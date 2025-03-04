@@ -1,0 +1,137 @@
+---
+description: Core Project Rules
+globs: 
+alwaysApply: true
+---
+# Next.js AI Application Development & Interaction Rules (ESM Edition)
+
+## Core Engineering Principles
+
+- Provide actual TypeScript/React code snippets using ESM syntax when asked for fixes
+- Use import/export statements instead of require/module.exports in all code examples
+- Keep communication direct and concise, respecting your expertise with Next.js and React
+- Suggest optimizations for OpenAI API usage and Vercel AI SDK implementations you might not have considered
+- Treat you as a new developer explaining most steps.
+- Present solutions immediately, followed by rationale only when necessary
+- When ambiguous, restate requirements to confirm understanding before implementing
+- Prioritize practical solutions over theoretical best practices; what works is more important than adhering to specific patterns
+- Consider experimental React/Next.js features and alternative approaches to conventional patterns
+- Clearly mark speculative performance optimizations or experimental API techniques
+- Discuss security only when it directly impacts OpenAI API usage or user data
+- When content policy affects AI feature implementation, provide alternative approaches
+- Include relevant docs and GitHub issues at the end of responses
+- Respect prettier/ESLint configuration in all code examples
+- Split complex technical explanations into multiple responses when needed
+- When suggesting code changes, show minimal context (2-3 lines before/after)
+
+## ESM-Specific Standards
+
+- Always use .mjs or .ts/.tsx file extensions in imports and examples
+- Use named exports whenever possible for better tree shaking and readability
+- Leverage top-level await when appropriate for asynchronous operations
+- Use dynamic imports for loading CommonJS dependencies if necessary
+- Replace CommonJS globals (__dirname, __filename) with ESM equivalents:
+  ```javascript
+  // Use the following for modern Node environments
+  const __dirname = import.meta.dirname;
+  const __filename = import.meta.filename;
+  
+  // For broader compatibility
+  import { fileURLToPath } from "node:url";
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = new URL(".", import.meta.url).pathname;
+  ```
+- When using Next.js configuration, always use next.config.mjs with ESM syntax:
+  ```javascript
+  export default {
+    // Your Next.js configuration options
+  };
+  ```
+
+## Next.js & React Architecture 
+
+- Provide clear explanations of component architecture decisions and data flow patterns
+- Include step-by-step examples for complex Server/Client Component interactions using ESM imports
+- Detail tradeoffs between different state management approaches (Context, Zustand, etc.)
+- Reference appropriate Next.js patterns for your specific app structure
+- Use ESM import statements for all components and utilities:
+  ```javascript
+  import { useState } from 'react';
+  import MyComponent from './MyComponent.mjs';
+  ```
+
+## TypeScript & Error Handling
+
+- Apply precise TypeScript types for OpenAI and Vercel AI SDK interfaces
+- Use ESM-compatible TypeScript imports and exports
+- Handle API errors gracefully without breaking UI rendering
+- Provide clear error boundaries and fallback components
+- Implement appropriate type guards and exhaustive checking
+- Suggest error tracking and debugging strategies for AI components
+- Make logging part of your plan when fixing or building new features
+- Use ESM syntax for importing types:
+  ```typescript
+  import type { OpenAIStream } from 'ai';
+  ```
+
+## AI Feature Implementation
+
+- Focus on specific implementation goals when building AI features
+- Ask clarifying questions to narrow API requirements and token usage
+- Break down complex AI interactions into manageable steps with clear data flow
+- Stay focused on the current AI feature without scope creep
+- Provide clear success criteria for AI feature implementations
+- Use ESM imports for all AI SDK components:
+  ```javascript
+  import { OpenAIStream, StreamingTextResponse } from 'ai';
+  ```
+
+## Application Context Awareness
+
+- Maintain awareness of your application's architecture and existing ESM patterns
+- Adapt suggestions to match your codebase conventions and component structure
+- Proactively suggest performance optimizations for AI API calls and streaming responses
+- Remember key implementation details from previous discussions
+- Ensure all file paths in imports include appropriate extensions (.mjs, .ts, .tsx)
+
+## Developer Experience & Flexibility
+
+- Provide flexible implementations that allow for experimentation with AI parameters
+- Present multiple approaches to AI feature implementation when relevant
+- Explain tradeoffs between different OpenAI models and Vercel AI SDK features
+- Support clear debugging and testing strategies for AI components
+- Take advantage of ESM-specific features like top-level await and dynamic imports
+
+## Technical Stack-Specific Guidelines
+
+### Next.js App Router with ESM
+- Utilize Server Components for initial AI content rendering when possible
+- Implement proper streaming patterns with suspense boundaries
+- Structure route handlers efficiently for AI API calls using ESM syntax
+- Optimize metadata and SEO for AI-generated content
+- Use .mjs extension for Next.js configuration files and API routes
+
+### TypeScript Best Practices with ESM
+- Create proper interfaces for all AI-related data structures
+- Use discriminated unions for different AI response types
+- Implement proper error typing for OpenAI API responses
+- Utilize generics for reusable AI utility functions
+- Follow ESM import/export patterns in TypeScript files:
+  ```typescript
+  // Export types and interfaces
+  export interface UserData {
+    id: string;
+    name: string;
+  }
+  
+  // Import types
+  import type { UserData } from './types.js';
+  ```
+
+### Shadcn/UI Integration
+- Use appropriate Shadcn components for AI interaction UIs
+- Implement proper loading states and skeleton components
+- Import Shadcn components using ESM syntax:
+  ```javascript
+  import { Button } from '@/components/ui/button.mjs';
+  ```

@@ -1,0 +1,18 @@
+{
+  "extends": ["next/core-web-vitals", "eslint:recommended"],
+  "rules": {
+    "import/no-commonjs": "error",
+    "no-var": "error",
+    "prefer-const": "error",
+    "import/no-amd": "error",
+    "import/first": "error",
+    "import/no-duplicates": "error",
+    "import/extensions": ["error", "ignorePackages", {
+      "js": "never",
+      "mjs": "never",
+      "jsx": "never",
+      "ts": "never",
+      "tsx": "never"
+    }]
+  }
+} 

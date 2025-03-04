@@ -1,0 +1,204 @@
+---
+description: ESM Migration Guide
+globs: 
+alwaysApply: false
+---
+This guide provides step-by-step instructions for migrating our codebase from CommonJS to ECMAScript Modules (ESM). ESM is the standard module system in JavaScript, offering benefits such as improved compatibility, tree shaking, and static analysis.
+
+## Prerequisites
+Before starting the migration, ensure you have the following:
+- Node.js version 14.x or higher
+- Next.js version 15.2 or higher
+- TypeScript version 4.x or higher
+
+## Step 1: Update Configuration Files
+1. Open the `package.json` file and add the following field:
+   ```json
+   "type": "module"
+   ```
+   This tells Node.js to treat all `.js` files as ESM modules by default.
+
+2. Rename the `next.config.js` file to `next.config.mjs` and update it to use ESM syntax:
+   ```javascript
+   export default {
+     // Your Next.js configuration options
+   };
+   ```
+
+3. Update the `tsconfig.json` file to include the following options:
+   ```json
+   {
+     "compilerOptions": {
+       "target": "ES2020",
+       "module": "ES2020",
+       "moduleResolution": "Node"
+     }
+   }
+   ```
+
+## Step 2: Migrate JavaScript Files
+1. Identify all JavaScript files in the codebase that currently use CommonJS syntax (`require`, `module.exports`).
+
+2. For each file:
+   - Rename the file extension from `.js` to `.mjs`.
+   - Replace `require` statements with `import` statements:
+     ```javascript
+     // From (CommonJS):
+     const { someFunction } = require('some-module');
+
+     // To (ESM):
+     import { someFunction } from 'some-module';
+     ```
+   - Replace `module.exports` with `export` statements:
+     ```javascript
+     // From (CommonJS):
+     module.exports = { someFunction };
+
+     // To (ESM):
+     export { someFunction };
+     ```
+
+3. For default exports:
+   ```javascript
+   // From (CommonJS):
+   module.exports = someFunction;
+
+   // To (ESM):
+   export default someFunction;
+   ```
+
+## Step 3: Handle CommonJS Dependencies
+If you have dependencies that still use CommonJS, you can use dynamic imports to load them:
+```javascript
+const { default: legacyModule } = await import('legacy-module');
+```
+
+## Step 4: Update TypeScript Files
+1. Identify all TypeScript files (`.ts` and `.tsx`) in the codebase.
+
+2. For each file:
+   - Replace `import` statements that use CommonJS syntax with ESM syntax:
+     ```typescript
+     // From (CommonJS):
+     import someModule = require('some-module');
+
+     // To (ESM):
+     import someModule from 'some-module';
+     ```
+   - Update re-export statements:
+     ```typescript
+     // From (CommonJS):
+     import * as someModule from 'some-module';
+     export = someModule;
+
+     // To (ESM):
+     export * from 'some-module';
+     ```
+
+## Step 5: Remove Strict Mode Declarations
+Since ESM automatically runs in strict mode, remove all occurrences of `"use strict";` from your JavaScript and TypeScript files.
+
+## Step 6: Use Shims for CommonJS Globals
+Replace CommonJS-specific globals like `__dirname` and `__filename` with their ESM equivalents:
+```javascript
+// Node 20.11.0+, Deno 1.40.0+
+const __dirname = import.meta.dirname;
+const __filename = import.meta.filename;
+
+// Previously
+const __dirname = new URL(".", import.meta.url).pathname;
+
+import { fileURLToPath } from "node:url";
+const __filename = fileURLToPath(import.meta.url);
+```
+
+## Step 7: Leverage Migration Tools
+Consider using the following tools to assist with the migration process:
+
+- VSCode's quick fix for converting `require` to `import` statements
+- Deno's linter (`deno lint --fix`) for adding missing file extensions
+- CLI tools like `ts2esm`, `cjs2esm`, and `cjstoesm` for transpilation
+- Babel plugin `babel-plugin-transform-commonjs` for conversion
+
+## Step 8: Test and Verify
+1. Run the application locally to ensure it starts without any errors.
+
+2. Test the functionality of the application thoroughly, checking for any runtime errors or unexpected behavior.
+
+3. Run the existing test suite and ensure all tests pass.
+
+## Step 9: Continuous Integration
+1. Update your continuous integration (CI) pipeline to use the appropriate Node.js version and run the necessary build and test commands.
+
+2. Ensure that the CI pipeline passes successfully after the migration.
+
+## Best Practices and Tips
+- Use named exports whenever possible for better tree shaking and readability.
+- Avoid mixing ESM and CommonJS modules in the same file.
+- Use dynamic imports for loading CommonJS dependencies if necessary.
+- Take advantage of top-level await in ESM for more readable asynchronous code.
+- Consider using a tool like `eslint-plugin-import` to enforce ESM best practices and catch common mistakes.
+
+## Conclusion
+By following this guide, you should be able to successfully migrate your Next.js 15.2 application to use ESM throughout the codebase. ESM offers various benefits and is the future-proof way of writing JavaScript modules. Remember to thoroughly test your application after the migration to ensure everything works as expected.
+
+<userExamples>
+Here are a few examples of migrated files:
+
+Example 1: `utils/math.mjs`
+```javascript
+// Before (CommonJS):
+function add(a, b) {
+  return a + b;
+}
+
+module.exports = { add };
+
+// After (ESM):
+export function add(a, b) {
+  return a + b;
+}
+```
+
+Example 2: `components/Button.mjs`
+```javascript
+// Before (CommonJS):
+const React = require('react');
+
+function Button({ children }) {
+  return <button>{children}</button>;
+}
+
+module.exports = Button;
+
+// After (ESM):
+import React from 'react';
+
+export default function Button({ children }) {
+  return <button>{children}</button>;
+}
+```
+
+Example 3: `pages/api/users.mjs`
+```javascript
+// Before (CommonJS):
+const { getUsers } = require('../../services/userService');
+
+function handler(req, res) {
+  const users = getUsers();
+  res.status(200).json(users);
+}
+
+module.exports = handler;
+
+// After (ESM):
+import { getUsers } from '../../services/userService.mjs';
+
+export default function handler(req, res) {
+  const users = getUsers();
+  res.status(200).json(users);
+}
+```
+</userExamples>
+
+By following the migration guide and referring to these examples, you should be able to successfully migrate your codebase to use ESM.

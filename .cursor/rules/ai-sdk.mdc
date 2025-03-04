@@ -1,0 +1,392 @@
+---
+description: Rules for AI components using Vercel AI SDK
+globs: 
+alwaysApply: false
+---
+## Streaming Responses for Chat UI
+Streaming allows displaying the AI's response word-by-word as it generates, greatly improving the user experience compared to waiting for the full response before displaying anything.
+
+In your Next.js API route:
+```ts
+import { streamText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+  
+  const result = streamText({
+    model: openai('gpt-4'),
+    messages
+  });
+
+  return result.toDataStreamResponse();
+}
+```
+
+And in your client-side chat component using the `useChat` hook:
+```tsx
+import { useChat } from 'ai/react';
+
+const Chat = () => {
+  const { messages, input, handleInputChange, handleSubmit } = useChat();
+
+  return (
+    <>
+      <div className="messages">
+        {messages.map(msg => (
+          <div key={msg.id}>{msg.content}</div>  
+        ))}
+      </div>
+      <form onSubmit={handleSubmit}>
+        <input 
+          type="text" 
+          value={input}
+          onChange={handleInputChange}
+        />
+        <button type="submit">Send</button>
+      </form>
+    </>
+  );
+}
+```
+
+The `useChat` hook handles streaming the AI's response and incrementally updating the `messages` state, triggering re-renders to display the new content.
+
+### Troubleshooting Streaming
+- If responses are not streaming in, check:
+  - Is the server returning a valid `event-stream` response? Check the Network tab, the response should have `content-type: text/event-stream` header.
+  - Are you using `result.toDataStreamResponse()` in the API route?
+  - Is the client-side component wrapped in a `'use client'` directive (in Next.js)?
+  - Check your browser console and server logs for any errors.
+
+- If UI freezes or "Maximum update depth exceeded" error in React:
+  - Use the `experimental_throttle` option in `useChat`, e.g. `useChat({ experimental_throttle: 50 })` to limit update frequency to at most every 50ms.
+  - Avoid performing expensive computations or state updates in your message rendering loop.
+
+## Separating Concerns
+
+Always keep API keys and direct AI model invocations in server-side API routes. Never expose keys or make calls from the client.
+
+Your client chat component should focus solely on:
+1. Displaying messages 
+2. Handling user input and actions
+3. Updating its state via the `useChat` hook
+
+All direct interactions with the AI model should be encapsulated in the server-side API route.
+
+In a Next.js app, use:
+- Route Handlers (app/api/) for API routes that call AI
+- Client Components (wrapped in `'use client'`) for interactive chat UI
+- Server Components for any other data fetching or server-side rendering
+
+This separation improves security and allows optimizing the client and server pieces independently.
+
+## Error Handling
+Robust error handling prevents crashes and provides a graceful experience when issues occur.
+
+In API routes, always wrap AI calls in a try/catch:
+```ts
+try {
+  const result = streamText({ 
+    model: openai('gpt-4'), 
+    messages 
+  });
+  return result.toDataStreamResponse();
+
+} catch (error) {
+  console.error(error);
+  return new Response('Internal Server Error', { status: 500 });
+}
+```
+
+Use AI SDK's custom error classes to handle specific issues:
+```ts
+import { 
+  AIError, 
+  RateLimitError, 
+  InvalidRequestError,
+  // ...
+} from 'ai';
+
+try {
+  // ...
+} catch (error) {
+  if (error instanceof RateLimitError) {
+    // Handle rate limiting
+  } else if (error instanceof InvalidRequestError) {
+    // Handle invalid request
+  } else {
+    // Generic error handling
+  }
+}
+```
+
+In your chat component, provide an `onError` callback to `useChat`:
+```tsx
+useChat({
+  onError: (error) => {
+    console.error('Chat error:', error);
+    // Display user-friendly error message
+  },
+});
+```
+
+### Troubleshooting Errors
+- Check your browser console and server logs for error details.
+- Ensure your API keys are valid and have the necessary permissions.
+- Verify the model ID and configuration are correct.
+- Look for network issues or service outages.
+- Incrementally test - call the API route directly, use curl, isolate client from server.
+
+## Performance Optimization
+Performance is critical for a responsive chat experience. Key optimizations include:
+
+- **Minimizing data transfer**: Once chat history is stored server-side, send only the relevant context or last user message with each request, rather than the full history.
+  ```ts
+  // In client component
+  const { handleSubmit } = useChat({
+    body: { lastMessage: messages[messages.length - 1] },
+  });
+
+  // In API route
+  const { lastMessage } = await req.json();
+  const fullConversation = await getConversationHistory(lastMessage.conversationId);
+  ```
+
+- **Setting response length limits**: Use `maxTokens` to prevent excessively long responses that consume tokens and slow things down.
+  ```ts
+  streamText({ 
+    model: openai('gpt-4'), 
+    messages, 
+    settings: {
+      maxTokens: 250
+    }
+  });
+  ```
+
+- **Parallel fetching**: If you need both AI-generated content and data from other sources (database, external APIs), fetch them concurrently using `createDataStreamResponse`.
+
+  ```ts
+  import { createDataStreamResponse, streamText } from 'ai';
+  import { searchProducts } from './search';
+
+  export async function POST(req: Request) {
+    const { query } = await req.json();
+
+    // Fetch from AI and DB in parallel
+    const aiStream = streamText({ 
+      model: openai('gpt-4'), 
+      prompt: `Recommend products for query: ${query}`
+    });
+
+    const stream = createDataStreamResponse();
+
+    let lastMessage = '';
+    aiStream.fullStream.pipeTo(stream.handleStream(async ({ text }) => {
+      lastMessage += text;
+    }));
+
+    // Stream product results as they're found
+    for await (const product of searchProducts(query)) {
+      stream.writeData({ type: 'product', product });
+    }
+
+    // Wait for the AI to finish before ending the stream
+    await aiStream.stream;
+
+    return stream;
+  }
+  ```
+
+  In your component:
+
+  ```tsx
+  useChat({
+    onResponse: (res) => {
+      const reader = res.body?.getReader();
+      reader?.read().then(function process({ done, value }) {
+        if (done) return;
+  
+        const event = new TextDecoder().decode(value);
+        if (event.startsWith('data:')) {
+          const data = JSON.parse(event.slice(5));
+          if (data.type === 'product') {
+            // Display product result
+          }
+        }
+  
+        return reader.read().then(process);
+      });
+    }
+  })
+  ```
+
+- **Caching**: Cache repeated or computationally expensive operations, such as:
+  - Embeddings for semantic search
+  - Retrieved documents
+  - Generated images
+  - Conversation history
+
+  Use a fast key-value store like Redis or Vercel KV.
+
+  ```ts
+  import { kv } from '@vercel/kv';
+
+  const cacheKey = `embedding:${text}`;
+  let embedding = await kv.get(cacheKey);
+
+  if (!embedding) {
+    embedding = await generateEmbedding(text);
+    await kv.set(cacheKey, embedding);
+  }
+  ```
+
+### Measuring Performance
+Use profiling and monitoring tools to identify bottlenecks:
+- Browser DevTools Performance tab to analyze client-side rendering
+- Log timestamps on the server to measure AI call duration vs other processing
+- Use Vercel's built-in request logging and metrics
+- Integrate a tracing tool like OpenTelemetry to trace requests and background jobs
+- Benchmark different model sizes to balance speed and output quality
+
+## Security Best Practices
+Security is paramount when dealing with user input and AI-generated content. Key practices:
+
+- **Never expose API keys**: Store keys securely in environment variables on the server. Use a secrets manager for added protection.
+
+- **Validate and sanitize user input**: Treat all user input as untrusted. Validate expected types, lengths. Sanitize to prevent prompt injection, e.g.:
+  ```ts
+  import sanitizeHtml from 'sanitize-html';
+
+  const sanitizedInput = sanitizeHtml(userInput, {
+    allowedTags: [],
+    allowedAttributes: {}
+  });
+  ```
+
+- **Use content filtering**: Enable provider content filtering when available. For OpenAI:
+  ```ts
+  streamText({
+    model: openai('gpt-4'),
+    messages,
+    settings: {
+      modelSettings: {
+        flags: ['FLAG_UNSAFE']
+      }
+    }
+  });
+  ```
+
+- **Output validation**: Validate and sanitize AI-generated content before displaying to users, especially if rendering as HTML. Use schema validation for structured outputs.
+  ```ts
+  import * as z from 'zod';
+
+  const productSchema = z.object({
+    name: z.string(),
+    price: z.number().positive()
+  });
+
+  const { data } = await generateObject({
+    model: openai('gpt-4'),
+    prompt: `Generate a product: ${userInput}`,
+    schema: productSchema
+  });
+  ```
+
+- **Authentication**: Require authentication for non-public apps to prevent misuse of your AI resources. Validate user roles and permissions.
+
+- **Sandboxing**: If your AI can invoke external tools or execute code, run in a secure sandboxed environment. Thoroughly test for escapes.
+
+- **Rate limiting**: Implement rate limiting in your API routes to prevent abuse and control costs. You can use Upstash or Vercel's built-in edge Rate Limiting middleware.
+
+- **Logging and monitoring**: Log all user-generated prompts and AI outputs, associated with user identities if available. Monitor for unusual usage patterns, offensive outputs, prompt injection attempts. Have an emergency shutoff mechanism.
+
+### Security Testing
+Regularly test your app's security:
+- Perform penetration testing, including tests for prompt injection
+- Fuzz test your prompt templates and output parsers
+- Validate content filtering by submitting NSFW or unsafe prompts
+- Test authentication flows and access controls
+- Monitor for new vulnerabilities in libraries and AI models
+- Have a bug bounty program to leverage the security community
+
+## Chat UI Patterns
+The `useChat` hook is the workhorse of your chat UI. Key considerations:
+
+- **Managing chat state**: `useChat` returns `messages`, `input`, and handler functions. Use them to render the chat log, controlled input, and submit button.
+
+  ```tsx
+  const { messages, input, handleInputChange, handleSubmit } = useChat();
+  ```
+
+- **Customizing behavior**: Configure the hook with options like `api` endpoint, request `headers`, event callbacks:
+
+  ```tsx
+  useChat({
+    api: '/api/custom-chat',
+    headers: { 
+      'Authorization': `Bearer ${token}`
+    },
+    onError: (err) => alert(`Chat error: ${err.message}`),
+    onFinish: async () => {
+      // Finished generating, perform any wrap-up
+    }
+  });
+  ```
+
+- **Accessibility**: Ensure your chat is fully accessible:
+  - Use ARIA live regions to announce new messages
+    ```html
+    <div aria-live="polite">
+      {messages.map(msg => <p key={msg.id}>{msg.content}</p>)}
+    </div>
+    ```
+  - Provide keyboard navigation and focus management
+  - Include text alternatives for images and media
+  - Test with screen readers
+
+- **Persistence**: Store conversation history server-side and hydrate the initial state to provide a seamless experience across page loads.
+  ```ts
+  // In API route
+  const history = await db.getConversationHistory(conversationId);
+  return json({ messages: history });
+
+  // In component
+  const { messages } = useChat({
+    initialMessages: await fetch('/api/history').then(res => res.json()),
+  });
+  ```
+
+- **User controls**: Allow users to stop a generating response, regenerate, edit their prompts.
+  ```tsx
+  const { stop, retry } = useChat();
+
+  <button onClick={stop}>Stop Generating</button>
+  <button onClick={retry}>Retry</button>
+  ```
+
+
+### Testing Your Chat UI
+Comprehensive testing ensures your chat works reliably:
+
+- **Unit test** core chat logic and edge cases with mocked API responses
+- **Integration test** the UI with a real AI model in a staging environment 
+- **End-to-end test** complete user flows using a tool like Playwright
+- **Accessibility test** with screen readers and keyboard navigation
+- **Visual regression test** to catch unintended style changes
+- **Load test** to verify graceful handling of many concurrent users
+- **Error handling test** by simulating API failures, invalid responses
+- **Security test** with authenticated and anonymous users
+
+## Conclusion and Resources
+Building an AI-powered app with cursor-rules MDC involves layering the right abstractions and following best practices for streaming, error handling, performance optimization, security, and UX.
+
+The AI SDK provides a powerful set of tools, but careful design and testing are required to create a production-ready experience.
+
+Key resources:
+- [AI SDK Documentation](mdc:https:/sdk.vercel.ai/docs)
+- [AI SDK Examples Repo](mdc:https:/github.com/vercel/ai-sdk/tree/main/examples)
+- [Vercel AI Playground](mdc:https:/play.vercel.ai)
+- [Next.js Documentation](mdc:https:/nextjs.org/docs)
+
+As you build, stay informed about the evolving capabilities and best practices in this exciting space. Happy building!

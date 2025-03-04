@@ -1,0 +1,80 @@
+---
+description: How to make API calls to perplexity for DeepSearch
+globs: 
+alwaysApply: false
+---
+cURL
+
+Copy
+curl --location 'https://api.perplexity.ai/chat/completions' \
+--header 'accept: application/json' \
+--header 'content-type: application/json' \
+--header 'Authorization: Bearer {API_KEY}' \
+--data '{
+  "model": "sonar-pro ",
+  "messages": [
+    {
+      "role": "system",
+      "content": "Be precise and concise."
+    },
+    {
+      "role": "user",
+      "content": "How many stars are there in our galaxy?"
+    }
+  ]
+}'
+
+Typescript:
+
+import { OpenAI } from 'openai';
+
+const YOUR_API_KEY = "INSERT API KEY HERE";
+
+const messages = [
+  {
+    role: "system",
+    content: "Your a deepresearch agent for an agent team. Please bring back the most context in your searches for other agents to use in their context..",
+  },
+  {
+    role: "user",
+    content: "Help me research my competitors in Miami for boudoir photography?",
+  },
+];
+
+const client = new OpenAI({
+  apiKey: YOUR_API_KEY,
+  baseUrl: "https://api.perplexity.ai",
+});
+
+// chat completion without streaming
+async function chatCompletion() {
+  try {
+    const response = await client.chat.completions.create({
+      model: "sonar-pro",
+      messages: messages,
+    });
+    console.log(response);
+  } catch (error) {
+    console.error('Error:', error);
+  }
+}
+
+// chat completion with streaming
+async function chatCompletionStream() {
+  try {
+    const responseStream = await client.chat.completions.create({
+      model: "sonar-pro", 
+      messages: messages,
+      stream: true,
+    });
+    
+    for await (const response of responseStream) {
+      console.log(response);
+    }
+  } catch (error) {
+    console.error('Error:', error);
+  }
+}
+
+chatCompletion();
+chatCompletionStream();

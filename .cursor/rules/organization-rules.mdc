@@ -1,0 +1,69 @@
+---
+description: cursor rules for organizing the entire app based on the provided file structure
+globs: 
+alwaysApply: true
+---
+## High-Level Structure
+- The app follows a standard Next.js project structure, with the main files and directories located at the root level.
+- The `src` directory serves as the main container for the application code.
+
+## Source Code Organization
+- The `src` directory contains subdirectories for different aspects of the application:
+  - `app`: Contains the main application components and routes.
+  - `agents`: Contains files related to AI agents and their configurations.
+  - `utils`: Contains utility functions and helper modules.
+  - `components`: Contains reusable components used throughout the application.
+
+## App Directory
+- The `app` directory follows the Next.js app router structure.
+- The `api` directory contains API route handlers.
+- The `page.tsx` file serves as the main entry point for the application.
+
+## Agents Directory
+- The `agents` directory is organized into subdirectories based on agent types and configurations:
+  - `tools`: Contains agent-specific tools and utilities.
+  - `core`: Contains core agent functionality.
+  - `specialized`: Contains specialized agent configurations.
+  - `prompts`: Contains prompt templates for agents.
+  - The `index.ts` file serves as the entry point for agent-related code.
+
+## Components Directory
+- The `components` directory contains reusable components organized by feature or functionality.
+- Common UI components are placed in the `ui` subdirectory.
+- Feature-specific components, such as `chat` and `auth`, have their own subdirectories.
+- Shared components that are used across multiple features are placed in the `shared` subdirectory.
+
+## Stores and Contexts
+- State management and context files are located in the `stores` directory.
+- Each store or context is defined in its own file (e.g., `chat-store.ts`, `auth-store.ts`).
+
+## Hooks
+- Custom hooks are placed in the `hooks` directory.
+- Each hook is defined in its own file with a descriptive name (e.g., `useEnhancedChat.ts`, `useIsClient.ts`).
+
+## Config and Constants
+- Configuration files and constants are located in the `config` directory.
+- Each configuration or constant is defined in its own file (e.g., `site.ts`, `agents.ts`).
+
+## Styling
+- Global styles are defined in the `styles` directory (e.g., `globals.css`).
+- Component-specific styles can be defined within the respective component files or in separate CSS/SCSS files.
+
+## Public Assets
+- Public assets, such as images and SVG files, are stored in the `public` directory.
+
+## Scripts and Utilities
+- Custom scripts and utility modules are placed in the `scripts` and `utils` directories, respectively.
+
+## Tests
+- Test files are colocated with the components or modules they test.
+- Test files are named with a `.test.ts` or `.test.tsx` extension.
+
+## Third-Party Modules
+- Third-party modules and libraries are installed using a package manager (e.g., npm or yarn) and stored in the `node_modules` directory.
+
+## Environment and Configuration Files
+- Environment-specific configuration files (e.g., `.env`, `.env.local`) are placed at the root level.
+- Configuration files for tools and libraries (e.g., `next.config.js`, `tailwind.config.ts`) are also placed at the root level.
+
+By following these cursor rules, the app maintains a consistent and organized structure, making it easier to navigate, understand, and maintain the codebase.

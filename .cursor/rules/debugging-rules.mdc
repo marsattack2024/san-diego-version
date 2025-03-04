@@ -1,0 +1,315 @@
+---
+description: Linter Error Troubleshooting Rulebook
+globs: 
+alwaysApply: false
+---
+## Core Principles - When asked to go into debug mode, follow these rules:
+
+1. **Understand Before Acting**: Always understand the full scope of a linter error before attempting to fix it.
+2. **Respect Boundaries**: Stay within the scope of the affected code without introducing changes to unrelated components.
+3. **Preserve Behavior**: Ensure fixes don't change the intended behavior of the code.
+4. **Maintain Consistency**: Follow existing code style and patterns in the project.
+5. **Document Decisions**: When making non-trivial fixes, document your reasoning.
+
+## First Response Protocol
+
+### Step 1: Assessment
+
+Before making any changes, gather information:
+
+- Identify the exact linter rule that's being violated
+- Review the error message and location in the codebase
+- Understand the rule's purpose and recommended fix
+- Check if the error is isolated or part of a pattern
+- Identify potential dependencies or side effects
+
+### Step 2: Contextual Analysis
+
+Examine the surrounding context:
+
+- Review the file's imports and exports
+- Identify component dependencies and usage patterns
+- Check for related components that might be affected
+- Review project-specific configurations or conventions
+- Look for similar patterns elsewhere in the codebase
+
+### Step 3: Formulate Approach
+
+Develop a clear plan:
+
+- List possible solutions ranked by simplicity and safety
+- Consider if the fix should be localized or systemic
+- Identify potential unintended consequences
+- Decide if the rule should be fixed, suppressed, or reconfigured
+
+## Common Linter Errors and Solutions
+
+### TypeScript Type Errors
+
+#### Error: Type 'X' is not assignable to type 'Y'
+
+**Approach:**
+1. **Understand the intended types**:
+   - Is the property optional (`?:`) or required? 
+   - Is there a mismatch between the defined interface and implementation?
+
+2. **Consider the context**:
+   - Is this a prop being passed to a component?
+   - Is this an API response being processed?
+
+3. **Resolution strategies**:
+   - Fix by correctly typing the variable
+   - Update the interface if it's outdated
+   - Use type narrowing (conditionals, type guards)
+   - Use type assertions only when you're certain (`as Type`)
+   - Use intersection or union types if appropriate
+
+```typescript
+// AVOID: Ignoring the issue
+// @ts-ignore
+component.invalidProp = value;
+
+// PREFER: Fix the underlying issue
+interface ComponentProps {
+  validProp: string;
+}
+component.validProp = value;
+```
+
+#### Error: Property 'X' does not exist on type 'Y'
+
+**Approach:**
+1. Check if the property name has a typo
+2. Verify if the property should exist on this type
+3. Determine if type definitions need to be updated
+
+```typescript
+// AVOID: Force-casting to any
+(user as any).address.zipCode
+
+// PREFER: Use proper type checking or extend the interface
+if (user.address && 'zipCode' in user.address) {
+  console.log(user.address.zipCode);
+}
+
+// Or extend the interface appropriately
+interface UserAddress {
+  zipCode?: string;
+}
+```
+
+### ESLint Rules
+
+#### Error: React Hook useEffect has a missing dependency
+
+**Approach:**
+1. Carefully review the dependency array
+2. Understand why each variable should or shouldn't be in the array
+3. Consider the impact of adding the dependency on re-render frequency
+
+```typescript
+// AVOID: Disabling the rule without understanding
+// eslint-disable-next-line react-hooks/exhaustive-deps
+useEffect(() => {
+  fetchData(userId);
+}, []);
+
+// PREFER: Add the correct dependency
+useEffect(() => {
+  fetchData(userId);
+}, [userId]);
+
+// ALTERNATIVE: Move function inside if it uses props
+useEffect(() => {
+  const fetchUserData = async () => {
+    // Use userId inside
+  };
+  fetchUserData();
+}, [userId]);
+```
+
+#### Error: Do not use useState with an arrow function that returns an object literal
+
+**Approach:**
+1. Understand the performance implications
+2. Refactor to use direct object or memo
+
+```typescript
+// AVOID:
+const [state, setState] = useState(() => ({
+  loading: false,
+  data: null
+}));
+
+// PREFER:
+const [state, setState] = useState({
+  loading: false,
+  data: null
+});
+
+// OR use useMemo for complex initialization
+const initialState = useMemo(() => ({
+  loading: false,
+  data: computeInitialData()
+}), []);
+const [state, setState] = useState(initialState);
+```
+
+### Import/Export Errors
+
+#### Error: File has no default export
+
+**Approach:**
+1. Verify how the module is intended to be used
+2. Check project patterns for default vs named exports
+
+```typescript
+// If the file should have a single main export:
+export default function Component() { }
+
+// If multiple exports are intended:
+export function Component1() { }
+export function Component2() { }
+
+// And then import properly:
+import { Component1, Component2 } from './components';
+```
+
+#### Error: Module not found
+
+**Approach:**
+1. Check the file path for typos
+2. Verify if the file exists
+3. Check project config for path aliases
+
+```typescript
+// Check for typos
+import Component from '../components/Button'; // Is it actually 'Button.tsx'?
+
+// Check for path aliases in tsconfig.json
+import Button from '@components/Button'; // Is @components defined?
+```
+
+## Decision-Making Framework
+
+When resolving linter errors, use this decision tree:
+
+### 1. Is the error a false positive?
+
+**If YES:**
+- Document why with a comment
+- Use the appropriate suppression technique for minimal scope:
+
+```typescript
+// For a single line
+// eslint-disable-next-line specific-rule
+const value = problematicExpression;
+
+// For a block
+/* eslint-disable specific-rule */
+// code block
+/* eslint-enable specific-rule */
+```
+
+**If NO:** Continue to step 2.
+
+### 2. Can the error be fixed without changing behavior?
+
+**If YES:**
+- Apply the simplest fix that addresses the root cause
+- Follow existing patterns in the codebase
+
+**If NO:** Continue to step 3.
+
+### 3. Is a broader refactoring required?
+
+**If YES:**
+- Consider if the scope is appropriate for the current task
+- Evaluate impact on other components
+- Possibly defer to a separate refactoring task
+
+**If NO:** Reevaluate the situation, as there should be a viable solution.
+
+## Risk Mitigation Strategies
+
+### Higher-Risk Fixes
+
+When making changes with higher risk:
+
+1. **Make minimal changes**: Fix only what's needed
+2. **Add tests**: Write or update tests to verify behavior
+3. **Document**: Add comments explaining the fix
+4. **Review impact**: Check all import locations to ensure behavior is preserved
+5. **Consider gradual adoption**: Use feature flags if needed
+
+### Safety Measures
+
+Before submitting fixes:
+
+1. **Verify locally**: Run the app to confirm functionality
+2. **Run all tests**: Ensure no regressions
+3. **Lint the entire project**: Check for new issues
+4. **Double-check imports/exports**: Verify no unintended changes to the public API
+
+## Special Cases
+
+### Third-Party Library Issues
+
+If the error involves third-party libraries:
+
+1. Check if typings are outdated (`@types/library-name`)
+2. Verify the library version matches the types version
+3. Consider creating local declaration files if necessary
+
+```typescript
+// In a declaration.d.ts file:
+declare module 'problem-library' {
+  export function problematicFunction(): any;
+}
+```
+
+### Configuration-Based Solutions
+
+Sometimes the best fix is to update configuration:
+
+1. Review `.eslintrc` for rule configurations
+2. Check `tsconfig.json` for compiler options
+3. Consider adding custom rules for project-specific patterns
+
+```javascript
+// In .eslintrc.js
+module.exports = {
+  rules: {
+    'react-hooks/exhaustive-deps': ['warn', {
+      additionalHooks: 'useCustomHook'
+    }]
+  }
+}
+```
+
+## Problem-Solving Checklist
+
+Before submitting a fix, verify:
+
+- [ ] I fully understand the lint error and its purpose
+- [ ] My fix addresses the root cause, not just the symptom
+- [ ] The fix follows existing patterns in the codebase
+- [ ] I've verified the fix doesn't change behavior
+- [ ] The change is minimal and focused
+- [ ] I've documented any non-obvious decisions
+- [ ] I've run linting on affected files
+- [ ] I've tested the application locally
+
+## When to Escalate
+
+Some situations warrant escalation to team discussion:
+
+- The fix requires significant refactoring
+- The error points to a systemic design issue
+- Multiple approaches exist with different trade-offs
+- The rule itself may need reconsideration
+- The fix touches critical business logic
+
+## Final Note
+
+Remember that linter rules exist to improve code quality, not to create busywork. Each rule has a purpose—to prevent bugs, improve readability, or enforce conventions. Understanding why a rule exists will help you apply the most appropriate fix.

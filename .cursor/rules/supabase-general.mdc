@@ -1,0 +1,392 @@
+---
+description: This document provides comprehensive best practices for using Supabase in your applications, incorporating both established patterns and advanced optimization techniques.
+globs: 
+alwaysApply: false
+---
+## 1. Authentication & User Management
+
+### User ID Integration
+```sql
+-- Always reference auth.users table for user identification
+CREATE TABLE profiles (
+  id UUID PRIMARY KEY REFERENCES auth.users(id),
+  display_name TEXT,
+  avatar_url TEXT,
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Example policy using auth.uid()
+CREATE POLICY "Users can read their own profile"
+ON profiles FOR SELECT
+USING (id = auth.uid());
+```
+
+### Key Principles
+- Always use the built-in `auth.users` table for authentication
+- Reference `auth.users(id)` as a foreign key for user-related data
+- Use the `auth.uid()` function in RLS policies to restrict access
+- Consider creating a profiles table to extend user information
+- Follow Supabase Auth SSR patterns for server-side rendering
+
+## 2. Table Structure Best Practices
+
+### Primary Keys & IDs
+```sql
+-- Use UUIDs for primary keys
+CREATE TABLE items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  description TEXT,
+  user_id UUID REFERENCES auth.users(id),
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+  metadata JSONB -- Flexible extension point
+);
+```
+
+### Column Recommendations
+- Use `TIMESTAMPTZ` for timestamps to handle timezone differences
+- Add `created_at` and `updated_at` columns to track record lifecycle
+- Set appropriate NOT NULL constraints on required fields
+- Use descriptive column names that clearly indicate purpose
+- Add a JSONB `metadata` column for flexible schema extension without migrations
+- Consider using `varchar(n)` with size limits for very large tables instead of unlimited TEXT
+- Add CHECK constraints to enforce data validity (e.g., enum values)
+
+### Data Type Selection
+- Use TEXT instead of VARCHAR when size limits aren't critical
+- Use ENUM types (via PostgreSQL's CREATE TYPE) for predefined values
+- Consider JSONB for semi-structured data with flexible schema
+- Use proper numeric types based on precision requirements
+- Use arrays when appropriate for simple multi-value fields
+
+## 3. Relationships & Foreign Keys
+
+### Foreign Key Examples
+```sql
+-- Basic foreign key relationship
+CREATE TABLE messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  sender_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  content TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Many-to-many relationship example
+CREATE TABLE team_members (
+  team_id UUID REFERENCES teams(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL,
+  joined_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (team_id, user_id)  -- Composite primary key
+);
+```
+
+### Relationship Design Principles
+- Define clear foreign key constraints to maintain referential integrity
+- Choose appropriate ON DELETE actions:
+  - CASCADE: Delete related records when parent is deleted
+  - SET NULL: Set reference to NULL when parent is deleted
+  - RESTRICT: Prevent deletion of parent if children exist
+- Use composite primary keys for junction tables in many-to-many relationships
+- Create indexes on foreign key columns that are frequently queried
+- Consider denormalization for performance when appropriate
+
+## 4. Indexing Strategy
+
+### Effective Index Examples
+```sql
+-- Basic index for frequently filtered column
+CREATE INDEX idx_posts_category ON posts (category);
+
+-- Composite index for common query pattern (chronological message retrieval)
+CREATE INDEX idx_messages_conversation ON messages (conversation_id, created_at DESC);
+
+-- Partial index for common filtered queries
+CREATE INDEX idx_active_items ON items (updated_at)
+WHERE status = 'active';
+
+-- Text search index
+CREATE INDEX idx_content_search ON posts USING GIN (to_tsvector('english', content));
+```
+
+### Indexing Guidelines
+- Create composite indexes for common access patterns (e.g., session_id + created_at)
+- Index columns used in WHERE, JOIN, and ORDER BY clauses
+- Order composite index columns based on selectivity (most selective first)
+- Use partial indexes to reduce index size and improve performance
+- Consider GIN indexes for full-text search capabilities
+- Monitor index usage and remove unused indexes
+- Be cautious of over-indexing small tables or write-heavy tables
+- For vector search applications, choose appropriate index types (HNSW vs IVFFlat)
+
+## 5. Row Level Security (RLS)
+
+### RLS Patterns
+```sql
+-- Enable RLS on tables with user data
+ALTER TABLE items ENABLE ROW LEVEL SECURITY;
+
+-- Basic ownership policy
+CREATE POLICY "Users can manage their own items"
+ON items FOR ALL
+USING (user_id = auth.uid());
+
+-- More granular access for related data via parent relationship
+CREATE POLICY "Users can view items in their sessions"
+ON items FOR SELECT
+USING (
+  session_id IN (
+    SELECT id FROM sessions WHERE user_id = auth.uid()
+  )
+);
+
+-- Public/private visibility pattern
+CREATE POLICY "Users can see public items or their own"
+ON items FOR SELECT
+USING (
+  is_public = true OR
+  user_id = auth.uid()
+);
+```
+
+### RLS Best Practices
+- Enable RLS on all tables containing user data
+- Create separate policies for different operations (SELECT, INSERT, UPDATE, DELETE)
+- Implement granular policies for complex access patterns
+- Keep policies as simple as possible for performance
+- Use the WITH CHECK clause for INSERT/UPDATE to validate new data
+- Test RLS policies thoroughly to ensure proper isolation
+- Remember that RLS only applies when accessing through normal channels
+- Consider using application roles for different permission levels
+
+## 6. Functions & Stored Procedures
+
+### Function Examples
+```sql
+-- Calculate derived value
+CREATE OR REPLACE FUNCTION calculate_total(order_id UUID)
+RETURNS DECIMAL
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  total DECIMAL;
+BEGIN
+  SELECT SUM(price * quantity)
+  INTO total
+  FROM order_items
+  WHERE order_id = calculate_total.order_id;
+  
+  RETURN total;
+END;
+$$;
+
+-- Helper function for retrieving conversation context
+CREATE OR REPLACE FUNCTION get_conversation_context(
+  session_uuid UUID,
+  message_limit INTEGER DEFAULT 10
+)
+RETURNS TABLE (
+  role TEXT,
+  content TEXT,
+  created_at TIMESTAMPTZ
+)
+LANGUAGE SQL
+AS $$
+  SELECT role, content, created_at
+  FROM messages
+  WHERE session_id = session_uuid
+  ORDER BY created_at DESC
+  LIMIT message_limit;
+$$;
+```
+
+### Function Guidelines
+- Create helper functions for common operations (e.g., retrieving conversation context)
+- Use functions to encapsulate complex logic
+- Use the appropriate language (SQL for simple operations, PL/pgSQL for complex logic)
+- Use SECURITY DEFINER only when absolutely necessary
+- Document function parameters and return values
+- Consider performance implications of complex functions
+- Use proper error handling in PL/pgSQL functions
+
+## 7. Triggers & Automated Tasks
+
+### Trigger Examples
+```sql
+-- Update timestamp trigger
+CREATE OR REPLACE FUNCTION update_modified_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = CURRENT_TIMESTAMP;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER set_updated_timestamp
+BEFORE UPDATE ON items
+FOR EACH ROW
+EXECUTE FUNCTION update_modified_column();
+
+-- Optimized counter trigger for high-volume tables
+CREATE OR REPLACE FUNCTION increment_message_count()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE sessions
+  SET message_count = message_count + 1
+  WHERE id = NEW.session_id;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER update_message_count
+AFTER INSERT ON messages
+FOR EACH ROW
+EXECUTE FUNCTION increment_message_count();
+```
+
+### Trigger Best Practices
+- Use triggers sparingly and for specific purposes
+- Keep trigger logic simple to avoid performance issues
+- Optimize counter updates for high-volume tables
+- Consider using AFTER triggers instead of BEFORE when possible
+- Be careful with recursive triggers that might cause infinite loops
+- Use statement-level triggers (FOR EACH STATEMENT) when appropriate
+- Consider using Event Functions for complex workflows
+
+## 8. Performance Optimization
+
+### Query Optimization Examples
+```sql
+-- Use specific column selection instead of SELECT *
+SELECT id, title, created_at FROM posts WHERE user_id = $1;
+
+-- Use keyset pagination for large datasets
+SELECT id, title, created_at 
+FROM posts 
+WHERE created_at < $last_seen_timestamp
+ORDER BY created_at DESC 
+LIMIT 20;
+```
+
+### Optimization Strategies
+- Analyze slow queries with EXPLAIN ANALYZE
+- Create appropriate indexes for common query patterns
+- Use limit and offset for pagination on small datasets
+- Use keyset pagination for large datasets
+- Consider materialized views for complex, frequent queries
+- Optimize JOIN operations to minimize table scans
+- Use server-side filtering with .eq(), .neq(), etc. instead of client filtering
+- Configure appropriate statement timeouts
+- For very large tables, consider table partitioning by time or logical keys
+- Monitor query performance regularly
+
+## 9. Vector Search Optimization
+
+### Vector Storage and Indexing
+```sql
+-- Efficient embedding storage
+CREATE TABLE embeddings (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  content_id UUID NOT NULL REFERENCES content(id) ON DELETE CASCADE,
+  embedding VECTOR(1536), -- Dimension matches your model
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+-- HNSW index for better recall/performance balance
+CREATE INDEX ON embeddings USING hnsw (embedding vector_cosine_ops)
+WITH (m = 16, ef_construction = 64);
+```
+
+### Vector Search Best Practices
+- Choose the right index type for your use case:
+  - IVFFlat: Good balance of build time and query speed
+  - HNSW: Better query performance but slower to build
+- Match vector dimensions to your embedding model
+- Use cosine distance (`<=>`) for most text embedding models
+- Consider hybrid search combining vector similarity with text matching
+- Regularly rebuild vector indexes for optimal performance
+- Implement appropriate caching for frequent similarity searches
+- Test performance with realistic data volumes
+
+## 10. Realtime & Subscription Features
+
+### Realtime Setup
+```sql
+-- Enable publication for realtime
+BEGIN;
+  -- Create publication if needed
+  CREATE PUBLICATION IF NOT EXISTS supabase_realtime;
+  
+  -- Add specific tables
+  ALTER PUBLICATION supabase_realtime ADD TABLE messages, notifications;
+COMMIT;
+
+-- Enable realtime only for specific columns (Postgres 14+)
+ALTER PUBLICATION supabase_realtime ALTER TABLE notifications
+  ADD COLUMN id, user_id, message, created_at;
+```
+
+### Realtime Best Practices
+- Enable realtime only for tables that need it
+- Consider security implications of broadcasting changes
+- Use RLS to restrict what data users can subscribe to
+- For high-volume tables, consider only broadcasting specific columns
+- Implement client-side throttling for realtime events
+- Use channels efficiently to organize subscriptions
+- Consider broadcast vs. presence channels based on needs
+- Test realtime performance under load
+
+## 11. Database Maintenance & Scaling
+
+### Maintenance Tasks
+```sql
+-- Database health check view
+CREATE OR REPLACE VIEW db_health AS
+SELECT
+  relname AS table_name,
+  n_live_tup AS row_count,
+  pg_size_pretty(pg_relation_size(relid)) AS table_size,
+  pg_size_pretty(pg_total_relation_size(relid)) AS total_size
+FROM pg_stat_user_tables
+ORDER BY pg_total_relation_size(relid) DESC;
+
+-- Index usage statistics
+CREATE OR REPLACE VIEW index_usage AS
+SELECT
+  schemaname || '.' || relname AS table,
+  indexrelname AS index,
+  idx_scan AS scans,
+  pg_size_pretty(pg_relation_size(i.indexrelid)) AS size
+FROM pg_stat_user_indexes ui
+JOIN pg_index i ON ui.indexrelid = i.indexrelid
+ORDER BY scans ASC, pg_relation_size(i.indexrelid) DESC;
+```
+
+### Scaling Considerations
+- Implement table partitioning for tables expected to grow very large
+- Consider archiving historical data to maintain performance
+- Use connection pooling effectively
+- Implement appropriate caching strategies
+- Monitor and tune autovacuum settings
+- Set up regular database maintenance tasks
+- Implement appropriate backup and recovery procedures
+- Consider read replicas for read-heavy workloads
+
+## 12. Naming Conventions & Developer Experience
+
+### Naming Guidelines
+- Use clear, descriptive names for tables, columns, and functions
+- Follow consistent naming patterns across your database
+- Consider using prefixes for related tables (e.g., chat_sessions, chat_messages)
+- Use snake_case for database objects (PostgreSQL convention)
+- Add comments to complex tables, functions, and triggers
+
+### Developer Experience Improvements
+- Create helper functions for common operations
+- Implement views for frequently used complex queries
+- Document database schema and relationships
+- Use consistent patterns for similar functionality
+- Consider implementing versioned migrations
+- Create appropriate test fixtures and environments
