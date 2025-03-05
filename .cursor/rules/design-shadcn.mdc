@@ -3,331 +3,110 @@ description: ShadCN UI Implementation Rules for AI Agents
 globs: 
 alwaysApply: false
 ---
-## Core Principles
-
-1. **Component First Approach**
-   - Use ShadCN UI's pre-built accessible components whenever possible
-   - Avoid creating custom UI elements when a ShadCN component exists
-   - Reference: [ShadCN UI Components](mdc:https:/ui.shadcn.com/docs/components)
-
-2. **Maintain Consistency**
-   - Use the same component variants across similar UI elements
-   - Keep spacing, sizing, and color choices consistent throughout the application
-   - Follow ShadCN's design system for cohesive user experience
-
-3. **Embrace Customization Through Configuration**
-   - Customize via Tailwind utility classes or component props
-   - Avoid directly modifying ShadCN component source code
-   - Use the theming system for global style changes: [ShadCN Theming](mdc:https:/ui.shadcn.com/docs/theming)
-
-## Implementation Guidelines
-
-### Installation & Setup
-
-1. **Fresh Installation**
-   ```bash
-   # For new projects
-   pnpm dlx create-next-app@latest my-app --typescript --tailwind --eslint
-   cd my-app
-   pnpm dlx shadcn-ui@latest init
-   ```
-
-2. **Adding to Existing Next.js 15 Project**
-   ```bash
-   pnpm dlx shadcn-ui@latest init
-   ```
-   
-3. **Component Installation**
-   ```bash
-   # Install specific components as needed
-   pnpm dlx shadcn-ui@latest add button card avatar
-   ```
-
-4. **React 19 Compatibility**
-   - ShadCN UI is fully compatible with Next.js 15 and React 19
-   - Reference: [React 19 Compatibility](mdc:https:/ui.shadcn.com/docs/react-19)
-
-### AI Chatbot UI Architecture
-
-1. **Message Handling**
-   - Use `Card` components for message containers
-   - Differentiate user and AI messages with visual styling
-   - Include timestamps and optional message status indicators
-
-   ```jsx
-   <div className="flex flex-col space-y-4">
-     {messages.map((message) => (
-       <Card key={message.id} className={message.role === "user" ? "ml-auto bg-primary-foreground" : "mr-auto"}>
-         <CardHeader className="flex flex-row items-start gap-4 p-4">
-           <Avatar>
-             <AvatarFallback>{message.role === "user" ? "U" : "AI"}</AvatarFallback>
-           </Avatar>
-           <div>
-             <CardTitle className="text-sm font-medium">
-               {message.role === "user" ? "You" : "Assistant"}
-             </CardTitle>
-             <CardDescription className="text-xs">
-               {new Date(message.createdAt).toLocaleTimeString()}
-             </CardDescription>
-           </div>
-         </CardHeader>
-         <CardContent className="p-4 pt-0">
-           {message.content}
-         </CardContent>
-       </Card>
-     ))}
-   </div>
-   ```
-
-2. **Input Area**
-   - Use `Textarea` instead of `Input` for multi-line support
-   - Include a prominent `Button` for submission
-   - Add loading states for user feedback
-
-   ```jsx
-   <div className="flex items-end w-full gap-2">
-     <Textarea 
-       placeholder="Type your message..." 
-       value={input}
-       onChange={handleInputChange}
-       className="flex-1 min-h-[80px]"
-     />
-     <Button 
-       onClick={handleSubmit}
-       disabled={isLoading || !input.trim()}
-     >
-       {isLoading ? <Spinner className="mr-2" /> : null}
-       Send
-     </Button>
-   </div>
-   ```
-
-3. **Streaming Responses**
-   - Implement response streaming using Vercel AI SDK
-   - Show typing indicators using `Skeleton` components
-   - Reference: [Vercel AI SDK](mdc:https:/sdk.vercel.ai/docs)
-
-4. **Chat Container**
-   - Use `ScrollArea` for message overflow
-   - Auto-scroll to latest message
-   - Consider fixed height containers
-
-   ```jsx
-   <ScrollArea className="h-[600px] pr-4" viewportRef={scrollAreaRef}>
-     {/* Messages go here */}
-   </ScrollArea>
-   ```
-
-5. **Error States**
-   - Use `Alert` components for API or model errors
-   - Implement retry mechanisms with clear feedback
-
-## Design Patterns for AI Interfaces
-
-### 1. Progressive Disclosure
-
-- Start with minimal UI and reveal advanced options progressively
-- Use `Tabs`, `Accordion`, or `Collapsible` components to organize content
-- Keep the primary interaction path clean and focused
-
-```jsx
-<Tabs defaultValue="chat">
-  <TabsList>
-    <TabsTrigger value="chat">Chat</TabsTrigger>
-    <TabsTrigger value="settings">Settings</TabsTrigger>
-  </TabsList>
-  <TabsContent value="chat">
-    {/* Chat interface */}
-  </TabsContent>
-  <TabsContent value="settings">
-    {/* Chat settings, model selection, etc. */}
-  </TabsContent>
-</Tabs>
-```
-
-### 2. Clear Visual Hierarchy
-
-- Use `Typography` components consistently
-- Establish clear visual distinction between different elements
-- Apply spacing consistently using Tailwind classes
-
-### 3. Responsive Layouts
-
-- Implement responsive layouts for all screen sizes
-- Use ShadCN's inherent mobile-friendliness
-- Consider collapsible side panels via `Sheet` component
-
-```jsx
-{/* Mobile navigation */}
-<Sheet>
-  <SheetTrigger asChild>
-    <Button variant="outline" className="md:hidden">
-      <Menu />
-    </Button>
-  </SheetTrigger>
-  <SheetContent side="left">
-    {/* Navigation items */}
-  </SheetContent>
-</Sheet>
-
-{/* Desktop sidebar */}
-<aside className="hidden md:flex w-64 flex-col">
-  {/* Same navigation items */}
-</aside>
-```
-
-### 4. Loading States
-
-- Always show loading states during API calls
-- Use `Skeleton` components for content placeholders
-- Implement streaming for perceived performance
-
-```jsx
-{isLoading ? (
-  <div className="space-y-2">
-    <Skeleton className="h-4 w-3/4" />
-    <Skeleton className="h-4 w-1/2" />
-    <Skeleton className="h-4 w-5/6" />
-  </div>
-) : (
-  <p>{content}</p>
-)}
-```
-
-## AI-Specific Implementation Rules
-
-### 1. Message Formatting
-
-- Support markdown in AI responses
-- Use syntax highlighting for code blocks
-- Consider using `react-markdown` with ShadCN styling
-
-### 2. Context Management
-
-- Visually indicate when context window is being used
-- Show conversation summary or key points when appropriate
-- Use `Badge` components to show active context
-
-```jsx
-<div className="flex items-center gap-2">
-  <h2 className="text-lg font-semibold">Current Chat</h2>
-  <Badge variant="outline">{messages.length} messages</Badge>
-  {contextLength > 75 && (
-    <Badge variant="destructive">Context near limit</Badge>
-  )}
-</div>
-```
-
-### 3. User Controls
-
-- Allow users to reset/start new conversations
-- Implement chat history management
-- Provide feedback mechanisms (thumbs up/down)
-
-```jsx
-<DropdownMenu>
-  <DropdownMenuTrigger asChild>
-    <Button variant="ghost" size="icon">
-      <MoreVertical className="h-4 w-4" />
-    </Button>
-  </DropdownMenuTrigger>
-  <DropdownMenuContent>
-    <DropdownMenuItem onClick={startNewChat}>
-      New Chat
-    </DropdownMenuItem>
-    <DropdownMenuItem onClick={clearMessages}>
-      Clear Messages
-    </DropdownMenuItem>
-    <DropdownMenuSeparator />
-    <DropdownMenuItem onClick={exportChatHistory}>
-      Export Chat
-    </DropdownMenuItem>
-  </DropdownMenuContent>
-</DropdownMenu>
-```
-
-### 4. Model Selection
-
-- Allow users to select different models when appropriate
-- Show model capabilities and limitations
-- Implement model switching with minimal UI changes
-
-```jsx
-<Select value={model} onValueChange={setModel}>
-  <SelectTrigger className="w-full">
-    <SelectValue placeholder="Select model" />
-  </SelectTrigger>
-  <SelectContent>
-    <SelectItem value="gpt-4">GPT-4 (Most capable)</SelectItem>
-    <SelectItem value="gpt-3.5-turbo">GPT-3.5 (Faster responses)</SelectItem>
-  </SelectContent>
-</Select>
-```
-
-## Performance Optimization Rules
-
-1. **Implement Response Streaming**
-   - Always use streaming responses for AI chatbots
-   - Implement with Vercel AI SDK's `OpenAIStream` and `StreamingTextResponse`
-   - Reference: [AI SDK Streaming](mdc:https:/sdk.vercel.ai/docs/api-reference/streaming)
-
-2. **Optimize Message Rendering**
-   - Use virtualization for long chat histories
-   - Consider pagination for older messages
-   - Implement efficient React rendering patterns
-
-3. **Edge Runtime Deployment**
-   - Deploy AI endpoints on Edge Runtime when possible
-   - Add `export const runtime = 'edge'` to API routes
-   - Reduces latency for global users
-
-4. **Implement Caching Strategies**
-   - Cache static content and repeated queries
-   - Use Next.js 15's improved caching system
-   - Consider SWR or React Query for client-side caching
-
-## Security Guidelines
-
-1. **Protect API Keys**
-   - Never expose OpenAI keys on the client
-   - Use environment variables for sensitive data
-   - Implement proper backend validation
-
-2. **Input Validation**
-   - Validate and sanitize user inputs
-   - Implement rate limiting for API calls
-   - Use the OpenAI moderation API when needed
-
-3. **Content Filtering**
-   - Filter inappropriate content
-   - Implement fallbacks for rejected completions
-   - Use `Alert` components for user feedback on rejected prompts
-
-## Resources and References
-
-- [ShadCN UI Documentation](mdc:https:/ui.shadcn.com)
-- [Next.js 15 Documentation](mdc:https:/nextjs.org/docs)
-- [Vercel AI SDK](mdc:https:/sdk.vercel.ai)
-- [OpenAI API Documentation](mdc:https:/platform.openai.com/docs)
-- [Radix UI Primitives](mdc:https:/www.radix-ui.com)
-- [Tailwind CSS Documentation](mdc:https:/tailwindcss.com/docs)
-- [Next.js AI Chatbot Template](mdc:https:/vercel.com/templates/next.js/nextjs-ai-chatbot)
-
-## Examples of Well-Implemented ShadCN UI Chatbots
-
-1. [Vercel AI Chatbot](mdc:https:/github.com/vercel-labs/ai-chatbot)
-2. [ShadCN Chat](mdc:https:/shadcn-chat.vercel.app)
-3. [ChatGPT Clone with ShadCN](mdc:https:/github.com/nisabmohd/ChatGPT)
-
-## Implementation Checklist
-
-- [ ] Install and configure ShadCN UI in Next.js 15
-- [ ] Set up proper theme configuration
-- [ ] Implement chat interface with proper components
-- [ ] Add streaming responses with Vercel AI SDK
-- [ ] Ensure responsive design across all breakpoints
-- [ ] Implement proper loading states
-- [ ] Add accessibility features
-- [ ] Test performance optimization
-- [ ] Implement security best practices
-- [ ] Conduct usability testing
+# UI Design System Guidelines                            │ │
+│ │  2                                                           │ │
+│ │  3  ## Material Design Components (MDC) Rules                │ │
+│ │  4                                      │ │
+│ │  5  This document outlines the design system principles f    │ │
+│ │    or our chat application to ensure consistency, accessi    │ │
+│ │    bility, and developer efficiency.                         │ │
+│ │  6                                                           │ │
+│ │  7  ## 1. Component Architecture                             │ │
+│ │  8                                                           │ │
+│ │  9  ### Core                                  │ │
+│ │ 10  - **Chat Container**: `components/chat.tsx` serves as    │ │
+│ │     the main container and orchestrator                      │ │
+│ │ 11  - **Message Components**: `components/message.tsx` an    │ │
+│ │    d `components/messages.tsx` handle rendering conversat    │ │
+│ │    ions                                                      │ │
+│ │ 12  - **Input Components**: `components/multimodal-input.    │ │
+│ │    tsx` provides user interaction                            │ │
+│ │ 13  - **Artifact Components**: Components prefixed with `    │ │
+│ │    artifatent types                   │ │
+│ │ 14                                                           │ │
+│ │ 15  ### Hierarchy                                            │ │
+│ │ 16  - Follow the established component hierarchy with con    │ │
+│ │    tainers → layout → functional components                  │ │
+│ │ 17  - Always compose from primitive UI components in `com    │ │
+│ │    ponents/ui/*`                                             │ │
+│ │ 18                                                           │ │
+│ │ 19  ## 2. Styling Principles                                 │ │
+│ │ 20                                                           │ │
+│ │ 21  ### CSS Guidelines                                       │ │
+│ │ 22  - Use Tailwind utility classes for styling               │ │
+│ │ 23  - Follow mobile-first responsive design patterns         │ │
+│ │ 24  - Use CSS variables defined in `globals.css` for them    │ │
+│ │    ing                                                       │ │
+│ │ 25  - Maintain dark/light mode compatibility                 │ │
+│ │ 26                                                           │ │
+│ │ 27  ### Design Tokens                                        │ │
+│ │ 28  - Colors: Use semantic color tokens defined in `tailw    │ │
+│ │    ind.config.ts`                                            │ │
+│ │ 29  - Spacing: Follow 4px grid system (0.25rem increments    │ │
+│ │    )                                                         │ │
+│ │ 30  - Typography: Use defined font sizes and weights         │ │
+│ │ 31  - Shadows: Use predefined shadow values for elevation    │ │
+│ │ 32                                                           │ │
+│ │ 33  ## 3. State Management                                   │ │
+│ │ 34                                                           │ │
+│ │ 35  - Prefer React hooks over globalssible     │ │
+│ │ 36  - Use the AI SDK's `useChat` hook for chat functional    │ │
+│ │    ity                                                       │ │
+│ │ 37  - Follow context pattern for shared state                │ │
+│ │ 38  - Keep state close to where it's used                    │ │
+│ │ 39                                                           │ │
+│ │ 40  ## 4. Accessibility                                      │ │
+│ │ 41                                                           │ │
+│ │ 42  - Maintain WCAG 2.1 AA compliance                        │ │
+│ │ 43  - Ensure proper contrast ratios (4.5:1 minimum)          │ │
+│ │ 44  - Provide keyboard navigation for all interactive ele    │ │
+│ │    ments                                                     │ │
+│ │ 45  - Use semantic HTML elements                             │ │
+│ │ 46  - Include proper ARIA attributes                         │ │
+│ │ 47                                                           │ │
+│ │ 48  ## 5. Component Development Rules                        │ │
+│ │ 49                                                           │ │
+│ │ 50  - Create single-responsibility components                │ │
+│ │ 51  - Document props with TypeScript interfaces              │ │
+│ │ 52  - Use React.memo() for performance-critical component    │ │
+│ │    s                                                         │ │
+│ │ 53  - Follow established naming conventions:                 │ │
+│ │ 54    - PascalCase for components                            │ │
+│ │ 55    - camelCase for functions and variables                │ │
+│ │ 56    - kebab-case for CSS classes                           │ │
+│ │ 57                                                           │ │
+│ │ 58  ## 6. Layout Patterns                                    │ │
+│ │ 59                                                           │ │
+│ │ 60  - Use CSS Grid for page layouts                          │ │
+│ │ 61  - Use Flexbox for component layouts                      │ │
+│ │ 62  - Maintain consistent spacing (margin/padding)           │ │
+│ │ 63  - Follow mobile-first responsive design approach         │ │
+│ │ 64                                                           │ │
+│ │ 65  ## 7. Interaction Patterns                               │ │
+│ │ 66                                                           │ │
+│ │ 67  - Provide visual feedback for all user actions           │ │
+│ │ 68  - Maintain consistent hover/focus states                 │ │
+│ │ 69  - Use transitions for state changes (300ms standard d    │ │
+│ │    uration)                                                  │ │
+│ │ 70  - Follow established navigation patterns                 │ │
+│ │ 71                                                           │ │
+│ │ 72  ## 8. Performance Considerations                         │ │
+│ │ 73                                                           │ │
+│ │ 74  - Lazy load components when appropriate                  │ │
+│ │ 75  - Use image optimization for performance                 │ │
+│ │ 76  - Keep bundle size minimal                               │ │
+│ │ 77  - Optimize for Core Web Vitals                           │ │
+│ │ 78                                                           │ │
+│ │ 79  ## 9. Integration Guidelines                             │ │
+│ │ 80                                                           │ │
+│ │ 81  When integrating with backend or AI:                     │ │
+│ │ 82  - Use the established AI SDK patterns                    │ │
+│ │ 83  - Follow streaming response handling patterns            │ │
+│ │ 84  - Maintain error state handling as shown in existing     │ │
+│ │    components                                                │ │
+│ │ 85  - Use proper loading states                              │ │
+│ │ 86                                                           │ │
+│ │ 87  By following these guidelines, we ensure a consistent    │ │
+│ │    , maintainable, and high-quality user interface across    │ │
+│ │     the application.                                         │ │
+│ │ 88 \ No newline at end of file           

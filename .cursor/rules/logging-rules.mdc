@@ -3,114 +3,116 @@ description: # Next.js TypeScript Logging Best Practices - AI Agent Rules
 globs: 
 alwaysApply: false
 ---
-# Logging Rules and Best Practices
+# Simplified Logging System for Vercel + Supabase
 
 ## Core Principles
 
-1. **Environment-Aware Logging**: Configure logging behavior based on the environment without code changes.
-2. **Structured Format**: Always use structured JSON logging in all environments.
-3. **Context Preservation**: Maintain request context throughout the entire request lifecycle.
-4. **Performance Consciousness**: Optimize logging to minimize performance impact, especially in production.
-5. **Security First**: Never log sensitive information in any environment.
-6. **AI-Specific Context**: Include token usage, model information, and anonymized prompt data.
-7. **Request Correlation**: Use unique identifiers to trace requests across client, API, and AI service boundaries.
-8. **Real-time Monitoring**: Structure logs to enable real-time dashboards for performance and usage patterns.
+1. **Vercel-Optimized**: Leverage Vercel's built-in logging infrastructure
+2. **Request Tracing**: Use correlation IDs to track requests across services
+3. **Structured Format**: JSON-structured logs for searchability
+4. **Database for History**: Store chat history in Supabase, not logs
+5. **Vector-Aware**: Include monitoring for vector embedding operations
 
-## Environment-Specific Configuration
-
-### Development Environment
+## Vercel-Optimized Logger
 
 ```typescript
-// logger.ts - Development Configuration
-import pino from 'pino';
-
-export const logger = pino({
-  level: 'debug',
-  transport: {
-    target: 'pino-pretty',
-    options: {
-      colorize: true,
-      translateTime: 'SYS:standard',
-      ignore: 'hostname,pid'
+// logger.ts - Simple but effective logger for Vercel
+export const logger = {
+  debug: (message, context = {}) => {
+    if (process.env.NODE_ENV === 'development') {
+      console.debug(JSON.stringify({ 
+        level: 'debug', 
+        message, 
+        ...context, 
+        timestamp: new Date().toISOString() 
+      }));
     }
   },
-  serializers: {
-    err: pino.stdSerializers.err,
-    req: pino.stdSerializers.req,
-    res: pino.stdSerializers.res
-  }
-});
-```
-
-### Production Environment
-
-```typescript
-// logger.ts - Production Configuration
-import pino from 'pino';
-
-export const logger = pino({
-  level: process.env.LOG_LEVEL || 'info',
-  redact: {
-    paths: ['password', 'token', 'authorization', 'creditCard', 'ssn', 'email'],
-    censor: '[REDACTED]'
+  
+  info: (message, context = {}) => {
+    // In production, limit info logs to important operations
+    if (process.env.NODE_ENV !== 'production' || context.important) {
+      console.log(JSON.stringify({ 
+        level: 'info', 
+        message, 
+        ...context, 
+        timestamp: new Date().toISOString() 
+      }));
+    }
   },
-  serializers: {
-    err: pino.stdSerializers.err,
-    req: (req) => {
-      return {
-        id: req.id,
-        method: req.method,
-        url: req.url,
-        // Exclude potentially large or sensitive parts
-        headers: {
-          'user-agent': req.headers['user-agent'],
-          'content-type': req.headers['content-type'],
-          'accept': req.headers['accept']
-        }
-      };
-    },
-    res: pino.stdSerializers.res
+  
+  warn: (message, context = {}) => {
+    console.warn(JSON.stringify({ 
+      level: 'warn', 
+      message, 
+      ...context, 
+      timestamp: new Date().toISOString() 
+    }));
+  },
+  
+  error: (message, context = {}) => {
+    console.error(JSON.stringify({ 
+      level: 'error', 
+      message, 
+      ...(context.error ? {
+        errorMessage: context.error.message,
+        stack: context.error.stack,
+        name: context.error.name
+      } : context),
+      timestamp: new Date().toISOString() 
+    }));
   }
-});
+};
+
+// Log application startup (useful in Vercel logs)
+if (typeof window === 'undefined') {
+  logger.info('Application started', { 
+    important: true,
+    environment: process.env.NODE_ENV,
+    region: process.env.VERCEL_REGION
+  });
+}
 ```
 
-## Server-Side Logging Implementation
-
-### Middleware Integration
+## Request Tracking Middleware
 
 ```typescript
 // middleware.ts
-import { NextResponse } from 'next/server';
-import type { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { logger } from '@/utils/logger';
 import { randomUUID } from 'crypto';
 
 export function middleware(request: NextRequest) {
-  // Create unique request ID or use existing
-  const requestId = request.headers.get('x-request-id') || randomUUID();
+  // Skip static assets
+  if (request.nextUrl.pathname.startsWith('/_next/') || 
+      request.nextUrl.pathname.includes('.')) {
+    return NextResponse.next();
+  }
   
-  // Capture start time for performance tracking
+  // Create or use existing request ID
+  const requestId = request.headers.get('x-request-id') || randomUUID();
   const startTime = performance.now();
   
-  // Add context to all logs for this request
-  const log = logger.child({
-    requestId,
-    route: request.nextUrl.pathname,
-    method: request.method,
-    userAgent: request.headers.get('user-agent')
-  });
-  
-  log.info('Request started');
-  
-  // Propagate context to downstream handlers
+  // Add context to downstream handlers
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-request-id', requestId);
   requestHeaders.set('x-request-start', startTime.toString());
   
+  // Log only in development or for important paths
+  const isImportantPath = request.nextUrl.pathname.includes('/api/') || 
+                         request.nextUrl.pathname.includes('/chat');
+  
+  if (process.env.NODE_ENV === 'development' || isImportantPath) {
+    logger.info('Request started', { 
+      requestId,
+      method: request.method,
+      path: request.nextUrl.pathname,
+      important: isImportantPath
+    });
+  }
+  
   return NextResponse.next({
-    request: {
-      headers: requestHeaders,
-    },
+    request: { headers: requestHeaders }
   });
 }
 
@@ -119,46 +121,69 @@ export const config = {
 };
 ```
 
-### API Routes Integration
+## API Route Wrapper
 
 ```typescript
-// api-handler.ts
+// api-logger.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { logger } from '@/utils/logger';
 
-export function withLogging(handler: (req: NextApiRequest, res: NextApiResponse) => Promise<void>) {
+export function withLogging(
+  handler: (req: NextApiRequest, res: NextApiResponse) => Promise<void>
+) {
   return async (req: NextApiRequest, res: NextApiResponse) => {
-    const requestId = req.headers['x-request-id'] as string || randomUUID();
+    const requestId = req.headers['x-request-id'] as string || 'unknown';
     const startTime = performance.now();
     
-    // Create request-scoped logger with context
-    const log = logger.child({ 
-      requestId,
-      method: req.method,
-      path: req.url
-    });
-    
-    // Track response for logging completion
+    // Add response logging
     const originalEnd = res.end;
-    
     res.end = function(chunk, ...args) {
       const responseTime = Math.round(performance.now() - startTime);
       
-      log.info({
-        status: res.statusCode,
-        responseTime
-      }, `Request completed in ${responseTime}ms`);
+      // Log based on status code
+      if (res.statusCode >= 400) {
+        logger.error(`API error: ${res.statusCode}`, {
+          requestId,
+          method: req.method,
+          path: req.url,
+          statusCode: res.statusCode,
+          responseTime
+        });
+      } else if (responseTime > 1000) {
+        // Log slow responses
+        logger.warn(`Slow API response (${responseTime}ms)`, {
+          requestId,
+          method: req.method,
+          path: req.url,
+          statusCode: res.statusCode,
+          responseTime
+        });
+      } else {
+        // Normal responses only logged in development
+        if (process.env.NODE_ENV === 'development') {
+          logger.info(`API request completed`, {
+            requestId,
+            method: req.method,
+            path: req.url,
+            statusCode: res.statusCode,
+            responseTime
+          });
+        }
+      }
       
       return originalEnd.apply(this, [chunk, ...args]);
     };
     
     try {
-      log.debug('Processing request');
       await handler(req, res);
     } catch (error) {
-      log.error({ err: error }, 'Unhandled error in request handler');
+      logger.error('Unhandled API error', {
+        requestId,
+        method: req.method,
+        path: req.url,
+        error
+      });
       
-      // Only send error response if not already sent
       if (!res.writableEnded) {
         res.status(500).json({ error: 'Internal server error' });
       }
@@ -167,1614 +192,379 @@ export function withLogging(handler: (req: NextApiRequest, res: NextApiResponse)
 }
 ```
 
-### Error Handling
+## Chat History in Supabase
 
 ```typescript
-// error-logger.ts
-import { logger } from './logger';
+// chat-store.ts - Supabase for chat history
+import { createClient } from '@supabase/supabase-js';
+import { logger } from '@/utils/logger';
 
-// Error categories for better filtering
-type ErrorCategory = 'api' | 'database' | 'validation' | 'auth' | 'system';
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
 
-export const logError = (
-  error: Error, 
-  category: ErrorCategory, 
-  context: Record<string, any> = {}
-) => {
-  logger.error({
-    err: error,
-    category,
-    ...context
-  }, `Error in ${category}: ${error.message}`);
-  
-  // Optional: Track errors in monitoring service
-  if (process.env.NODE_ENV === 'production') {
-    // Example: Sentry.captureException(error);
-  }
-};
-
-// Global exception handlers
-if (typeof window === 'undefined') {
-  process.on('uncaughtException', (error) => {
-    logger.fatal({ err: error }, 'Uncaught exception');
-    // Graceful shutdown after logging
-    process.exit(1);
-  });
-  
-  process.on('unhandledRejection', (reason) => {
-    logger.fatal({ err: reason }, 'Unhandled rejection');
-  });
-}
-```
-
-## Client-Side Logging
-
-### Optimized Browser Logger
-
-```typescript
-// client-logger.ts
-import log from 'loglevel';
-
-// Configure based on environment
-const isProduction = process.env.NODE_ENV === 'production';
-log.setLevel(isProduction ? 'warn' : 'debug');
-
-// Add context enrichment
-const originalFactory = log.methodFactory;
-log.methodFactory = function(methodName, logLevel, loggerName) {
-  const rawMethod = originalFactory(methodName, logLevel, loggerName);
-  
-  return function(message, ...args) {
-    // Add timestamp and page info to all logs
-    const enrichedMessage = {
-      timestamp: new Date().toISOString(),
-      level: methodName,
-      page: window.location.pathname,
-      message: message,
-      ...args.length === 1 && typeof args[0] === 'object' ? args[0] : { details: args }
-    };
-    
-    return rawMethod(enrichedMessage);
-  };
-};
-
-// Apply the method factory changes
-log.setLevel(log.getLevel());
-
-// Remote logging for production (errors only)
-if (isProduction) {
-  // Batch and send logs to backend
-  const queue = [];
-  const MAX_QUEUE = 10;
-  
-  // Override error and warn methods to queue for sending
-  const originalError = log.error;
-  log.error = function(...args) {
-    originalError.apply(this, args);
-    
-    queue.push({
-      level: 'error',
-      data: args,
-      timestamp: new Date().toISOString()
-    });
-    
-    if (queue.length >= MAX_QUEUE) {
-      sendLogs();
-    }
-  };
-  
-  // Send logs to backend endpoint
-  function sendLogs() {
-    if (queue.length === 0) return;
-    
-    const logsToSend = [...queue];
-    queue.length = 0;
-    
-    fetch('/api/client-logs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ logs: logsToSend }),
-      // Use keepalive to ensure logs are sent even during page transitions
-      keepalive: true
-    }).catch(() => {
-      // If sending fails, don't retry to avoid affecting user experience
-    });
-  }
-  
-  // Ensure logs are sent when user leaves
-  window.addEventListener('beforeunload', sendLogs);
-}
-
-export default log;
-```
-
-### React Integration
-
-```typescript
-// components/LogProvider.tsx
-import React, { createContext, useContext, useEffect } from 'react';
-import log from '@/utils/client-logger';
-
-type LogContextType = {
-  logEvent: (event: string, data?: any) => void;
-  logError: (error: Error, context?: any) => void;
-};
-
-const LogContext = createContext<LogContextType>({
-  logEvent: () => {},
-  logError: () => {}
-});
-
-export const LogProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Get any user context if available
-  const user = useUserContext(); // Your user context hook
-  
-  // Set user context for all logs when user state changes
-  useEffect(() => {
-    if (user?.id) {
-      log.info({ event: 'user_context_set', userId: user.id });
-    }
-  }, [user?.id]);
-  
-  const logEvent = (event: string, data?: any) => {
-    log.info({
-      event,
-      ...(user?.id ? { userId: user.id } : {}),
-      ...(data || {})
-    });
-  };
-  
-  const logError = (error: Error, context?: any) => {
-    log.error({
-      error: {
-        message: error.message,
-        stack: error.stack
-      },
-      ...(user?.id ? { userId: user.id } : {}),
-      ...(context || {})
-    });
-  };
-  
-  return (
-    <LogContext.Provider value={{ logEvent, logError }}>
-      {children}
-    </LogContext.Provider>
-  );
-};
-
-// Hook for components to use
-export const useLogger = () => useContext(LogContext);
-```
-
-## Structured Logging Guidelines
-
-### Log Levels and When to Use Them
-
-1. **TRACE** (development only)
-   - Extremely detailed information
-   - Function entry/exit points with parameters
-   - Variable state changes
-   
-2. **DEBUG** (development only)
-   - Detailed information useful for debugging
-   - Resource initialization
-   - Configuration details
-   
-3. **INFO** (production acceptable)
-   - Notable but normal events
-   - User actions (login, logout, etc.)
-   - Business events (order created, etc.)
-   - API calls
-   
-4. **WARN** (production important)
-   - Potential issues that aren't errors
-   - Deprecated feature usage
-   - Resource utilization warnings
-   - Business rule violations
-   
-5. **ERROR** (production critical)
-   - Runtime errors
-   - Failed requests
-   - API failures
-   - Business process failures
-   
-6. **FATAL** (production critical)
-   - Application crashes
-   - Unrecoverable situations
-   - Data corruption
-
-### Standard Log Fields
-
-All logs should include these standard fields when applicable:
-
-```typescript
-interface StandardLogFields {
-  // Technical context
-  timestamp: string;  // ISO format
-  level: string;      // Log level
-  requestId?: string; // Unique ID for request tracing
-  
-  // User context
-  userId?: string;    // Authenticated user ID
-  sessionId?: string; // Browser session ID
-  
-  // Request context
-  method?: string;    // HTTP method
-  path?: string;      // Request path
-  statusCode?: number;// Response status
-  responseTime?: number; // MS to process
-  
-  // Error context
-  error?: {
-    message: string;
-    name: string;
-    stack?: string;
-  };
-  
-  // Business context
-  event?: string;     // Business event name
-  resource?: string;  // Resource type being acted upon
-  resourceId?: string;// ID of the resource
-}
-```
-
-### What to Log
-
-#### Always Log:
-- Application startup and shutdown
-- Authentication events (success and failure)
-- Authorization failures
-- Data access and modification (without sensitive details)
-- Business process completions and failures
-- External service interactions
-- Performance metrics (DB query time, API response time)
-- Configuration changes
-- All errors with contextual information
-- Security events
-
-#### Never Log:
-- Passwords or credentials (even hashed)
-- API keys, tokens, or secrets
-- Complete credit card numbers, SSNs, or other PII
-- Session identifiers
-- Database connection strings
-- Encryption keys
-- Detailed health check results
-- Internal network information
-- Large request or response bodies
-- User-uploaded files or content
-
-## Performance Optimization
-
-### Conditional Logging
-
-```typescript
-// Efficient approach to avoid string construction costs
-if (logger.isLevelEnabled('debug')) {
-  logger.debug({ 
-    complexObject: calculateExpensiveValue(),
-    details: getDetails()
-  }, 'Detailed debug information');
-}
-```
-
-### Sampling Strategy
-
-```typescript
-// For high-volume endpoints, implement sampling
-const shouldLog = (req) => {
-  // Always log errors
-  if (req.statusCode >= 400) return true;
-  
-  // Always log specific critical paths
-  if (req.path.includes('/checkout') || req.path.includes('/payment')) {
-    return true;
-  }
-  
-  // Sample other traffic at 10%
-  return Math.random() < 0.1;
-};
-```
-
-### Batch Processing
-
-For client-side or high-volume server logs:
-
-```typescript
-// Batch collector
-class LogBatch {
-  private buffer: any[] = [];
-  private timer: NodeJS.Timeout | null = null;
-  private readonly maxSize: number;
-  private readonly maxWait: number;
-  
-  constructor(
-    private readonly processor: (logs: any[]) => void,
-    options = { maxSize: 100, maxWait: 5000 }
-  ) {
-    this.maxSize = options.maxSize;
-    this.maxWait = options.maxWait;
-  }
-  
-  add(log: any): void {
-    this.buffer.push(log);
-    
-    if (this.buffer.length >= this.maxSize) {
-      this.flush();
-      return;
-    }
-    
-    if (!this.timer) {
-      this.timer = setTimeout(() => this.flush(), this.maxWait);
-    }
-  }
-  
-  flush(): void {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = null;
-    }
-    
-    if (this.buffer.length === 0) return;
-    
-    const logs = [...this.buffer];
-    this.buffer = [];
-    
-    this.processor(logs);
-  }
-}
-```
-
-## Framework-Specific Logging
-
-### Next.js API Routes with Edge Runtime
-
-```typescript
-// api-route-logging.ts
-import { NextResponse } from 'next/server';
-import { v4 as uuidv4 } from 'uuid';
-import { createLogger } from '@/utils/server-logger';
-
-// Create a logger specific to API routes
-const apiLogger = createLogger('api');
-
-export function withApiLogging(handler: (req: Request) => Promise<Response>) {
-  return async (req: Request) => {
-    const requestId = req.headers.get('x-request-id') || uuidv4();
-    const startTime = performance.now();
-    
-    // Extract key request metadata
-    const method = req.method;
-    const url = new URL(req.url);
-    const path = url.pathname;
-    const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0] || 'unknown';
-    const userAgent = req.headers.get('user-agent') || 'unknown';
-    
-    // Create context-aware logger
-    const log = apiLogger.child({
-      requestId,
-      method,
-      path,
-      clientIp,
-      runtime: 'edge'
-    });
-    
-    log.info('API request received');
-    
-    try {
-      // Call the handler
-      const response = await handler(req);
-      
-      // Calculate performance metrics
-      const responseTime = Math.round(performance.now() - startTime);
-      const status = response.status;
-      
-      // Clone the response to add headers
-      const enhancedResponse = new NextResponse(response.body, response);
-      enhancedResponse.headers.set('x-request-id', requestId);
-      enhancedResponse.headers.set('x-response-time', `${responseTime}ms`);
-      
-      // Log the completion
-      log.info({
-        status,
-        responseTime,
-        contentType: response.headers.get('content-type')
-      }, `API request completed with status ${status} in ${responseTime}ms`);
-      
-      return enhancedResponse;
-    } catch (error) {
-      // Calculate time even for errors
-      const responseTime = Math.round(performance.now() - startTime);
-      
-      // Log the error with context
-      log.error({
-        err: error,
-        responseTime
-      }, `API request failed after ${responseTime}ms`);
-      
-      // Return an appropriate error response
-      return NextResponse.json(
-        { error: 'Internal server error' },
-        { status: 500, headers: {
-          'x-request-id': requestId,
-          'x-response-time': `${responseTime}ms`
-        }}
-      );
-    }
-  };
-}
-```
-
-### AI Service Interaction Logging
-
-```typescript
-// ai-logging.ts
-import { v4 as uuidv4 } from 'uuid';
-import { createLogger } from '@/utils/server-logger';
-import { Message } from 'ai';
-
-const aiLogger = createLogger('ai-service');
-
-export async function loggedAiStream({
-  messages,
-  model,
-  provider,
-  agent,
-  estimatedTokens,
-  streamFn
+// Store chat messages in Supabase
+export async function saveChatMessage({
+  userId,
+  sessionId,
+  role,
+  content
 }: {
-  messages: Message[];
-  model: string;
-  provider: string;
-  agent?: string;
-  estimatedTokens: number;
-  streamFn: () => Promise<ReadableStream>
+  userId: string;
+  sessionId: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
 }) {
-  const interactionId = uuidv4();
+  try {
+    const { error } = await supabase
+      .from('chat_messages')
+      .insert({
+        user_id: userId,
+        session_id: sessionId,
+        role,
+        content,
+        created_at: new Date().toISOString()
+      });
+      
+    if (error) throw error;
+    
+  } catch (error) {
+    logger.error('Failed to save chat message', {
+      error,
+      userId,
+      sessionId,
+      action: 'save_chat_message'
+    });
+  }
+}
+
+// Retrieve chat history
+export async function getChatSession(sessionId: string, userId: string) {
+  try {
+    const { data, error } = await supabase
+      .from('chat_messages')
+      .select('*')
+      .eq('session_id', sessionId)
+      .eq('user_id', userId)
+      .order('created_at', { ascending: true });
+      
+    if (error) throw error;
+    return { data, error: null };
+    
+  } catch (error) {
+    logger.error('Failed to retrieve chat session', {
+      error,
+      userId,
+      sessionId,
+      action: 'get_chat_session'
+    });
+    return { data: null, error };
+  }
+}
+
+// Chat retention policy can be implemented with a scheduled function:
+// Example: Run once per day with cron trigger in Supabase Edge Functions
+// ```
+// DELETE FROM chat_messages WHERE created_at < NOW() - INTERVAL '90 days';
+// ```
+```
+
+## Vector Embedding Logging
+
+```typescript
+// vector-logger.ts - For Supabase Vector operations
+import { logger } from '@/utils/logger';
+
+export const vectorLogger = {
+  // Log embedding creation
+  logEmbeddingCreation: (documentId, metadata = {}) => {
+    logger.info('Vector embedding created', {
+      operation: 'embedding_creation',
+      documentId,
+      ...metadata,
+      important: true
+    });
+  },
+  
+  // Log vector searches
+  logVectorQuery: (query, params = {}, resultCount, durationMs) => {
+    // Only log if slow or in development
+    const isSlowQuery = durationMs > 500;
+    
+    if (process.env.NODE_ENV === 'development' || isSlowQuery) {
+      logger.info(`Vector search completed in ${durationMs}ms`, {
+        operation: 'vector_query',
+        queryType: params.type || 'similarity',
+        resultCount,
+        durationMs,
+        dimensions: params.dimensions,
+        important: isSlowQuery
+      });
+    }
+    
+    // Always log slow queries as warnings
+    if (isSlowQuery) {
+      logger.warn(`Slow vector query (${durationMs}ms)`, {
+        operation: 'vector_query',
+        queryType: params.type || 'similarity',
+        resultCount,
+        durationMs
+      });
+    }
+  },
+  
+  // Log vector operations errors
+  logVectorError: (operation, error, context = {}) => {
+    logger.error(`Vector operation failed`, {
+      operation,
+      error,
+      ...context
+    });
+  }
+};
+
+// Example usage for vector operations
+export async function searchVectorEmbeddings(query, options = {}) {
   const startTime = performance.now();
-  
-  const log = aiLogger.child({
-    interactionId,
-    model,
-    provider,
-    agent: agent || 'default',
-    messageCount: messages.length,
-    estimatedTokens
-  });
-  
-  log.info('AI request initiated');
+  const requestId = options.requestId || 'unknown';
   
   try {
-    // Call the AI service
-    const stream = await streamFn();
+    // Your vector search implementation here
+    const results = await supabase.rpc('match_documents', {
+      query_embedding: query,
+      match_threshold: options.threshold || 0.5,
+      match_count: options.limit || 10
+    });
     
-    // Log success but don't wait for stream completion
-    const setupTime = Math.round(performance.now() - startTime);
-    log.info({
-      status: 'streaming',
-      setupTime
-    }, `AI stream setup completed in ${setupTime}ms`);
+    const durationMs = Math.round(performance.now() - startTime);
     
-    // You could add post-stream logging here with a transform stream
+    // Log the search
+    vectorLogger.logVectorQuery(
+      'document_search',
+      { threshold: options.threshold, limit: options.limit },
+      results.length,
+      durationMs
+    );
     
-    return stream;
+    return results;
   } catch (error) {
-    const errorTime = Math.round(performance.now() - startTime);
-    
-    log.error({
-      err: error,
-      errorTime,
-      lastMessagePreview: messages.length > 0 
-        ? messages[messages.length - 1].content.substring(0, 100) 
-        : 'no messages'
-    }, `AI request failed after ${errorTime}ms`);
-    
+    vectorLogger.logVectorError('document_search', error, {
+      requestId,
+      ...options
+    });
     throw error;
   }
 }
 ```
 
-## Integration Examples
-
-### Database Query Logging
+## Client-Side Minimal Logging
 
 ```typescript
-// db-client.ts
-import { Pool } from 'pg';
-import { logger } from './logger';
-
-export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL
-});
-
-// Wrap query method to add logging
-export async function query(text: string, params: any[] = []) {
-  const start = performance.now();
+// client-logger.ts - Browser-side logging
+export const clientLogger = {
+  // Track last error timestamp to prevent flooding
+  lastErrorTime: 0,
   
-  try {
-    const result = await pool.query(text, params);
-    const duration = Math.round(performance.now() - start);
-    
-    // Only log slow queries in production
-    const isSlowQuery = duration > 100; // 100ms threshold
-    
-    if (process.env.NODE_ENV !== 'production' || isSlowQuery) {
-      logger.info({
-        query: {
-          text: text.replace(/\s+/g, ' ').trim(),
-          params: params.map(p => typeof p === 'string' && p.length > 100 
-                             ? `${p.substring(0, 100)}... (truncated)` 
-                             : p),
-          rowCount: result.rowCount,
-          duration
-        }
-      }, isSlowQuery ? 'Slow database query' : 'Database query');
+  debug(message, data) {
+    if (process.env.NODE_ENV === 'development') {
+      console.debug(message, data || '');
     }
-    
-    return result;
-  } catch (error) {
-    logger.error({
-      err: error,
-      query: {
-        text: text.replace(/\s+/g, ' ').trim(),
-        params: params.map(p => typeof p === 'string' && p.length > 100 
-                         ? `${p.substring(0, 100)}... (truncated)` 
-                         : p)
-      }
-    }, 'Database query error');
-    
-    throw error;
-  }
-}
-```
-
-### Business Event Logging
-
-```typescript
-// business-events.ts
-import { logger } from './logger';
-
-export const businessEvents = {
-  orderCreated: (orderId: string, userId: string, amount: number, items: number) => {
-    logger.info({
-      event: 'order_created',
-      orderId,
-      userId,
-      amount,
-      items
-    }, 'Order created');
   },
   
-  paymentProcessed: (orderId: string, userId: string, amount: number, status: string) => {
-    logger.info({
-      event: 'payment_processed',
-      orderId,
-      userId,
-      amount,
-      status
-    }, 'Payment processed');
+  info(message, data) {
+    if (process.env.NODE_ENV === 'development') {
+      console.info(message, data || '');
+    }
   },
   
-  userRegistered: (userId: string, plan: string) => {
-    logger.info({
-      event: 'user_registered',
-      userId,
-      plan
-    }, 'User registered');
-  }
-};
-```
-
-## AI Chat Interface Logging
-
-### Example Implementation for Chat Routes
-
-```typescript
-// chat-route-logger.ts
-import { createLogger } from '@/utils/server-logger';
-import { Message } from 'ai';
-import { v4 as uuidv4 } from 'uuid';
-
-const chatLogger = createLogger('chat-routes');
-
-// Core logger setup for chat routes
-export function setupChatRequestLogging(req: Request) {
-  const requestId = req.headers.get('x-request-id') || uuidv4();
-  const startTime = performance.now();
-  const clientIp = getClientIp(req);
-  const userAgent = req.headers.get('user-agent') || 'unknown';
+  warn(message, data) {
+    console.warn(message, data || '');
+  },
   
-  // Create request-specific logger with standardized context
-  const log = chatLogger.child({ 
-    requestId, 
-    clientIp,
-    userAgent,
-    endpoint: new URL(req.url).pathname,
-    method: req.method
-  });
-  
-  return {
-    log,
-    requestId,
-    startTime,
-    // Helper to get response time at any point
-    getResponseTime: () => Math.round(performance.now() - startTime)
-  };
-}
-
-// Log message validation outcomes
-export function logMessageValidation(
-  log: any, 
-  isValid: boolean, 
-  messages: any[], 
-  errors?: any[],
-  responseTime?: number
-) {
-  if (isValid) {
-    log.debug({
-      messageCount: messages.length,
-      userMessageCount: messages.filter(m => m.role === 'user').length,
-      assistantMessageCount: messages.filter(m => m.role === 'assistant').length,
-      systemMessageCount: messages.filter(m => m.role === 'system').length
-    }, 'Message validation successful');
-  } else {
-    log.info({
-      validationErrors: errors,
-      responseTime
-    }, 'Message validation failed');
-  }
-}
-
-// Log agent selection details
-export function logAgentSelection(
-  log: any,
-  agent: string | null | undefined,
-  selectedAgentDetails: any | null,
-  messageCount: number
-) {
-  if (selectedAgentDetails) {
-    log.info({
-      agent: selectedAgentDetails.id,
-      agentName: selectedAgentDetails.name,
-      messageCount
-    }, 'Agent selected for chat request');
-  } else if (agent) {
-    log.warn({
-      requestedAgent: agent
-    }, 'Requested agent not found, using default');
-  } else {
-    log.debug('No agent specified, using default');
-  }
-}
-
-// Log chat request completion
-export function logChatCompletion(
-  log: any,
-  responseTime: number,
-  estimatedTokens: number,
-  agentId?: string
-) {
-  log.info({ 
-    responseTime,
-    estimatedTokens,
-    agent: agentId || 'default'
-  }, `Chat request completed successfully in ${responseTime}ms`);
-}
-
-// Log error with appropriate error type classification
-export function logChatError(
-  log: any,
-  error: any,
-  responseTime: number
-) {
-  const errorMessage = error instanceof Error ? error.message : String(error);
-  const errorStack = error instanceof Error ? error.stack : undefined;
-  const errorType = getErrorType(error);
-  
-  log.error({ 
-    err: error,
-    errorMessage,
-    errorStack,
-    errorType,
-    responseTime
-  }, `Chat error (${errorType}): ${errorMessage}`);
-}
-
-// Helper to categorize error types
-function getErrorType(error: any): string {
-  if (!error) return 'unknown';
-  
-  if (error instanceof Error) {
-    const msg = error.message.toLowerCase();
+  error(message, data) {
+    console.error(message, data || '');
     
-    if (msg.includes('rate limit')) return 'rate_limit';
-    if (msg.includes('authentication') || msg.includes('auth')) return 'authentication';
-    if (msg.includes('validation') || msg.includes('invalid')) return 'validation';
-    if (msg.includes('timeout') || msg.includes('timed out')) return 'timeout';
-    if (msg.includes('not found')) return 'not_found';
-    if (msg.includes('permission') || msg.includes('access')) return 'permission';
-    
-    // Extract custom error types from error name
-    const name = error.name?.replace('Error', '').toLowerCase();
-    if (name && name !== 'error') return name;
-  }
-  
-  return 'internal';
-}
-
-// Helper function to get client IP
-function getClientIp(req: Request): string {
-  const forwarded = req.headers.get('x-forwarded-for');
-  return (forwarded ? forwarded.split(',')[0] : 'unknown-ip').trim();
-}
-```
-
-### Chat Streaming Analytics
-
-```typescript
-// stream-analytics.ts
-import { createLogger } from '@/utils/server-logger';
-import { TransformStream } from 'stream/web';
-
-const streamLogger = createLogger('stream-analytics');
-
-// Analyzer that can be inserted into a streaming response
-export function createStreamAnalyzer(requestId: string, metadata: Record<string, any> = {}) {
-  let streamStart: number | null = null;
-  let totalChunks = 0;
-  let totalBytes = 0;
-  let firstChunkTime: number | null = null;
-  let lastChunkTime: number | null = null;
-  
-  const log = streamLogger.child({
-    requestId,
-    ...metadata
-  });
-  
-  // Create a transform stream that analyzes but doesn't modify the data
-  const { readable, writable } = new TransformStream({
-    start(controller) {
-      streamStart = performance.now();
-      log.debug('Stream started');
-    },
-    
-    transform(chunk, controller) {
-      // Pass through the chunk unmodified
-      controller.enqueue(chunk);
+    // Only send errors to server in production and throttle them
+    if (process.env.NODE_ENV === 'production') {
+      const now = Date.now();
       
-      // Analyze the chunk
-      totalChunks++;
-      const chunkSize = typeof chunk === 'string' 
-        ? new TextEncoder().encode(chunk).length 
-        : chunk.byteLength;
-      
-      totalBytes += chunkSize;
-      
-      const now = performance.now();
-      if (!firstChunkTime) {
-        firstChunkTime = now;
+      // Limit to one error per minute per client
+      if (now - this.lastErrorTime > 60000) {
+        this.lastErrorTime = now;
         
-        // Log the time to first chunk
-        log.debug({
-          timeToFirstChunk: Math.round(firstChunkTime - streamStart!)
-        }, 'First chunk received');
-      }
-      
-      lastChunkTime = now;
-    },
-    
-    flush(controller) {
-      // Calculate final metrics
-      const totalTime = lastChunkTime 
-        ? Math.round(lastChunkTime - streamStart!) 
-        : 0;
-      
-      const timeToFirstChunk = firstChunkTime 
-        ? Math.round(firstChunkTime - streamStart!) 
-        : 0;
-      
-      log.info({
-        totalChunks,
-        totalBytes,
-        totalTimeMs: totalTime,
-        timeToFirstChunkMs: timeToFirstChunk,
-        bytesPerSecond: totalTime > 0 
-          ? Math.round((totalBytes / totalTime) * 1000) 
-          : 0
-      }, `Stream completed: ${totalChunks} chunks, ${totalBytes} bytes in ${totalTime}ms`);
-    }
-  });
-  
-  return { readable, writable };
-}
-
-// Helper to wrap a streaming response with analytics
-export function wrapStreamWithAnalytics(
-  stream: ReadableStream,
-  requestId: string,
-  metadata: Record<string, any> = {}
-): ReadableStream {
-  const analyzer = createStreamAnalyzer(requestId, metadata);
-  
-  // Pipe through the analyzer
-  const reader = stream.getReader();
-  const writer = analyzer.writable.getWriter();
-  
-  // Start the pumping process
-  pump();
-  
-  async function pump() {
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) {
-          await writer.close();
-          break;
-        }
-        await writer.write(value);
-      }
-    } catch (err) {
-      streamLogger.error({ err, requestId }, 'Error in stream analytics');
-      writer.abort(err);
-    }
-  }
-  
-  return analyzer.readable;
-}
-```
-
-### Token Usage Monitoring
-
-```typescript
-// token-monitor.ts
-import { createLogger } from '@/utils/server-logger';
-
-const tokenLogger = createLogger('token-monitor');
-
-interface TokenUsage {
-  requestId: string;
-  userId?: string;
-  model: string;
-  promptTokens: number;
-  completionTokens: number;
-  totalCost: number;
-  timestamp: Date;
-}
-
-// Model cost mapping (in dollars per 1K tokens)
-const MODEL_COSTS = {
-  'gpt-4': {
-    prompt: 0.03,
-    completion: 0.06
-  },
-  'gpt-4-turbo': {
-    prompt: 0.01,
-    completion: 0.03
-  },
-  'gpt-3.5-turbo': {
-    prompt: 0.001,
-    completion: 0.002
-  }
-};
-
-// Log token usage and calculate costs
-export function logTokenUsage({
-  requestId,
-  userId,
-  model,
-  promptTokens,
-  completionTokens
-}: Omit<TokenUsage, 'totalCost' | 'timestamp'>) {
-  // Default to gpt-4 costs if model not found
-  const costs = MODEL_COSTS[model as keyof typeof MODEL_COSTS] || MODEL_COSTS['gpt-4'];
-  
-  // Calculate costs (convert to dollars from cost per 1K tokens)
-  const promptCost = (promptTokens / 1000) * costs.prompt;
-  const completionCost = (completionTokens / 1000) * costs.completion;
-  const totalCost = promptCost + completionCost;
-  
-  tokenLogger.info({
-    requestId,
-    userId,
-    model,
-    promptTokens,
-    completionTokens,
-    totalTokens: promptTokens + completionTokens,
-    promptCost,
-    completionCost,
-    totalCost,
-    timestamp: new Date().toISOString()
-  }, `Token usage for ${model}: ${promptTokens + completionTokens} tokens (${totalCost.toFixed(4)})`);
-  
-  // In a real system, you might persist this to a database
-  // and track usage against quotas or billing
-}
-
-// Simplified token estimator (more accurate than char-based)
-export function estimateTokensFromMessages(messages: Array<{role: string, content: string}>) {
-  let total = 0;
-  
-  // Each message has a base token cost based on role
-  const roleCost = {
-    system: 4,  // "system: " overhead
-    user: 4,    // "user: " overhead
-    assistant: 4 // "assistant: " overhead
-  };
-  
-  // Count tokens in each message
-  for (const message of messages) {
-    // Add role overhead
-    total += roleCost[message.role as keyof typeof roleCost] || 4;
-    
-    // Add token count for content (simplified: ~4 chars per token)
-    const contentTokens = Math.ceil(message.content.length / 4);
-    total += contentTokens;
-  }
-  
-  // Add 2 tokens for model formatting
-  return total + 2;
-}
-```
-
-### Practical Example - Complete Chat Route
-
-```typescript
-// chat.ts - Next.js API Route
-import { NextResponse } from 'next/server';
-import { streamText } from 'ai';
-import { openai } from '@ai-sdk/openai';
-import { z } from 'zod';
-import { v4 as uuidv4 } from 'uuid';
-
-import { 
-  setupChatRequestLogging,
-  logMessageValidation,
-  logAgentSelection,
-  logChatCompletion,
-  logChatError
-} from '@/lib/chat-route-logger';
-import { wrapStreamWithAnalytics } from '@/lib/stream-analytics';
-import { logTokenUsage, estimateTokensFromMessages } from '@/lib/token-monitor';
-import { agents } from '@/config/agents';
-
-// Message validation schema
-const MessageSchema = z.object({
-  role: z.enum(['user', 'assistant', 'system']),
-  content: z.string()
-});
-
-const RequestSchema = z.object({
-  messages: z.array(MessageSchema),
-  agent: z.string().optional()
-});
-
-export async function POST(req: Request) {
-  // Setup logging context
-  const { log, requestId, startTime, getResponseTime } = setupChatRequestLogging(req);
-  
-  log.info('Chat request received');
-  
-  try {
-    // Parse and validate request
-    const body = await req.json();
-    const parseResult = RequestSchema.safeParse(body);
-    
-    if (!parseResult.success) {
-      logMessageValidation(log, false, [], parseResult.error.errors, getResponseTime());
-      
-      return NextResponse.json(
-        { error: 'Invalid request', details: parseResult.error.errors },
-        { status: 400 }
-      );
-    }
-    
-    const { messages, agent } = parseResult.data;
-    logMessageValidation(log, true, messages);
-    
-    // Handle agent selection
-    let finalMessages = [...messages];
-    let selectedAgentDetails = null;
-    
-    if (agent) {
-      const selectedAgent = agents.find(a => a.id === agent);
-      if (selectedAgent) {
-        selectedAgentDetails = {
-          id: selectedAgent.id,
-          name: selectedAgent.name
-        };
-        
-        // Add system message for agent
-        finalMessages = [
-          { role: 'system', content: selectedAgent.systemPrompt },
-          ...finalMessages
-        ];
+        // Simple error reporting
+        fetch('/api/client-error', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: message instanceof Error ? message.message : message,
+            stack: message instanceof Error ? message.stack : null,
+            url: window.location.href,
+            timestamp: new Date().toISOString()
+          }),
+          keepalive: true
+        }).catch(() => {/* Ignore send failures */});
       }
     }
-    
-    logAgentSelection(log, agent, selectedAgentDetails, finalMessages.length);
-    
-    // Estimate tokens
-    const estimatedTokens = estimateTokensFromMessages(finalMessages);
-    
-    log.info({
-      messageCount: finalMessages.length,
-      estimatedTokens,
-      agentId: selectedAgentDetails?.id
-    }, 'Preparing chat response');
-    
-    // Get AI response
-    const model = 'gpt-4';
-    const stream = streamText({
-      model: openai(model),
-      messages: finalMessages,
-      maxTokens: 1000
-    });
-    
-    // Wrap with analytics
-    const analyzedStream = wrapStreamWithAnalytics(
-      stream, 
-      requestId,
-      { 
-        model,
-        agentId: selectedAgentDetails?.id,
-        estimatedPromptTokens: estimatedTokens
-      }
-    );
-    
-    // Log token usage (in a real app, this would likely happen after completion)
-    // For this example, we're using estimated values
-    logTokenUsage({
-      requestId,
-      model,
-      promptTokens: estimatedTokens,
-      completionTokens: Math.ceil(estimatedTokens * 1.5) // Rough estimate
-    });
-    
-    // Log completion
-    const responseTime = getResponseTime();
-    logChatCompletion(log, responseTime, estimatedTokens, selectedAgentDetails?.id);
-    
-    // Return stream with headers
-    return new Response(analyzedStream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'X-Request-ID': requestId,
-        'X-Response-Time': `${responseTime}ms`
-      }
-    });
-  } catch (error) {
-    const responseTime = getResponseTime();
-    logChatError(log, error, responseTime);
-    
-    // Return appropriate error
-    return NextResponse.json(
-      { error: 'An error occurred processing your request' },
-      { 
-        status: 500,
-        headers: {
-          'X-Request-ID': requestId,
-          'X-Response-Time': `${responseTime}ms`
-        }
-      }
-    );
-  }
-}
-```
-
-### Dashboard-Oriented Logging
-
-When configuring logging for a dashboard or monitoring system, you'll want to ensure logs have consistent structure for easy querying and visualization.
-
-```typescript
-// dashboard-logger.ts
-import { createLogger } from '@/utils/server-logger';
-
-const dashboardLogger = createLogger('dashboard-metrics');
-
-// Log formats specifically designed for dashboard consumption
-export const dashboardEvents = {
-  // User-centric metrics
-  userActivity: (userId: string, eventType: string, metadata = {}) => {
-    dashboardLogger.info({
-      metric: 'user_activity',
-      userId,
-      eventType,
-      ...metadata,
-      timestamp: new Date().toISOString()
-    }, `User activity: ${eventType}`);
-  },
-  
-  // Performance metrics
-  performance: (metric: string, valueMs: number, metadata = {}) => {
-    dashboardLogger.info({
-      metric: 'performance',
-      name: metric,
-      valueMs,
-      ...metadata,
-      timestamp: new Date().toISOString()
-    }, `Performance metric: ${metric} = ${valueMs}ms`);
-  },
-  
-  // AI metrics
-  aiUsage: (model: string, promptTokens: number, completionTokens: number, 
-            durationMs: number, metadata = {}) => {
-    dashboardLogger.info({
-      metric: 'ai_usage',
-      model,
-      promptTokens,
-      completionTokens,
-      totalTokens: promptTokens + completionTokens,
-      durationMs,
-      tokensPerSecond: Math.round(
-        (completionTokens / durationMs) * 1000
-      ),
-      ...metadata,
-      timestamp: new Date().toISOString()
-    }, `AI usage: ${model} - ${promptTokens + completionTokens} tokens in ${durationMs}ms`);
-  },
-  
-  // Error metrics
-  error: (category: string, errorType: string, metadata = {}) => {
-    dashboardLogger.error({
-      metric: 'error',
-      category,
-      errorType,
-      ...metadata,
-      timestamp: new Date().toISOString()
-    }, `Error metric: ${category} - ${errorType}`);
-  }
-};
-
-// Usage tracking granular enough for heat maps and trend analysis
-export const usageTracking = {
-  // Track API requests with dimensions
-  trackRequest: (path: string, method: string, statusCode: number, 
-                durationMs: number, userId?: string) => {
-    dashboardLogger.info({
-      metric: 'request',
-      path,
-      method,
-      statusCode,
-      durationMs,
-      userId,
-      success: statusCode < 400,
-      timestamp: new Date().toISOString(),
-      // Add time dimensions for dashboard grouping
-      hour: new Date().getHours(),
-      day: new Date().getDay(),
-      date: new Date().toISOString().split('T')[0]
-    }, `Request: ${method} ${path} - ${statusCode} in ${durationMs}ms`);
-  },
-  
-  // Track chat interactions for conversation analytics
-  trackConversation: (conversationId: string, messageCount: number, 
-                     userMessageCount: number, aiMessageCount: number,
-                     totalUserTokens: number, totalAiTokens: number,
-                     userId?: string) => {
-    dashboardLogger.info({
-      metric: 'conversation',
-      conversationId,
-      messageCount,
-      userMessageCount,
-      aiMessageCount,
-      messageRatio: userMessageCount / Math.max(1, aiMessageCount),
-      totalUserTokens,
-      totalAiTokens,
-      totalTokens: totalUserTokens + totalAiTokens,
-      userId,
-      timestamp: new Date().toISOString(),
-      // Add time dimensions for dashboard grouping
-      hour: new Date().getHours(),
-      day: new Date().getDay(),
-      date: new Date().toISOString().split('T')[0]
-    }, `Conversation: ${conversationId} - ${messageCount} messages, ${totalUserTokens + totalAiTokens} tokens`);
   }
 };
 ```
 
-## Client-Side Logging for AI Applications
-
-AI applications often require specialized client-side logging to capture user interaction patterns and model performance from the user's perspective.
+## AI Service Logging
 
 ```typescript
-// client-ai-logger.ts
-import logger from './client-logger';
+// ai-logger.ts - For tracking AI service interactions
+import { logger } from '@/utils/logger';
 
-// Track user interactions with AI responses
-export function trackResponseInteraction(responseId: string, interaction: {
-  type: 'copy' | 'regenerate' | 'feedback' | 'expand' | 'scrolled_through',
-  detail?: string,
-  timeSpentViewingMs?: number
-}) {
-  logger.info({
-    event: 'ai_response_interaction',
-    responseId,
-    interactionType: interaction.type,
-    detail: interaction.detail,
-    timeSpentViewingMs: interaction.timeSpentViewingMs,
-    timestamp: new Date().toISOString()
-  });
-}
-
-// Track perceived response quality
-export function trackResponseQuality(responseId: string, quality: {
-  userRating?: 'thumbs_up' | 'thumbs_down' | null,
-  userFeedback?: string,
-  followupCount?: number,
-  copyActions?: number,
-  helpfulness?: 1 | 2 | 3 | 4 | 5 | null
-}) {
-  logger.info({
-    event: 'ai_response_quality',
-    responseId,
-    ...quality,
-    timestamp: new Date().toISOString()
-  });
-}
-
-// Track waiting experience during AI generation
-export function trackGenerationExperience(requestId: string, metrics: {
-  totalWaitTimeMs: number,
-  timeToFirstTokenMs: number,
-  perceivedLatency: 'fast' | 'medium' | 'slow',
-  streamingExperience: 'smooth' | 'choppy',
-  userActionsWhileWaiting?: string[]
-}) {
-  logger.info({
-    event: 'ai_generation_experience',
-    requestId,
-    ...metrics,
-    timestamp: new Date().toISOString()
-  });
-}
-
-// Safe prompt logging (with sensitive data protection)
-export function logUserPrompt(promptId: string, prompt: string, metadata: {
-  conversationId?: string,
-  aiModel?: string,
-  timestamp?: string
-} = {}) {
-  // Apply sanitization to remove potential PII
-  const sanitizedPrompt = sanitizePrompt(prompt);
-  
-  logger.debug({
-    event: 'user_prompt',
-    promptId,
-    // Only log a truncated version of the prompt
-    promptPreview: sanitizedPrompt.substring(0, 100) + 
-      (sanitizedPrompt.length > 100 ? '...' : ''),
-    promptLength: prompt.length,
-    ...metadata,
-    timestamp: metadata.timestamp || new Date().toISOString()
-  });
-}
-
-// Helper function to sanitize prompts before logging
-function sanitizePrompt(prompt: string): string {
-  // Simple example - in production you'd use more comprehensive filters
-  return prompt
-    // Remove email addresses
-    .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '[EMAIL]')
-    // Remove phone numbers
-    .replace(/(\+\d{1,2}\s?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/g, '[PHONE]')
-    // Remove credit card numbers
-    .replace(/\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}/g, '[CARD]')
-    // Remove SSNs
-    .replace(/\d{3}-\d{2}-\d{4}/g, '[SSN]');
-}
-```
-
-## Environment-Specific Implementation
-
-```typescript
-// metrics.ts
-import { createLogger } from '@/utils/server-logger';
-
-const metricsLogger = createLogger('metrics');
-
-// Predefined thresholds for alerting
-const THRESHOLDS = {
-  responseTime: 2000,      // ms
-  tokenUsage: 100000,      // tokens per hour
-  errorRate: 0.05,         // 5% error rate
-  rateLimitHits: 10,       // per hour
-  streamLatency: 500,      // ms to first token
-  costPerUser: 5.0,        // dollars per day
-  userRequestRate: 50      // per hour
-};
-
-// Track error rates over time
-const errorCounter = {
-  total: 0,
-  errors: 0,
-  lastReset: Date.now()
-};
-
-// Reset counters every hour
-setInterval(() => {
-  const errorRate = errorCounter.total > 0 ? 
-    errorCounter.errors / errorCounter.total : 0;
-  
-  if (errorCounter.total > 100) { // Only log if we have significant traffic
-    metricsLogger.info({
-      errorRate,
-      requests: errorCounter.total,
-      errors: errorCounter.errors,
-      timeWindow: 'hourly'
-    }, `Hourly error rate: ${(errorRate * 100).toFixed(2)}%`);
-    
-    // Alert on high error rates
-    if (errorRate > THRESHOLDS.errorRate) {
-      metricsLogger.warn({
-        errorRate,
-        threshold: THRESHOLDS.errorRate,
-        requests: errorCounter.total,
-        errors: errorCounter.errors
-      }, `High error rate detected: ${(errorRate * 100).toFixed(2)}%`);
-    }
-  }
-  
-  // Reset counters
-  errorCounter.total = 0;
-  errorCounter.errors = 0;
-  errorCounter.lastReset = Date.now();
-}, 60 * 60 * 1000); // 1 hour
-
-// Log a request completion
-export function logRequestMetric(success: boolean, responseTime: number, path: string) {
-  errorCounter.total++;
-  if (!success) {
-    errorCounter.errors++;
-  }
-  
-  // Log slow requests
-  if (responseTime > THRESHOLDS.responseTime) {
-    metricsLogger.warn({
-      responseTime,
-      threshold: THRESHOLDS.responseTime,
-      path
-    }, `Slow request detected: ${responseTime}ms`);
-  }
-}
-
-// Track token usage over time
-const tokenUsage = {
-  hourly: 0,
-  daily: 0,
-  lastHourlyReset: Date.now(),
-  lastDailyReset: Date.now()
-};
-
-// Add tokens to counters
-export function trackTokenUsage(tokens: number) {
-  tokenUsage.hourly += tokens;
-  tokenUsage.daily += tokens;
-  
-  // Reset hourly counter if needed
-  const now = Date.now();
-  if (now - tokenUsage.lastHourlyReset > 60 * 60 * 1000) {
-    metricsLogger.info({
-      tokens: tokenUsage.hourly,
-      timeWindow: 'hourly'
-    }, `Hourly token usage: ${tokenUsage.hourly} tokens`);
-    
-    // Alert on high token usage
-    if (tokenUsage.hourly > THRESHOLDS.tokenUsage) {
-      metricsLogger.warn({
-        tokens: tokenUsage.hourly,
-        threshold: THRESHOLDS.tokenUsage
-      }, `High token usage detected: ${tokenUsage.hourly} tokens per hour`);
-    }
-    
-    tokenUsage.hourly = 0;
-    tokenUsage.lastHourlyReset = now;
-  }
-  
-  // Reset daily counter if needed
-  if (now - tokenUsage.lastDailyReset > 24 * 60 * 60 * 1000) {
-    metricsLogger.info({
-      tokens: tokenUsage.daily,
-      timeWindow: 'daily'
-    }, `Daily token usage: ${tokenUsage.daily} tokens`);
-    
-    tokenUsage.daily = 0;
-    tokenUsage.lastDailyReset = now;
-  }
-}
-```
-
-### Token Usage Tracking
-
-```typescript
-// token-logger.ts
-import { Message } from 'ai';
-import { createLogger } from '@/utils/server-logger';
-
-const tokenLogger = createLogger('token-usage');
-
-interface TokenUsageEvent {
-  userId?: string;
-  requestId: string;
-  model: string;
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-  timestamp: string;
-}
-
-// Record token usage for analytics and billing
-export function logTokenUsage({
-  userId,
+export function logAIInteraction({
   requestId,
   model,
   promptTokens,
-  completionTokens
-}: Omit<TokenUsageEvent, 'totalTokens' | 'timestamp'>) {
-  const totalTokens = promptTokens + completionTokens;
-  
-  tokenLogger.info({
-    userId,
-    requestId,
-    model,
-    promptTokens,
-    completionTokens,
-    totalTokens,
-    timestamp: new Date().toISOString()
-  }, `Token usage: ${totalTokens} tokens (${promptTokens} prompt, ${completionTokens} completion)`);
-  
-  // In a production system, you might also:
-  // 1. Store this in a database for billing
-  // 2. Increment user quota usage
-  // 3. Send to analytics service
-}
-
-// Simplified token counting estimator
-export function estimateTokens(messages: Message[]): number {
-  // Very rough estimate: ~4 chars per token
-  return messages.reduce((total, msg) => {
-    return total + Math.ceil(msg.content.length / 4);
-  }, 0);
-}
-```
-
-### Rate Limiting Logs
-
-```typescript
-// rate-limit-logger.ts
-import { createLogger } from '@/utils/server-logger';
-
-const rateLimitLogger = createLogger('rate-limits');
-
-// Log rate limit events for monitoring abuse
-export function logRateLimitEvent({
-  clientIp,
-  userId,
-  endpoint,
-  currentCount,
-  limit,
-  windowSeconds,
-  isBlocked
-}: {
-  clientIp: string;
-  userId?: string;
-  endpoint: string;
-  currentCount: number;
-  limit: number;
-  windowSeconds: number;
-  isBlocked: boolean;
-}) {
-  rateLimitLogger.warn({
-    clientIp,
-    userId,
-    endpoint,
-    currentCount,
-    limit,
-    windowSeconds,
-    isBlocked,
-    usagePercentage: Math.round((currentCount / limit) * 100)
-  }, `Rate limit ${isBlocked ? 'exceeded' : 'approaching'}: ${currentCount}/${limit} requests in ${windowSeconds}s window`);
-  
-  // For repeat offenders, you might want to log at a higher level
-  if (currentCount > limit * 2) {
-    rateLimitLogger.error({
-      clientIp,
-      userId,
-      endpoint,
-      currentCount,
-      limit
-    }, `Excessive rate limit violations detected`);
-  }
-}
-```
-
-### AI Prompt and Response Logging
-
-```typescript
-// prompt-logger.ts
-import { createLogger } from '@/utils/server-logger';
-import { Message } from 'ai';
-
-const promptLogger = createLogger('prompts');
-
-// Be careful with this - don't log sensitive user data!
-export function logPromptAndResponse({
-  requestId,
-  userId,
-  agentId,
-  prompt,
-  response,
-  model,
-  responseTimeMs
+  completionTokens,
+  responseTimeMs,
+  success,
+  errorMessage
 }: {
   requestId: string;
-  userId?: string;
-  agentId?: string;
-  prompt: Message[];
-  response: string;
   model: string;
+  promptTokens: number;
+  completionTokens?: number;
   responseTimeMs: number;
+  success: boolean;
+  errorMessage?: string;
 }) {
-  // In production, you might want to redact or truncate
-  // sensitive information from prompts/responses
+  // Always log errors and slow responses
+  const isSlowResponse = responseTimeMs > 2000;
+  const shouldLog = success ? 
+    (isSlowResponse || process.env.NODE_ENV === 'development') : 
+    true;
   
-  const lastUserMessage = prompt
-    .filter(m => m.role === 'user')
-    .pop()?.content.substring(0, 100) + '...';
-    
-  const truncatedResponse = response.substring(0, 100) + 
-    (response.length > 100 ? '...' : '');
-  
-  promptLogger.info({
-    requestId,
-    userId,
-    agentId,
-    model,
-    responseTimeMs,
-    promptMessageCount: prompt.length,
-    responseLengthChars: response.length,
-    // Include short samples for debugging without full content
-    lastUserMessagePreview: lastUserMessage,
-    responsePreview: truncatedResponse
-  }, `AI interaction completed in ${responseTimeMs}ms`);
-  
-  // For development/staging environments, you might log full prompts
-  if (process.env.NODE_ENV !== 'production') {
-    promptLogger.debug({
-      requestId,
-      fullPrompt: prompt,
-      fullResponse: response
-    }, 'Full AI interaction details');
+  if (shouldLog) {
+    if (success) {
+      logger.info('AI request completed', {
+        requestId,
+        model,
+        promptTokens,
+        completionTokens,
+        totalTokens: promptTokens + (completionTokens || 0),
+        responseTimeMs,
+        important: isSlowResponse
+      });
+      
+      if (isSlowResponse) {
+        logger.warn(`Slow AI response (${responseTimeMs}ms)`, {
+          requestId,
+          model,
+          responseTimeMs
+        });
+      }
+    } else {
+      logger.error('AI request failed', {
+        requestId,
+        model,
+        promptTokens,
+        responseTimeMs,
+        errorMessage
+      });
+    }
   }
 }
 ```
 
-## Implementation in Different Environments
+## Usage Examples
 
-### Development Environment
+### API Route with Full Logging
 
-- Use debug and trace levels liberally
-- Enable colorized, pretty-printed output
-- Log to console/stdout
-- Include full error details including stacks
-- Show full request/response bodies for debugging
+```typescript
+// pages/api/chat.ts
+import { NextApiRequest, NextApiResponse } from 'next';
+import { withLogging } from '@/utils/api-logger';
+import { logAIInteraction } from '@/utils/ai-logger';
+import { saveChatMessage } from '@/utils/chat-store';
 
-### Staging Environment
+async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const requestId = req.headers['x-request-id'] as string || 'unknown';
+  const startTime = performance.now();
+  
+  // Process the chat request
+  try {
+    const { message, userId, sessionId } = req.body;
+    
+    // Save user message to Supabase
+    await saveChatMessage({
+      userId,
+      sessionId,
+      role: 'user',
+      content: message
+    });
+    
+    // Process with AI service
+    const aiResponse = await callAIService(message);
+    
+    // Log AI interaction
+    logAIInteraction({
+      requestId,
+      model: 'gpt-4o',
+      promptTokens: estimateTokens(message),
+      completionTokens: estimateTokens(aiResponse.text),
+      responseTimeMs: Math.round(performance.now() - startTime),
+      success: true
+    });
+    
+    // Save AI response to Supabase
+    await saveChatMessage({
+      userId,
+      sessionId,
+      role: 'assistant',
+      content: aiResponse.text
+    });
+    
+    res.status(200).json({ response: aiResponse.text });
+  } catch (error) {
+    // Log AI interaction failure
+    logAIInteraction({
+      requestId,
+      model: 'gpt-4',
+      promptTokens: estimateTokens(req.body?.message || ''),
+      responseTimeMs: Math.round(performance.now() - startTime),
+      success: false,
+      errorMessage: error instanceof Error ? error.message : 'Unknown error'
+    });
+    
+    throw error; // Let the withLogging wrapper handle the error response
+  }
+}
 
-- Use production logging configuration
-- Log at info level for normal operations
-- Enable enhanced error reporting
-- Direct logs to both file and monitoring service
-- Log all API calls and responses for testing
-- Log performance metrics for load testing
+// Estimate tokens for logging (simple approximation)
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
 
-### Production Environment
+// Wrap with logging middleware
+export default withLogging(handler);
+```
 
-- Limit logging to info level and above by default
-- Implement log rotation and retention policies
-- Use structured JSON format exclusively
-- Exclude sensitive information and large payloads
-- Sample high-volume endpoints
-- Ship logs to a centralized logging system
-- Set up alerts for error thresholds
+## Best Practices for Vercel Deployment
+
+1. **Use Correlation IDs**: Pass `x-request-id` headers through all services for tracing
+2. **Structured JSON Logs**: Makes logs searchable in Vercel dashboard
+3. **Log Levels**:
+   - DEBUG: Only in development, detailed traces
+   - INFO: Important business events, successful operations
+   - WARN: Slow responses, resource warnings
+   - ERROR: Failed operations, unhandled exceptions
+4. **Focus on Exceptions**: Always log errors with full context
+5. **Monitor Performance**: Track slow vector queries and AI responses
+6. **Use Supabase for Storage**: Keep chat history and vector embeddings in Supabase
+7. **Leverage Vercel Analytics**: Enable Vercel Analytics for real-time metrics
+8. **Production Logging**: In production, limit logs to important events and errors
+
+## Implementation Tips
+
+1. **Keep it Simple**: Vercel already handles log storage and retention
+2. **Filter by Request ID**: When debugging, use request IDs to trace full request flows
+3. **JSON Format**: Structure logs as JSON for better searchability in Vercel dashboard
+4. **Throttle Client Errors**: Prevent flooding from client-side error reporting
+5. **Prioritize Vector Performance**: Pay special attention to vector query performance
+6. **Scheduled Cleanup**: Implement database retention policy in Supabase

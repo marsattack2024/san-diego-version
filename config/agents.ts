@@ -1,4 +1,4 @@
-import { Agent } from '@/types/chat';
+import { Agent } from '@/types/chat/chat';
 
 export const agents: Agent[] = [
   {

@@ -3,67 +3,163 @@ description: cursor rules for organizing the entire app based on the provided fi
 globs: 
 alwaysApply: true
 ---
-## High-Level Structure
-- The app follows a standard Next.js project structure, with the main files and directories located at the root level.
-- The `src` directory serves as the main container for the application code.
+Reorganization Plan
 
-## Source Code Organization
-- The `src` directory contains subdirectories for different aspects of the application:
-  - `app`: Contains the main application components and routes.
-  - `agents`: Contains files related to AI agents and their configurations.
-  - `utils`: Contains utility functions and helper modules.
-  - `components`: Contains reusable components used throughout the application.
+  Here's a comprehensive plan to organize your project
+  structure for better clarity and maintainability:
 
-## App Directory
-- The `app` directory follows the Next.js app router structure.
-- The `api` directory contains API route handlers.
-- The `page.tsx` file serves as the main entry point for the application.
+  1. Directory Structure Goals
 
-## Agents Directory
-- The `agents` directory is organized into subdirectories based on agent types and configurations:
-  - `tools`: Contains agent-specific tools and utilities.
-  - `core`: Contains core agent functionality.
-  - `specialized`: Contains specialized agent configurations.
-  - `prompts`: Contains prompt templates for agents.
-  - The `index.ts` file serves as the entry point for agent-related code.
+  - Eliminate duplicate directories (/src, /utils vs /lib)
+  - Create a clear separation of concerns
+  - Simplify imports with consistent paths
+  - Make the enhanced chat the primary chat interface
 
-## Components Directory
-- The `components` directory contains reusable components organized by feature or functionality.
-- Common UI components are placed in the `ui` subdirectory.
-- Feature-specific components, such as `chat` and `auth`, have their own subdirectories.
-- Shared components that are used across multiple features are placed in the `shared` subdirectory.
+  2. New Directory Structure
 
-## Stores and Contexts
-- State management and context files are located in the `stores` directory.
-- Each store or context is defined in its own file (e.g., `chat-store.ts`, `auth-store.ts`).
+  /
+  ├── app                    # Next.js app router pages
+  │   ├── api                # API routes
+  │   ├── auth               # Auth pages
+  │   ├── chat               # Main chat interface (moved
+  from enhanced-chat)
+  │   └── error.tsx          # Error page
+  ├── components             # UI components
+  │   ├── auth               # Auth components
+  │   ├── chat               # Chat components (renamed from
+  enhanced-)
+  │   ├── layout             # Layout components
+  │   ├── shared             # Shared components
+  │   └── ui                 # UI primitives
+  ├── lib                    # Core utilities & business
+  logic
+  │   ├── agents             # Agent implementations
+  │   ├── chat               # Chat logic
+  │   ├── logger             # Unified logging system
+  │   ├── supabase           # Supabase client
+  │   └── vector             # Vector search functionality
+  ├── config                 # Application config
+  ├── contexts               # React contexts
+  ├── hooks                  # React hooks
+  ├── public                 # Static assets
+  ├── scripts                # Build/Dev scripts
+  ├── stores                 # State stores (Zustand)
+  ├── styles                 # Global styles
+  ├── types                  # TypeScript types
+  └── docs                   # Documentation (renamed from
+  architecture-docs)
 
-## Hooks
-- Custom hooks are placed in the `hooks` directory.
-- Each hook is defined in its own file with a descriptive name (e.g., `useEnhancedChat.ts`, `useIsClient.ts`).
+  3. Implementation Steps
 
-## Config and Constants
-- Configuration files and constants are located in the `config` directory.
-- Each configuration or constant is defined in its own file (e.g., `site.ts`, `agents.ts`).
+  Step 1: Prepare New Directory Structure
 
-## Styling
-- Global styles are defined in the `styles` directory (e.g., `globals.css`).
-- Component-specific styles can be defined within the respective component files or in separate CSS/SCSS files.
+  # Create new directories
+  mkdir -p lib/agents/core lib/agents/prompts
+  lib/agents/specialized lib/agents/tools
+  mkdir -p lib/chat
+  mkdir -p lib/logger
+  mkdir -p lib/vector
+  mkdir -p docs
 
-## Public Assets
-- Public assets, such as images and SVG files, are stored in the `public` directory.
+  Step 2: Consolidate Agents
 
-## Scripts and Utilities
-- Custom scripts and utility modules are placed in the `scripts` and `utils` directories, respectively.
+  # Move agents from src to lib
+  cp -r src/agents/core/* lib/agents/core/
+  cp -r src/agents/prompts/* lib/agents/prompts/
+  cp -r src/agents/specialized/* lib/agents/specialized/
+  cp -r src/agents/tools/* lib/agents/tools/
+  cp src/agents/index.ts lib/agents/
 
-## Tests
-- Test files are colocated with the components or modules they test.
-- Test files are named with a `.test.ts` or `.test.tsx` extension.
+  Step 3: Consolidate Logging
 
-## Third-Party Modules
-- Third-party modules and libraries are installed using a package manager (e.g., npm or yarn) and stored in the `node_modules` directory.
+  # Create a unified logging system in lib/logger
+  mv utils/logger.ts lib/logger/base-logger.ts
+  mv utils/client-logger.ts lib/logger/client-logger.ts
+  mv utils/vector-logger.ts lib/logger/vector-logger.ts
+  mv utils/ai-logger.ts lib/logger/ai-logger.ts
+  mv src/utils/server-logger.ts lib/logger/server-logger.ts
+  mv src/utils/edge-logger.ts lib/logger/edge-logger.ts
 
-## Environment and Configuration Files
-- Environment-specific configuration files (e.g., `.env`, `.env.local`) are placed at the root level.
-- Configuration files for tools and libraries (e.g., `next.config.js`, `tailwind.config.ts`) are also placed at the root level.
+  # Create a unified logger index file
+  touch lib/logger/index.ts
 
-By following these cursor rules, the app maintains a consistent and organized structure, making it easier to navigate, understand, and maintain the codebase.
+  Step 4: Consolidate Vector Search
+
+  # Move vector search functionality to lib/vector
+  cp -r utils/vector/* lib/vector/
+  cp -r src/utils/vector/* lib/vector/
+
+  Step 5: Rename and Move Enhanced Chat to Main Chat
+
+  # Make enhanced chat the main chat interface
+  mkdir -p app/chat
+  cp app/enhanced-chat/page.tsx app/chat/
+
+  # Rename components to remove "enhanced-" prefix
+  # (Will need to update imports and references)
+
+  Step 6: Rename Components for Consistency
+
+  # Create a script to rename enhanced- components and update
+   imports
+  touch scripts/rename-components.js
+
+  Components to rename:
+  - enhanced-chat.tsx → chat.tsx
+  - enhanced-chat-renderer.tsx → chat-renderer.tsx
+  - enhanced-message-item.tsx → message-item.tsx
+  - enhanced-message-list.tsx → message-list.tsx
+  - enhanced-chat-context.tsx → chat-context.tsx
+  - useEnhancedChat.ts → useChat.ts
+
+  Step 7: Move Documentation
+
+  # Rename architecture-docs to docs
+  mv architecture-docs docs
+
+  Step 8: Clean Up Redundant Directories
+
+  # After confirming everything works, remove redundant 
+  directories
+  rm -rf src
+  rm -rf utils
+  rm -rf middleware
+  rm -rf app/enhanced-chat
+
+  Step 9: Update Imports
+
+  # Create a script to update all import paths
+  touch scripts/update-all-imports.js
+
+  4. Import Path Updates
+
+  Common import changes:
+  - @/src/agents/* → @/lib/agents/*
+  - @/utils/* → @/lib/logger/* or @/lib/*
+  - @/components/chat/enhanced-* → @/components/chat/*
+  - @/contexts/enhanced-chat-context →
+  @/contexts/chat-context
+  - @/hooks/useEnhancedChat → @/hooks/useChat
+
+  5. Testing Strategy
+
+  1. Implement changes in smaller batches:
+    - Start with non-UI changes (logger, vector)
+    - Then refactor components with careful testing
+    - Update app routes last
+  2. Test key functionality after each batch:
+    - Vector search
+    - Chat functionality
+    - Authentication
+    - API endpoints
+
+  6. Execution Order
+
+  1. Create new directory structure
+  2. Move non-UI utilities (logger, vector)
+  3. Move and rename agent code
+  4. Rename and refactor components
+  5. Update app routes
+  6. Update imports
+  7. Clean up redundant files
+  8. Final testing

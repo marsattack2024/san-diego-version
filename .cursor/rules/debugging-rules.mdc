@@ -3,7 +3,7 @@ description: Linter Error Troubleshooting Rulebook
 globs: 
 alwaysApply: false
 ---
-## Core Principles - When asked to go into debug mode, follow these rules:
+## Core Principles - When asked to go into debug mode, follow these rules and make edits to fix the issues.:
 
 1. **Understand Before Acting**: Always understand the full scope of a linter error before attempting to fix it.
 2. **Respect Boundaries**: Stay within the scope of the affected code without introducing changes to unrelated components.

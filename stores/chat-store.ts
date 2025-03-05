@@ -135,12 +135,36 @@ export const useChatStore = create<ChatState>()(
         
         const timestamp = new Date().toISOString();
         
+        // Get existing messages to preserve any enhanced properties
+        const existingMessages = conversations[conversationId].messages;
+        const existingMessageMap = new Map();
+        existingMessages.forEach(msg => {
+          existingMessageMap.set(msg.id, msg);
+        });
+        
+        // Merge new messages with existing ones, preserving status if available
+        const mergedMessages = messages.map(msg => {
+          const existingMsg = existingMessageMap.get(msg.id);
+          const messageWithId = msg.id ? msg : { ...msg, id: uuidv4() };
+          
+          // If this message exists and has status info, preserve it
+          if (existingMsg && (existingMsg as any).status) {
+            return {
+              ...messageWithId,
+              status: (existingMsg as any).status === 'sending' ? 'complete' : (existingMsg as any).status,
+              serverConfirmed: true
+            };
+          }
+          
+          return messageWithId;
+        });
+        
         set({
           conversations: {
             ...conversations,
             [conversationId]: {
               ...conversations[conversationId],
-              messages: messages.map(msg => msg.id ? msg : { ...msg, id: uuidv4() }),
+              messages: mergedMessages,
               updatedAt: timestamp
             }
           }
@@ -151,29 +175,23 @@ export const useChatStore = create<ChatState>()(
         const id = uuidv4();
         const timestamp = new Date().toISOString();
         
-        // First, clear localStorage to ensure a clean state
-        if (typeof window !== 'undefined') {
-          // Only clear chat-related items, not all localStorage
-          const chatStorageKey = 'chat-storage';
-          localStorage.removeItem(chatStorageKey);
-        }
-        
-        // Then set a fresh state
-        set({
+        // Create a new conversation without clearing localStorage history
+        set((state) => ({
           conversations: {
+            ...state.conversations,  // Preserve existing conversations
             [id]: {
               id,
               messages: [],
               createdAt: timestamp,
               updatedAt: timestamp,
-              title: '',
+              title: 'New Conversation',
               userId: undefined,
               agentId: undefined,
               metadata: {}
             }
           },
           currentConversationId: id
-        });
+        }));
         
         return id;
       },

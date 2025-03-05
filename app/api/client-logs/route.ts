@@ -1,9 +1,6 @@
-import { createLogger, createRequestLogger, Logger } from '@/utils/server-logger';
+import { logger } from '@/lib/logger/base-logger';
 import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
-
-// Create a logger for this API route
-const log = createLogger('api:client-logs');
 
 export const dynamic = 'force-dynamic';
 
@@ -33,12 +30,12 @@ function shouldProcessLog(level: string): boolean {
  */
 function mapLogLevel(clientLevel: string): string {
   const levelMap: Record<string, string> = {
-    trace: 'trace',
+    trace: 'debug',  // We map trace to debug since base logger doesn't have trace
     debug: 'debug',
     info: 'info',
     warn: 'warn',
     error: 'error',
-    TRACE: 'trace',
+    TRACE: 'debug',
     DEBUG: 'debug',
     INFO: 'info',
     WARN: 'warn',
@@ -49,11 +46,11 @@ function mapLogLevel(clientLevel: string): string {
 }
 
 export async function POST(req: NextRequest) {
-  const requestId = req.headers.get('x-request-id') || 'unknown';
-  const requestLogger = log.child({ requestId });
+  const requestId = req.headers.get('x-request-id') || uuidv4();
   
   try {
-    requestLogger.debug('Received client logs', {
+    logger.debug('Received client logs', {
+      requestId,
       method: req.method,
       url: req.url,
       timestamp: new Date().toISOString()
@@ -63,7 +60,8 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const logs = Array.isArray(body) ? body : [body];
     
-    requestLogger.debug('Processing client logs', { 
+    logger.debug('Processing client logs', { 
+      requestId,
       count: logs.length,
       timestamp: new Date().toISOString()
     });
@@ -84,37 +82,36 @@ export async function POST(req: NextRequest) {
       // Extract standard fields
       const { message, namespace, sessionId, timestamp, ...data } = clientLog;
       
-      // Log to server with appropriate level and context
-      const contextLogger = log.child({ 
+      // Create context with client metadata
+      const context = {
+        requestId,
         clientSessionId: sessionId,
         clientNamespace: namespace,
         clientTimestamp: timestamp,
-        requestId
-      });
+        ...data
+      };
       
       // Use the appropriate log level method
       switch (level) {
-        case 'trace':
-          contextLogger.trace(message || 'Client trace log', data);
-          break;
         case 'debug':
-          contextLogger.debug(message || 'Client debug log', data);
+          logger.debug(message || 'Client debug log', context);
           break;
         case 'info':
-          contextLogger.info(message || 'Client info log', data);
+          logger.info(message || 'Client info log', context);
           break;
         case 'warn':
-          contextLogger.warn(message || 'Client warning log', data);
+          logger.warn(message || 'Client warning log', context);
           break;
         case 'error':
-          contextLogger.error(message || 'Client error log', data);
+          logger.error(message || 'Client error log', context);
           break;
         default:
-          contextLogger.info(message || 'Client log', data);
+          logger.info(message || 'Client log', context);
       }
     }
     
-    requestLogger.debug('Processed client logs', { 
+    logger.debug('Processed client logs', { 
+      requestId,
       totalReceived: logs.length,
       processedCount,
       samplingApplied: process.env.NODE_ENV === 'production',
@@ -129,7 +126,8 @@ export async function POST(req: NextRequest) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     const errorStack = error instanceof Error ? error.stack : undefined;
     
-    requestLogger.error('Error processing client logs', {
+    logger.error('Error processing client logs', {
+      requestId,
       error: errorMessage,
       stack: errorStack,
       timestamp: new Date().toISOString()

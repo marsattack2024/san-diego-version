@@ -1,26 +1,47 @@
-import { ChatInterface } from '@/components/chat/chat-interface';
-import { siteConfig } from '@/config/site';
-import Link from 'next/link';
+'use client';
 
-export const metadata = {
-  title: `Chat | ${siteConfig.name}`,
-  description: 'Chat with our AI assistant',
-};
+import { Chat } from '@/components/chat';
+import { useChatStore } from '@/stores/chat-store';
+import { useEffect } from 'react';
+import { clientLogger } from '@/lib/logger/client-logger';
+
+const log = clientLogger;
 
 export default function ChatPage() {
+  const currentConversationId = useChatStore(state => state.currentConversationId);
+  const conversations = useChatStore(state => state.conversations);
+  const createConversation = useChatStore(state => state.createConversation);
+  
+  // Create a conversation ID if none exists
+  useEffect(() => {
+    if (!currentConversationId) {
+      log.info('No current conversation, creating a new one');
+      createConversation();
+    } else {
+      log.info('Using existing conversation', { id: currentConversationId });
+    }
+  }, [currentConversationId, createConversation]);
+  
+  // Get current conversation
+  const currentConversation = currentConversationId 
+    ? conversations[currentConversationId] 
+    : null;
+  
+  // If no conversation exists yet, show loading or empty state
+  if (!currentConversationId || !currentConversation) {
+    return <div className="h-screen flex items-center justify-center">Loading...</div>;
+  }
+  
+  log.info('Rendering chat with conversation', { 
+    id: currentConversationId,
+    messageCount: currentConversation.messages.length 
+  });
+  
   return (
-    <div className="container mx-auto py-4 h-[calc(100vh-4rem)]">
-      <div className="flex justify-between items-center mb-4">
-        <h1 className="text-2xl font-bold">AI Chat</h1>
-        <Link 
-          href="/enhanced-chat" 
-          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
-        >
-          Try Enhanced Chat
-        </Link>
-      </div>
-      <ChatInterface />
-    </div>
+    <Chat
+      id={currentConversationId}
+      initialMessages={currentConversation.messages}
+      isReadonly={false}
+    />
   );
-}
-
+} 
