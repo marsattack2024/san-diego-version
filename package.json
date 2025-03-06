@@ -16,6 +16,7 @@
     "fix-alias-imports": "node scripts/fix-alias-imports.js",
     "supabase": "npx supabase",
     "setup-supabase": "node scripts/setup-supabase.js",
+    "deploy": "node scripts/deploy-vercel.js",
     "test:deep-search": "tsx lib/agents/tools/perplexity/test-deep-search.ts",
     "test:perplexity": "tsx lib/agents/tools/perplexity/test-deep-search-simple.ts",
     "test:tools": "tsx lib/agents/tools/test-tools.ts",
