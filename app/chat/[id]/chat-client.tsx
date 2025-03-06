@@ -12,23 +12,50 @@ interface ChatClientProps {
 }
 
 export function ChatClient({ chatId }: ChatClientProps) {
-  const { conversations, setCurrentConversation } = useChatStore();
+  const { conversations, setCurrentConversation, createConversation } = useChatStore();
   
   useEffect(() => {
-    if (chatId && conversations[chatId]) {
-      setCurrentConversation(chatId);
+    if (chatId) {
+      if (conversations[chatId]) {
+        // If the conversation exists, set it as current
+        setCurrentConversation(chatId);
+        log.info('Using existing conversation', { id: chatId });
+      } else {
+        // If the conversation doesn't exist in the store, create a new one with the same ID
+        // This is a temporary fix until Supabase tables are set up
+        log.info('Conversation not found, creating a new one with the requested ID', { id: chatId });
+        
+        // We'll manually add a conversation with this ID to the store
+        const timestamp = new Date().toISOString();
+        const selectedAgentId = useChatStore.getState().selectedAgentId;
+        
+        // Add the conversation to the store
+        useChatStore.setState((state) => ({
+          conversations: {
+            ...state.conversations,
+            [chatId]: {
+              id: chatId,
+              messages: [],
+              createdAt: timestamp,
+              updatedAt: timestamp,
+              agentId: selectedAgentId,
+              deepSearchEnabled: state.deepSearchEnabled,
+            },
+          },
+          currentConversationId: chatId,
+        }));
+      }
     }
-  }, [chatId, conversations, setCurrentConversation]);
+  }, [chatId, conversations, setCurrentConversation, createConversation]);
 
-  const currentConversation = conversations[chatId];
-  
-  if (!currentConversation) {
-    return (
-      <div className="h-screen flex items-center justify-center">
-        <div>Conversation not found</div>
-      </div>
-    );
-  }
+  // Get the conversation (either existing or newly created)
+  const currentConversation = conversations[chatId] || {
+    id: chatId,
+    messages: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    agentId: useChatStore.getState().selectedAgentId,
+  };
 
   return (
     <Chat

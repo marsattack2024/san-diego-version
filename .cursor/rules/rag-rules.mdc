@@ -3,7 +3,6 @@ description:
 globs: 
 alwaysApply: false
 ---
-
 RAG Chatbot
 RAG Chatbot Guide
 In this guide, you will learn how to build a retrieval-augmented generation (RAG) chatbot application.
@@ -70,16 +69,11 @@ This project will use the following stack:
 Next.js 14 (App Router)
 AI SDK 
 OpenAI
-Drizzle ORM 
 Postgres  with pgvector 
 shadcn-ui  and TailwindCSS  for styling
 Clone Repo
 To reduce the scope of this guide, you will be starting with a repository that already has a few things set up for you:
 
-Drizzle ORM (lib/db) including an initial migration and a script to migrate (db:migrate)
-a basic schema for the resources table (this will be for source material)
-a Server Action for creating a resource
-To get started, clone the starter repository with the following command:
 
 git clone https://github.com/vercel/ai-sdk-rag-starter
 cd ai-sdk-rag-starter

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
+import { createServerClient } from '@supabase/ssr';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 
 // Generate a valid UUID v4 that works in Edge Runtime
@@ -27,48 +27,53 @@ export async function middleware(request: NextRequest) {
   const isImportantPath = request.nextUrl.pathname.startsWith('/api/');
   
   let supabaseResponse = NextResponse.next({
-    request: {
-      headers: request.headers,
-    },
+    request,
   });
 
-  // Create Supabase client
-  const supabase = createSupabaseServerClient(
+  // Create Supabase client with the recommended cookie handling pattern
+  const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        get(name) {
-          return request.cookies.get(name)?.value;
+        getAll() {
+          return request.cookies.getAll();
         },
-        set(name, value, options) {
-          supabaseResponse.cookies.set(name, value, options);
-        },
-        remove(name, options) {
-          supabaseResponse.cookies.set(name, '', { ...options, maxAge: 0 });
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value));
+          supabaseResponse = NextResponse.next({
+            request,
+          });
+          cookiesToSet.forEach(({ name, value, options }) =>
+            supabaseResponse.cookies.set(name, value, options)
+          );
         },
       },
     }
   );
 
-  // Get the current user's session
+  // IMPORTANT: Do not run code between createServerClient and
+  // supabase.auth.getUser(). A simple mistake could make it very hard to debug
+  // issues with users being randomly logged out.
+
+  // Get the current user
   const {
-    data: { session },
-  } = await supabase.auth.getSession();
+    data: { user },
+  } = await supabase.auth.getUser();
 
   const { pathname } = request.nextUrl;
   const isProtectedPath = protectedPaths.some(path => pathname.startsWith(path));
   const isAuthPath = authPaths.some(path => pathname === path);
 
   // If the user is not logged in and trying to access a protected path
-  if (isProtectedPath && !session) {
+  if (isProtectedPath && !user) {
     const redirectUrl = new URL('/login', request.url);
     redirectUrl.searchParams.set('next', pathname);
     return NextResponse.redirect(redirectUrl);
   }
 
   // If the user is logged in and trying to access an auth path
-  if (isAuthPath && session) {
+  if (isAuthPath && user) {
     return NextResponse.redirect(new URL('/chat', request.url));
   }
 
@@ -80,7 +85,7 @@ export async function middleware(request: NextRequest) {
       method: request.method,
       path: request.nextUrl.pathname,
       important: isImportantPath,
-      user: session ? { id: session.user.id } : null
+      user: user ? { id: user.id } : null
     });
   }
   
@@ -89,6 +94,7 @@ export async function middleware(request: NextRequest) {
   supabaseResponse.headers.set('X-Middleware-Time', `${endTime - startTime}ms`);
   supabaseResponse.headers.set('X-Request-Id', requestId);
   
+  // IMPORTANT: You *must* return the supabaseResponse object as it is.
   return supabaseResponse;
 }
 
@@ -100,8 +106,7 @@ export const config = {
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
      * - public (public files)
-     * - api (API routes)
      */
-    '/((?!_next/static|_next/image|favicon.ico|public|api).*)',
+    '/((?!_next/static|_next/image|favicon.ico|public).*)',
   ],
 }; 

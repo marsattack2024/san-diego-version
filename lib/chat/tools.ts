@@ -244,9 +244,9 @@ export const chatTools = {
           ...textContent.other // Include all additional content
         ].join('\n');
         
-        // Increase character limit to 20,000 characters
-        const trimmedContent = formattedContent.length > 20000 
-          ? formattedContent.substring(0, 20000) + '\n\n[Content truncated due to length...]' 
+        // Increase character limit to 30,000 characters
+        const trimmedContent = formattedContent.length > 30000 
+          ? formattedContent.substring(0, 30000) + '\n\n[Content truncated due to length...]' 
           : formattedContent;
         
         // Return full scraped content for the model

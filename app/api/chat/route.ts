@@ -19,11 +19,16 @@ export async function POST(req: Request) {
     const { messages, id, agentId = 'default', deepSearchEnabled = false } = validateChatRequest(body);
     const modelName = 'gpt-4o';
 
-    // Get the selected agent ID from the request or use the default
-    let selectedAgentId: AgentType = ((messages[0]?.content as string)?.includes('agent_id:')
-      ? (messages[0]?.content as string).split('agent_id:')[1].trim()
-      : 'default') as AgentType;
-
+    // Use the agentId from the request body, which comes from the user's selection in the UI
+    let selectedAgentId: AgentType = agentId as AgentType;
+    
+    // Log the agent selection details for debugging
+    logger.info('Agent selection details', {
+      requestBodyAgentId: agentId,
+      selectedAgentId,
+      important: true
+    });
+    
     // Get the last user message for processing
     const lastMessage = messages[messages.length - 1];
     const userQuery = lastMessage?.role === 'user' ? lastMessage.content : '';
@@ -44,11 +49,26 @@ export async function POST(req: Request) {
     // Auto-route if using the default agent
     if (selectedAgentId === 'default') {
       edgeLogger.info('Attempting to auto-route message based on content');
+      const previousAgentId = selectedAgentId;
       selectedAgentId = agentRouter.routeMessage(selectedAgentId, messages);
       
-      if (selectedAgentId !== 'default') {
+      if (selectedAgentId !== previousAgentId) {
         edgeLogger.info(`Auto-routed to specialized agent: ${selectedAgentId}`);
+        logger.info('Auto-routing result', {
+          previousAgentId,
+          newAgentId: selectedAgentId,
+          isChanged: true,
+          important: true
+        });
       }
+    } else {
+      // Log that we're using an explicitly selected agent
+      edgeLogger.info(`Using explicitly selected agent: ${selectedAgentId}`);
+      logger.info('Using explicitly selected agent', {
+        agentId: selectedAgentId,
+        selectionMethod: 'user-selected',
+        important: true
+      });
     }
 
     // Extract URLs from the last message
