@@ -36,8 +36,8 @@ async function findSimilarDocuments(
   const { data: similarDocs, error } = await supabase
     .rpc('match_documents', {
       query_embedding: userQueryEmbedded,
-      filter: options.metadataFilter || {},
-      match_count: options.limit || 4
+      match_count: options.limit || 5,
+      filter: options.metadataFilter || {}
     });
 
   if (error) {
@@ -134,25 +134,28 @@ export async function findSimilarDocumentsOptimized(
   const processedQuery = preprocessQuery(queryText);
   
   try {
+    // First attempt with higher threshold (0.6)
     const result = await findSimilarDocumentsWithPerformance(processedQuery, {
       ...options,
+      similarityThreshold: options.similarityThreshold || 0.6, // Start with higher threshold
       sessionId,
     });
     
     const endTime = performance.now();
     const retrievalTimeMs = Math.round(endTime - startTime);
     
-    if (result.documents.length === 0 && (options.similarityThreshold || 0.5) > 0.3) {
+    // If no results with 0.6 threshold, try with 0.4
+    if (result.documents.length === 0) {
       logger.logVectorQuery(queryText, {
-        originalThreshold: options.similarityThreshold || 0.5,
-        newThreshold: 0.3,
+        originalThreshold: options.similarityThreshold || 0.6,
+        newThreshold: 0.4,
         sessionId,
         retrievalTimeMs,
       }, 0, retrievalTimeMs);
       
       const fallbackResult = await findSimilarDocumentsWithPerformance(processedQuery, {
         ...options,
-        similarityThreshold: 0.3,
+        similarityThreshold: 0.4, // Lower threshold for fallback
         sessionId,
       });
       

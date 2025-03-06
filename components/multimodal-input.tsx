@@ -23,12 +23,14 @@ import { useLocalStorage, useWindowSize } from 'usehooks-ts';
 
 import { sanitizeUIMessages } from '@/lib/utils';
 
-import { ArrowUpIcon, PaperclipIcon, StopIcon } from './icons';
+import { ArrowUpIcon, MagnifyingGlassIcon, StopIcon } from './icons';
 import { PreviewAttachment } from './preview-attachment';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
 import { SuggestedActions } from './suggested-actions';
 import equal from 'fast-deep-equal';
+import { useChatStore } from '@/stores/chat-store';
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 
 function PureMultimodalInput({
   chatId,
@@ -67,6 +69,9 @@ function PureMultimodalInput({
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
+  
+  const deepSearchEnabled = useChatStore(state => state.getDeepSearchEnabled());
+  const setDeepSearchEnabled = useChatStore(state => state.setDeepSearchEnabled);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -258,8 +263,30 @@ function PureMultimodalInput({
         }}
       />
 
+      {deepSearchEnabled && (
+        <div className="absolute right-14 top-[50%] translate-y-[-50%] text-xs text-muted-foreground flex items-center">
+          <MagnifyingGlassIcon size={12} className="mr-1" />
+          {isLoading ? (
+            <span className="flex items-center">
+              <span className="mr-1">DeepSearching</span>
+              <span className="inline-flex">
+                <span className="deepsearch-dot deepsearch-dot-1">.</span>
+                <span className="deepsearch-dot deepsearch-dot-2">.</span>
+                <span className="deepsearch-dot deepsearch-dot-3">.</span>
+              </span>
+            </span>
+          ) : (
+            "DeepSearch enabled"
+          )}
+        </div>
+      )}
+
       <div className="absolute bottom-0 p-2 w-fit flex flex-row justify-start">
-        <AttachmentsButton fileInputRef={fileInputRef} isLoading={isLoading} />
+        <DeepSearchButton 
+          deepSearchEnabled={deepSearchEnabled} 
+          setDeepSearchEnabled={setDeepSearchEnabled} 
+          isLoading={isLoading} 
+        />
       </div>
 
       <div className="absolute bottom-0 right-0 p-2 w-fit flex flex-row justify-end">
@@ -288,30 +315,46 @@ export const MultimodalInput = memo(
   },
 );
 
-function PureAttachmentsButton({
-  fileInputRef,
+function PureDeepSearchButton({
+  deepSearchEnabled,
+  setDeepSearchEnabled,
   isLoading,
 }: {
-  fileInputRef: React.MutableRefObject<HTMLInputElement | null>;
+  deepSearchEnabled: boolean;
+  setDeepSearchEnabled: (enabled: boolean) => void;
   isLoading: boolean;
 }) {
   return (
-    <Button
-      data-testid="attachments-button"
-      className="rounded-md rounded-bl-lg p-[7px] h-fit dark:border-zinc-700 hover:dark:bg-zinc-900 hover:bg-zinc-200"
-      onClick={(event) => {
-        event.preventDefault();
-        fileInputRef.current?.click();
-      }}
-      disabled={isLoading}
-      variant="ghost"
-    >
-      <PaperclipIcon size={14} />
-    </Button>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          data-testid="deep-search-button"
+          className={cx(
+            "rounded-md rounded-bl-lg p-[7px] h-fit dark:border-zinc-700",
+            deepSearchEnabled 
+              ? "bg-primary text-primary-foreground hover:bg-primary/90" 
+              : "hover:dark:bg-zinc-900 hover:bg-zinc-200"
+          )}
+          onClick={(event) => {
+            event.preventDefault();
+            setDeepSearchEnabled(!deepSearchEnabled);
+          }}
+          disabled={isLoading}
+          variant={deepSearchEnabled ? "default" : "ghost"}
+        >
+          <MagnifyingGlassIcon size={14} />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="top">
+        {deepSearchEnabled 
+          ? "Disable DeepSearch" 
+          : "Enable DeepSearch: Get comprehensive research on your queries"}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
-const AttachmentsButton = memo(PureAttachmentsButton);
+const DeepSearchButton = memo(PureDeepSearchButton);
 
 function PureStopButton({
   stop,

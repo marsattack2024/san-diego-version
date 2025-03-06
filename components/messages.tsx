@@ -5,6 +5,10 @@ import { Overview } from './overview';
 import { memo } from 'react';
 import { Vote } from '@/lib/db/schema';
 import equal from 'fast-deep-equal';
+import { useChatStore } from '@/stores/chat-store';
+import { MagnifyingGlassIcon } from './icons';
+import { cx } from 'class-variance-authority';
+import { SparklesIcon } from './icons';
 
 interface MessagesProps {
   chatId: string;
@@ -32,6 +36,7 @@ function PureMessages({
 }: MessagesProps) {
   const [messagesContainerRef, messagesEndRef] =
     useScrollToBottom<HTMLDivElement>();
+  const deepSearchEnabled = useChatStore(state => state.getDeepSearchEnabled());
 
   return (
     <div
@@ -47,20 +52,25 @@ function PureMessages({
           chatId={chatId}
           message={message}
           isLoading={isLoading && messages.length - 1 === index}
-          vote={
-            votes
-              ? votes.find((vote) => vote.messageId === message.id)
-              : undefined
-          }
+          vote={votes?.find((vote) => vote.messageId === message.id) || undefined}
           setMessages={setMessages}
           reload={reload}
           isReadonly={isReadonly}
         />
       ))}
 
-      {isLoading &&
-        messages.length > 0 &&
-        messages[messages.length - 1].role === 'user' && <ThinkingMessage />}
+      {isLoading && messages[messages.length - 1]?.role === 'user' && (
+        <div className="flex flex-col gap-2 px-4 md:px-6 w-full max-w-3xl mx-auto">
+          <div className="flex justify-end">
+            <div className="flex items-center gap-2 bg-background rounded-xl p-3 shadow-sm">
+              <ThinkingMessage 
+                message={deepSearchEnabled ? "Thinking & searching" : "Thinking"} 
+                className="animate-pulse"
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       <div
         ref={messagesEndRef}

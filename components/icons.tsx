@@ -1172,3 +1172,27 @@ export const WarningIcon = ({ size = 16 }: { size?: number }) => {
     </svg>
   );
 };
+
+export const MagnifyingGlassIcon = ({ 
+  size = 16, 
+  className = '' 
+}: { 
+  size?: number;
+  className?: string;
+}) => (
+  <svg
+    height={size}
+    width={size}
+    viewBox="0 0 16 16"
+    strokeLinejoin="round"
+    style={{ color: 'currentcolor' }}
+    className={className}
+  >
+    <path
+      fillRule="evenodd"
+      clipRule="evenodd"
+      d="M6.5 1C3.46243 1 1 3.46243 1 6.5C1 9.53757 3.46243 12 6.5 12C7.83879 12 9.05558 11.5217 10.0186 10.7266L14.1464 14.8536L14.8536 14.1464L10.7266 10.0186C11.5217 9.05558 12 7.83879 12 6.5C12 3.46243 9.53757 1 6.5 1ZM2 6.5C2 4.01472 4.01472 2 6.5 2C8.98528 2 11 4.01472 11 6.5C11 8.98528 8.98528 11 6.5 11C4.01472 11 2 8.98528 2 6.5Z"
+      fill="currentColor"
+    />
+  </svg>
+);

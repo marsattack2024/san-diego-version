@@ -18,6 +18,7 @@
   "dependencies": {
     "@ai-sdk/fireworks": "^0.1.12",
     "@ai-sdk/openai": "^1.2.0",
+    "@ai-sdk/perplexity": "^1.0.3",
     "@ai-sdk/provider": "^1.0.9",
     "@ai-sdk/provider-utils": "^2.1.10",
     "@ai-sdk/react": "^1.1.19",
@@ -112,11 +113,13 @@
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "@types/uuid": "^9.0.7",
-    "autoprefixer": "^10.0.1",
+    "autoprefixer": "^10.4.20",
     "eslint": "^8",
     "eslint-config-next": "15.2.0",
     "open-cli": "^8.0.0",
     "postcss": "^8",
+    "stylelint": "^16.15.0",
+    "stylelint-config-standard": "^37.0.0",
     "tailwindcss": "^3.3.0",
     "typescript": "^5"
   }

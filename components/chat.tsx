@@ -12,6 +12,8 @@ import { MultimodalInput } from './multimodal-input';
 import { Messages } from './messages';
 import { useArtifactSelector } from '@/hooks/use-artifact';
 import { toast } from 'sonner';
+import { useChatStore } from '@/stores/chat-store';
+import { TooltipProvider } from './ui/tooltip';
 
 export function Chat({
   id,
@@ -23,6 +25,7 @@ export function Chat({
   isReadonly: boolean;
 }) {
   const { mutate } = useSWRConfig();
+  const deepSearchEnabled = useChatStore(state => state.getDeepSearchEnabled());
 
   const {
     messages,
@@ -36,7 +39,10 @@ export function Chat({
     reload,
   } = useChat({
     id,
-    body: { id },
+    body: { 
+      id,
+      deepSearchEnabled
+    },
     initialMessages,
     experimental_throttle: 100,
     sendExtraMessageFields: true,
@@ -58,59 +64,61 @@ export function Chat({
   const isArtifactVisible = useArtifactSelector((state) => state.isVisible);
 
   return (
-    <>
-      <div className="flex flex-col min-w-0 h-dvh bg-background">
-        <ChatHeader
-          chatId={id}
-          isReadonly={isReadonly}
-        />
+    <TooltipProvider>
+      <>
+        <div className="flex flex-col min-w-0 h-dvh bg-background">
+          <ChatHeader
+            chatId={id}
+            isReadonly={isReadonly}
+          />
 
-        <Messages
+          <Messages
+            chatId={id}
+            isLoading={isLoading}
+            votes={votes}
+            messages={messages}
+            setMessages={setMessages}
+            reload={reload}
+            isReadonly={isReadonly}
+            isArtifactVisible={isArtifactVisible}
+          />
+
+          <form className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full md:max-w-3xl">
+            {!isReadonly && (
+              <MultimodalInput
+                chatId={id}
+                input={input}
+                setInput={setInput}
+                handleSubmit={handleSubmit}
+                isLoading={isLoading}
+                stop={stop}
+                attachments={attachments}
+                setAttachments={setAttachments}
+                messages={messages}
+                setMessages={setMessages}
+                append={append}
+              />
+            )}
+          </form>
+        </div>
+
+        <Artifact
           chatId={id}
+          input={input}
+          setInput={setInput}
+          handleSubmit={handleSubmit}
           isLoading={isLoading}
-          votes={votes}
+          stop={stop}
+          attachments={attachments}
+          setAttachments={setAttachments}
+          append={append}
           messages={messages}
           setMessages={setMessages}
           reload={reload}
+          votes={votes}
           isReadonly={isReadonly}
-          isArtifactVisible={isArtifactVisible}
         />
-
-        <form className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full md:max-w-3xl">
-          {!isReadonly && (
-            <MultimodalInput
-              chatId={id}
-              input={input}
-              setInput={setInput}
-              handleSubmit={handleSubmit}
-              isLoading={isLoading}
-              stop={stop}
-              attachments={attachments}
-              setAttachments={setAttachments}
-              messages={messages}
-              setMessages={setMessages}
-              append={append}
-            />
-          )}
-        </form>
-      </div>
-
-      <Artifact
-        chatId={id}
-        input={input}
-        setInput={setInput}
-        handleSubmit={handleSubmit}
-        isLoading={isLoading}
-        stop={stop}
-        attachments={attachments}
-        setAttachments={setAttachments}
-        append={append}
-        messages={messages}
-        setMessages={setMessages}
-        reload={reload}
-        votes={votes}
-        isReadonly={isReadonly}
-      />
-    </>
+      </>
+    </TooltipProvider>
   );
 }

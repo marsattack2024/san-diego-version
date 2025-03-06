@@ -6,7 +6,8 @@ import { useWindowSize } from 'usehooks-ts';
 import { SidebarToggle } from './sidebar-toggle';
 import { Button } from './ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
-import { PlusIcon } from './icons';
+import { PlusIcon, MagnifyingGlassIcon } from './icons';
+import { useChatStore } from '@/stores/chat-store';
 
 export function PureChatHeader({
   chatId,
@@ -18,6 +19,7 @@ export function PureChatHeader({
   const router = useRouter();
   const { width } = useWindowSize();
   const isMobile = width < 768;
+  const deepSearchEnabled = useChatStore(state => state.getDeepSearchEnabled());
 
   const handleNewChat = () => {
     router.push('/chat');
@@ -27,6 +29,12 @@ export function PureChatHeader({
     <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b bg-background px-4">
       <div className="flex items-center gap-2">
         {isMobile && <SidebarToggle />}
+        {deepSearchEnabled && (
+          <div className="flex items-center text-xs text-muted-foreground">
+            <MagnifyingGlassIcon size={12} className="mr-1" />
+            <span className="flex items-center">DeepSearch enabled</span>
+          </div>
+        )}
       </div>
       <div className="flex items-center gap-2">
         <Tooltip>

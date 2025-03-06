@@ -1,9 +1,15 @@
 import { OpenAI } from 'openai';
 import { z } from 'zod';
 import { createBasicTool } from '../core/agent-tools';
-import { createLogger } from '../../utils/client-logger';
+import { clientLogger } from '../../logger/client-logger';
 
-const logger = createLogger('agent:tools:deep-search');
+// Create a component-specific logger wrapper
+const logger = {
+  debug: (message: string, context = {}) => clientLogger.debug(`[agent:tools:deep-search] ${message}`, context),
+  info: (message: string, context = {}) => clientLogger.info(`[agent:tools:deep-search] ${message}`, context),
+  warn: (message: string, context = {}) => clientLogger.warn(`[agent:tools:deep-search] ${message}`, context),
+  error: (message: string | Error, context = {}) => clientLogger.error(`[agent:tools:deep-search] ${message}`, context)
+};
 
 /**
  * DeepSearch tool powered by Perplexity API

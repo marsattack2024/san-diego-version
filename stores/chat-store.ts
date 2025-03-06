@@ -13,6 +13,7 @@ export interface Conversation {
   userId?: string; // For Supabase auth integration
   agentId?: string; // Track which agent was used
   metadata?: Record<string, any>; // For additional data like settings
+  deepSearchEnabled?: boolean; // Track if DeepSearch is enabled for this conversation
 }
 
 // Define previous state versions for migrations
@@ -40,6 +41,8 @@ interface ChatState {
   ensureMessageIds: (messages: Message[]) => Message[];
   updateConversationMetadata: (conversationId: string, metadata: Partial<Conversation>) => void;
   deleteConversation: (conversationId: string) => void;
+  setDeepSearchEnabled: (enabled: boolean) => void; // New action to toggle DeepSearch
+  getDeepSearchEnabled: () => boolean; // New action to get DeepSearch state
 }
 
 // Custom storage with debug logging
@@ -240,6 +243,28 @@ export const useChatStore = create<ChatState>()(
           conversations: newConversations,
           currentConversationId: newCurrentId
         });
+      },
+      
+      setDeepSearchEnabled: (enabled) => {
+        const { conversations } = get();
+        const currentConversationId = get().currentConversationId;
+        if (currentConversationId) {
+          set({
+            conversations: {
+              ...conversations,
+              [currentConversationId]: {
+                ...conversations[currentConversationId],
+                deepSearchEnabled: enabled
+              }
+            }
+          });
+        }
+      },
+      
+      getDeepSearchEnabled: () => {
+        const { conversations } = get();
+        const currentConversationId = get().currentConversationId;
+        return currentConversationId ? conversations[currentConversationId].deepSearchEnabled ?? false : false;
       }
     }),
     {
@@ -265,7 +290,8 @@ export const useChatStore = create<ChatState>()(
               // Add any new fields with default values
               userId: undefined,
               agentId: undefined,
-              metadata: {}
+              metadata: {},
+              deepSearchEnabled: false
             };
           });
           
@@ -281,7 +307,9 @@ export const useChatStore = create<ChatState>()(
             clearConversation: () => {},
             ensureMessageIds: (msgs) => msgs,
             updateConversationMetadata: () => {},
-            deleteConversation: () => {}
+            deleteConversation: () => {},
+            setDeepSearchEnabled: () => {},
+            getDeepSearchEnabled: () => false
           };
         }
         

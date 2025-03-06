@@ -6,7 +6,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { memo, useState } from 'react';
 import type { Vote } from '@/lib/db/schema';
 import { DocumentToolCall, DocumentToolResult } from './document';
-import { PencilEditIcon, SparklesIcon } from './icons';
+import { PencilEditIcon, SparklesIcon, MagnifyingGlassIcon } from './icons';
 import { Markdown } from './markdown';
 import { MessageActions } from './message-actions';
 import { PreviewAttachment } from './preview-attachment';
@@ -119,7 +119,26 @@ const PurePreviewMessage = ({
                       message.role === 'user',
                   })}
                 >
-                  <Markdown>{message.content as string}</Markdown>
+                  {/* Remove the marker from the content before rendering */}
+                  <Markdown>
+                    {typeof message.content === 'string' 
+                      ? message.content.replace(/<DeepSearchMarker count="[^"]+" \/>/, '') 
+                      : message.content as string}
+                  </Markdown>
+                  
+                  {/* Show thinking indicator for streaming assistant messages */}
+                  {message.role === 'assistant' && isLoading && (
+                    <ThinkingMessage 
+                      className="ml-1 inline-flex animate-pulse"
+                    />
+                  )}
+                  
+                  {/* Display RAG results only */}
+                  {message.role === 'assistant' && (
+                    <div className="flex items-center flex-wrap gap-2 mt-2">
+                      {/* DeepSearch badge removed */}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -169,8 +188,14 @@ const PurePreviewMessage = ({
                           />
                         ) : toolName === 'getInformation' ? (
                           <RagResultCount count={result.found ? result.documents.length : 0} />
+                        ) : toolName === 'deepSearch' || toolName === 'webScraper' || toolName === 'detectAndScrapeUrls' || 
+                           toolName === 'comprehensiveScraper' || toolName === 'addResource' || 
+                           toolName.includes('Scraper') || toolName.includes('Search') ? (
+                          null // Don't show any UI for these tools
                         ) : (
-                          <pre>{JSON.stringify(result, null, 2)}</pre>
+                          <div className="text-xs text-muted-foreground">
+                            Tool used: {toolName}
+                          </div>
                         )}
                       </div>
                     );
@@ -241,34 +266,22 @@ export const PreviewMessage = memo(
   },
 );
 
-export const ThinkingMessage = () => {
-  const role = 'assistant';
-
+export function ThinkingMessage({
+  message = '',
+  className
+}: {
+  message?: string;
+  className?: string;
+}) {
   return (
-    <motion.div
-      className="w-full mx-auto max-w-3xl px-4 group/message "
-      initial={{ y: 5, opacity: 0 }}
-      animate={{ y: 0, opacity: 1, transition: { delay: 1 } }}
-      data-role={role}
-    >
-      <div
-        className={cx(
-          'flex gap-4 group-data-[role=user]/message:px-3 w-full group-data-[role=user]/message:w-fit group-data-[role=user]/message:ml-auto group-data-[role=user]/message:max-w-2xl group-data-[role=user]/message:py-2 rounded-xl',
-          {
-            'group-data-[role=user]/message:bg-muted': true,
-          },
-        )}
-      >
-        <div className="size-8 flex items-center rounded-full justify-center ring-1 shrink-0 ring-border">
-          <SparklesIcon size={14} />
-        </div>
-
-        <div className="flex flex-col gap-2 w-full">
-          <div className="flex flex-col gap-4 text-muted-foreground">
-            Thinking...
-          </div>
-        </div>
-      </div>
-    </motion.div>
+    <div className={cn('flex items-center gap-1.5 text-xs text-muted-foreground', className)}>
+      <SparklesIcon size={14} />
+      {message && <span>{message}</span>}
+      <span className="flex items-center">
+        <span className="thinking-dot thinking-dot-1">.</span>
+        <span className="thinking-dot thinking-dot-2">.</span>
+        <span className="thinking-dot thinking-dot-3">.</span>
+      </span>
+    </div>
   );
-};
+}

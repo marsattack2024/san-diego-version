@@ -5,6 +5,7 @@ interface ChatRequest {
   messages: Message[];
   id?: string;
   useDeepSearch?: boolean;
+  deepSearchEnabled?: boolean;
 }
 
 export function validateChatRequest(body: any): ChatRequest {
@@ -26,5 +27,6 @@ export function validateChatRequest(body: any): ChatRequest {
     messages: body.messages,
     id: body.id,
     useDeepSearch: body.useDeepSearch || false,
+    deepSearchEnabled: body.deepSearchEnabled || false,
   };
 } 

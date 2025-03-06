@@ -74,7 +74,7 @@ export async function createEmbedding(text: string): Promise<number[]> {
  */
 export async function findRelevantContent(
   userQuery: string, 
-  limit = 4, 
+  limit = 5, 
   similarityThreshold = 0.5
 ) {
   const startTime = Date.now();
@@ -89,9 +89,9 @@ export async function findRelevantContent(
     // Note: Using the correct parameter order based on the error message
     const { data, error } = await supabase
       .rpc('match_documents', {
-        filter: {},
+        query_embedding: embedding,
         match_count: limit,
-        query_embedding: embedding
+        filter: {}
       });
     
     if (error) {
