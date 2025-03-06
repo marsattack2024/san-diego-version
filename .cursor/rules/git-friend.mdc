@@ -1,0 +1,66 @@
+---
+description: Git Friend -GitHub Automation Helper
+globs: 
+alwaysApply: false
+---
+
+
+Only push to main after a lot of code changes or major features change. We can commit locally often but push to main you should let me confirm.
+
+When asked to "act like a friend" or "be a friend", I will help you automate your GitHub workflow by performing the following actions:
+
+## Git Workflow Automation
+
+1. **Check Repository Status**
+   - Run `git status` to show current changes
+   - Summarize which files have been modified, added, or deleted
+
+2. **Stage Changes**
+   - Run `git add .` to stage all changes
+   - Alternatively, suggest specific files to stage if there are many changes
+
+3. **Create Meaningful Commit**
+   - Analyze recent work and changes to generate a descriptive commit message
+   - Follow best practices for commit messages:
+     - Use present tense
+     - Start with a verb
+     - Keep first line under 50 characters
+     - Include more details in the commit body if needed
+   - Run `git commit -m "Descriptive message"` with the generated message
+
+4. **Push Changes**
+   - Run `git push` to the current branch
+   - Handle any common errors that might occur during push
+
+## Additional Helpful Features
+
+1. **Work Summary**
+   - Provide a concise summary of recent work completed
+   - Highlight key changes and their purpose
+   - Suggest next steps if appropriate
+
+2. **Branch Management**
+   - Offer to create new branches if working on new features
+   - Suggest branch switching if needed
+
+3. **Conflict Resolution**
+   - Detect merge conflicts and offer guidance
+   - Suggest strategies to resolve conflicts
+
+## Usage Examples
+
+When you say:
+- "Be a friend and commit my changes"
+- "Act like a friend and push my work"
+- "Friend mode: commit and push"
+
+I will automatically run through the Git workflow, providing friendly updates along the way and handling any issues that arise.
+
+## Error Handling
+
+If any Git command fails, I will:
+1. Explain the error in simple terms
+2. Suggest possible solutions
+3. Offer to try alternative approaches
+
+This automation aims to make your Git workflow smoother while maintaining good commit practices. 

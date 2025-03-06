@@ -25,7 +25,7 @@ export function PureChatHeader({
   return (
     <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b bg-background px-4">
       <div className="flex items-center gap-2">
-        {isMobile && <SidebarToggle />}
+        <SidebarToggle />
         <AgentSelector />
         {deepSearchEnabled && (
           <div className="flex items-center text-xs text-muted-foreground">
