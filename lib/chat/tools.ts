@@ -102,7 +102,7 @@ export const chatTools = {
         });
         
         const response = await openai.chat.completions.create({
-          model: 'sonar-medium-online',
+          model: 'sonar-pro', // Confirmed valid model from Perplexity docs
           messages: [
             { role: 'system', content: 'You are a helpful research assistant that provides comprehensive information.' },
             { role: 'user', content: query }
