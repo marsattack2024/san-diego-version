@@ -1,11 +1,8 @@
 import { type Message } from 'ai';
-import { type AgentType } from '@/components/agent-selector';
-import { DEFAULT_SYSTEM_PROMPT } from './prompts/default-prompts';
-import { COPYWRITING_SYSTEM_PROMPT } from './prompts/copywriting-prompts';
-import { GOOGLE_ADS_SYSTEM_PROMPT } from './prompts/google-ads-prompts';
-import { FACEBOOK_ADS_SYSTEM_PROMPT } from './prompts/facebook-ads-prompts';
-import { QUIZ_SYSTEM_PROMPT } from './prompts/quiz-prompts';
+import { buildSystemPrompt, enhancePromptWithToolResults, type ToolResults, type AgentType } from './prompts';
 import { type ToolSet } from 'ai';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { logger } from '../logger/edge-logger';
 
 // Keywords that trigger specific agents
 const AGENT_KEYWORDS: Record<AgentType, string[]> = {
@@ -97,23 +94,32 @@ export class AgentRouter {
    * @returns The agent type to use
    */
   routeMessage(selectedAgentId: AgentType, messages: Message[]): AgentType {
-    console.log(`Agent router: selectedAgentId=${selectedAgentId}, messages.length=${messages.length}`);
+    edgeLogger.info('Agent router processing message', { 
+      selectedAgentId, 
+      messagesCount: messages.length 
+    });
     
     // If user has explicitly selected a non-default agent, use that
     if (selectedAgentId !== 'default') {
-      console.log(`Using explicitly selected agent: ${selectedAgentId}`);
+      logger.info('Using explicitly selected agent', { 
+        selectedAgentId, 
+        selectionMethod: 'user-selected',
+        important: true
+      });
       return selectedAgentId;
     }
 
     // Auto-routing only happens from the default agent
     const lastMessage = messages[messages.length - 1];
     if (!lastMessage || lastMessage.role !== 'user') {
-      console.log('No user message to route, using default agent');
+      edgeLogger.info('No user message to route, using default agent');
       return 'default';
     }
 
     const content = lastMessage.content.toLowerCase();
-    console.log(`Routing based on message content: "${content.substring(0, 50)}..."`);
+    edgeLogger.info('Routing based on message content', { 
+      contentPreview: content.substring(0, 50) + (content.length > 50 ? '...' : '') 
+    });
 
     // Create a scoring system for each agent type
     const scores: Record<AgentType, number> = {
@@ -129,13 +135,38 @@ export class AgentRouter {
       if (agentType === 'default') continue;
       
       for (const keyword of keywords) {
-        // Exact match gets higher score
+        // Check for exact matches (higher score)
         if (content.includes(keyword.toLowerCase())) {
           // Multi-word keywords get higher scores
           const wordCount = keyword.split(' ').length;
           const score = wordCount * 2;
           scores[agentType as AgentType] += score;
-          console.log(`Found keyword "${keyword}" for agent: ${agentType}, adding score: ${score}`);
+          edgeLogger.debug('Keyword match found', { 
+            keyword, 
+            agentType, 
+            score 
+          });
+          
+          // Bonus points for keywords at the beginning of the message
+          if (content.startsWith(keyword.toLowerCase())) {
+            const bonusScore = 5;
+            scores[agentType as AgentType] += bonusScore;
+            edgeLogger.debug('Keyword at start of message', { 
+              keyword, 
+              bonusScore 
+            });
+          }
+          
+          // Bonus points for exact phrase matches
+          const exactPhraseRegex = new RegExp(`\\b${keyword.toLowerCase()}\\b`, 'i');
+          if (exactPhraseRegex.test(content)) {
+            const exactMatchBonus = 3;
+            scores[agentType as AgentType] += exactMatchBonus;
+            edgeLogger.debug('Exact phrase match', { 
+              keyword, 
+              exactMatchBonus 
+            });
+          }
         }
       }
     }
@@ -151,64 +182,92 @@ export class AgentRouter {
       }
     }
 
+    // Log all scores for debugging
+    edgeLogger.debug('Agent routing scores', { scores });
+
     // Only route to a specialized agent if the score is above a threshold
-    if (highestScore > 0) {
-      console.log(`Selected agent: ${selectedAgent} with score: ${highestScore}`);
+    const routingThreshold = 5; // Minimum score to trigger routing
+    if (highestScore >= routingThreshold) {
+      edgeLogger.info('Auto-routed to specialized agent', { 
+        selectedAgent, 
+        score: highestScore, 
+        threshold: routingThreshold 
+      });
+      
+      logger.info('Auto-routed message to specialized agent', {
+        agentType: selectedAgent,
+        selectionMethod: 'auto-routing',
+        score: highestScore,
+        threshold: routingThreshold,
+        important: true
+      });
+      
       return selectedAgent;
     }
 
-    // Default to the default agent if no keywords match
-    console.log('No keywords matched, using default agent');
+    // Default to the default agent if no keywords match or score is too low
+    edgeLogger.info('No agent scored above threshold, using default agent', { 
+      highestScore, 
+      threshold: routingThreshold 
+    });
+    
+    logger.info('Using default agent (no specialized agent matched)', {
+      selectionMethod: 'auto-routing',
+      highestScore,
+      threshold: routingThreshold,
+      important: true
+    });
+    
     return 'default';
   }
 
   /**
    * Gets the system prompt for the specified agent
    * @param agentType The agent type
+   * @param toolResults The tool results
    * @param deepSearchEnabled Whether DeepSearch is enabled
    * @returns The system prompt
    */
-  getSystemPrompt(agentType: AgentType, deepSearchEnabled: boolean = false): string {
-    // Get the base system prompt for the agent
-    let prompt: string;
-    switch (agentType) {
-      case 'copywriting':
-        prompt = COPYWRITING_SYSTEM_PROMPT;
-        break;
-      case 'google-ads':
-        prompt = GOOGLE_ADS_SYSTEM_PROMPT;
-        break;
-      case 'facebook-ads':
-        prompt = FACEBOOK_ADS_SYSTEM_PROMPT;
-        break;
-      case 'quiz':
-        prompt = QUIZ_SYSTEM_PROMPT;
-        break;
-      default:
-        prompt = DEFAULT_SYSTEM_PROMPT;
-        break;
-    }
+  getSystemPrompt(agentType: AgentType, toolResults: ToolResults = {}, deepSearchEnabled = false): string {
+    // Log agent selection with context
+    logger.info('Agent selected for conversation', {
+      agentType,
+      selectionMethod: agentType === 'default' ? 'auto-routing' : 'user-selected',
+      hasToolResults: Object.keys(toolResults).length > 0,
+      deepSearchEnabled,
+      important: true
+    });
     
-    // Add DeepSearch-specific instructions if enabled
+    // Start with the base prompt
+    let prompt = buildSystemPrompt(agentType);
+    
+    // Add tool descriptions for this agent
+    prompt += `\n\n${AGENT_TOOL_DESCRIPTIONS[agentType]}`;
+    
+    // Add DeepSearch-specific instructions if explicitly enabled by the user
     if (deepSearchEnabled) {
-      prompt += `\n\nIMPORTANT: DeepSearch is enabled for this conversation. You MUST use the deepSearch tool for research-intensive questions, complex topics, or when comprehensive information is needed. The deepSearch tool provides much more thorough and reliable information than regular search.`;
+      prompt += `\n\nIMPORTANT: DeepSearch is enabled for this conversation. You MUST use the deepSearch tool for research-intensive questions, complex topics, or when comprehensive information is needed.`;
+      
+      // If DeepSearch results are already available, note that in the prompt
+      if (toolResults.deepSearch) {
+        prompt += `\n\nDeepSearch results have already been included below.`;
+      }
+    } else {
+      // Make it clear that DeepSearch should NOT be used unless explicitly enabled
+      prompt += `\n\nNOTE: DeepSearch is NOT enabled for this conversation. Do NOT use the deepSearch tool even if it seems appropriate. Use other available tools like comprehensiveScraper or getInformation instead.`;
     }
     
-    return prompt;
-  }
-
-  /**
-   * Configures tools for the specified agent
-   * @param agentType The agent type
-   * @param availableTools The available tools
-   * @returns The configured tools
-   */
-  configureTools<T extends ToolSet>(agentType: AgentType, availableTools: T): T {
-    // Log which tools are being configured for the agent
-    console.log(`Configuring tools for agent ${agentType}`);
+    // Add tool results in priority order
+    const enhancedPrompt = enhancePromptWithToolResults(prompt, toolResults);
     
-    // Return all tools - they are already properly configured in the chat route
-    // Each tool has its own description and parameters defined there
-    return availableTools;
+    edgeLogger.debug('System prompt built successfully', {
+      agentType,
+      promptLength: enhancedPrompt.length,
+      hasRagContent: !!toolResults?.ragContent,
+      hasWebScraperContent: !!toolResults?.webScraper,
+      hasDeepSearchContent: !!toolResults?.deepSearch
+    });
+    
+    return enhancedPrompt;
   }
-} 
+}

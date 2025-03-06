@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { MagnifyingGlassIcon } from './icons';
 import { useChatStore } from '@/stores/chat-store';
 import { AuthButton } from './auth/auth-button';
+import { AgentSelector } from './agent-selector';
 
 export function PureChatHeader({
   chatId,
@@ -25,6 +26,7 @@ export function PureChatHeader({
     <header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b bg-background px-4">
       <div className="flex items-center gap-2">
         {isMobile && <SidebarToggle />}
+        <AgentSelector />
         {deepSearchEnabled && (
           <div className="flex items-center text-xs text-muted-foreground">
             <MagnifyingGlassIcon size={12} className="mr-1" />

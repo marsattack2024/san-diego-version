@@ -1,11 +1,13 @@
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import type { Message } from 'ai';
+import type { AgentType } from '@/lib/agents/prompts';
 
 interface ChatRequest {
   messages: Message[];
   id?: string;
   useDeepSearch?: boolean;
   deepSearchEnabled?: boolean;
+  agentId?: AgentType;
 }
 
 export function validateChatRequest(body: any): ChatRequest {
@@ -28,5 +30,6 @@ export function validateChatRequest(body: any): ChatRequest {
     id: body.id,
     useDeepSearch: body.useDeepSearch || false,
     deepSearchEnabled: body.deepSearchEnabled || false,
+    agentId: body.agentId || 'default'
   };
 } 

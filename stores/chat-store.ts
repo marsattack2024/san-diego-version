@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage, StateStorage } from 'zustand/middleware';
 import { v4 as uuidv4 } from 'uuid';
 import { Message } from 'ai';
+import { type AgentType } from '@/lib/agents/prompts';
 
 // Define a more comprehensive conversation type for Supabase integration
 export interface Conversation {
@@ -11,7 +12,7 @@ export interface Conversation {
   updatedAt: string;
   title?: string;
   userId?: string; // For Supabase auth integration
-  agentId?: string; // Track which agent was used
+  agentId: AgentType; // Track which agent was used
   metadata?: Record<string, any>; // For additional data like settings
   deepSearchEnabled?: boolean; // Track if DeepSearch is enabled for this conversation
 }
@@ -30,6 +31,8 @@ interface ChatStateV0 {
 interface ChatState {
   conversations: Record<string, Conversation>;
   currentConversationId: string | null;
+  selectedAgentId: AgentType;
+  deepSearchEnabled: boolean;
   
   // Actions
   createConversation: () => string;
@@ -41,8 +44,10 @@ interface ChatState {
   ensureMessageIds: (messages: Message[]) => Message[];
   updateConversationMetadata: (conversationId: string, metadata: Partial<Conversation>) => void;
   deleteConversation: (conversationId: string) => void;
-  setDeepSearchEnabled: (enabled: boolean) => void; // New action to toggle DeepSearch
-  getDeepSearchEnabled: () => boolean; // New action to get DeepSearch state
+  setDeepSearchEnabled: (enabled: boolean) => void;
+  getDeepSearchEnabled: () => boolean;
+  setSelectedAgent: (agentId: AgentType) => void;
+  getSelectedAgent: () => AgentType;
 }
 
 // Custom storage with debug logging
@@ -77,10 +82,13 @@ export const useChatStore = create<ChatState>()(
     (set, get) => ({
       conversations: {},
       currentConversationId: null,
+      selectedAgentId: 'default' as AgentType,
+      deepSearchEnabled: false,
       
       createConversation: () => {
         const id = uuidv4();
         const timestamp = new Date().toISOString();
+        const selectedAgentId = get().selectedAgentId;
         
         set((state) => ({
           conversations: {
@@ -90,6 +98,8 @@ export const useChatStore = create<ChatState>()(
               messages: [],
               createdAt: timestamp,
               updatedAt: timestamp,
+              agentId: selectedAgentId,
+              deepSearchEnabled: state.deepSearchEnabled
             }
           },
           currentConversationId: id
@@ -189,8 +199,9 @@ export const useChatStore = create<ChatState>()(
               updatedAt: timestamp,
               title: 'New Conversation',
               userId: undefined,
-              agentId: undefined,
-              metadata: {}
+              agentId: 'default' as AgentType,
+              metadata: {},
+              deepSearchEnabled: false
             }
           },
           currentConversationId: id
@@ -245,16 +256,42 @@ export const useChatStore = create<ChatState>()(
         });
       },
       
-      setDeepSearchEnabled: (enabled) => {
-        const { conversations } = get();
-        const currentConversationId = get().currentConversationId;
-        if (currentConversationId) {
+      setSelectedAgent: (agentId: AgentType) => {
+        set({ selectedAgentId: agentId });
+        
+        // Update current conversation if it exists
+        const { currentConversationId, conversations } = get();
+        if (currentConversationId && conversations[currentConversationId]) {
           set({
             conversations: {
               ...conversations,
               [currentConversationId]: {
                 ...conversations[currentConversationId],
-                deepSearchEnabled: enabled
+                agentId,
+                updatedAt: new Date().toISOString()
+              }
+            }
+          });
+        }
+      },
+      
+      getSelectedAgent: () => {
+        return get().selectedAgentId;
+      },
+      
+      setDeepSearchEnabled: (enabled) => {
+        set({ deepSearchEnabled: enabled });
+        
+        // Update current conversation if it exists
+        const { currentConversationId, conversations } = get();
+        if (currentConversationId && conversations[currentConversationId]) {
+          set({
+            conversations: {
+              ...conversations,
+              [currentConversationId]: {
+                ...conversations[currentConversationId],
+                deepSearchEnabled: enabled,
+                updatedAt: new Date().toISOString()
               }
             }
           });
@@ -262,59 +299,34 @@ export const useChatStore = create<ChatState>()(
       },
       
       getDeepSearchEnabled: () => {
-        const { conversations } = get();
-        const currentConversationId = get().currentConversationId;
-        return currentConversationId ? conversations[currentConversationId].deepSearchEnabled ?? false : false;
+        return get().deepSearchEnabled;
       }
     }),
     {
       name: 'chat-storage',
       version: 1,
       storage: createJSONStorage(() => createDebugStorage()),
-      migrate: (persistedState: unknown, version): ChatState => {
-        console.debug(`[ChatStore] Migrating from version ${version}`);
-        
+      migrate: (persistedState: any, version: number) => {
         if (version === 0) {
-          // Migrate from v0 to v1
-          const oldState = persistedState as ChatStateV0;
-          
-          // Create new state with updated conversation structure
-          const newConversations: Record<string, Conversation> = {};
-          
-          Object.entries(oldState.conversations).forEach(([id, oldConversation]) => {
-            const timestamp = oldConversation.createdAt || new Date().toISOString();
-            
-            newConversations[id] = {
-              ...oldConversation,
-              updatedAt: timestamp,
-              // Add any new fields with default values
-              userId: undefined,
-              agentId: undefined,
-              metadata: {},
-              deepSearchEnabled: false
-            };
-          });
-          
+          const v0State = persistedState as ChatStateV0;
           return {
-            ...oldState,
-            conversations: newConversations,
-            // We need to add these methods, but they'll be replaced by the store
-            createConversation: () => '',
-            setCurrentConversation: () => {},
-            getConversation: () => undefined,
-            addMessage: () => {},
-            updateMessages: () => {},
-            clearConversation: () => {},
-            ensureMessageIds: (msgs) => msgs,
-            updateConversationMetadata: () => {},
-            deleteConversation: () => {},
-            setDeepSearchEnabled: () => {},
-            getDeepSearchEnabled: () => false
+            ...v0State,
+            selectedAgentId: 'default' as AgentType,
+            deepSearchEnabled: false,
+            conversations: Object.fromEntries(
+              Object.entries(v0State.conversations).map(([id, conv]) => [
+                id,
+                {
+                  ...conv,
+                  agentId: 'default' as AgentType,
+                  deepSearchEnabled: false,
+                  updatedAt: conv.createdAt
+                }
+              ])
+            )
           };
         }
-        
-        // If we don't recognize the version, return the state as is
-        return persistedState as ChatState;
+        return persistedState;
       }
     }
   )

@@ -1,5 +1,7 @@
+import { type AgentType } from '@/lib/agents/prompts';
+
 export interface Agent {
-  id: string;
+  id: AgentType;
   name: string;
   description: string;
   capabilities: string[];

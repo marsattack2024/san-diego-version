@@ -1,8 +1,6 @@
 'use client';
 
-import { startTransition, useMemo, useOptimistic, useState } from 'react';
-
-import { saveAgentAsCookie } from '@/app/chat/actions';
+import { useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -10,28 +8,25 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { agents, type Agent } from '@/lib/ai/agents';
+import { agents } from '@/lib/ai/agents';
 import { cn } from '@/lib/utils';
-
 import { CheckCircleFillIcon, ChevronDownIcon } from './icons';
+import { useChatStore } from '@/stores/chat-store';
+import { type AgentType } from '@/lib/agents/prompts';
 
 export function AgentSelector({
-  selectedAgentId,
   className,
-}: {
-  selectedAgentId: string;
-} & React.ComponentProps<typeof Button>) {
-  const [open, setOpen] = useState(false);
-  const [optimisticAgentId, setOptimisticAgentId] =
-    useOptimistic(selectedAgentId);
+}: React.ComponentProps<typeof Button>) {
+  const selectedAgentId = useChatStore(state => state.selectedAgentId);
+  const setSelectedAgent = useChatStore(state => state.setSelectedAgent);
 
   const selectedAgent = useMemo(
-    () => agents.find((agent: Agent) => agent.id === optimisticAgentId) || agents[0],
-    [optimisticAgentId],
+    () => agents.find(agent => agent.id === selectedAgentId) || agents[0],
+    [selectedAgentId],
   );
 
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
+    <DropdownMenu>
       <DropdownMenuTrigger
         asChild
         className={cn(
@@ -45,22 +40,18 @@ export function AgentSelector({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-[300px]">
-        {agents.map((agent: Agent) => {
+        {agents.map((agent) => {
           const { id } = agent;
+          const isSelected = id === selectedAgentId;
 
           return (
             <DropdownMenuItem
               key={id}
               onSelect={() => {
-                setOpen(false);
-
-                startTransition(() => {
-                  setOptimisticAgentId(id);
-                  saveAgentAsCookie(id);
-                });
+                setSelectedAgent(id as AgentType);
               }}
               className="gap-4 group/item flex flex-row justify-between items-center"
-              data-active={id === optimisticAgentId}
+              data-active={isSelected}
             >
               <div className="flex flex-col gap-1 items-start">
                 <div>{agent.name}</div>

@@ -8,8 +8,9 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { extractUrls, ensureProtocol } from './url-utils';
 import type { RetrievedDocument } from '../../types/vector/vector';
+import { callPerplexityAPI } from '../agents/tools/perplexity/api';
 
-// Define the type for scraped content
+// Define interfaces for scraped content
 interface ScrapedContent {
   title: string;
   description: string;
@@ -17,7 +18,7 @@ interface ScrapedContent {
   url: string;
 }
 
-// Define the stats type for scraper results
+// Stats interface for scraper metrics
 interface ScraperStats {
   headers: number;
   paragraphs: number;
@@ -107,7 +108,7 @@ export const chatTools = {
             { role: 'system', content: 'You are a helpful research assistant that provides comprehensive information.' },
             { role: 'user', content: query }
           ],
-          max_tokens: 4000,
+          max_tokens: 12000,
           temperature: 0.7,
         });
         
@@ -126,64 +127,6 @@ export const chatTools = {
         });
         
         return `DeepSearch failed: ${error instanceof Error ? error.message : String(error)}`;
-      }
-    }
-  }),
-
-  // Web scraper tool - now uses comprehensive scraper internally
-  webScraper: tool({
-    description: 'Scrape content from a URL. Extracts the title, description, and main content',
-    parameters: z.object({
-      url: z.string().describe('The URL to scrape')
-    }),
-    execute: async ({ url }): Promise<ScrapedContent> => {
-      const startTime = performance.now();
-      const fullUrl = ensureProtocol(url);
-      
-      try {
-        edgeLogger.debug('[WEB SCRAPER] Starting to scrape URL', { url: fullUrl });
-        
-        // Use the comprehensive scraper internally
-        const { title, description, textContent } = await scrapeComprehensively(fullUrl);
-        
-        // Calculate stats for logging
-        const headerCount = textContent.headers.length;
-        const paragraphCount = textContent.paragraphs.length;
-        const listCount = textContent.lists.length;
-        const otherCount = textContent.other.length;
-        
-        const executionTimeMs = Math.round(performance.now() - startTime);
-        
-        edgeLogger.info('[WEB SCRAPER] URL scraped successfully', { 
-          url: fullUrl, 
-          executionTimeMs,
-          headerCount,
-          paragraphCount,
-          listCount,
-          otherCount
-        });
-        
-        // Return simplified content for the user
-        return {
-          title,
-          description,
-          content: `Scraped content from ${fullUrl}`,
-          url: fullUrl
-        };
-      } catch (error) {
-        const executionTimeMs = Math.round(performance.now() - startTime);
-        edgeLogger.error('[WEB SCRAPER] Failed to scrape URL', { 
-          url: fullUrl, 
-          executionTimeMs,
-          error: error instanceof Error ? error.message : String(error)
-        });
-        
-        return {
-          title: 'Error',
-          description: 'Failed to scrape content',
-          content: `Failed to scrape content from ${fullUrl}: ${error instanceof Error ? error.message : String(error)}`,
-          url: fullUrl
-        };
       }
     }
   }),
@@ -212,8 +155,8 @@ export const chatTools = {
         
         // Only scrape the first URL to avoid overwhelming the system
         const firstUrl = urls[0];
-        // Use non-null assertion since we know webScraper exists and has execute method
-        const scrapedContent = await chatTools.webScraper.execute!({ url: firstUrl }, { 
+        // Use the comprehensive scraper for better content extraction
+        const scrapedContent = await chatTools.comprehensiveScraper.execute!({ url: firstUrl }, { 
           toolCallId: 'internal-url-scraper-call',
           messages: []
         });
@@ -224,7 +167,7 @@ export const chatTools = {
             {
               url: firstUrl,
               title: scrapedContent.title,
-              content: `Scraped content from ${firstUrl}`
+              content: `Comprehensive content scraped from ${firstUrl}`
             }
           ]
         };
@@ -301,9 +244,9 @@ export const chatTools = {
           ...textContent.other // Include all additional content
         ].join('\n');
         
-        // Trim to max 25,000 characters if needed
-        const trimmedContent = formattedContent.length > 25000 
-          ? formattedContent.substring(0, 25000) + '\n\n[Content truncated due to length...]' 
+        // Increase character limit to 20,000 characters
+        const trimmedContent = formattedContent.length > 20000 
+          ? formattedContent.substring(0, 20000) + '\n\n[Content truncated due to length...]' 
           : formattedContent;
         
         // Return full scraped content for the model
@@ -371,7 +314,7 @@ async function scrapeComprehensively(url: string): Promise<{
       'Pragma': 'no-cache',
     },
     timeout: 30000,
-    maxContentLength: 10 * 1024 * 1024, // 10MB max content size
+    maxContentLength: 20 * 1024 * 1024, // Increased to 20MB max content size
   });
   
   const html = response.data;
@@ -405,14 +348,14 @@ async function scrapeComprehensively(url: string): Promise<{
     if (text) textContent.headers.push(`${el.name.toUpperCase()}: ${text}`);
   });
   
-  // Extract paragraphs
-  $('p').each((_, el) => {
+  // Extract paragraphs - include more text-containing elements
+  $('p, div > p, article > p, section > p, main > p, .content p, [class*="content"] p, [class*="text"] p, [class*="body"] p').each((_, el) => {
     const text = $(el).text().trim();
     if (text) textContent.paragraphs.push(text);
   });
   
   // Extract lists (ul, ol)
-  $('ul, ol').each((_, el) => {
+  $('ul, ol, div > ul, div > ol, article > ul, article > ol, section > ul, section > ol, .content ul, .content ol').each((_, el) => {
     const items = $(el)
       .find('li')
       .map((_, li) => $(li).text().trim())
@@ -428,7 +371,7 @@ async function scrapeComprehensively(url: string): Promise<{
   });
   
   // Extract footer with special attention to contact info
-  const footerElements = $('footer, .footer, [role="contentinfo"], #footer, .site-footer');
+  const footerElements = $('footer, .footer, [role="contentinfo"], #footer, .site-footer, [class*="footer"], [id*="footer"]');
   let footerText = '';
   footerElements.each((_, el) => {
     footerText += $(el).text().trim().replace(/\s+/g, ' ') + ' ';
@@ -436,7 +379,7 @@ async function scrapeComprehensively(url: string): Promise<{
   textContent.footer = footerText.trim();
   
   // Look for contact information specifically
-  const contactSections = $('[id*="contact"], [class*="contact"], #contact, .contact, .contact-us, .contact-info, [data-id*="contact"]');
+  const contactSections = $('[id*="contact"], [class*="contact"], #contact, .contact, .contact-us, .contact-info, [data-id*="contact"], [href*="contact"], [href*="mailto"], [href*="tel"]');
   if (contactSections.length) {
     textContent.other.push('CONTACT INFORMATION:');
     contactSections.each((_, section) => {
@@ -454,6 +397,14 @@ async function scrapeComprehensively(url: string): Promise<{
       textContent.other.push(`Phone: ${phone.trim()}`);
     });
   }
+  
+  // Capture text from common content containers
+  $('article, section, .content, [class*="content"], [class*="main"], main, [role="main"], [class*="body"], [id*="content"], [id*="main"]').each((_, container) => {
+    const containerText = $(container).text().trim().replace(/\s+/g, ' ');
+    if (containerText && containerText.length > 50) { // Only add substantial content
+      textContent.other.push(`CONTENT SECTION: ${containerText}`);
+    }
+  });
   
   // Now capture ALL text from every element with minimal filtering
   // First, get all elements that have any text content
@@ -474,9 +425,10 @@ async function scrapeComprehensively(url: string): Promise<{
     }
     
     // Also get full text (including children) if it's a container element that might have mixed content
-    if (['div', 'section', 'article', 'aside', 'header', 'main', 'nav', 'address'].includes(el.name)) {
+    if (['div', 'section', 'article', 'aside', 'header', 'main', 'nav', 'address', 'span', 'label', 'a', 'button', 'form'].includes(el.name)) {
       const fullText = $el.text().trim();
-      if (fullText && fullText.length > directText.length*1.5) { // Only add if significantly more content than direct text
+      // Capture more content by lowering the threshold for what's considered "significant"
+      if (fullText && fullText.length > directText.length*1.2) { // Reduced threshold to capture more content
         const cleanedText = fullText.replace(/\s+/g, ' ').trim();
         if (!processedText.has(cleanedText)) {
           processedText.add(cleanedText);
@@ -488,6 +440,7 @@ async function scrapeComprehensively(url: string): Promise<{
   
   // Get all text nodes that aren't in an element
   const walkTree = (node: any) => {
+    // Process text nodes
     if (node.type === 'text' && node.data && typeof node.data.trim === 'function') {
       const text = node.data.trim();
       if (text.length > 0 && !processedText.has(text)) {
@@ -496,6 +449,26 @@ async function scrapeComprehensively(url: string): Promise<{
       }
     }
     
+    // Process CDATA sections which might contain text
+    if (node.type === 'cdata' && node.data && typeof node.data.trim === 'function') {
+      const text = node.data.trim();
+      if (text.length > 0 && !processedText.has(text)) {
+        processedText.add(text);
+        textContent.other.push(`[CDATA]: ${text}`);
+      }
+    }
+    
+    // Process comment nodes which might contain important information
+    if (node.type === 'comment' && node.data && typeof node.data.trim === 'function') {
+      const text = node.data.trim();
+      // Only include comments that might contain useful information (longer than 10 chars)
+      if (text.length > 10 && !processedText.has(text)) {
+        processedText.add(text);
+        textContent.other.push(`[COMMENT]: ${text}`);
+      }
+    }
+    
+    // Recursively process children
     if (node.children && Array.isArray(node.children)) {
       node.children.forEach(walkTree);
     }
@@ -523,6 +496,33 @@ async function scrapeComprehensively(url: string): Promise<{
     
     if (tableData.length) {
       textContent.other.push(`TABLE DATA:\n${tableData.join('\n')}`);
+    }
+  });
+  
+  // Look for forms and input fields which might contain important information
+  $('form').each((formIndex, form) => {
+    const formData = [`FORM ${formIndex+1}:`];
+    
+    // Get form labels and inputs
+    $(form).find('label, input[type="text"], input[type="email"], input[type="tel"], textarea, select').each((_, el) => {
+      const text = $(el).text().trim() || $(el).attr('placeholder') || $(el).attr('name') || $(el).attr('id');
+      if (text) {
+        formData.push(`${el.name}: ${text}`);
+      }
+    });
+    
+    if (formData.length > 1) { // If we found any form elements
+      textContent.other.push(formData.join('\n'));
+    }
+  });
+  
+  // Look for meta tags with important information
+  $('meta[name], meta[property]').each((_, meta) => {
+    const name = $(meta).attr('name') || $(meta).attr('property');
+    const content = $(meta).attr('content');
+    
+    if (name && content && !name.includes('viewport') && !name.includes('charset')) {
+      textContent.other.push(`META: ${name} = ${content}`);
     }
   });
   

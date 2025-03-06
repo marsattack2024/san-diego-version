@@ -2,7 +2,7 @@
 
 import type { Attachment, Message } from 'ai';
 import { useChat } from '@ai-sdk/react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { ChatHeader } from '@/components/chat-header';
 import type { Vote } from '@/lib/db/schema';
@@ -26,6 +26,15 @@ export function Chat({
 }) {
   const { mutate } = useSWRConfig();
   const deepSearchEnabled = useChatStore(state => state.getDeepSearchEnabled());
+  const selectedAgentId = useChatStore(state => state.selectedAgentId);
+  const updateConversationMetadata = useChatStore(state => state.updateConversationMetadata);
+
+  // Update conversation metadata when agent changes
+  useEffect(() => {
+    if (id) {
+      updateConversationMetadata(id, { agentId: selectedAgentId });
+    }
+  }, [id, selectedAgentId, updateConversationMetadata]);
 
   const {
     messages,
@@ -41,7 +50,8 @@ export function Chat({
     id,
     body: { 
       id,
-      deepSearchEnabled
+      deepSearchEnabled,
+      agentId: selectedAgentId
     },
     initialMessages,
     experimental_throttle: 100,
