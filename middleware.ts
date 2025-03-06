@@ -1,57 +1,35 @@
+import { NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
 import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
-import { NextRequest, NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 
 // Generate a valid UUID v4 that works in Edge Runtime
-function generateUUID() {
-  // Generate random bytes
-  const bytes = new Uint8Array(16);
-  for (let i = 0; i < 16; i++) {
-    bytes[i] = Math.floor(Math.random() * 256);
-  }
-  
-  // Set version bits (4 for version 4 UUID)
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  // Set variant bits (10xx for standard UUID)
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  
-  // Format the UUID string with proper hyphens
-  return [
-    bytes.slice(0, 4).reduce((str, byte) => str + byte.toString(16).padStart(2, '0'), ''),
-    bytes.slice(4, 6).reduce((str, byte) => str + byte.toString(16).padStart(2, '0'), ''),
-    bytes.slice(6, 8).reduce((str, byte) => str + byte.toString(16).padStart(2, '0'), ''),
-    bytes.slice(8, 10).reduce((str, byte) => str + byte.toString(16).padStart(2, '0'), ''),
-    bytes.slice(10).reduce((str, byte) => str + byte.toString(16).padStart(2, '0'), '')
-  ].join('-');
+function uuidv4() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
 }
 
+// List of paths that require authentication
+const protectedPaths = ['/chat', '/settings'];
+
+// List of paths that should redirect to /chat if the user is already logged in
+const authPaths = ['/login'];
+
 export async function middleware(request: NextRequest) {
-  // Skip static assets and HMR requests
-  if (request.nextUrl.pathname.startsWith('/_next/') || 
-      request.nextUrl.pathname.includes('.') ||
-      request.nextUrl.pathname.includes('__webpack_hmr')) {
-    return NextResponse.next();
-  }
+  // Generate a unique request ID for tracing
+  const requestId = uuidv4();
+  const startTime = Date.now();
   
-  // Create or use existing request ID
-  // Only generate UUIDs for actual API requests or page requests, not for HMR
-  let requestId = request.headers.get('x-request-id');
-  if (!requestId && !request.nextUrl.pathname.includes('_next/data')) {
-    requestId = generateUUID();
-  }
+  // Check if this is an important path for logging
+  const isImportantPath = request.nextUrl.pathname.startsWith('/api/');
   
-  const startTime = performance.now();
-  
-  // Add context to downstream handlers
-  const requestHeaders = new Headers(request.headers);
-  if (requestId) {
-    requestHeaders.set('x-request-id', requestId);
-  }
-  requestHeaders.set('x-request-start', startTime.toString());
-  
-  // Initialize Supabase response
   let supabaseResponse = NextResponse.next({
-    request: { headers: requestHeaders }
+    request: {
+      headers: request.headers,
+    },
   });
 
   // Create Supabase client
@@ -60,62 +38,56 @@ export async function middleware(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        getAll() {
-          return request.cookies.getAll();
+        get(name) {
+          return request.cookies.get(name)?.value;
         },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value));
-          supabaseResponse = NextResponse.next({
-            request,
-          });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
-          );
+        set(name, value, options) {
+          supabaseResponse.cookies.set(name, value, options);
+        },
+        remove(name, options) {
+          supabaseResponse.cookies.set(name, '', { ...options, maxAge: 0 });
         },
       },
     }
   );
 
-  // IMPORTANT: Do not run code between createServerClient and
-  // supabase.auth.getUser(). A simple mistake could make it very hard to debug
-  // issues with users being randomly logged out.
+  // Get the current user's session
   const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  const { pathname } = request.nextUrl;
+  const isProtectedPath = protectedPaths.some(path => pathname.startsWith(path));
+  const isAuthPath = authPaths.some(path => pathname === path);
+
+  // If the user is not logged in and trying to access a protected path
+  if (isProtectedPath && !session) {
+    const redirectUrl = new URL('/login', request.url);
+    redirectUrl.searchParams.set('next', pathname);
+    return NextResponse.redirect(redirectUrl);
+  }
+
+  // If the user is logged in and trying to access an auth path
+  if (isAuthPath && session) {
+    return NextResponse.redirect(new URL('/chat', request.url));
+  }
 
   // Log only in development or for important paths,
-  // but skip webpack HMR and internal Next.js requests
-  const isImportantPath = request.nextUrl.pathname.includes('/api/') || 
-                         request.nextUrl.pathname.includes('/chat');
-  const isInternalNextRequest = request.nextUrl.pathname.includes('_next/data');
-  
-  if ((process.env.NODE_ENV === 'development' || isImportantPath) && !isInternalNextRequest) {
-    edgeLogger.info('Request started', { 
-      requestId: requestId || 'no-id',
+  // to avoid excessive logging in production
+  if (process.env.NODE_ENV === 'development' || isImportantPath) {
+    edgeLogger.info('Middleware request', {
+      requestId,
       method: request.method,
       path: request.nextUrl.pathname,
       important: isImportantPath,
-      user: user ? { id: user.id } : null
+      user: session ? { id: session.user.id } : null
     });
   }
   
-  // For MVP, we're not requiring authentication
-  // Uncomment this block when ready to enforce authentication
-  /*
-  if (
-    !user &&
-    !request.nextUrl.pathname.startsWith('/login') &&
-    !request.nextUrl.pathname.startsWith('/auth') &&
-    request.nextUrl.pathname !== '/'
-  ) {
-    const url = request.nextUrl.clone();
-    url.pathname = '/login';
-    return NextResponse.redirect(url);
-  }
-  */
-  
   // Add timing header
-  supabaseResponse.headers.set('Server-Timing', `request;dur=${Math.round(performance.now() - startTime)}`);
+  const endTime = Date.now();
+  supabaseResponse.headers.set('X-Middleware-Time', `${endTime - startTime}ms`);
+  supabaseResponse.headers.set('X-Request-Id', requestId);
   
   return supabaseResponse;
 }
@@ -127,8 +99,9 @@ export const config = {
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon.ico (favicon file)
-     * Feel free to modify this pattern to include more paths.
+     * - public (public files)
+     * - api (API routes)
      */
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|public|api).*)',
   ],
 }; 

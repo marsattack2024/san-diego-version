@@ -1,10 +1,10 @@
-import { echoTool, dateTimeTool } from '../core/agent-tools';
-import { webScraperTool, urlDetectionTool } from './web-scraper-tool';
+import { echoTool, dateTimeTool } from '../core/agent-tools.js';
+import { webScraperTool, urlDetectionTool } from './web-scraper-tool.js';
 // Import web search tools
-import { webSearchTool, combinedSearchTool } from './web-search-tool';
-import { deepSearchTool } from './deep-search-tool';
-// Import vector search tool
-import { vectorSearchTool, extractRelevantContext, createContextEnhancedPrompt } from './vector-search-tool';
+import { webSearchTool, combinedSearchTool } from './web-search-tool.js';
+import { deepSearchTool, streamingDeepSearch } from './perplexity/index.js';
+// Import vector search tools
+import { vectorSearchTool, extractRelevantContext, createContextEnhancedPrompt } from './vector-search-tool.js';
 
 export {
   // Basic tools
@@ -18,6 +18,7 @@ export {
   // Web search tools
   webSearchTool,
   deepSearchTool,
+  streamingDeepSearch,
   combinedSearchTool,
   
   // Vector search tools
@@ -26,5 +27,6 @@ export {
   createContextEnhancedPrompt,
 };
 
-// Export utility functions
+// Export utility functions from web-scraper-tool
+// Note: Make sure extractUrls is exported from web-scraper-tool.ts
 export { extractUrls } from './web-scraper-tool.js'; 

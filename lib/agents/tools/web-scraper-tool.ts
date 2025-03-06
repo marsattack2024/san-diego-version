@@ -3,7 +3,7 @@ import * as cheerio from 'cheerio';
 import { z } from 'zod';
 import { createBasicTool } from '../core/agent-tools';
 import { clientLogger } from '../../logger/client-logger';
-import { extractUrls, ensureProtocol } from '../../chat/url-utils';
+import { extractUrls as extractUrlsFromUtils, ensureProtocol } from '../../chat/url-utils';
 
 // URL detection regex pattern
 const URL_REGEX = /https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+\.?/gi;
@@ -371,7 +371,7 @@ export const urlDetectionTool = createBasicTool(
     recursive: z.boolean().optional().describe('Whether to recursively scrape linked pages from the same domain. Default is false.'),
   }),
   async ({ text, recursive = false }) => {
-    const urls = extractUrls(text);
+    const urls = extractUrlsFromUtils(text);
     
     if (urls.length === 0) {
       return {
@@ -446,4 +446,12 @@ export const allTextScraperTool = createBasicTool(
     logger.info('Full text scrape completed', { url });
     return result;
   }
-); 
+);
+
+/**
+ * Extract URLs from a text string
+ */
+export function extractUrls(text: string): string[] {
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  return text.match(urlRegex) || [];
+} 

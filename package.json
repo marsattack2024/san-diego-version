@@ -13,7 +13,12 @@
     "esm-migration": "node scripts/esm-migration.js",
     "update-imports": "node scripts/update-imports.js",
     "esm-fix": "node scripts/esm-fix.js",
-    "fix-alias-imports": "node scripts/fix-alias-imports.js"
+    "fix-alias-imports": "node scripts/fix-alias-imports.js",
+    "supabase": "npx supabase",
+    "test:deep-search": "tsx lib/agents/tools/perplexity/test-deep-search.ts",
+    "test:perplexity": "tsx lib/agents/tools/perplexity/test-deep-search-simple.ts",
+    "test:tools": "tsx lib/agents/tools/test-tools.ts",
+    "test:perplexity-direct": "tsx lib/agents/tools/direct-perplexity-test.ts"
   },
   "dependencies": {
     "@ai-sdk/fireworks": "^0.1.12",
@@ -120,7 +125,9 @@
     "postcss": "^8",
     "stylelint": "^16.15.0",
     "stylelint-config-standard": "^37.0.0",
+    "supabase": "^2.15.8",
     "tailwindcss": "^3.3.0",
+    "tsx": "^4.19.3",
     "typescript": "^5"
   }
 }

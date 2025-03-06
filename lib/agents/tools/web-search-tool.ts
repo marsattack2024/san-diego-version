@@ -1,11 +1,10 @@
 import { z } from 'zod';
 import { createBasicTool } from '../core/agent-tools';
-import { createLogger } from '../../utils/client-logger';
+import { clientLogger } from '../../logger/client-logger';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import { extractUrls } from './web-scraper-tool';
 
-const logger = createLogger('agent:tools:web-search');
+const logger = clientLogger;
 
 // Define types for search results
 interface SearchResult {
@@ -132,7 +131,7 @@ export const combinedSearchTool = createBasicTool(
       const [webSearchResult, deepSearchResult] = await Promise.allSettled([
         webSearchTool.execute({ query }),
         // Import dynamically to avoid circular dependencies
-        import('./deep-search-tool').then(module => 
+        import('./perplexity/deep-search-tool.js').then(module => 
           module.deepSearchTool.execute({ query })
         )
       ]);
@@ -156,6 +155,8 @@ export const combinedSearchTool = createBasicTool(
       });
       
       return {
+        success: true,
+        message: 'Combined search completed',
         webSearch: webResults,
         deepSearch: deepResults,
         combinedSummary: `Combined search results for "${query}". Web search ${webSearchResult.status === 'fulfilled' ? 'succeeded' : 'failed'}. Deep search ${deepSearchResult.status === 'fulfilled' ? 'succeeded' : 'failed'}.`

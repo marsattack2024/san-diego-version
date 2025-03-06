@@ -7,7 +7,7 @@
 
 @font-face {
   font-family: 'geist';
-  src: url('/fonts/geist.woff2') format('woff2');
+  src: local('Inter'), local('Segoe UI'), local('Helvetica Neue'), local('Arial'), sans-serif;
   font-weight: 100 900;
   font-style: normal;
   font-display: swap;
@@ -15,7 +15,7 @@
 
 @font-face {
   font-family: 'geist-mono';
-  src: url('/fonts/geist-mono.woff2') format('woff2');
+  src: local('JetBrains Mono'), local('Menlo'), local('Monaco'), local('Consolas'), local('Courier New'), monospace;
   font-weight: 100 900;
   font-style: normal;
   font-display: swap;

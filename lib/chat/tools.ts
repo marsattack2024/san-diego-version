@@ -487,8 +487,8 @@ async function scrapeComprehensively(url: string): Promise<{
   });
   
   // Get all text nodes that aren't in an element
-  const walkTree = (node) => {
-    if (node.type === 'text' && node.data.trim()) {
+  const walkTree = (node: any) => {
+    if (node.type === 'text' && node.data && typeof node.data.trim === 'function') {
       const text = node.data.trim();
       if (text.length > 0 && !processedText.has(text)) {
         processedText.add(text);
@@ -496,7 +496,7 @@ async function scrapeComprehensively(url: string): Promise<{
       }
     }
     
-    if (node.children) {
+    if (node.children && Array.isArray(node.children)) {
       node.children.forEach(walkTree);
     }
   };
