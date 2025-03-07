@@ -2,6 +2,9 @@ import { redirect } from 'next/navigation';
 import { LoginForm } from '@/components/auth/login-form';
 import { createServerClient } from '@/lib/supabase/server';
 
+// Mark this route as dynamic since it uses cookies
+export const dynamic = 'force-dynamic';
+
 export default async function LoginPage() {
   const supabase = await createServerClient();
   

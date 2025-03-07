@@ -1,5 +1,8 @@
 import { AuthButton } from '@/components/auth/auth-button';
 
+// Mark this layout as dynamic since it uses cookies
+export const dynamic = 'force-dynamic';
+
 export default function AuthLayout({
   children,
 }: {
