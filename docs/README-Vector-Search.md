@@ -90,9 +90,19 @@ The retrieval process accepts several configuration options:
 - **`metadataFilter`**: Filter documents based on metadata fields
 - **`sessionId`**: Identifier for tracking and logging
 
-### Fallback Mechanism
+### Adaptive Threshold Mechanism
 
-If no documents meet the default similarity threshold (0.65), the system automatically retries with a lower threshold (0.41). This ensures that even for queries with no exact matches, some potentially relevant information is retrieved.
+The system implements an adaptive threshold mechanism directly in the database function:
+
+1. **Initial Threshold (0.6)**: First attempts to find documents with at least 60% similarity
+2. **Fallback Threshold (0.4)**: If no documents meet the initial threshold, automatically falls back to a lower threshold of 40%
+
+This two-tier approach ensures that:
+- High quality matches are prioritized (documents with 60%+ similarity)
+- If no high-quality matches exist, potentially relevant documents with at least 40% similarity are returned
+- Completely irrelevant documents (below 40% similarity) are filtered out entirely
+
+The thresholds are implemented within the `match_documents` SQL function for optimal performance and to reduce database roundtrips.
 
 ## Retrieval Process
 
@@ -124,6 +134,8 @@ Retrieved documents are formatted for different use cases through functions in `
    - Only uses the top 3 most relevant documents
    - Includes similarity percentages
    - Formats content with clear document boundaries
+   - Applies proper indentation and line breaks for readability
+   - Adds separators between documents
 
 2. **`formatDocumentsForDisplay`**: Formats documents for UI display.
    ```typescript
@@ -147,6 +159,16 @@ Retrieved documents are formatted for different use cases through functions in `
    ```typescript
    export function createRAGPrompt(query: string, documents: RetrievedDocument[]): string
    ```
+
+### Formatting Improvements
+
+The system includes several formatting improvements to enhance readability:
+
+1. **Indented Content**: Document content is indented with four spaces for better readability.
+2. **Line Break Handling**: Line breaks in the original content are preserved and properly formatted.
+3. **Document Separators**: Clear separators are added between documents to visually distinguish them.
+4. **Metadata Formatting**: Metadata is formatted with proper indentation and structure.
+5. **Log Formatting**: Vector search logs are formatted to be more readable, with clean previews and organized structure.
 
 ## Tools Integration
 

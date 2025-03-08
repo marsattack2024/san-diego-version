@@ -1,570 +1,264 @@
 ---
-description: # Next.js TypeScript Logging Best Practices - AI Agent Rules
-globs: 
+description: Enhanced Logging System for Next.js with Vector Search - Best Practices
+globs: ["**/*.ts", "**/*.tsx"]
 alwaysApply: false
 ---
-# Simplified Logging System for Vercel + Supabase
+
+# Enhanced Logging System - Best Practices
 
 ## Core Principles
 
-1. **Vercel-Optimized**: Leverage Vercel's built-in logging infrastructure
-2. **Request Tracing**: Use correlation IDs to track requests across services
-3. **Structured Format**: JSON-structured logs for searchability
-4. **Database for History**: Store chat history in Supabase, not logs
-5. **Vector-Aware**: Include monitoring for vector embedding operations
+1. **Environment-Aware**: Different formats for development vs. production
+2. **Structured Data**: JSON format with consistent fields
+3. **Special Formatting**: Enhanced readability for complex data like document results
+4. **Performance Tracking**: Automatic monitoring of slow operations
+5. **Correlation**: Request/session IDs for cross-service tracing
 
-## Vercel-Optimized Logger
+## Base Logger Usage
 
 ```typescript
-// logger.ts - Simple but effective logger for Vercel
-export const logger = {
-  debug: (message, context = {}) => {
-    if (process.env.NODE_ENV === 'development') {
-      console.debug(JSON.stringify({ 
-        level: 'debug', 
-        message, 
-        ...context, 
-        timestamp: new Date().toISOString() 
-      }));
-    }
-  },
-  
-  info: (message, context = {}) => {
-    // In production, limit info logs to important operations
-    if (process.env.NODE_ENV !== 'production' || context.important) {
-      console.log(JSON.stringify({ 
-        level: 'info', 
-        message, 
-        ...context, 
-        timestamp: new Date().toISOString() 
-      }));
-    }
-  },
-  
-  warn: (message, context = {}) => {
-    console.warn(JSON.stringify({ 
-      level: 'warn', 
-      message, 
-      ...context, 
-      timestamp: new Date().toISOString() 
-    }));
-  },
-  
-  error: (message, context = {}) => {
-    console.error(JSON.stringify({ 
-      level: 'error', 
-      message, 
-      ...(context.error ? {
-        errorMessage: context.error.message,
-        stack: context.error.stack,
-        name: context.error.name
-      } : context),
-      timestamp: new Date().toISOString() 
-    }));
-  }
-};
+import { logger } from '@/lib/logger';
 
-// Log application startup (useful in Vercel logs)
-if (typeof window === 'undefined') {
-  logger.info('Application started', { 
-    important: true,
-    environment: process.env.NODE_ENV,
-    region: process.env.VERCEL_REGION
-  });
-}
+// Debug (only in development)
+logger.debug('Detailed information', { context: 'value' });
+
+// Info (filtered in production unless marked important)
+logger.info('Normal event occurred', { userId: '123' });
+logger.info('Critical event occurred', { orderId: 'abc', important: true });
+
+// Warning (always shown)
+logger.warn('Potential issue detected', { resourceId: '123', usage: 95 });
+
+// Error (always shown with stack trace)
+logger.error('Operation failed', { error: new Error('Database error') });
+
+// Structured log format
+logger.info('Operation completed', logger.formatLogStructure({
+  operation: 'document_creation',
+  documentId: '123',
+  duration: 150
+}));
 ```
 
-## Request Tracking Middleware
+## Vector Search Logging
 
 ```typescript
-// middleware.ts
-import { NextRequest, NextResponse } from 'next/server';
-import { logger } from '@/utils/logger';
-import { randomUUID } from 'crypto';
+import { logger, tracedVectorOperation } from '@/lib/logger/vector-logger';
 
-export function middleware(request: NextRequest) {
-  // Skip static assets
-  if (request.nextUrl.pathname.startsWith('/_next/') || 
-      request.nextUrl.pathname.includes('.')) {
-    return NextResponse.next();
-  }
-  
-  // Create or use existing request ID
-  const requestId = request.headers.get('x-request-id') || randomUUID();
-  const startTime = performance.now();
-  
-  // Add context to downstream handlers
-  const requestHeaders = new Headers(request.headers);
-  requestHeaders.set('x-request-id', requestId);
-  requestHeaders.set('x-request-start', startTime.toString());
-  
-  // Log only in development or for important paths
-  const isImportantPath = request.nextUrl.pathname.includes('/api/') || 
-                         request.nextUrl.pathname.includes('/chat');
-  
-  if (process.env.NODE_ENV === 'development' || isImportantPath) {
-    logger.info('Request started', { 
-      requestId,
-      method: request.method,
-      path: request.nextUrl.pathname,
-      important: isImportantPath
-    });
-  }
-  
-  return NextResponse.next({
-    request: { headers: requestHeaders }
-  });
-}
+// Log embedding creation
+logger.logEmbeddingCreation('doc-123', { 
+  contentType: 'article',
+  dimensions: 1536
+});
 
-export const config = {
-  matcher: '/((?!_next/static|_next/image|favicon.ico).*)',
-};
-```
-
-## API Route Wrapper
-
-```typescript
-// api-logger.ts
-import type { NextApiRequest, NextApiResponse } from 'next';
-import { logger } from '@/utils/logger';
-
-export function withLogging(
-  handler: (req: NextApiRequest, res: NextApiResponse) => Promise<void>
-) {
-  return async (req: NextApiRequest, res: NextApiResponse) => {
-    const requestId = req.headers['x-request-id'] as string || 'unknown';
-    const startTime = performance.now();
-    
-    // Add response logging
-    const originalEnd = res.end;
-    res.end = function(chunk, ...args) {
-      const responseTime = Math.round(performance.now() - startTime);
-      
-      // Log based on status code
-      if (res.statusCode >= 400) {
-        logger.error(`API error: ${res.statusCode}`, {
-          requestId,
-          method: req.method,
-          path: req.url,
-          statusCode: res.statusCode,
-          responseTime
-        });
-      } else if (responseTime > 1000) {
-        // Log slow responses
-        logger.warn(`Slow API response (${responseTime}ms)`, {
-          requestId,
-          method: req.method,
-          path: req.url,
-          statusCode: res.statusCode,
-          responseTime
-        });
-      } else {
-        // Normal responses only logged in development
-        if (process.env.NODE_ENV === 'development') {
-          logger.info(`API request completed`, {
-            requestId,
-            method: req.method,
-            path: req.url,
-            statusCode: res.statusCode,
-            responseTime
-          });
-        }
-      }
-      
-      return originalEnd.apply(this, [chunk, ...args]);
-    };
-    
-    try {
-      await handler(req, res);
-    } catch (error) {
-      logger.error('Unhandled API error', {
-        requestId,
-        method: req.method,
-        path: req.url,
-        error
-      });
-      
-      if (!res.writableEnded) {
-        res.status(500).json({ error: 'Internal server error' });
-      }
-    }
-  };
-}
-```
-
-## Chat History in Supabase
-
-```typescript
-// chat-store.ts - Supabase for chat history
-import { createClient } from '@supabase/supabase-js';
-import { logger } from '@/utils/logger';
-
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+// Log vector search results
+logger.logVectorResults(
+  'user query text',
+  documentResults, // array of retrieved documents
+  {
+    averageSimilarity: 0.68,
+    highestSimilarity: 0.72,
+    lowestSimilarity: 0.63,
+    retrievalTimeMs: 150
+  },
+  'session-123'
 );
 
-// Store chat messages in Supabase
-export async function saveChatMessage({
-  userId,
-  sessionId,
-  role,
-  content
-}: {
-  userId: string;
-  sessionId: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-}) {
-  try {
-    const { error } = await supabase
-      .from('chat_messages')
-      .insert({
-        user_id: userId,
-        session_id: sessionId,
-        role,
-        content,
-        created_at: new Date().toISOString()
-      });
-      
-    if (error) throw error;
-    
-  } catch (error) {
-    logger.error('Failed to save chat message', {
-      error,
-      userId,
-      sessionId,
-      action: 'save_chat_message'
-    });
+// Performance tracking wrapper
+const results = await tracedVectorOperation(
+  'document_search',
+  () => performSearchOperation(query),
+  {
+    query,
+    sessionId: 'session-123',
+    params: { threshold: 0.65 }
   }
-}
-
-// Retrieve chat history
-export async function getChatSession(sessionId: string, userId: string) {
-  try {
-    const { data, error } = await supabase
-      .from('chat_messages')
-      .select('*')
-      .eq('session_id', sessionId)
-      .eq('user_id', userId)
-      .order('created_at', { ascending: true });
-      
-    if (error) throw error;
-    return { data, error: null };
-    
-  } catch (error) {
-    logger.error('Failed to retrieve chat session', {
-      error,
-      userId,
-      sessionId,
-      action: 'get_chat_session'
-    });
-    return { data: null, error };
-  }
-}
-
-// Chat retention policy can be implemented with a scheduled function:
-// Example: Run once per day with cron trigger in Supabase Edge Functions
-// ```
-// DELETE FROM chat_messages WHERE created_at < NOW() - INTERVAL '90 days';
-// ```
+);
 ```
 
-## Vector Embedding Logging
+## Development vs. Production Logs
+
+### Development Format (Human-Readable)
+
+```
+[INFO] 2025-03-08T12:34:56.789Z Vector search completed
+
+  {
+    "queryLength": 42,
+    "resultCount": 3,
+    "durationMs": 150
+  }
+
+  Documents:
+    [1] Marketing Guide (73%)
+        The essential guide to Facebook marketing starts with understanding your audience...
+    [2] Ad Strategies (68%)
+        When creating Google Ads campaigns, focus on these key performance indicators...
+```
+
+### Production Format (Machine-Parseable)
+
+```json
+{"level":"info","message":"Vector search completed","operation":"vector_results","queryLength":42,"resultCount":3,"averageSimilarity":0.68,"durationMs":150,"important":true,"timestamp":"2025-03-08T12:34:56.789Z"}
+```
+
+## Common Logging Patterns
+
+### 1. API Endpoint Logging
 
 ```typescript
-// vector-logger.ts - For Supabase Vector operations
-import { logger } from '@/utils/logger';
-
-export const vectorLogger = {
-  // Log embedding creation
-  logEmbeddingCreation: (documentId, metadata = {}) => {
-    logger.info('Vector embedding created', {
-      operation: 'embedding_creation',
-      documentId,
-      ...metadata,
-      important: true
-    });
-  },
-  
-  // Log vector searches
-  logVectorQuery: (query, params = {}, resultCount, durationMs) => {
-    // Only log if slow or in development
-    const isSlowQuery = durationMs > 500;
-    
-    if (process.env.NODE_ENV === 'development' || isSlowQuery) {
-      logger.info(`Vector search completed in ${durationMs}ms`, {
-        operation: 'vector_query',
-        queryType: params.type || 'similarity',
-        resultCount,
-        durationMs,
-        dimensions: params.dimensions,
-        important: isSlowQuery
-      });
-    }
-    
-    // Always log slow queries as warnings
-    if (isSlowQuery) {
-      logger.warn(`Slow vector query (${durationMs}ms)`, {
-        operation: 'vector_query',
-        queryType: params.type || 'similarity',
-        resultCount,
-        durationMs
-      });
-    }
-  },
-  
-  // Log vector operations errors
-  logVectorError: (operation, error, context = {}) => {
-    logger.error(`Vector operation failed`, {
-      operation,
-      error,
-      ...context
-    });
-  }
-};
-
-// Example usage for vector operations
-export async function searchVectorEmbeddings(query, options = {}) {
+// Route handler with logging
+export async function POST(req: Request) {
   const startTime = performance.now();
-  const requestId = options.requestId || 'unknown';
+  const requestId = req.headers.get('x-request-id') || crypto.randomUUID();
   
   try {
-    // Your vector search implementation here
-    const results = await supabase.rpc('match_documents', {
-      query_embedding: query,
-      match_threshold: options.threshold || 0.5,
-      match_count: options.limit || 10
+    logger.info('API request received', {
+      path: '/api/chat',
+      method: 'POST',
+      requestId
     });
     
-    const durationMs = Math.round(performance.now() - startTime);
+    // Process request...
+    const result = await processRequest(req);
     
-    // Log the search
-    vectorLogger.logVectorQuery(
-      'document_search',
-      { threshold: options.threshold, limit: options.limit },
-      results.length,
-      durationMs
-    );
+    // Log completion
+    const duration = Math.round(performance.now() - startTime);
+    logger.info('API request completed', {
+      path: '/api/chat',
+      method: 'POST',
+      requestId,
+      durationMs: duration,
+      important: duration > 1000 // Mark slow responses as important
+    });
     
-    return results;
+    return Response.json(result);
   } catch (error) {
-    vectorLogger.logVectorError('document_search', error, {
+    logger.error('API request failed', {
+      path: '/api/chat',
+      method: 'POST',
       requestId,
-      ...options
+      error,
+      durationMs: Math.round(performance.now() - startTime)
     });
-    throw error;
+    
+    return Response.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 ```
 
-## Client-Side Minimal Logging
+### 2. Document Result Formatting
 
 ```typescript
-// client-logger.ts - Browser-side logging
-export const clientLogger = {
-  // Track last error timestamp to prevent flooding
-  lastErrorTime: 0,
-  
-  debug(message, data) {
-    if (process.env.NODE_ENV === 'development') {
-      console.debug(message, data || '');
-    }
-  },
-  
-  info(message, data) {
-    if (process.env.NODE_ENV === 'development') {
-      console.info(message, data || '');
-    }
-  },
-  
-  warn(message, data) {
-    console.warn(message, data || '');
-  },
-  
-  error(message, data) {
-    console.error(message, data || '');
-    
-    // Only send errors to server in production and throttle them
-    if (process.env.NODE_ENV === 'production') {
-      const now = Date.now();
-      
-      // Limit to one error per minute per client
-      if (now - this.lastErrorTime > 60000) {
-        this.lastErrorTime = now;
-        
-        // Simple error reporting
-        fetch('/api/client-error', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: message instanceof Error ? message.message : message,
-            stack: message instanceof Error ? message.stack : null,
-            url: window.location.href,
-            timestamp: new Date().toISOString()
-          }),
-          keepalive: true
-        }).catch(() => {/* Ignore send failures */});
-      }
-    }
-  }
-};
+// Format document results for logging
+const formattedDocs = documents.map(doc => ({
+  id: doc.id,
+  title: doc.metadata?.title || `Doc ${doc.id}`,
+  preview: doc.content.substring(0, 100) + '...',
+  similarity: Math.round(doc.similarity * 100)
+}));
+
+logger.info('Documents retrieved', {
+  queryId: '123',
+  count: formattedDocs.length,
+  documents: formattedDocs
+});
 ```
 
-## AI Service Logging
+### 3. Error Handling
 
 ```typescript
-// ai-logger.ts - For tracking AI service interactions
-import { logger } from '@/utils/logger';
-
-export function logAIInteraction({
-  requestId,
-  model,
-  promptTokens,
-  completionTokens,
-  responseTimeMs,
-  success,
-  errorMessage
-}: {
-  requestId: string;
-  model: string;
-  promptTokens: number;
-  completionTokens?: number;
-  responseTimeMs: number;
-  success: boolean;
-  errorMessage?: string;
-}) {
-  // Always log errors and slow responses
-  const isSlowResponse = responseTimeMs > 2000;
-  const shouldLog = success ? 
-    (isSlowResponse || process.env.NODE_ENV === 'development') : 
-    true;
+try {
+  // Risky operation
+  await riskyOperation();
+} catch (error) {
+  logger.error('Failed to perform operation', {
+    operationType: 'database_query',
+    error, // Pass the full error object, not just the message
+    correlationId: 'req-123',
+    important: true
+  });
   
-  if (shouldLog) {
-    if (success) {
-      logger.info('AI request completed', {
-        requestId,
-        model,
-        promptTokens,
-        completionTokens,
-        totalTokens: promptTokens + (completionTokens || 0),
-        responseTimeMs,
-        important: isSlowResponse
-      });
-      
-      if (isSlowResponse) {
-        logger.warn(`Slow AI response (${responseTimeMs}ms)`, {
-          requestId,
-          model,
-          responseTimeMs
-        });
-      }
-    } else {
-      logger.error('AI request failed', {
-        requestId,
-        model,
-        promptTokens,
-        responseTimeMs,
-        errorMessage
-      });
-    }
-  }
+  // Re-throw or handle as needed
 }
 ```
 
-## Usage Examples
+## Best Practices
 
-### API Route with Full Logging
+1. **Mark Important Logs**: Use `important: true` to ensure critical logs appear in production
+2. **Use Structured Context**: Always include relevant context as structured data
+3. **Full Error Objects**: Pass error objects, not just messages, for better stack traces
+4. **Correlation IDs**: Include request/session IDs in all logs
+5. **Session Context**: Include user ID and session information when available
+6. **Performance Flags**: Automatically mark slow operations as important
+7. **Security**: Never log sensitive information (passwords, tokens, etc.)
+8. **Document Formatting**: Use specialized formatters for complex data like document results
+9. **Filter Development Logs**: Use debug level for verbose development-only logs
+10. **Standardize Log Structure**: Follow consistent patterns across different components
 
-```typescript
-// pages/api/chat.ts
-import { NextApiRequest, NextApiResponse } from 'next';
-import { withLogging } from '@/utils/api-logger';
-import { logAIInteraction } from '@/utils/ai-logger';
-import { saveChatMessage } from '@/utils/chat-store';
+## Monitoring and Troubleshooting
 
-async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const requestId = req.headers['x-request-id'] as string || 'unknown';
-  const startTime = performance.now();
-  
-  // Process the chat request
-  try {
-    const { message, userId, sessionId } = req.body;
-    
-    // Save user message to Supabase
-    await saveChatMessage({
-      userId,
-      sessionId,
-      role: 'user',
-      content: message
-    });
-    
-    // Process with AI service
-    const aiResponse = await callAIService(message);
-    
-    // Log AI interaction
-    logAIInteraction({
-      requestId,
-      model: 'gpt-4o',
-      promptTokens: estimateTokens(message),
-      completionTokens: estimateTokens(aiResponse.text),
-      responseTimeMs: Math.round(performance.now() - startTime),
-      success: true
-    });
-    
-    // Save AI response to Supabase
-    await saveChatMessage({
-      userId,
-      sessionId,
-      role: 'assistant',
-      content: aiResponse.text
-    });
-    
-    res.status(200).json({ response: aiResponse.text });
-  } catch (error) {
-    // Log AI interaction failure
-    logAIInteraction({
-      requestId,
-      model: 'gpt-4',
-      promptTokens: estimateTokens(req.body?.message || ''),
-      responseTimeMs: Math.round(performance.now() - startTime),
-      success: false,
-      errorMessage: error instanceof Error ? error.message : 'Unknown error'
-    });
-    
-    throw error; // Let the withLogging wrapper handle the error response
+1. **Filter by Operation**: Use `operation: 'operation_name'` for grouping related logs
+2. **Correlation Tracing**: Track request flow using the `requestId` or `sessionId` fields
+3. **Performance Analysis**: Use `durationMs` fields to identify slow operations
+4. **Error Rates**: Monitor error logs to identify problematic components
+5. **User Impact**: Filter logs by `userId` to troubleshoot user-specific issues
+
+---
+
+### Recommended VS Code Logger Snippets
+
+```json
+{
+  "Logger Debug": {
+    "prefix": "logd",
+    "body": ["logger.debug('$1', { $2 });"],
+    "description": "Add debug log statement"
+  },
+  "Logger Info": {
+    "prefix": "logi",
+    "body": ["logger.info('$1', { $2 });"],
+    "description": "Add info log statement"
+  },
+  "Logger Warning": {
+    "prefix": "logw",
+    "body": ["logger.warn('$1', { $2 });"],
+    "description": "Add warning log statement"
+  },
+  "Logger Error": {
+    "prefix": "loge",
+    "body": ["logger.error('$1', { error, $2 });"],
+    "description": "Add error log statement"
+  },
+  "Logger Important Info": {
+    "prefix": "logii",
+    "body": ["logger.info('$1', { important: true, $2 });"],
+    "description": "Add important info log statement"
+  },
+  "Trace Operation": {
+    "prefix": "logtrace",
+    "body": [
+      "const startTime = performance.now();",
+      "try {",
+      "  // Perform operation",
+      "  $1",
+      "  ",
+      "  const duration = Math.round(performance.now() - startTime);",
+      "  logger.info('$2 completed', { ",
+      "    durationMs: duration,",
+      "    $3",
+      "    important: duration > $4",
+      "  });",
+      "} catch (error) {",
+      "  logger.error('$2 failed', {",
+      "    error,",
+      "    durationMs: Math.round(performance.now() - startTime),",
+      "    $3",
+      "  });",
+      "  throw error;",
+      "}"
+    ],
+    "description": "Add trace operation pattern"
   }
 }
-
-// Estimate tokens for logging (simple approximation)
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
-
-// Wrap with logging middleware
-export default withLogging(handler);
 ```
-
-## Best Practices for Vercel Deployment
-
-1. **Use Correlation IDs**: Pass `x-request-id` headers through all services for tracing
-2. **Structured JSON Logs**: Makes logs searchable in Vercel dashboard
-3. **Log Levels**:
-   - DEBUG: Only in development, detailed traces
-   - INFO: Important business events, successful operations
-   - WARN: Slow responses, resource warnings
-   - ERROR: Failed operations, unhandled exceptions
-4. **Focus on Exceptions**: Always log errors with full context
-5. **Monitor Performance**: Track slow vector queries and AI responses
-6. **Use Supabase for Storage**: Keep chat history and vector embeddings in Supabase
-7. **Leverage Vercel Analytics**: Enable Vercel Analytics for real-time metrics
-8. **Production Logging**: In production, limit logs to important events and errors
-
-## Implementation Tips
-
-1. **Keep it Simple**: Vercel already handles log storage and retention
-2. **Filter by Request ID**: When debugging, use request IDs to trace full request flows
-3. **JSON Format**: Structure logs as JSON for better searchability in Vercel dashboard
-4. **Throttle Client Errors**: Prevent flooding from client-side error reporting
-5. **Prioritize Vector Performance**: Pay special attention to vector query performance
-6. **Scheduled Cleanup**: Implement database retention policy in Supabase

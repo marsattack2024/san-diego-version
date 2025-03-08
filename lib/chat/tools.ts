@@ -56,8 +56,17 @@ export const chatTools = {
           const idString = typeof doc.id === 'string' ? doc.id : String(doc.id);
           const idPreview = idString.length > 8 ? idString.substring(0, 8) : idString;
           
-          return `Document #${index + 1} [ID: ${idPreview}] (${similarityPercent}% relevant):\n${doc.content}\n`;
-        }).join('\n');
+          // Format content with proper line breaks
+          const content = typeof doc.content === 'string' ? doc.content : String(doc.content);
+          // Replace any existing line breaks with proper formatting
+          const formattedContent = content
+            .split(/\r?\n/)
+            .filter(line => line.trim() !== '')
+            .map(line => `    ${line.trim()}`)
+            .join('\n');
+          
+          return `Document #${index + 1} [ID: ${idPreview}] (${similarityPercent}% relevant):\n${formattedContent}\n`;
+        }).join('\n-------------------------------------------\n\n');
 
         // Add aggregate metrics
         const avgSimilarity = Math.round(

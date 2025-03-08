@@ -16,10 +16,29 @@ export function formatDocumentsForLLM(documents: RetrievedDocument[]): string {
   
   topDocuments.forEach((doc, i) => {
     const similarityPercent = Math.round(doc.similarity * 100);
-    context += `DOCUMENT ${i + 1} (${similarityPercent}% relevance):\n${doc.content}\n\n`;
+    
+    // Format content with proper line breaks
+    const content = typeof doc.content === 'string' ? doc.content : String(doc.content);
+    // Replace any existing line breaks with proper formatting
+    const formattedContent = content
+      .split(/\r?\n/)
+      .filter(line => line.trim() !== '')
+      .map(line => `    ${line.trim()}`)
+      .join('\n');
+    
+    context += `DOCUMENT ${i + 1} (${similarityPercent}% relevance):\n${formattedContent}\n\n`;
     
     if (doc.metadata) {
-      context += `METADATA: ${JSON.stringify(doc.metadata)}\n\n`;
+      const metadataStr = JSON.stringify(doc.metadata, null, 2)
+        .split('\n')
+        .map(line => `    ${line}`)
+        .join('\n');
+      context += `METADATA:\n${metadataStr}\n\n`;
+    }
+    
+    // Add a separator between documents
+    if (i < topDocuments.length - 1) {
+      context += '-------------------------------------------\n\n';
     }
   });
   

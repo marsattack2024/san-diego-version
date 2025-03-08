@@ -124,6 +124,7 @@ function logQueryPerformance(queryText: string, retrievalTimeMs: number, count: 
  * 2. Performance monitoring
  * 3. Automatic retry with adjusted parameters for failed searches
  */
+
 export async function findSimilarDocumentsOptimized(
   queryText: string,
   options: DocumentSearchOptions = {}
@@ -134,44 +135,42 @@ export async function findSimilarDocumentsOptimized(
   const processedQuery = preprocessQuery(queryText);
   
   try {
-    // First attempt with higher threshold (0.65)
+    // The thresholds are now handled in the SQL function directly (0.6 initial, 0.4 fallback)
+    // No need to retry with lower threshold in the application code
     const result = await findSimilarDocumentsWithPerformance(processedQuery, {
       ...options,
       limit: options.limit || 5,
-      similarityThreshold: options.similarityThreshold || 0.65,
       sessionId,
     });
     
     const endTime = performance.now();
     const retrievalTimeMs = Math.round(endTime - startTime);
     
-    // If no results with 0.65 threshold, try with 0.41
-    if (result.documents.length === 0) {
+    // Set usedFallbackThreshold based on similarity values
+    // If any documents have similarity between 0.4 and 0.6, fallback was used
+    const usedFallback = result.documents.some(doc => 
+      doc.similarity >= 0.4 && doc.similarity < 0.6
+    );
+    
+    if (usedFallback) {
       logger.logVectorQuery(queryText, {
-        originalThreshold: options.similarityThreshold || 0.65,
-        newThreshold: 0.41,
+        originalThreshold: 0.6,
+        newThreshold: 0.4,
         sessionId,
         retrievalTimeMs,
-      }, 0, retrievalTimeMs);
-
-      const fallbackResult = await findSimilarDocumentsWithPerformance(processedQuery, {
-        ...options,
-        limit: options.limit || 5,
-        similarityThreshold: 0.41,
-        sessionId,
-      });
-
-      fallbackResult.metrics.usedFallbackThreshold = true;
+      }, result.documents.length, retrievalTimeMs);
+      
+      result.metrics.usedFallbackThreshold = true;
       
       // Log detailed results with the new logger function
       logger.logVectorResults(
         queryText,
-        fallbackResult.documents,
-        fallbackResult.metrics,
+        result.documents,
+        result.metrics,
         sessionId
       );
-
-      return fallbackResult;
+      
+      return result;
     }
     
     // Log detailed results with the new logger function

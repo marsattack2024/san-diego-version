@@ -1,287 +1,408 @@
-<think>Let me analyze the simplest way to ensure all tools work regardless of the agent selected. Based on the photography bot example, I can see that their approach is quite straightforward:
+# Agent Selector Implementation Guide
 
-1. Agent selection happens in `chooseAgent` function
-2. Tool results are injected into the system prompt through the `getSystemPrompt` function 
-3. The actual AI call is the same for all agent types in `getSpecialistResponse`
+This document provides detailed technical documentation about how the Agent Selector works in our application, including the files involved and how agent selection is calculated.
 
-This makes it very clean - all tools work with all agents because:
-1. Tool execution is separate from agent selection
-2. Tool results are added to the system prompt, not sent through a different channel
-3. The same API call pattern is used for all agents
+## Overview
 
-For our implementation, we need to:
-1. Decouple agent selection from tool availability
-2. Have a consistent way to inject tool results into prompts
-3. Use the same core API call pattern for all agents
+The Agent Selector allows users to choose between different specialized AI agents for different tasks. The system automatically routes messages to appropriate specialized agents based on content analysis, but users can also explicitly select an agent of their choice.
 
-Let me revise the plan with this simpler approach.</think># Revised Implementation Plan: Ensuring All Tools Work With All Agents
+## Key Files and Their Roles
 
-After analyzing the photography bot approach, I can see a much simpler way to ensure all tools work with all agents. Here's my revised plan with implementation phases:
+### 1. Agent Router Implementation
 
-## Core Architecture
+**File: `/lib/agents/agent-router.ts`**
 
-The key insight is that tools work with all agents because:
-1. Tool execution is completely separate from agent selection
-2. Tool results are directly injected into the system prompt
-3. The same API call pattern is used for all agents
+This is the core file that handles agent routing logic. It contains:
 
-Here's the revised architecture:
+- The `AgentRouter` class which has two primary methods:
+  - `routeMessage(selectedAgentId, messages)`: Determines which agent should handle a message
+  - `getSystemPrompt(agentType, deepSearchEnabled)`: Builds the system prompt for a selected agent
 
-```
-User Message → Agent Selection → Tool Execution → Results Added to Prompt → API Call
-```
-
-## Phase 1: Agent Configuration (1 Day)
-
-### 1. Create Agent Definition File
+The routing algorithm works as follows:
 ```typescript
-// lib/agents/agent-config.ts
-export type AgentType = 'default' | 'copywriting' | 'google-ads' | 'facebook-ads' | 'quiz';
+routeMessage(selectedAgentId: AgentType, messages: Message[]): AgentType {
+  // If user has explicitly selected a non-default agent, use that
+  if (selectedAgentId !== 'default') {
+    return selectedAgentId;
+  }
 
-export interface AgentDefinition {
-  id: AgentType;
-  name: string;
-  description: string;
-  systemPrompt: string;
-  emoji?: string;
+  // Auto-routing only happens from the default agent
+  const lastMessage = messages[messages.length - 1];
+  if (!lastMessage || lastMessage.role !== 'user') {
+    return 'default';
+  }
+
+  const content = lastMessage.content.toLowerCase();
+  
+  // Calculate scores for each agent type based on keywords
+  const scores: Record<AgentType, number> = {...};
+  
+  for (const [agentType, keywords] of Object.entries(AGENT_KEYWORDS)) {
+    if (agentType === 'default') continue;
+    
+    for (const keyword of keywords) {
+      // Multi-word keywords get higher scores (2 points per word)
+      if (content.includes(keyword.toLowerCase())) {
+        const wordCount = keyword.split(' ').length;
+        const score = wordCount * 2;
+        scores[agentType as AgentType] += score;
+        
+        // Bonus points for keywords at the beginning (5 points)
+        if (content.startsWith(keyword.toLowerCase())) {
+          scores[agentType as AgentType] += 5;
+        }
+        
+        // Bonus for exact phrase matches (3 points)
+        if (new RegExp(`\\b${keyword.toLowerCase()}\\b`, 'i').test(content)) {
+          scores[agentType as AgentType] += 3;
+        }
+      }
+    }
+  }
+
+  // Find agent with highest score
+  let highestScore = 0;
+  let selectedAgent: AgentType = 'default';
+  
+  for (const [agentType, score] of Object.entries(scores)) {
+    if (score > highestScore) {
+      highestScore = score;
+      selectedAgent = agentType as AgentType;
+    }
+  }
+
+  // Only route to specialized agent if score exceeds threshold (5)
+  const routingThreshold = 5;
+  if (highestScore >= routingThreshold) {
+    return selectedAgent;
+  }
+  
+  return 'default';
 }
+```
 
-export const AGENTS: Record<AgentType, AgentDefinition> = {
-  'default': {
-    id: 'default',
-    name: 'General Assistant',
-    description: 'All-purpose AI assistant',
-    systemPrompt: DEFAULT_SYSTEM_PROMPT,
-    emoji: '🤖'
-  },
-  // Other agent definitions...
+### 2. Agent Keywords Configuration
+
+**File: `/lib/agents/agent-router.ts`**
+
+The keywords that trigger specific agents are defined at the top of the same file:
+
+```typescript
+const AGENT_KEYWORDS: Record<AgentType, string[]> = {
+  'default': [],
+  'copywriting': [
+    'copywriting', 'copy', 'website text', 'landing page', 'sales page', 
+    'email copy', 'marketing copy', 'write copy', 'content writing',
+    /* more keywords... */
+  ],
+  'google-ads': [
+    'google ads', 'google ad', 'google advertising', 'search ads', 'ppc',
+    /* more keywords... */
+  ],
+  'facebook-ads': [
+    'facebook ad', 'facebook ads', 'social ad', 'instagram ad', 'meta ad',
+    /* more keywords... */
+  ],
+  'quiz': [
+    'quiz', 'question', 'test', 'assessment', 'questionnaire',
+    /* more keywords... */
+  ]
 };
 ```
 
-### 2. Simplify Agent Router
-```typescript
-// lib/agents/agent-router.ts
-import { type Message } from 'ai';
-import { AGENTS, type AgentType } from './agent-config';
+### 3. Agent Type Definition
 
-export class AgentRouter {
-  // Get the system prompt for a specific agent, enhanced with tool results
-  getSystemPrompt(
-    agentType: AgentType, 
-    toolResults: { 
-      ragContent?: string;
-      scrapedContent?: string;
-      deepSearchContent?: string;
-    } = {}
-  ): string {
-    const agent = AGENTS[agentType] || AGENTS.default;
-    let prompt = agent.systemPrompt;
-    
-    // Add tool results to the prompt directly
-    if (toolResults.deepSearchContent) {
-      prompt += `\n\n### RESEARCH INFORMATION:\n${toolResults.deepSearchContent}`;
-    }
-    
-    if (toolResults.ragContent) {
-      prompt += `\n\n### KNOWLEDGE BASE RESULTS:\n${toolResults.ragContent}`;
-    }
-    
-    if (toolResults.scrapedContent) {
-      prompt += `\n\n### WEB PAGE CONTENT:\n${toolResults.scrapedContent}`;
-    }
-    
-    return prompt;
-  }
+**File: `/lib/agents/core/agent-types.ts`**
+
+This file defines the `AgentType` type used throughout the application:
+
+```typescript
+export type AgentType = 'default' | 'google-ads' | 'facebook-ads' | 'copywriting' | 'quiz';
+```
+
+### 4. Agent Prompt Building
+
+**File: `/lib/agents/prompts/index.ts`**
+
+This file exports the specialized prompts and a function to build the full system prompt:
+
+```typescript
+export function buildSystemPrompt(agentType: AgentType): string {
+  // Determine which prompt to use based on agent type
+  const specializedPrompt = AGENT_PROMPTS[agentType];
+  
+  // Combine base prompt with specialized prompt
+  return `${BASE_PROMPT}\n\n${specializedPrompt}`;
 }
 ```
 
-## Phase 2: Tool Result Collection (1 Day)
+### 5. Agent UI Component
 
-### 1. Collect Tool Results
-```typescript
-// lib/chat/route.ts (API endpoint)
-import { AgentRouter } from '@/lib/agents/agent-router';
-import { streamText } from 'ai';
-import { openai } from '@ai-sdk/openai';
-import { formatToolResults } from '@/lib/chat/tools-formatter';
+**File: `/components/agent-selector.tsx`**
 
-export async function POST(req: Request) {
-  const { messages, agentId } = await req.json();
-  const agentRouter = new AgentRouter();
-  const toolResults = { ragContent: '', scrapedContent: '', deepSearchContent: '' };
-  
-  // Extract last user message for tool processing
-  const lastUserMessage = messages.findLast(m => m.role === 'user')?.content || '';
-  
-  // Run tools in parallel if needed
-  if (lastUserMessage) {
-    // Only process if there's a new user message
-    const [ragResult, scrapedResult, deepSearchResult] = await Promise.allSettled([
-      processRAG(lastUserMessage),
-      processWebScraper(lastUserMessage),
-      processDeepSearch(lastUserMessage),
-    ]);
-    
-    // Format results for prompt injection
-    if (ragResult.status === 'fulfilled' && ragResult.value) {
-      toolResults.ragContent = formatToolResults('rag', ragResult.value);
-    }
-    
-    // Similar for other tools...
-  }
-  
-  // Get enhanced system prompt with tool results
-  const systemPrompt = agentRouter.getSystemPrompt(agentId, toolResults);
-  
-  // Generate response using AI SDK
-  return streamText({
-    model: openai('gpt-4o', { structuredOutputs: true }),
-    system: systemPrompt,
-    messages,
-    tools: toolDefinitions,
-    maxSteps: 3
-  }).toDataStreamResponse();
-}
-```
+This is the React component that renders the agent selection dropdown in the UI:
 
-### 2. Format Tool Results
-```typescript
-// lib/chat/tools-formatter.ts
-export function formatToolResults(toolType: string, result: any): string {
-  switch (toolType) {
-    case 'rag':
-      return `## Knowledge Base Results:\n${result.content}`;
-    
-    case 'webScraper':
-      return `## Web Page: ${result.url}\n${result.title}\n${result.description}\n\n${result.content.substring(0, 1000)}...`;
-    
-    case 'deepSearch':
-      return `## Research Results:\n${result.content}`;
-    
-    default:
-      return '';
-  }
-}
-```
-
-## Phase 3: Tool Execution (1-2 Days)
-
-### 1. Process RAG Results
-```typescript
-// lib/chat/rag-processor.ts
-import { getVectorResults } from '@/lib/vector';
-
-export async function processRAG(query: string) {
-  try {
-    // Skip processing if query is too short
-    if (query.length < 3) return null;
-    
-    // Get vector results
-    const results = await getVectorResults(query);
-    
-    // Return formatted results
-    return {
-      content: results.map(r => r.text).join('\n\n'),
-      sources: results.map(r => r.metadata)
-    };
-  } catch (error) {
-    console.error('RAG processing error:', error);
-    return null;
-  }
-}
-```
-
-### 2. Similar functions for other tools
-
-## Phase 4: UI Integration (1 Day)
-
-### 1. Update Chat Store
-```typescript
-// stores/chat-store.ts
-interface ChatState {
-  // Existing properties...
-  
-  // Clear separation between agent selection and tools
-  selectedAgentId: AgentType;
-  deepSearchEnabled: boolean;
-  toolsEnabled: boolean;
-  
-  // No coupling between agent type and tool selection
-  setSelectedAgent: (agentId: AgentType) => void;
-  setDeepSearchEnabled: (enabled: boolean) => void;
-  setToolsEnabled: (enabled: boolean) => void;
-}
-```
-
-### 2. Update Agent Selector Component
 ```tsx
-// components/agent-selector.tsx
-export default function AgentSelector() {
+export function AgentSelector({
+  className,
+}: React.ComponentProps<typeof Button>) {
   const selectedAgentId = useChatStore(state => state.selectedAgentId);
   const setSelectedAgent = useChatStore(state => state.setSelectedAgent);
-  
+
+  const selectedAgent = useMemo(
+    () => agents.find(agent => agent.id === selectedAgentId) || agents[0],
+    [selectedAgentId],
+  );
+
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger>
-        <Button variant="ghost">
-          {AGENTS[selectedAgentId].name}
-          <ChevronDown />
+      <DropdownMenuTrigger asChild className="...">
+        <Button variant="outline" className="...">
+          {selectedAgent?.name}
+          <ChevronDownIcon />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent>
-        {Object.values(AGENTS).map(agent => (
-          <DropdownMenuItem
-            key={agent.id}
-            onClick={() => setSelectedAgent(agent.id)}
-          >
-            {agent.emoji} {agent.name}
-          </DropdownMenuItem>
-        ))}
+      <DropdownMenuContent align="start" className="...">
+        {agents.map((agent) => {
+          const { id } = agent;
+          const isSelected = id === selectedAgentId;
+
+          return (
+            <DropdownMenuItem
+              key={id}
+              onSelect={() => {
+                setSelectedAgent(id as AgentType);
+              }}
+              className="..."
+              data-active={isSelected}
+            >
+              <div className="...">{agent.name}</div>
+              {isSelected && <CheckCircleFillIcon />}
+            </DropdownMenuItem>
+          );
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 ```
 
-## Benefits of This Approach
+### 6. Agent List Configuration 
 
-1. **Simple Integration**: All tools work with all agents because tool outputs are directly injected into the system prompt
-2. **Clean Separation**: Agent selection is completely separate from tool availability
-3. **Minimal Changes**: We leverage existing code and just modify how tool results feed into prompts
-4. **Easy Extension**: New agents only need a system prompt, and they automatically work with all tools
+**File: `/lib/ai/agents.ts`**
 
-## Key Technical Decisions
+This file defines the list of available agents shown in the dropdown:
 
-1. **Direct Prompt Injection**:
-   - Tool results are added directly to the agent's system prompt
-   - No need for complex context management system initially
+```typescript
+export const agents = [
+  {
+    id: 'default',
+    name: 'General Assistant',
+    description: 'A versatile assistant that can help with a wide range of tasks',
+    icon: 'bot',
+  },
+  {
+    id: 'copywriting',
+    name: 'Copywriting Specialist',
+    description: 'Expert in creating compelling marketing copy and content',
+    icon: 'pencil',
+  },
+  {
+    id: 'google-ads',
+    name: 'Google Ads Specialist',
+    description: 'Expert in Google Ads campaign creation and optimization',
+    icon: 'google',
+  },
+  {
+    id: 'facebook-ads',
+    name: 'Facebook Ads Specialist',
+    description: 'Expert in Facebook and Instagram advertising strategies',
+    icon: 'facebook',
+  },
+  {
+    id: 'quiz',
+    name: 'Quiz Specialist',
+    description: 'Expert in creating and managing interactive quizzes',
+    icon: 'question-mark',
+  },
+];
+```
 
-2. **Parallel Tool Processing**:
-   - Process all tools concurrently for each user message
-   - Results are collected before making the AI call
+### 7. Chat Store for Agent State
 
-3. **Independent Configuration**:
-   - Agent selection doesn't automatically enable/disable specific tools
-   - Users can enable/disable tools independent of agent selection
+**File: `/stores/chat-store.ts`**
 
-4. **Simplified Implementation**:
-   - No need for a context manager class initially
-   - Tool results format is standardized but simple
+This file manages the state for agent selection using Zustand:
 
-## Testing Strategy (1 Day)
+```typescript
+export const useChatStore = create<ChatStore>((set) => ({
+  selectedAgentId: 'default',
+  setSelectedAgent: (agentId) => set({ selectedAgentId: agentId }),
+  // ... other store properties and methods
+}));
+```
 
-1. **Verify Tool Independence**:
-   - Test each tool with each agent type
-   - Confirm results appear in responses regardless of agent
+## Agent Selection Process Flowchart
 
-2. **Test Agent Switching**:
-   - Switch agents mid-conversation and verify tools still work
-   - Check that appropriate agent prompts are used
+```
+┌─────────────────────┐
+│  User Selects Agent │
+│  from Dropdown      │◄────────── User Initiated
+└──────────┬──────────┘            Selection
+           │
+           ▼
+┌─────────────────────┐
+│ Is selected agent   │      ┌─────────────────┐
+│ 'default'?          ├──Yes─►  Continue to    │
+└──────────┬──────────┘      │  Auto-Routing   │
+           │                 └─────────────────┘
+           │ No
+           ▼
+┌─────────────────────┐
+│ Use selected agent  │
+│ (Skip auto-routing) │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ Build system prompt │
+│ for selected agent  │
+└─────────────────────┘
+```
 
-3. **Check Tool Output Injection**:
-   - Validate that tool results appear in the context window
-   - Verify that the AI uses tool information appropriately
+## Auto-Routing Process Flowchart
 
-This implementation follows the successful pattern from your photography bot and ensures all tools work regardless of agent selection by directly injecting tool results into the system prompt. By keeping the implementation simple and focused, we can deliver a reliable solution quickly.
+```
+┌─────────────────────┐
+│  New User Message   │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ Extract message     │
+│ content             │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ Check for keywords  │
+│ for each agent type │
+└──────────┬──────────┘
+           │
+           ▼
+┌─────────────────────┐     ┌─────────────────────┐
+│ Calculate scores:   │     │ Score Calculation:  │
+│ - Base word match   │     │ - Multi-word: x2    │
+│ - Position bonus    ├────►│ - Start position: +5│
+│ - Exact match bonus │     │ - Exact match: +3   │
+└──────────┬──────────┘     └─────────────────────┘
+           │
+           ▼
+┌─────────────────────┐
+│ Is highest score    │     ┌─────────────────────┐
+│ above threshold (5)?├─No──► Use Default Agent   │
+└──────────┬──────────┘     └─────────────────────┘
+           │ Yes
+           ▼
+┌─────────────────────┐
+│ Use Specialized     │
+│ Agent with highest  │
+│ score               │
+└─────────────────────┘
+```
 
-Would you like me to elaborate on any specific part of this plan or make adjustments to better match your needs?
+## Technical Details
+
+### Scoring Algorithm
+
+The agent selection algorithm uses a weighted scoring system:
+
+1. **Base Score**: 2 points for each word in a matching keyword
+   - Example: "google ads" (2 words) = 4 points
+   - Example: "facebook advertising" (2 words) = 4 points
+
+2. **Position Bonus**: +5 points if keyword is at the start of message
+   - Example: "copywriting for my website" = +5 for copywriting agent
+   - Example: "I need copywriting for my website" = No bonus (not at start)
+
+3. **Exact Match Bonus**: +3 points if keyword is an exact word match
+   - Example: "Create a quiz for my students" = +3 for quiz agent
+   - Example: "I need quizzes for testing" = +3 for quiz agent
+
+### Threshold Logic
+
+- The default threshold is 5 points
+- This means a single-word keyword needs bonuses to trigger a specialized agent
+- Multi-word keywords can trigger specialized agents on their own
+- This prevents false-positive agent switching on common words
+
+### Prompt Combination
+
+When an agent is selected (automatically or manually), the system:
+
+1. Gets the base prompt common to all agents
+2. Gets the specialized prompt for the selected agent
+3. Combines them into a single system prompt
+4. Adds tool descriptions and instructions
+5. Uses this as the context for the AI model
+
+## How to Modify Agent Selection
+
+### Adding New Keywords
+
+To add new keywords for an agent, update the `AGENT_KEYWORDS` object in `lib/agents/agent-router.ts`:
+
+```typescript
+const AGENT_KEYWORDS: Record<AgentType, string[]> = {
+  'copywriting': [
+    // Existing keywords...
+    'new keyword 1', 
+    'new keyword 2',
+  ],
+  // Other agents...
+};
+```
+
+### Changing the Threshold
+
+To make agent switching more or less sensitive, modify the `routingThreshold` value in the `routeMessage` method:
+
+```typescript
+// Only route to a specialized agent if the score is above a threshold
+const routingThreshold = 5; // Change this value (higher = less sensitive)
+```
+
+### Adding a New Agent Type
+
+To add a new agent type:
+
+1. Update the `AgentType` type in `lib/agents/core/agent-types.ts`
+2. Add the agent's keywords in `lib/agents/agent-router.ts`
+3. Create a system prompt in `lib/agents/prompts/`
+4. Add the agent to the `agents` array in `lib/ai/agents.ts`
+5. Create a specialized agent class in `lib/agents/specialized/`
+
+## Debugging Agent Selection
+
+To debug which agent is being selected and why:
+
+1. Enable logging in the `routeMessage` method
+2. The method already has debug logs that show:
+   - Scores for each agent type
+   - The selected agent
+   - The threshold comparison
+   - The final agent selection decision
+
+For example:
+```typescript
+edgeLogger.debug('Agent routing scores', { scores });
+edgeLogger.info('Auto-routed to specialized agent', { 
+  selectedAgent, 
+  score: highestScore, 
+  threshold: routingThreshold 
+});
+```
+
+## Conclusion
+
+The agent selection system provides a flexible way to route user queries to specialized AI agents. The combination of explicit user selection and automatic content-based routing ensures that the most appropriate agent handles each query. The scoring algorithm balances specificity and sensitivity to avoid incorrect agent selection while still effectively identifying domain-specific requests.

@@ -56,39 +56,71 @@ export const logger = {
     metrics: DocumentSearchMetrics,
     sessionId: string
   ) => {
-    // Calculate average similarity
-    const averageSimilarity = metrics.averageSimilarity;
-    const highestSimilarity = metrics.highestSimilarity;
-    const lowestSimilarity = metrics.lowestSimilarity;
-
-    // Create document summary with previews and IDs
-    const documentSummaries = documents.map(doc => {
-      // Safely handle ID - ensure it's a string and handle non-string IDs
-      const idString = typeof doc.id === 'string' ? doc.id : String(doc.id);
-      const idPreview = idString.length > 8 ? idString.substring(0, 8) : idString;
+    // Format document summaries with better organization and line breaks
+    const documentSummaries = documents.map((doc, index) => {
+      // Safely handle ID - ensure it's a string
+      const id = doc.id !== undefined ? doc.id : 'unknown';
+      
+      // Get title from metadata or use ID
+      const title = doc.metadata?.title || `Doc ${String(id).substring(0, 8)}`;
+      
+      // Format the preview with proper line breaks
+      const content = typeof doc.content === 'string' ? doc.content : String(doc.content || '');
+      const preview = content.length > 100 ? content.substring(0, 100) + '...' : content;
+      // Replace any existing line breaks with spaces to prevent JSON formatting issues
+      const cleanPreview = preview.replace(/\r?\n/g, ' ');
+      
+      const similarityPercent = Math.round(doc.similarity * 100);
       
       return {
-        id: doc.id,
-        title: doc.metadata?.title || `Doc ${idPreview}`,
-        preview: typeof doc.content === 'string' ? 
-          (doc.content.substring(0, 100) + '...') : 
-          'Content not available as string',
+        id,
+        title,
+        preview: cleanPreview,
         similarity: doc.similarity,
-        similarityPercent: Math.round(doc.similarity * 100)
+        similarityPercent
       };
     });
 
-    baseLogger.info('Vector search results', {
+    // For development, create a nicely formatted message
+    const formattedMessage = process.env.NODE_ENV === 'development' 
+      ? `Vector search for query (${query.length} chars)`
+      : 'Vector search results';
+      
+    // Create a well-structured log object for both human and machine readability
+    const structuredOutput = {
+      search: {
+        query: {
+          text: query.substring(0, 50) + (query.length > 50 ? '...' : ''),
+          length: query.length
+        },
+        metrics: {
+          resultCount: documents.length,
+          avgSimilarity: `${Math.round(metrics.averageSimilarity * 100)}%`,
+          highSimilarity: `${Math.round(metrics.highestSimilarity * 100)}%`,
+          lowSimilarity: `${Math.round(metrics.lowestSimilarity * 100)}%`,
+          durationMs: metrics.retrievalTimeMs
+        },
+        results: documentSummaries.map(doc => ({
+          id: doc.id,
+          title: doc.title,
+          similarity: `${doc.similarityPercent}%`
+        }))
+      }
+    };
+
+    // Log the results with better formatting
+    baseLogger.info(formattedMessage, {
       operation: 'vector_results',
       queryLength: query.length,
       resultCount: documents.length,
-      averageSimilarity: Math.round(averageSimilarity * 100) / 100,
-      highestSimilarity: Math.round(highestSimilarity * 100) / 100,
-      lowestSimilarity: Math.round(lowestSimilarity * 100) / 100,
+      averageSimilarity: Math.round(metrics.averageSimilarity * 100) / 100,
+      highestSimilarity: Math.round(metrics.highestSimilarity * 100) / 100,
+      lowestSimilarity: Math.round(metrics.lowestSimilarity * 100) / 100,
       durationMs: metrics.retrievalTimeMs,
       sessionId,
       documents: documentSummaries,
-      important: metrics.isSlowQuery || documents.length === 0
+      structuredOutput, // Include the nicely structured output
+      important: true
     });
   },
   
