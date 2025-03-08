@@ -1,13 +1,11 @@
 import { BaseAgent } from '../core/agent-base';
 import { AgentType, AgentContext } from '../core/agent-types';
-import { DEFAULT_SYSTEM_PROMPT } from '../prompts/default-prompts';
+import { BASE_PROMPT } from '../prompts/base-prompt';
 import { echoTool, dateTimeTool } from '../core/agent-tools';
 import { 
   webScraperTool, 
   urlDetectionTool, 
-  webSearchTool, 
   deepSearchTool, 
-  combinedSearchTool,
   vectorSearchTool
 } from '../tools';
 import { createAgentLogger } from '../core/agent-logger';
@@ -23,22 +21,19 @@ export class DefaultAgent extends BaseAgent {
     'Answer general questions',
     'Provide information on various topics',
     'Assist with basic tasks',
-    'Scrape and analyze web content',
-    'Perform web searches for up-to-date information',
-    'Conduct deep research on complex topics',
+    'Scrape and analyze web content when URLs are provided',
+    'Conduct deep research on complex topics using Perplexity AI',
     'Search internal knowledge base for relevant information',
     'Recommend other specialized agents when appropriate'
   ];
   icon = 'bot';
-  systemPrompt = DEFAULT_SYSTEM_PROMPT;
+  systemPrompt = BASE_PROMPT;
   tools = [
     echoTool, 
     dateTimeTool, 
     webScraperTool, 
     urlDetectionTool,
-    webSearchTool,
     deepSearchTool,
-    combinedSearchTool,
     vectorSearchTool
   ];
   
@@ -63,6 +58,8 @@ If you think another specialized agent would be better suited to help with this 
 - Facebook Ads Agent for social media advertising
 - Copywriting Agent for marketing content
 - Quiz Agent for creating interactive quizzes
+
+Please format content and responses properly with line breaks and headings. Lists should never be output as paragraphs.
 
 I can help you analyze web content and perform searches. If you provide a URL, I'll automatically scrape it. If you need up-to-date information, I can perform web searches or conduct deep research on complex topics. I can also search our internal knowledge base for relevant information when appropriate.`;
     

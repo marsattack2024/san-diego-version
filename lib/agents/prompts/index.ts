@@ -62,12 +62,12 @@ export function enhancePromptWithToolResults(
   
   // Add web scraper results (MEDIUM PRIORITY)
   if (toolResults.webScraper) {
-    enhancedPrompt += `\n\n### WEBSITE CONTENT (MEDIUM PRIORITY):\n${toolResults.webScraper}`;
+    enhancedPrompt += `\n\n### SCRAPED URL CONTENT (MEDIUM PRIORITY):\n${toolResults.webScraper}`;
   }
   
   // Add deep search results (LOWEST PRIORITY)
   if (toolResults.deepSearch) {
-    enhancedPrompt += `\n\n### RESEARCH INFORMATION (LOWEST PRIORITY):\n${toolResults.deepSearch}`;
+    enhancedPrompt += `\n\n### PERPLEXITY RESEARCH INFORMATION (LOWEST PRIORITY):\n${toolResults.deepSearch}`;
   }
   
   return enhancedPrompt;

@@ -1,5 +1,5 @@
 import { type Message } from 'ai';
-import { buildSystemPrompt, enhancePromptWithToolResults, type ToolResults, type AgentType } from './prompts';
+import { buildSystemPrompt, type ToolResults, type AgentType, AGENT_PROMPTS } from './prompts';
 import { type ToolSet } from 'ai';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { logger } from '../logger/edge-logger';
@@ -42,49 +42,15 @@ const AGENT_KEYWORDS: Record<AgentType, string[]> = {
   ]
 };
 
-// Tool capability descriptions for each agent
-const AGENT_TOOL_DESCRIPTIONS: Record<AgentType, string> = {
-  'default': `
+// Common tool description for all agents
+const COMMON_TOOL_DESCRIPTION = `
 You have access to the following tools:
 - RAG: Retrieve information from the knowledge base
-- WebSearch: Search the web for up-to-date information
-- DeepSearch: Conduct in-depth research on complex topics
+- WebScraper: Extract content from specific URLs provided by the user
+- DeepSearch: Conduct in-depth research on complex topics using Perplexity AI
 
 Use these tools when appropriate to provide accurate and comprehensive responses.
-`,
-  'copywriting': `
-You have access to the following tools:
-- RAG: Retrieve information from the knowledge base about copywriting best practices and examples
-- WebSearch: Search the web for up-to-date information on brands, competitors, and industry trends
-- DeepSearch: Conduct in-depth research on target audiences and market positioning
-
-Use these tools when appropriate to create compelling and effective copy.
-`,
-  'google-ads': `
-You have access to the following tools:
-- RAG: Retrieve information from the knowledge base about Google Ads best practices
-- WebSearch: Search the web for up-to-date information on Google Ads policies and features
-- DeepSearch: Conduct in-depth research on keywords, competitors, and industry benchmarks
-
-Use these tools when appropriate to create effective Google Ads campaigns.
-`,
-  'facebook-ads': `
-You have access to the following tools:
-- RAG: Retrieve information from the knowledge base about Facebook Ads best practices
-- WebSearch: Search the web for up-to-date information on Facebook Ads policies and features
-- DeepSearch: Conduct in-depth research on audience targeting, creative formats, and performance metrics
-
-Use these tools when appropriate to create effective Facebook Ads campaigns.
-`,
-  'quiz': `
-You have access to the following tools:
-- RAG: Retrieve information from the knowledge base about quiz design best practices
-- WebSearch: Search the web for up-to-date information on quiz platforms and features
-- DeepSearch: Conduct in-depth research on quiz topics, question formats, and assessment methodologies
-
-Use these tools when appropriate to create engaging and effective quizzes.
-`
-};
+`;
 
 export class AgentRouter {
   /**
@@ -186,7 +152,7 @@ export class AgentRouter {
     edgeLogger.debug('Agent routing scores', { scores });
 
     // Only route to a specialized agent if the score is above a threshold
-    const routingThreshold = 5; // Minimum score to trigger routing
+    const routingThreshold = 5;
     if (highestScore >= routingThreshold) {
       edgeLogger.info('Auto-routed to specialized agent', { 
         selectedAgent, 
@@ -224,50 +190,41 @@ export class AgentRouter {
   /**
    * Gets the system prompt for the specified agent
    * @param agentType The agent type
-   * @param toolResults The tool results
    * @param deepSearchEnabled Whether DeepSearch is enabled
    * @returns The system prompt
    */
-  getSystemPrompt(agentType: AgentType, toolResults: ToolResults = {}, deepSearchEnabled = false): string {
+  getSystemPrompt(agentType: AgentType, deepSearchEnabled = false): string {
     // Log agent selection with context
     logger.info('Agent selected for conversation', {
       agentType,
       selectionMethod: agentType === 'default' ? 'auto-routing' : 'user-selected',
-      hasToolResults: Object.keys(toolResults).length > 0,
       deepSearchEnabled,
       important: true
     });
     
-    // Start with the base prompt
-    let prompt = buildSystemPrompt(agentType);
-    
-    // Add tool descriptions for this agent
-    prompt += `\n\n${AGENT_TOOL_DESCRIPTIONS[agentType]}`;
-    
-    // Add DeepSearch-specific instructions if explicitly enabled by the user
-    if (deepSearchEnabled) {
-      prompt += `\n\nIMPORTANT: DeepSearch is enabled for this conversation. You MUST use the deepSearch tool for research-intensive questions, complex topics, or when comprehensive information is needed.`;
+    // Build the system prompt in a simple, linear fashion
+    const systemPrompt = [
+      // 1. Start with the base prompt and specialized prompt if applicable
+      buildSystemPrompt(agentType),
       
-      // If DeepSearch results are already available, note that in the prompt
-      if (toolResults.deepSearch) {
-        prompt += `\n\nDeepSearch results have already been included below.`;
-      }
-    } else {
-      // Make it clear that DeepSearch should NOT be used unless explicitly enabled
-      prompt += `\n\nNOTE: DeepSearch is NOT enabled for this conversation. Do NOT use the deepSearch tool even if it seems appropriate. Use other available tools like comprehensiveScraper or getInformation instead.`;
-    }
+      // 2. Add tool descriptions
+      COMMON_TOOL_DESCRIPTION,
+      
+      // 3. Add DeepSearch-specific instructions
+      deepSearchEnabled
+        ? "IMPORTANT: DeepSearch is enabled for this conversation. Use the deepSearch tool for research-intensive questions."
+        : "NOTE: DeepSearch is NOT enabled for this conversation. Do NOT use the deepSearch tool.",
+      
+      // 4. Add critical instruction to mention tools used
+      "CRITICAL INSTRUCTION: At the end of your response, you MUST include a section that explicitly states which tools you used (RAG Knowledge Base, Web Scraper, or Perplexity Deep Search). If you didn't use any of these resources, state that you didn't use any specific Photography to Profits or High Rollers Resources."
+    ].join("\n\n");
     
-    // Add tool results in priority order
-    const enhancedPrompt = enhancePromptWithToolResults(prompt, toolResults);
-    
+    // Log the system prompt creation
     edgeLogger.debug('System prompt built successfully', {
       agentType,
-      promptLength: enhancedPrompt.length,
-      hasRagContent: !!toolResults?.ragContent,
-      hasWebScraperContent: !!toolResults?.webScraper,
-      hasDeepSearchContent: !!toolResults?.deepSearch
+      promptLength: systemPrompt.length
     });
     
-    return enhancedPrompt;
+    return systemPrompt;
   }
 }

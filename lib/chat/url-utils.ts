@@ -1,10 +1,25 @@
 // Enhanced URL detection regex pattern - more comprehensive to catch various URL formats
-const URL_REGEX = /(?:https?:\/\/)?(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*)/gi;
+// This pattern is more precise to avoid false positives like 'e.g.' or 'i.e.'
+const URL_REGEX = /(?:https?:\/\/(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*))|(?:www\.[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*))/gi;
+
+// Common abbreviations and terms that might be falsely detected as URLs
+const COMMON_FALSE_POSITIVES = [
+  'e.g.', 'i.e.', 'etc.', 'vs.', 'a.m.', 'p.m.', 
+  'fig.', 'ca.', 'et al.', 'n.b.', 'p.s.'
+];
 
 // Test if a string looks like a domain name (without protocol)
 export function isDomainLike(text: string): boolean {
+  // Skip common abbreviations that might look like domains
+  if (COMMON_FALSE_POSITIVES.includes(text.toLowerCase())) {
+    return false;
+  }
+  
+  // More strict domain validation - requires valid TLD
   // Match strings that look like domains (e.g., example.com, sub.domain.co.uk)
-  return /^[a-zA-Z0-9][-a-zA-Z0-9]*(\.[a-zA-Z0-9][-a-zA-Z0-9]*)+$/.test(text);
+  return /^[a-zA-Z0-9][-a-zA-Z0-9]*(\.[a-zA-Z0-9][-a-zA-Z0-9]*)+$/.test(text) && 
+         // Check if the TLD is at least 2 characters
+         text.split('.').pop()!.length >= 2;
 }
 
 // Ensures URL has a protocol
@@ -27,6 +42,15 @@ export function extractUrls(text: string): string[] {
     for (const word of words) {
       // Clean up the word (remove punctuation at the end)
       const cleanWord = word.replace(/[.,;:!?]$/, '');
+      
+      // Skip if it's too short to be a valid domain
+      if (cleanWord.length < 5) continue;
+      
+      // Skip common abbreviations and false positives
+      if (COMMON_FALSE_POSITIVES.some(fp => cleanWord.toLowerCase().includes(fp))) {
+        continue;
+      }
+      
       if (isDomainLike(cleanWord)) {
         result.push(cleanWord);
       }

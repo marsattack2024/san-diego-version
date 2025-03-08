@@ -450,8 +450,25 @@ export const allTextScraperTool = createBasicTool(
 
 /**
  * Extract URLs from a text string
+ * Only detects properly formatted URLs (http/https or www.)
+ * Avoids common false positives like 'e.g.' or other abbreviations
  */
 export function extractUrls(text: string): string[] {
-  const urlRegex = /(https?:\/\/[^\s]+)/g;
-  return text.match(urlRegex) || [];
+  // More precise regex that requires proper URL format
+  // Matches http/https URLs or URLs starting with www.
+  // Requires domain to have at least one dot and valid TLD characters
+  const urlRegex = /(https?:\/\/(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*))|(?:www\.[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*))/g;
+  
+  // Extract all potential URLs
+  const matches = text.match(urlRegex) || [];
+  
+  // Filter out common false positives
+  return matches.filter(url => {
+    // Skip URLs that are likely abbreviations or examples
+    if (/\be\.g\.\b/.test(url)) return false;
+    if (/\bi\.e\.\b/.test(url)) return false;
+    
+    // Ensure URL has a valid domain structure
+    return url.includes('.') && url.length > 4;
+  });
 } 

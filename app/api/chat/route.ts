@@ -80,15 +80,27 @@ export async function POST(req: Request) {
     // Run RAG for queries over 15 characters
     if (userQuery.length > 15) {
       try {
-        edgeLogger.info('Running RAG for query', { queryLength: userQuery.length });
+        edgeLogger.info('Running RAG for query', { 
+          queryLength: userQuery.length,
+          query: userQuery.substring(0, 100) // Log first 100 chars of query
+        });
         
         const ragResult = await chatTools.getInformation.execute({ query: userQuery }, {
           toolCallId: 'rag-search',
           messages: []
         });
         
+        // Log the RAG result details
+        edgeLogger.info('RAG result details', {
+          resultLength: ragResult ? ragResult.length : 0,
+          hasResults: ragResult ? !ragResult.includes("No relevant information found") : false,
+          firstChars: ragResult ? ragResult.substring(0, 100) : 'No result'
+        });
+        
         if (ragResult && !ragResult.includes("No relevant information found")) {
+          // Use the full RAG result without truncation
           toolResults.ragContent = ragResult;
+          
           edgeLogger.info('RAG search successful', { 
             contentLength: ragResult.length,
             hasResults: true
@@ -97,7 +109,11 @@ export async function POST(req: Request) {
           edgeLogger.info('RAG search completed with no relevant results');
         }
       } catch (error) {
-        edgeLogger.error('RAG search failed', { error });
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        edgeLogger.error('RAG search failed', { 
+          error: errorMessage,
+          query: userQuery.substring(0, 100)
+        });
       }
     }
 
@@ -166,8 +182,62 @@ export async function POST(req: Request) {
       }
     }
 
-    // Get system prompt with tool results
-    const systemPrompt = agentRouter.getSystemPrompt(selectedAgentId, toolResults, deepSearchEnabled);
+    // Get system prompt without tool results
+    const systemPrompt = agentRouter.getSystemPrompt(selectedAgentId, deepSearchEnabled);
+
+    // Check system prompt length
+    const systemPromptLength = systemPrompt.length;
+    if (systemPromptLength > 25000) {
+      edgeLogger.warn('System prompt is very long', { 
+        systemPromptLength,
+        selectedAgentId
+      });
+    } else {
+      edgeLogger.info('System prompt length is acceptable', { 
+        systemPromptLength,
+        selectedAgentId
+      });
+    }
+
+    // Enhance the system prompt with tool results instead of using tool messages
+    // This approach is more compatible with the Vercel AI SDK
+    let enhancedSystemPrompt = systemPrompt;
+    
+    // Track which tools were used to inform the model
+    const toolsUsed = [];
+    
+    // Add RAG results to the system prompt if available
+    if (toolResults.ragContent) {
+      enhancedSystemPrompt += `\n\n### RAG KNOWLEDGE BASE TOOL RESULTS ###\nThe following information was retrieved from the knowledge base using the RAG tool:\n\n${toolResults.ragContent}\n\n`;
+      toolsUsed.push('RAG Knowledge Base');
+      edgeLogger.info('Added RAG results to system prompt', { 
+        contentLength: toolResults.ragContent.length 
+      });
+    }
+    
+    // Add web scraper results to the system prompt if available
+    if (toolResults.webScraper) {
+      enhancedSystemPrompt += `\n\n### WEB SCRAPER TOOL RESULTS ###\nThe following information was scraped from the web using the Web Scraper tool:\n\n${toolResults.webScraper}\n\n`;
+      toolsUsed.push('Web Scraper');
+      edgeLogger.info('Added web scraper results to system prompt', { 
+        contentLength: toolResults.webScraper.length 
+      });
+    }
+    
+    // Add deep search results to the system prompt if available
+    if (toolResults.deepSearch) {
+      enhancedSystemPrompt += `\n\n### PERPLEXITY DEEP SEARCH TOOL RESULTS ###\nThe following information was retrieved using the Perplexity Deep Search tool:\n\n${toolResults.deepSearch}\n\n`;
+      toolsUsed.push('Perplexity Deep Search');
+      edgeLogger.info('Added deep search results to system prompt', { 
+        contentLength: toolResults.deepSearch.length 
+      });
+    }
+    
+    // Add a reminder about which tools were used
+    if (toolsUsed.length > 0) {
+      enhancedSystemPrompt += `\n\n### IMPORTANT: TOOLS USED IN THIS RESPONSE ###\nYou have used the following tools to generate this response: ${toolsUsed.join(', ')}.\nYou MUST acknowledge the use of these tools at the end of your response.\n\n`;
+      edgeLogger.info('Added tools used reminder to system prompt', { toolsUsed });
+    }
 
     edgeLogger.info('Generating response', {
       selectedAgentId,
@@ -178,28 +248,70 @@ export async function POST(req: Request) {
       maxSteps: urls.length > 0 ? 5 : 3
     });
 
-    // Use AI SDK to generate response with more steps if URLs are present
-    const response = await streamText({
-      model: myProvider.languageModel(modelName),
-      system: systemPrompt,
-      messages,
-      tools: {
-        // Only include the comprehensive scraper and other tools, not the basic webScraper
-        getInformation: chatTools.getInformation,
-        deepSearch: chatTools.deepSearch,
-        comprehensiveScraper: chatTools.comprehensiveScraper,
-        detectAndScrapeUrls: chatTools.detectAndScrapeUrls,
-        addResource: chatTools.addResource
-      },
-      maxSteps: urls.length > 0 ? 5 : 3, // More steps if URLs need processing
-      temperature: 0.4 // Lower temperature for more consistent formatting
+    // Calculate total message size for debugging
+    const totalMessageSize = JSON.stringify(messages).length + enhancedSystemPrompt.length;
+    edgeLogger.info('Total message size', { 
+      totalMessageSize,
+      messageCount: messages.length,
+      systemPromptLength: enhancedSystemPrompt.length
     });
 
-    return response.toDataStreamResponse();
+    // Check if total size is approaching limits
+    if (totalMessageSize > 100000) {
+      edgeLogger.warn('Total message size is very large', { totalMessageSize });
+    }
+
+    // Use AI SDK to generate response with more steps if URLs are present
+    try {
+      const response = await streamText({
+        model: myProvider.languageModel(modelName),
+        system: enhancedSystemPrompt,
+        messages: messages,
+        tools: {
+          // Only include the comprehensive scraper and other tools, not the basic webScraper
+          getInformation: chatTools.getInformation,
+          deepSearch: chatTools.deepSearch,
+          comprehensiveScraper: chatTools.comprehensiveScraper,
+          detectAndScrapeUrls: chatTools.detectAndScrapeUrls,
+          addResource: chatTools.addResource
+        },
+        maxSteps: urls.length > 0 ? 5 : 3, // More steps if URLs need processing
+        temperature: 0.4 // Lower temperature for more consistent formatting
+      });
+
+      return response.toDataStreamResponse();
+    } catch (streamError) {
+      // Log specific error from streamText
+      const errorMessage = streamError instanceof Error ? streamError.message : 'Unknown streamText error';
+      const errorStack = streamError instanceof Error ? streamError.stack : 'No stack trace';
+      
+      edgeLogger.error('Error in streamText', { 
+        error: errorMessage,
+        stack: errorStack,
+        systemPromptLength: enhancedSystemPrompt.length,
+        messageCount: messages.length
+      });
+      
+      return new Response(
+        JSON.stringify({ 
+          error: 'An error occurred while generating the response',
+          details: errorMessage
+        }),
+        { status: 500 }
+      );
+    }
   } catch (error) {
-    edgeLogger.error('Error in chat route', { error });
+    // Improved error logging with more details
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorStack = error instanceof Error ? error.stack : 'No stack trace';
+    
+    edgeLogger.error('Error in chat route', { 
+      error: errorMessage,
+      stack: errorStack
+    });
+    
     return new Response(
-      JSON.stringify({ error: 'An error occurred processing your request' }),
+      JSON.stringify({ error: 'An error occurred processing your request', details: errorMessage }),
       { status: 500 }
     );
   }

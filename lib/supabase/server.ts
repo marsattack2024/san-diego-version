@@ -8,7 +8,7 @@ import { logger } from '@/lib/logger';
  */
 export async function createServerClient() {
   try {
-    const cookieStore = cookies();
+    const cookieStore = await cookies();
     
     return createSupabaseServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
