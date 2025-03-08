@@ -235,8 +235,45 @@ export async function POST(req: Request) {
     
     // Add a reminder about which tools were used
     if (toolsUsed.length > 0) {
-      enhancedSystemPrompt += `\n\n### IMPORTANT: TOOLS USED IN THIS RESPONSE ###\nYou have used the following tools to generate this response: ${toolsUsed.join(', ')}.\nYou MUST acknowledge the use of these tools at the end of your response.\n\n`;
-      edgeLogger.info('Added tools used reminder to system prompt', { toolsUsed });
+      enhancedSystemPrompt += `\n\n### RESPONSE STRUCTURE REQUIREMENTS ###
+Your response MUST end with a section formatted exactly like this:
+
+--- Tools and Resources Used ---
+${toolsUsed.map(tool => {
+  if (tool === 'RAG Knowledge Base' && toolResults.ragContent) {
+    return `- Knowledge Base: Retrieved ${toolResults.ragContent.length} characters of relevant information about ${userQuery.substring(0, 50)}...`;
+  }
+  if (tool === 'Web Scraper' && toolResults.webScraper) {
+    return `- Web Scraper: Analyzed ${urls.length} URLs with ${toolResults.webScraper.length} characters of content`;
+  }
+  if (tool === 'Perplexity Deep Search' && toolResults.deepSearch) {
+    return `- Deep Search: Retrieved ${toolResults.deepSearch.length} characters of additional context through web search`;
+  }
+  return `- ${tool}: No content retrieved`;
+}).join('\n')}
+
+IMPORTANT INSTRUCTIONS:
+1. You MUST include this exact section at the end of your response
+2. DO NOT say "I did not use any specific resources" or similar disclaimers
+3. If you used the tools above, you MUST acknowledge them in this format
+4. The tools section should be separated from your main response by a blank line
+
+Example acknowledgment format:
+[Your detailed response here]
+
+--- Tools and Resources Used ---
+- Knowledge Base: Retrieved 1500 characters of relevant information about pricing strategies...
+- Web Scraper: Analyzed 2 URLs with 5000 characters of content
+\n\n`;
+      
+      edgeLogger.info('Added structured tools used reminder to system prompt', { 
+        toolsUsed,
+        toolResults: {
+          ragLength: toolResults.ragContent?.length || 0,
+          webScraperLength: toolResults.webScraper?.length || 0,
+          deepSearchLength: toolResults.deepSearch?.length || 0
+        }
+      });
     }
 
     edgeLogger.info('Generating response', {

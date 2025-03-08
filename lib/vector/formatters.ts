@@ -9,9 +9,12 @@ import { RetrievedDocument } from '@/types/vector/vector';
 export function formatDocumentsForLLM(documents: RetrievedDocument[]): string {
   if (!documents || documents.length === 0) return '';
   
+  // Only use the top 3 most relevant documents, even if more were retrieved
+  const topDocuments = documents.slice(0, 3);
+  
   let context = 'RELEVANT INFORMATION:\n\n';
   
-  documents.forEach((doc, i) => {
+  topDocuments.forEach((doc, i) => {
     const similarityPercent = Math.round(doc.similarity * 100);
     context += `DOCUMENT ${i + 1} (${similarityPercent}% relevance):\n${doc.content}\n\n`;
     
@@ -33,20 +36,32 @@ export function formatDocumentsForDisplay(documents: RetrievedDocument[]): {
   id: string;
   title: string;
   content: string;
+  preview: string;
   similarity: number;
+  similarityPercent: number;
   metadata?: Record<string, any>;
 }[] {
   if (!documents || documents.length === 0) return [];
   
-  return documents.map(doc => ({
-    id: doc.id,
-    title: doc.metadata?.title || `Document ${doc.id.substring(0, 8)}`,
-    content: doc.content.length > 300 ? 
-      doc.content.substring(0, 300) + '...' : 
-      doc.content,
-    similarity: doc.similarity,
-    metadata: doc.metadata
-  }));
+  return documents.map(doc => {
+    // Safely handle ID - ensure it's a string and handle non-string IDs
+    const idString = typeof doc.id === 'string' ? doc.id : String(doc.id);
+    const idPreview = idString.length > 8 ? idString.substring(0, 8) : idString;
+    
+    // Safely handle content
+    const content = typeof doc.content === 'string' ? doc.content : String(doc.content);
+    const preview = content.length > 100 ? content.substring(0, 100) + '...' : content;
+    
+    return {
+      id: doc.id,
+      title: doc.metadata?.title || `Document ${idPreview}`,
+      content,
+      preview,
+      similarity: doc.similarity,
+      similarityPercent: Math.round(doc.similarity * 100),
+      metadata: doc.metadata
+    };
+  });
 }
 
 /**

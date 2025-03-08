@@ -10,7 +10,7 @@ interface DocumentSearchOptions {
   sessionId?: string;
 }
 
-interface DocumentSearchMetrics {
+export interface DocumentSearchMetrics {
   count: number;
   averageSimilarity: number;
   highestSimilarity: number;
@@ -134,35 +134,53 @@ export async function findSimilarDocumentsOptimized(
   const processedQuery = preprocessQuery(queryText);
   
   try {
-    // First attempt with higher threshold (0.6)
+    // First attempt with higher threshold (0.65)
     const result = await findSimilarDocumentsWithPerformance(processedQuery, {
       ...options,
-      similarityThreshold: options.similarityThreshold || 0.6, // Start with higher threshold
+      limit: options.limit || 5,
+      similarityThreshold: options.similarityThreshold || 0.65,
       sessionId,
     });
     
     const endTime = performance.now();
     const retrievalTimeMs = Math.round(endTime - startTime);
     
-    // If no results with 0.6 threshold, try with 0.4
+    // If no results with 0.65 threshold, try with 0.41
     if (result.documents.length === 0) {
       logger.logVectorQuery(queryText, {
-        originalThreshold: options.similarityThreshold || 0.6,
-        newThreshold: 0.4,
+        originalThreshold: options.similarityThreshold || 0.65,
+        newThreshold: 0.41,
         sessionId,
         retrievalTimeMs,
       }, 0, retrievalTimeMs);
-      
+
       const fallbackResult = await findSimilarDocumentsWithPerformance(processedQuery, {
         ...options,
-        similarityThreshold: 0.4, // Lower threshold for fallback
+        limit: options.limit || 5,
+        similarityThreshold: 0.41,
         sessionId,
       });
-      
+
       fallbackResult.metrics.usedFallbackThreshold = true;
       
+      // Log detailed results with the new logger function
+      logger.logVectorResults(
+        queryText,
+        fallbackResult.documents,
+        fallbackResult.metrics,
+        sessionId
+      );
+
       return fallbackResult;
     }
+    
+    // Log detailed results with the new logger function
+    logger.logVectorResults(
+      queryText,
+      result.documents,
+      result.metrics,
+      sessionId
+    );
     
     return result;
   } catch (error) {

@@ -68,14 +68,14 @@ export async function createEmbedding(text: string): Promise<number[]> {
  * Finds relevant content from the database based on a user query
  * 
  * @param userQuery - The user's question or query
- * @param limit - Maximum number of results to return (default: 4)
- * @param similarityThreshold - Minimum similarity score (0-1) to include results (default: 0.5)
+ * @param limit - Maximum number of results to return (default: 5)
+ * @param similarityThreshold - Minimum similarity score (0-1) to include results (default: 0.65)
  * @returns Promise resolving to array of relevant content with similarity scores
  */
 export async function findRelevantContent(
   userQuery: string, 
   limit = 5, 
-  similarityThreshold = 0.5
+  similarityThreshold = 0.65
 ) {
   const startTime = Date.now();
   

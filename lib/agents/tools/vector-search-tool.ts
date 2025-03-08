@@ -72,7 +72,7 @@ export const vectorSearchTool = tool({
       // Find similar documents using the optimized function
       const result = await findSimilarDocumentsOptimized(input.query, {
         limit: input.limit || 5,
-        similarityThreshold: input.similarityThreshold || 0.5,
+        similarityThreshold: input.similarityThreshold || 0.65,
         metadataFilter: input.metadataFilter,
         sessionId,
       });
@@ -109,7 +109,7 @@ export const vectorSearchTool = tool({
       switch (input.formatOption || 'llm') {
         case 'llm':
           formattedContent = formatDocumentsForLLM(documents);
-          formattedDocuments = documents;
+          formattedDocuments = documents.slice(0, 3);
           break;
         case 'display':
           formattedDocuments = formatDocumentsForDisplay(documents);

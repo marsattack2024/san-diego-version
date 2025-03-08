@@ -37,21 +37,34 @@ export const chatTools = {
     }),
     execute: async ({ query }): Promise<string> => {
       try {
-        const { documents } = await findSimilarDocumentsOptimized(query, {
-          limit: 5, // Update to 5 to match the rest of the code
-          similarityThreshold: 0.5
+        const { documents, metrics } = await findSimilarDocumentsOptimized(query, {
+          limit: 5, // Changed back to 5 from 10
+          similarityThreshold: 0.65
         });
         
         if (!documents || documents.length === 0) {
           return "No relevant information found in the knowledge base.";
         }
 
-        // Format the results in a clean, readable format
-        const formattedResults = documents.map((doc: RetrievedDocument, index: number) => {
-          return `Document #${index + 1}: ${doc.metadata?.title || 'Untitled'}\n${doc.content}\n`;
+        // Only use the top 3 most relevant documents for the agent
+        const topDocuments = documents.slice(0, 3);
+        
+        // Format the results with more detail including IDs and similarity scores
+        const formattedResults = topDocuments.map((doc: RetrievedDocument, index: number) => {
+          const similarityPercent = Math.round(doc.similarity * 100);
+          // Safely handle ID - ensure it's a string
+          const idString = typeof doc.id === 'string' ? doc.id : String(doc.id);
+          const idPreview = idString.length > 8 ? idString.substring(0, 8) : idString;
+          
+          return `Document #${index + 1} [ID: ${idPreview}] (${similarityPercent}% relevant):\n${doc.content}\n`;
         }).join('\n');
 
-        return `Found ${documents.length} relevant documents:\n\n${formattedResults}`;
+        // Add aggregate metrics
+        const avgSimilarity = Math.round(
+          topDocuments.reduce((sum, doc) => sum + doc.similarity, 0) / topDocuments.length * 100
+        );
+
+        return `Found ${topDocuments.length} most relevant documents (out of ${documents.length} retrieved, average similarity of top 3: ${avgSimilarity}%):\n\n${formattedResults}`;
       } catch (error) {
         edgeLogger.error('Knowledge base search failed', {
           query,

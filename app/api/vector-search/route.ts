@@ -35,18 +35,29 @@ export async function POST(req: NextRequest) {
     // Format documents for display
     const formattedDocuments = formatDocumentsForDisplay(documents);
     
-    // Log successful search
+    // Enhanced metrics to include in the response
+    const enhancedMetrics = {
+      ...searchMetrics,
+      resultCount: documents.length,
+      averageSimilarityPercent: Math.round(searchMetrics.averageSimilarity * 100),
+      highestSimilarityPercent: Math.round(searchMetrics.highestSimilarity * 100),
+      lowestSimilarityPercent: Math.round(searchMetrics.lowestSimilarity * 100),
+    };
+    
+    // Log successful search with additional details
     logger.info('Vector search completed', {
       queryLength: query.length,
       resultCount: documents.length,
       durationMs: searchMetrics.retrievalTimeMs,
+      averageSimilarity: searchMetrics.averageSimilarity,
+      documentIds: documents.map(d => d.id),
       important: searchMetrics.isSlowQuery
     });
     
-    // Return results
+    // Return enhanced results
     return NextResponse.json({
       documents: formattedDocuments,
-      metrics: searchMetrics
+      metrics: enhancedMetrics
     });
   } catch (error) {
     const duration = Math.round(performance.now() - startTime);

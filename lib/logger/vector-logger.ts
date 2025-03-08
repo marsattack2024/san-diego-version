@@ -1,4 +1,6 @@
 import { logger as baseLogger } from './base-logger';
+import type { RetrievedDocument } from '../../types/vector/vector';
+import type { DocumentSearchMetrics } from '../vector/documentRetrieval';
 
 /**
  * Specialized logger for Supabase Vector operations
@@ -45,6 +47,49 @@ export const logger = {
         durationMs
       });
     }
+  },
+  
+  // Enhanced vector results logger with document previews and metrics
+  logVectorResults: (
+    query: string,
+    documents: RetrievedDocument[],
+    metrics: DocumentSearchMetrics,
+    sessionId: string
+  ) => {
+    // Calculate average similarity
+    const averageSimilarity = metrics.averageSimilarity;
+    const highestSimilarity = metrics.highestSimilarity;
+    const lowestSimilarity = metrics.lowestSimilarity;
+
+    // Create document summary with previews and IDs
+    const documentSummaries = documents.map(doc => {
+      // Safely handle ID - ensure it's a string and handle non-string IDs
+      const idString = typeof doc.id === 'string' ? doc.id : String(doc.id);
+      const idPreview = idString.length > 8 ? idString.substring(0, 8) : idString;
+      
+      return {
+        id: doc.id,
+        title: doc.metadata?.title || `Doc ${idPreview}`,
+        preview: typeof doc.content === 'string' ? 
+          (doc.content.substring(0, 100) + '...') : 
+          'Content not available as string',
+        similarity: doc.similarity,
+        similarityPercent: Math.round(doc.similarity * 100)
+      };
+    });
+
+    baseLogger.info('Vector search results', {
+      operation: 'vector_results',
+      queryLength: query.length,
+      resultCount: documents.length,
+      averageSimilarity: Math.round(averageSimilarity * 100) / 100,
+      highestSimilarity: Math.round(highestSimilarity * 100) / 100,
+      lowestSimilarity: Math.round(lowestSimilarity * 100) / 100,
+      durationMs: metrics.retrievalTimeMs,
+      sessionId,
+      documents: documentSummaries,
+      important: metrics.isSlowQuery || documents.length === 0
+    });
   },
   
   // Log vector operations errors
