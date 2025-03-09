@@ -12,13 +12,35 @@ export default function ChatPage() {
   const conversations = useChatStore(state => state.conversations);
   const createConversation = useChatStore(state => state.createConversation);
   
-  // Create a conversation ID if none exists
+  // Check for a newChat parameter which forces creation of a new chat
   useEffect(() => {
-    if (!currentConversationId) {
-      log.info('No current conversation, creating a new one');
-      createConversation();
-    } else {
-      log.info('Using existing conversation', { id: currentConversationId });
+    // Check if the URL contains the newChat parameter and timestamp
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const isNewChat = urlParams.get('new') === 'true';
+      const timestamp = urlParams.get('t');
+      
+      if (isNewChat) {
+        // Force creation of a new chat and clear existing conversation
+        log.info('Creating new chat from URL parameter', { timestamp });
+        
+        // Clear existing conversation state first to ensure full refresh
+        useChatStore.setState({
+          currentConversationId: null
+        });
+        
+        // Create a new conversation
+        createConversation();
+        
+        // Remove the query parameter from the URL
+        window.history.replaceState({}, '', '/chat');
+      } else if (!currentConversationId) {
+        // Create a conversation ID if none exists
+        log.info('No current conversation, creating a new one');
+        createConversation();
+      } else {
+        log.info('Using existing conversation', { id: currentConversationId });
+      }
     }
   }, [currentConversationId, createConversation]);
   

@@ -4,6 +4,11 @@
 
 This document provides a comprehensive explanation of our Retrieval-Augmented Generation (RAG) system, which enhances AI responses by retrieving relevant documents from a knowledge base. The system uses vector embeddings to find semantically similar documents to user queries and integrates this information into the response generation process.
 
+> **IMPORTANT NOTES**:
+> 1. Only administrators can upload documents. End users cannot upload documents or attachments.
+> 2. Document management is restricted through Row Level Security policies in the database.
+> 3. The RAG system implements an adaptive threshold mechanism (0.6 initial, 0.4 fallback) directly in the database.
+
 ## Table of Contents
 
 1. [Vector Embeddings](#vector-embeddings)
@@ -38,16 +43,17 @@ The embedding creation is handled in `lib/vector/embeddings.ts`, which provides 
 
 ### Database Schema
 
-Documents are stored in two tables:
-1. **Resources**: Contains the original, full-text documents
-2. **Embeddings**: Contains the chunked text and corresponding vector embeddings
+Documents are stored in a single table called `documents` with the following structure:
+- `id`: Unique identifier (UUID)
+- `title`: Document title
+- `content`: The full text content
+- `kind`: Document type/category
+- `user_id`: ID of the admin user who uploaded the document
+- `created_at`: Timestamp of creation
+- `updated_at`: Timestamp of last update
+- `embedding`: Vector representation (1536 dimensions)
 
-The embeddings table has the following structure:
-- `id`: Unique identifier
-- `resourceId`: Foreign key to the resources table
-- `content`: The text chunk
-- `embedding`: The vector representation (1536 dimensions)
-- `metadata`: Additional information about the document (optional)
+> **IMPORTANT**: Only administrators can upload documents. End users cannot upload documents or attachments. The database enforces this through Row Level Security (RLS) policies that restrict document creation/modification to admin users only.
 
 ### Retrieval Process
 
@@ -86,7 +92,7 @@ Document retrieval is implemented in `lib/vector/documentRetrieval.ts` with thre
 The retrieval process accepts several configuration options:
 
 - **`limit`**: Maximum number of documents to retrieve (default: 5)
-- **`similarityThreshold`**: Minimum similarity score for documents (default: 0.65)
+- **`similarityThreshold`**: *Deprecated* - Thresholds are now handled directly in the database function (0.6 initial, 0.4 fallback)
 - **`metadataFilter`**: Filter documents based on metadata fields
 - **`sessionId`**: Identifier for tracking and logging
 
@@ -115,9 +121,10 @@ The complete retrieval process follows these steps:
 
 2. **Embedding Creation**: The preprocessed query is converted to a vector embedding.
 
-3. **Initial Search**: A search is performed with the default similarity threshold (0.65).
-
-4. **Fallback (if needed)**: If no results are found, a second search is performed with a lower threshold (0.41).
+3. **Database Search**: The query embedding is sent to the `match_documents` database function, which:
+   - First attempts to find documents with similarity ≥ 0.6
+   - If no results are found, automatically falls back to documents with similarity ≥ 0.4
+   - All filtering happens in a single database call
 
 5. **Document Filtering**: The top 5 documents are retrieved based on similarity scores.
 
@@ -186,9 +193,9 @@ getInformation: tool({
   }),
   execute: async ({ query }): Promise<string> => {
     try {
+      // Note: similarityThreshold is no longer needed - handled by database
       const { documents, metrics } = await findSimilarDocumentsOptimized(query, {
-        limit: 5,
-        similarityThreshold: 0.65
+        limit: 5
       });
       
       if (!documents || documents.length === 0) {
@@ -212,7 +219,12 @@ getInformation: tool({
         topDocuments.reduce((sum, doc) => sum + doc.similarity, 0) / topDocuments.length * 100
       );
 
-      return `Found ${topDocuments.length} most relevant documents (out of ${documents.length} retrieved, average similarity of top 3: ${avgSimilarity}%):\n\n${formattedResults}`;
+      // Log if fallback threshold was used
+      const thresholdInfo = metrics.usedFallbackThreshold 
+        ? " (fallback threshold was used)" 
+        : "";
+
+      return `Found ${topDocuments.length} most relevant documents (out of ${documents.length} retrieved, average similarity of top 3: ${avgSimilarity}%${thresholdInfo}):\n\n${formattedResults}`;
     } catch (error) {
       // Error handling...
     }
@@ -231,11 +243,11 @@ export const vectorSearchTool = tool({
   schema: z.object({
     query: z.string().describe('The search query'),
     limit: z.number().optional().describe('Maximum number of results to return'),
-    similarityThreshold: z.number().optional().describe('Minimum similarity threshold'),
+    // similarityThreshold is no longer needed as it's handled in the database
     formatOption: z.enum(['llm', 'display', 'raw']).optional().describe('Format option for results')
   }),
   execute: async (input: VectorSearchInput) => {
-    // Implementation...
+    // Implementation uses database thresholds (0.6 initial, 0.4 fallback)
   }
 })
 ```
@@ -268,14 +280,14 @@ The system includes comprehensive performance monitoring:
    - Lowest similarity
    - Number of results
 
-4. **Fallback Usage**: The system logs when the fallback threshold is used.
+4. **Fallback Detection**: The system detects and logs when the fallback threshold was used by analyzing the similarity scores of returned documents.
 
 ## Troubleshooting
 
 ### Common Issues
 
 1. **No Results Found**: 
-   - Check if the similarity threshold is too high
+   - If no results are found even with the 0.4 fallback threshold, the documents may be too dissimilar
    - Verify that the query is preprocessed correctly
    - Ensure the embeddings are created properly
 
@@ -285,9 +297,10 @@ The system includes comprehensive performance monitoring:
    - Review the number of documents in the database
 
 3. **Irrelevant Results**:
-   - Adjust the similarity threshold
-   - Improve the query preprocessing
+   - The two-tier threshold system (0.6/0.4) should filter out irrelevant results
+   - If still getting irrelevant results, improve the query preprocessing
    - Consider retraining or updating the embeddings
+   - Admin can modify the thresholds in the SQL function if needed
 
 ### Debugging Tools
 
@@ -297,6 +310,46 @@ The system includes comprehensive performance monitoring:
 
 3. **Metrics Visualization**: Review the metrics returned by `findSimilarDocumentsOptimized` to understand search performance.
 
+## Database Schema Details
+
+### Table Relationships
+
+The database schema consists of the following key tables:
+
+1. **auth.users** (Supabase provided)
+   - Contains user authentication information
+   - Referenced by other tables via `user_id` foreign keys
+
+2. **sd_chat_sessions**
+   - Stores chat session information
+   - Primary key: `id` (UUID, auto-generated)
+   - Foreign key: `user_id` references `auth.users(id)`
+   - Creates timestamps (`created_at`, `updated_at`) automatically
+
+3. **sd_chat_histories**
+   - Stores individual chat messages within sessions
+   - Primary key: `id` (UUID, auto-generated)
+   - Foreign key: `session_id` references `sd_chat_sessions(id)`
+   - Foreign key: `user_id` references `auth.users(id)`
+   - Creates timestamps (`created_at`) automatically
+   - Includes `vote` column for user feedback (up/down/null)
+   - Contains `tools_used` to track which tools were used in generating the response
+
+4. **documents**
+   - Stores document content with vector embeddings
+   - Primary key: `id` (UUID, auto-generated)
+   - Foreign key: `user_id` references `auth.users(id)`
+   - Only admin users can create/modify/delete documents (enforced by RLS)
+   - All users can view documents
+
+### Component Responsibilities
+
+- **Database**: Generates all IDs and timestamps automatically
+- **Server**: Validates data and enforces application logic
+- **Client**: Maintains user context and manages session state
+
 ## Conclusion
 
-This RAG system provides a robust mechanism for enhancing AI responses with relevant information from a knowledge base. By using vector embeddings and similarity search, it can find semantically relevant documents even when exact keyword matches are not present. The system's configurable parameters, fallback mechanisms, and comprehensive logging make it adaptable to various use cases and easy to troubleshoot.
+This RAG system provides a robust mechanism for enhancing AI responses with relevant information from a knowledge base. By using vector embeddings and similarity search, it can find semantically relevant documents even when exact keyword matches are not present. The system's configurable parameters, fallback mechanisms, and comprehensive logging make it adaptable to various use cases and easy to troubleshoot. 
+
+The database schema is designed with proper normalization, referential integrity, and security in mind, ensuring that only administrators can manage documents while allowing all users to benefit from the RAG capabilities.

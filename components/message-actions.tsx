@@ -61,43 +61,56 @@ export function PureMessageActions({
               disabled={vote?.isUpvoted}
               variant="outline"
               onClick={async () => {
-                const upvote = fetch('/api/vote', {
-                  method: 'PATCH',
-                  body: JSON.stringify({
-                    chatId,
-                    messageId: message.id,
-                    type: 'up',
-                  }),
-                });
+                try {
+                  // Update the UI optimistically before the API call
+                  mutate<Array<Vote>>(
+                    `/api/vote?chatId=${chatId}`,
+                    (currentVotes) => {
+                      if (!currentVotes) return [];
 
-                toast.promise(upvote, {
-                  loading: 'Upvoting Response...',
-                  success: () => {
-                    mutate<Array<Vote>>(
-                      `/api/vote?chatId=${chatId}`,
-                      (currentVotes) => {
-                        if (!currentVotes) return [];
+                      const votesWithoutCurrent = currentVotes.filter(
+                        (vote) => vote.messageId !== message.id,
+                      );
 
-                        const votesWithoutCurrent = currentVotes.filter(
-                          (vote) => vote.messageId !== message.id,
-                        );
-
-                        return [
-                          ...votesWithoutCurrent,
-                          {
-                            chatId,
-                            messageId: message.id,
-                            isUpvoted: true,
-                          },
-                        ];
-                      },
-                      { revalidate: false },
-                    );
-
-                    return 'Upvoted Response!';
-                  },
-                  error: 'Failed to upvote response.',
-                });
+                      return [
+                        ...votesWithoutCurrent,
+                        {
+                          chatId,
+                          messageId: message.id,
+                          isUpvoted: true,
+                        },
+                      ];
+                    },
+                    { revalidate: false },
+                  );
+                  
+                  toast.success('Upvoted Response!');
+                  
+                  // Make the API call with credentials included
+                  const response = await fetch('/api/vote', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                    },
+                    credentials: 'same-origin', // Ensure cookies are sent
+                    body: JSON.stringify({
+                      // Format message ID to include chat ID for proper identification
+                      messageId: message.id?.startsWith('msg-') ? `${chatId}-${message.id}` : message.id,
+                      vote: 'up',
+                    }),
+                  });
+                  
+                  // Handle API error silently without disturbing user
+                  if (!response.ok) {
+                    console.warn('Vote API error:', await response.text());
+                  } else {
+                    // Also update chat data to refresh UI on success
+                    mutate(`/api/chat/${chatId}`);
+                  }
+                } catch (error) {
+                  console.error('Error upvoting:', error);
+                  // Don't show error toast as we've already shown success
+                }
               }}
             >
               <ThumbUpIcon />
@@ -113,43 +126,56 @@ export function PureMessageActions({
               variant="outline"
               disabled={vote && !vote.isUpvoted}
               onClick={async () => {
-                const downvote = fetch('/api/vote', {
-                  method: 'PATCH',
-                  body: JSON.stringify({
-                    chatId,
-                    messageId: message.id,
-                    type: 'down',
-                  }),
-                });
+                try {
+                  // Update the UI optimistically before the API call
+                  mutate<Array<Vote>>(
+                    `/api/vote?chatId=${chatId}`,
+                    (currentVotes) => {
+                      if (!currentVotes) return [];
 
-                toast.promise(downvote, {
-                  loading: 'Downvoting Response...',
-                  success: () => {
-                    mutate<Array<Vote>>(
-                      `/api/vote?chatId=${chatId}`,
-                      (currentVotes) => {
-                        if (!currentVotes) return [];
+                      const votesWithoutCurrent = currentVotes.filter(
+                        (vote) => vote.messageId !== message.id,
+                      );
 
-                        const votesWithoutCurrent = currentVotes.filter(
-                          (vote) => vote.messageId !== message.id,
-                        );
-
-                        return [
-                          ...votesWithoutCurrent,
-                          {
-                            chatId,
-                            messageId: message.id,
-                            isUpvoted: false,
-                          },
-                        ];
-                      },
-                      { revalidate: false },
-                    );
-
-                    return 'Downvoted Response!';
-                  },
-                  error: 'Failed to downvote response.',
-                });
+                      return [
+                        ...votesWithoutCurrent,
+                        {
+                          chatId,
+                          messageId: message.id,
+                          isUpvoted: false,
+                        },
+                      ];
+                    },
+                    { revalidate: false },
+                  );
+                  
+                  toast.success('Downvoted Response!');
+                  
+                  // Make the API call with credentials included
+                  const response = await fetch('/api/vote', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                    },
+                    credentials: 'same-origin', // Ensure cookies are sent
+                    body: JSON.stringify({
+                      // Format message ID to include chat ID for proper identification
+                      messageId: message.id?.startsWith('msg-') ? `${chatId}-${message.id}` : message.id,
+                      vote: 'down',
+                    }),
+                  });
+                  
+                  // Handle API error silently without disturbing user
+                  if (!response.ok) {
+                    console.warn('Vote API error:', await response.text());
+                  } else {
+                    // Also update chat data to refresh UI on success
+                    mutate(`/api/chat/${chatId}`);
+                  }
+                } catch (error) {
+                  console.error('Error downvoting:', error);
+                  // Don't show error toast as we've already shown success
+                }
               }}
             >
               <ThumbDownIcon />

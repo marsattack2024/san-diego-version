@@ -1,11 +1,3 @@
-export interface Vote {
-  id: string;
-  chatId: string;
-  messageId: string;
-  type: 'up' | 'down';
-  createdAt: string;
-}
-
 export interface Chat {
   id: string;
   title?: string;
@@ -31,4 +23,10 @@ export interface Document {
   userId: string;
   createdAt: string | Date;
   updatedAt?: string | Date;
+}
+
+export interface Vote {
+  chatId: string;
+  messageId: string;
+  isUpvoted: boolean;
 } 

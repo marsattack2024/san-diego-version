@@ -150,6 +150,7 @@ export abstract class BaseAgent implements Agent {
       .map(msg => `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`)
       .join('\n\n');
     
+    // Preserve line breaks in the formatted history
     return formattedHistory;
   }
 } 

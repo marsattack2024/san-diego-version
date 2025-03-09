@@ -11,10 +11,15 @@ export function generateUUID() {
 }
 
 export async function fetcher(url: string) {
-  const res = await fetch(url);
+  // Add credentials to ensure cookies are sent with the request
+  const res = await fetch(url, {
+    credentials: 'same-origin' // Ensures cookies are sent with the request
+  });
   
   if (!res.ok) {
-    throw new Error('An error occurred while fetching the data.');
+    const errorText = await res.text().catch(() => 'Unknown error');
+    console.error(`Fetch error (${res.status}): ${errorText}`);
+    throw new Error(`Error ${res.status}: ${errorText}`);
   }
   
   return res.json();

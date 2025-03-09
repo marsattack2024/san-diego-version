@@ -101,6 +101,10 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
   const { setOpenMobile } = useSidebar();
   const { id } = useParams();
   const pathname = usePathname();
+  
+  // Debug log to confirm user is received
+  console.log("SidebarHistory received user:", user?.id); 
+  
   const {
     data: history,
     isLoading,
@@ -117,7 +121,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const router = useRouter();
   const handleDelete = async () => {
-    const deletePromise = fetch(`/api/chat?id=${deleteId}`, {
+    const deletePromise = fetch(`/api/history?id=${deleteId}`, {
       method: 'DELETE',
     });
 
@@ -126,7 +130,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
       success: () => {
         mutate((history) => {
           if (history) {
-            return history.filter((h) => h.id !== id);
+            return history.filter((h) => h.id !== deleteId);
           }
         });
         return 'Chat deleted successfully';

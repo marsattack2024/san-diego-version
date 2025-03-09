@@ -1,6 +1,8 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { createClient } from '@/lib/supabase/client';
 
 import { PlusIcon } from '@/components/icons';
 import { SidebarHistory } from '@/components/sidebar-history';
@@ -17,9 +19,37 @@ import {
 import Link from 'next/link';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 
-export function AppSidebar({ user }: { user: User | undefined }) {
+export function AppSidebar({ user: serverUser }: { user: User | undefined }) {
   const router = useRouter();
   const { setOpenMobile } = useSidebar();
+  const [user, setUser] = useState<User | undefined>(serverUser);
+  
+  // If no user was provided from the server, try to get it on the client side
+  useEffect(() => {
+    async function getUser() {
+      if (serverUser) {
+        // If we already have user from server, use that
+        return;
+      }
+      
+      try {
+        console.log("Attempting to get user from client");
+        const supabase = createClient();
+        const { data } = await supabase.auth.getUser();
+        
+        if (data.user) {
+          console.log("Client-side auth detected user:", data.user.id);
+          setUser(data.user);
+        } else {
+          console.log("No user found from client-side auth");
+        }
+      } catch (error) {
+        console.error("Error getting user on client:", error);
+      }
+    }
+    
+    getUser();
+  }, [serverUser]);
 
   return (
     <Sidebar 
@@ -48,8 +78,10 @@ export function AppSidebar({ user }: { user: User | undefined }) {
                   className="p-2 h-fit"
                   onClick={() => {
                     setOpenMobile(false);
-                    router.push('/');
-                    router.refresh();
+                    // Force a new chat to be created with a unique timestamp to prevent caching
+                    const timestamp = Date.now();
+                    // Using replace instead of push for a hard navigation
+                    window.location.href = `/chat?new=true&t=${timestamp}`;
                   }}
                 >
                   <PlusIcon />

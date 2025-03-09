@@ -8,6 +8,9 @@ import { extractUrls } from '@/lib/chat/url-utils';
 import { AgentRouter } from '@/lib/agents/agent-router';
 import { type ToolResults, type AgentType } from '@/lib/agents/prompts';
 import { logger } from '@/lib/logger/edge-logger';
+import { createServerClient } from '@/lib/supabase/server';
+import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
+import { cookies } from 'next/headers';
 
 // Allow streaming responses up to 120 seconds
 export const maxDuration = 120;
@@ -18,6 +21,36 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { messages, id, agentId = 'default', deepSearchEnabled = false } = validateChatRequest(body);
     const modelName = 'gpt-4o';
+    
+    // Create Supabase client for auth
+    const cookieStore = await cookies();
+    const authClient = createSupabaseServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return cookieStore.getAll();
+          },
+          setAll(cookiesToSet) {
+            try {
+              cookiesToSet.forEach(({ name, value, options }) =>
+                cookieStore.set(name, value, options)
+              );
+            } catch {
+              // This can be ignored if you have middleware refreshing users
+            }
+          },
+        },
+      }
+    );
+    
+    // Get the current user
+    const { data: { user } } = await authClient.auth.getUser();
+    const userId = user?.id;
+    
+    // Create Supabase client if user is authenticated
+    const supabase = userId ? await createServerClient() : null;
 
     // Use the agentId from the request body, which comes from the user's selection in the UI
     let selectedAgentId: AgentType = agentId as AgentType;
@@ -300,6 +333,69 @@ Example acknowledgment format:
 
     // Use AI SDK to generate response with more steps if URLs are present
     try {
+      // Create or update chat session if user is authenticated and sessionId is provided
+      if (supabase && userId && id) {
+        try {
+          // Check if this is a new session or existing one
+          const { data: existingSession } = await supabase
+            .from('sd_chat_sessions')
+            .select('id')
+            .eq('id', id)
+            .maybeSingle();
+          
+          if (existingSession) {
+            // Update existing session's update_at timestamp
+            await supabase
+              .from('sd_chat_sessions')
+              .update({ updated_at: new Date().toISOString() })
+              .eq('id', id)
+              .eq('user_id', userId);
+            
+            edgeLogger.info('Updated existing chat session', { sessionId: id, userId });
+          } else {
+            // Create new session with the provided ID
+            await supabase
+              .from('sd_chat_sessions')
+              .insert({
+                id,
+                user_id: userId,
+                title: messages.length > 0 && messages[0].role === 'user' 
+                  ? messages[0].content.substring(0, 50) + (messages[0].content.length > 50 ? '...' : '')
+                  : 'New Chat',
+                agent_id: selectedAgentId,
+                deep_search_enabled: deepSearchEnabled
+              });
+            
+            edgeLogger.info('Created new chat session', { sessionId: id, userId });
+          }
+          
+          // Store the user message in chat_histories
+          if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
+            const userMessage = messages[messages.length - 1];
+            await supabase
+              .from('sd_chat_histories')
+              .insert({
+                session_id: id,
+                role: userMessage.role,
+                content: userMessage.content,
+                user_id: userId
+              });
+            
+            edgeLogger.info('Stored user message', { sessionId: id, userId });
+          }
+        } catch (dbError) {
+          // Log error but continue with response generation
+          edgeLogger.error('Failed to update Supabase', { error: dbError, sessionId: id });
+        }
+      }
+      
+      // For Google Ads agent, modify the system prompt to emphasize format preservation
+      if (selectedAgentId === 'google-ads') {
+        enhancedSystemPrompt = `${enhancedSystemPrompt}
+
+IMPORTANT: You must preserve all line breaks exactly as they appear in your response. Each headline, description, and ad asset must be on its own separate line. Do not combine items into paragraphs. This format is critical for the user to read the content properly.`;
+      }
+      
       const response = await streamText({
         model: myProvider.languageModel(modelName),
         system: enhancedSystemPrompt,
@@ -315,6 +411,12 @@ Example acknowledgment format:
         maxSteps: urls.length > 0 ? 5 : 3, // More steps if URLs need processing
         temperature: 0.4 // Lower temperature for more consistent formatting
       });
+      
+      // Store the AI response after generation
+      if (supabase && userId && id) {
+        // We'll handle this in a custom handler in the frontend
+        // because we need to capture the full streamed response
+      }
 
       return response.toDataStreamResponse();
     } catch (streamError) {

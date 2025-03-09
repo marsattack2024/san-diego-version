@@ -78,5 +78,5 @@ INSTRUCTIONS FOR USING DOCUMENTS:
 1. You MUST reference specific information from the documents above
 2. If a document contains relevant information, blend it together with context from other documents to form the best response.
 3. Do not ever format citations as [Doc X] where X is the document number in output
-4. If the documents don't contain enough information, you may supplement with your general knowledge
+4. If the documents don't contain enough information, you may supplement with your general knowledge, but let the user know.
 5. Always prioritize information from documents with higher similarity scores`;

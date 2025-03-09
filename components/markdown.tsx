@@ -96,9 +96,11 @@ const components: Partial<Components> = {
 const remarkPlugins = [remarkGfm];
 
 const NonMemoizedMarkdown = ({ children }: { children: string }) => {
+  // Preserve line breaks by replacing single newlines with line break tags
+  const formattedContent = children.replace(/(?<!\n)\n(?!\n)/g, '  \n');
   return (
     <ReactMarkdown remarkPlugins={remarkPlugins} components={components}>
-      {children}
+      {formattedContent}
     </ReactMarkdown>
   );
 };

@@ -22,6 +22,9 @@ import { createClient } from '@/lib/supabase/client';
 export interface User {
   id: string;
   email?: string;
+  aud?: string;
+  app_metadata?: any;
+  user_metadata?: any;
 }
 
 export function SidebarUserNav({ user }: { user: User }) {
@@ -42,13 +45,13 @@ export function SidebarUserNav({ user }: { user: User }) {
           <DropdownMenuTrigger asChild>
             <SidebarMenuButton className="data-[state=open]:bg-sidebar-accent bg-background data-[state=open]:text-sidebar-accent-foreground h-10">
               <Image
-                src={`https://avatar.vercel.sh/${user.email}`}
-                alt={user.email ?? 'User Avatar'}
+                src={`https://avatar.vercel.sh/${user.email || user.id}`}
+                alt={user.email || user.id || 'User Avatar'}
                 width={24}
                 height={24}
                 className="rounded-full"
               />
-              <span className="truncate">{user?.email}</span>
+              <span className="truncate">{user?.email || `User ${user.id.substring(0,8)}`}</span>
               <ChevronUp className="ml-auto" />
             </SidebarMenuButton>
           </DropdownMenuTrigger>
