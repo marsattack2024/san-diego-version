@@ -2,6 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { findSimilarDocumentsOptimized } from '@/lib/vector/documentRetrieval';
 import { formatDocumentsForDisplay } from '@/lib/vector/formatters';
 import { logger } from '@/lib/logger';
+import { initializeVectorSearch } from '@/lib/vector/init';
+
+// Initialize vector search on module load
+try {
+  initializeVectorSearch();
+} catch (error) {
+  logger.error('Failed to initialize vector search', { error });
+}
 
 /**
  * API route for vector search

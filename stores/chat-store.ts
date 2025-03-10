@@ -33,6 +33,7 @@ interface ChatState {
   currentConversationId: string | null;
   selectedAgentId: AgentType;
   deepSearchEnabled: boolean;
+  isDeepSearchInProgress: boolean; // Track when deep search is actively running
   
   // Actions
   createConversation: () => string;
@@ -48,6 +49,8 @@ interface ChatState {
   getDeepSearchEnabled: () => boolean;
   setSelectedAgent: (agentId: AgentType) => void;
   getSelectedAgent: () => AgentType;
+  setDeepSearchInProgress: (inProgress: boolean) => void; // Set deep search progress state
+  isAnySearchInProgress: () => boolean; // Check if either regular loading or deep search is happening
 }
 
 // Custom storage with debug logging
@@ -84,6 +87,7 @@ export const useChatStore = create<ChatState>()(
       currentConversationId: null,
       selectedAgentId: 'default' as AgentType,
       deepSearchEnabled: false,
+      isDeepSearchInProgress: false,
       
       createConversation: () => {
         const id = uuidv4();
@@ -300,6 +304,16 @@ export const useChatStore = create<ChatState>()(
       
       getDeepSearchEnabled: () => {
         return get().deepSearchEnabled;
+      },
+      
+      setDeepSearchInProgress: (inProgress) => {
+        set({ isDeepSearchInProgress: inProgress });
+      },
+      
+      isAnySearchInProgress: () => {
+        // This function can be used to check if either regular loading or deep search is happening
+        // Will be used by the UI to determine when to show the loading indicator
+        return get().isDeepSearchInProgress;
       }
     }),
     {

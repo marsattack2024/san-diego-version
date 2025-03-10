@@ -199,8 +199,26 @@ export async function POST(req: Request) {
     // Run DeepSearch ONLY if explicitly enabled by the user
     if (deepSearchEnabled && userQuery.length > 0) {
       try {
-        edgeLogger.info('Running DeepSearch (explicitly enabled)', { queryLength: userQuery.length });
+        edgeLogger.info('Running DeepSearch (explicitly enabled)', { 
+          queryLength: userQuery.length,
+          query: userQuery.substring(0, 50) // Log first 50 chars for debugging
+        });
         
+        // Import and use the sendEventToClients function dynamically to avoid circular dependencies
+        const { sendEventToClients } = await import('../events/route');
+        
+        // Notify clients that deep search has started
+        sendEventToClients({
+          type: 'deepSearch',
+          status: 'started',
+          details: `Query length: ${userQuery.length} characters`
+        });
+        
+        // Add a small delay to ensure the "thinking & searching" indicator has time to appear
+        // This improves the user experience especially for fast searches
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        // Execute the deep search - this is now the ONLY deep search that will be performed
         const deepSearchResult = await chatTools.deepSearch.execute({ query: userQuery }, {
           toolCallId: 'deep-search',
           messages: []
@@ -208,10 +226,35 @@ export async function POST(req: Request) {
         
         if (deepSearchResult) {
           toolResults.deepSearch = deepSearchResult;
-          edgeLogger.info('DeepSearch successful', { contentLength: deepSearchResult.length });
+          edgeLogger.info('DeepSearch successful', { 
+            contentLength: deepSearchResult.length,
+            firstPart: deepSearchResult.substring(0, 100) + '...' // For debugging
+          });
+          
+          // Add a small delay before marking search as complete
+          // This ensures indicator stays visible for a minimum time even for fast searches
+          await new Promise(resolve => setTimeout(resolve, 200));
+          
+          // Notify clients that deep search has completed successfully
+          sendEventToClients({
+            type: 'deepSearch',
+            status: 'completed',
+            details: `Retrieved ${deepSearchResult.length} characters of information`
+          });
         }
       } catch (error) {
-        edgeLogger.error('DeepSearch failed', { error });
+        edgeLogger.error('DeepSearch failed', { 
+          error,
+          query: userQuery.substring(0, 50)
+        });
+        
+        // Notify clients that deep search has failed
+        const { sendEventToClients } = await import('../events/route');
+        sendEventToClients({
+          type: 'deepSearch',
+          status: 'failed',
+          details: error instanceof Error ? error.message : String(error)
+        });
       }
     }
 
@@ -393,21 +436,40 @@ Example acknowledgment format:
       if (selectedAgentId === 'google-ads') {
         enhancedSystemPrompt = `${enhancedSystemPrompt}
 
-IMPORTANT: You must preserve all line breaks exactly as they appear in your response. Each headline, description, and ad asset must be on its own separate line. Do not combine items into paragraphs. This format is critical for the user to read the content properly.`;
+IMPORTANT FORMATTING INSTRUCTIONS:
+1. Format your response as plain text without any XML-like tags (do not use <headlines>, <descriptions>, etc.)
+2. Use clear section headings like "HEADLINES:" instead of XML tags
+3. Put each item on its own separate line with proper line breaks between items
+4. Do not combine items into paragraphs
+5. Preserve all line breaks in your response
+6. Do not use any HTML or markdown formatting - just plain text with line breaks
+7. This formatting is critical for readability`;
       }
+      
+      // Determine which tools to provide to the LLM
+      // Don't include deepSearch when we've already done it in pre-processing
+      // to avoid duplicate calls
+      const toolsToProvide = {
+        // Only include the comprehensive scraper and other tools, not the basic webScraper
+        getInformation: chatTools.getInformation,
+        comprehensiveScraper: chatTools.comprehensiveScraper,
+        detectAndScrapeUrls: chatTools.detectAndScrapeUrls,
+        addResource: chatTools.addResource
+        // deepSearch is intentionally removed to prevent duplicated searches
+        // since we already did the deep search in pre-processing if it was enabled
+      };
+      
+      // Log which tools are being provided
+      edgeLogger.info('Providing tools to LLM', { 
+        toolNames: Object.keys(toolsToProvide),
+        deepSearchAlreadyRun: toolResults.deepSearch ? true : false
+      });
       
       const response = await streamText({
         model: myProvider.languageModel(modelName),
         system: enhancedSystemPrompt,
         messages: messages,
-        tools: {
-          // Only include the comprehensive scraper and other tools, not the basic webScraper
-          getInformation: chatTools.getInformation,
-          deepSearch: chatTools.deepSearch,
-          comprehensiveScraper: chatTools.comprehensiveScraper,
-          detectAndScrapeUrls: chatTools.detectAndScrapeUrls,
-          addResource: chatTools.addResource
-        },
+        tools: toolsToProvide,
         maxSteps: urls.length > 0 ? 5 : 3, // More steps if URLs need processing
         temperature: 0.4 // Lower temperature for more consistent formatting
       });

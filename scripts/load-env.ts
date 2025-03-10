@@ -4,30 +4,62 @@ import { resolve } from 'path';
 // Load environment variables from .env file
 config({ path: resolve(process.cwd(), '.env') });
 
-// Fallback to .env.test if needed
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
-  console.log('Loading test environment variables...');
-  config({ path: resolve(process.cwd(), '.env.test') });
+// Also try to load from .env.local which is the recommended approach for Next.js
+config({ path: resolve(process.cwd(), '.env.local') });
+
+// Check for critical environment variables
+const requiredPublicVars = ['NEXT_PUBLIC_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_ANON_KEY'];
+const requiredPrivateVars = ['SUPABASE_URL', 'SUPABASE_KEY', 'OPENAI_API_KEY'];
+
+// Check for missing public vars which are needed for client components
+const missingPublicVars = requiredPublicVars.filter(envVar => !process.env[envVar]);
+if (missingPublicVars.length > 0) {
+  console.warn(`Warning: Missing public environment variables: ${missingPublicVars.join(', ')}`);
+  
+  // Use values from non-public vars if available (common mistake is forgetting the NEXT_PUBLIC_ prefix)
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_URL) {
+    console.log('Using SUPABASE_URL as fallback for NEXT_PUBLIC_SUPABASE_URL');
+    process.env.NEXT_PUBLIC_SUPABASE_URL = process.env.SUPABASE_URL;
+  }
+  
+  if (!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY && process.env.SUPABASE_ANON_KEY) {
+    console.log('Using SUPABASE_ANON_KEY as fallback for NEXT_PUBLIC_SUPABASE_ANON_KEY');
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+  }
 }
 
-// Verify required environment variables
-const requiredEnvVars = ['SUPABASE_URL', 'SUPABASE_KEY', 'OPENAI_API_KEY'];
-const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
+// Check for missing private vars
+const missingPrivateVars = requiredPrivateVars.filter(envVar => !process.env[envVar]);
+if (missingPrivateVars.length > 0) {
+  console.warn(`Warning: Missing private environment variables: ${missingPrivateVars.join(', ')}`);
+}
 
-if (missingEnvVars.length > 0) {
-  console.warn(`Warning: Missing environment variables: ${missingEnvVars.join(', ')}`);
-  console.warn('Using placeholder values for testing purposes');
+// For development only - provide example values with clear indicators that they're placeholders
+if (process.env.NODE_ENV === 'development') {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://example.supabase.co';
+    console.warn('⚠️ Using placeholder NEXT_PUBLIC_SUPABASE_URL for development - not suitable for production');
+  }
   
-  // Set placeholder values for testing
-  if (!process.env.SUPABASE_URL) process.env.SUPABASE_URL = 'https://example.supabase.co';
-  if (!process.env.SUPABASE_KEY) process.env.SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSJ9.test-key';
-  if (!process.env.OPENAI_API_KEY) process.env.OPENAI_API_KEY = 'sk-test';
+  if (!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.example-key';
+    console.warn('⚠️ Using placeholder NEXT_PUBLIC_SUPABASE_ANON_KEY for development - not suitable for production');
+  }
+  
+  if (!process.env.OPENAI_API_KEY) {
+    process.env.OPENAI_API_KEY = 'sk-example';
+    console.warn('⚠️ Using placeholder OPENAI_API_KEY for development - not suitable for production');
+  }
 }
 
 // Export environment variables
 export const env = {
-  SUPABASE_URL: process.env.SUPABASE_URL,
-  SUPABASE_KEY: process.env.SUPABASE_KEY,
+  // Public vars (safe to expose to client)
   NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  
+  // Private vars (server-side only)
+  SUPABASE_URL: process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL,
+  SUPABASE_KEY: process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY,
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY
 }; 

@@ -1,114 +1,43 @@
 # Enhanced Logging System for Next.js + Vercel + Supabase
 
-This document describes our enhanced logging system designed for Next.js applications with Supabase vector search capabilities. The system provides optimized logging for both development and production environments.
+This document describes our comprehensive logging system designed for Next.js applications with specialized support for AI operations, vector search, and client-side error reporting. The system adapts its behavior based on the environment (development, production, testing) to balance verbosity with performance.
 
-## Key Features
+## Core Logger Architecture
 
-### 1. Environment-Aware Formatting
+### Hierarchy
 
-- **Development**: Human-readable logs with colors, proper indentation, and special formatting for complex data
-- **Production**: JSON structured logs optimized for Vercel's log viewer and searchability
+The logging system follows a hierarchical design:
 
-### 2. Specialized Loggers
+1. **Base Logger** (`lib/logger/base-logger.ts`)
+   - Foundation for all logging
+   - Environment detection and format switching
+   - Core log levels: debug, info, warn, error
 
-Our system includes several specialized loggers for different components:
+2. **Specialized Loggers**
+   - **Vector Logger** (`lib/logger/vector-logger.ts`): Optimized for vector search/embeddings
+   - **AI Logger** (`lib/logger/ai-logger.ts`): AI model operations tracking
+   - **API Logger** (`lib/logger/api-logger.ts`): API endpoint performance monitoring
+   - **Client Logger** (`lib/logger/client-logger.ts`): Browser-side logging
+   - **Edge Logger** (`lib/logger/edge-logger.ts`): Edge runtime compatible
+   - **Agent Logger** (`lib/agents/core/agent-logger.ts`): Agent operation tracking
+   - **Chat Logger** (`lib/logger/chat-logger.ts`): Chat-specific operations
 
-| Logger | Purpose | Key Features |
-|--------|---------|-------------|
-| `baseLogger` | Foundation for all loggers | Environment detection, formatting, error handling |
-| `vectorLogger` | Vector search operations | Document preview formatting, similarity metrics |
-| `aiLogger` | AI interactions | Token usage tracking, performance monitoring |
-| `apiLogger` | API request tracking | Request/response timing, error handling |
-| `clientLogger` | Browser-side logging | Error reporting, throttling |
-| `edgeLogger` | Edge runtime (middleware) | Compatible with Vercel Edge functions |
+3. **Utility Functions**
+   - `tracedVectorOperation`: Performance-tracked vector operations
+   - `tracedAIOperation`: Token usage and performance for AI operations
+   - `withLogging`: API handler wrapper for request logging
 
-### 3. Document Result Formatting
-
-Vector search results are specially formatted for improved readability:
-
-```
-[INFO] 2025-03-08T08:29:44.844Z Vector search for query (69 chars)
-
-  Documents:
-    [1] Doc 3128 (66%)
-        ________________ 4. What role do negative keywords play in removing people with the wrong inten...
-    [2] Doc 3144 (61%)
-        4. Refresh Extensions: Keep callouts, structured snippets, and promotions up to date with new offers...
-    [3] Doc 3129 (61%)
-        * Quality Score Boost: Google rewards high relevance. When your keywords, ad copy, and landing page ...
-    [4] Doc 3161 (61%)
-        By maintaining this cycle of testing, measuring, and refining, you'll consistently lower your cost p...
-    [5] Doc 3145 (61%)
-        Answer: Even if your ad targeting is perfect, a lackluster landing page can cause potential client...
-
-  {
-    "operation": "vector_results",
-    "queryLength": 69,
-    "resultCount": 5,
-    "averageSimilarity": 0.62,
-    "highestSimilarity": 0.66,
-    "lowestSimilarity": 0.61,
-    "durationMs": 757,
-    "sessionId": "cixxx0xyqqw"
-  }
-```
-
-## Logger Usage Guide
-
-### Base Logger
-
-The foundation for all logging in the application:
-
-```typescript
-import { logger } from '@/lib/logger';
-
-// Basic usage
-logger.debug('Debugging information', { key: 'value' });
-logger.info('User logged in', { userId: '123' });
-logger.warn('Resource running low', { resourceId: 'abc', usage: 95 });
-logger.error('Operation failed', { error: new Error('Database connection failed') });
-
-// Mark important logs for production visibility
-logger.info('Critical business event', { orderId: '123', important: true });
-```
-
-### Vector Logger
-
-Specialized for vector search operations:
-
-```typescript
-import { logger as vectorLogger } from '@/lib/logger/vector-logger';
-
-// Log embedding creation
-vectorLogger.logEmbeddingCreation('doc-123', { contentType: 'article' });
-
-// Log vector search results
-vectorLogger.logVectorResults(
-  'user query text',
-  documentResults,
-  searchMetrics,
-  'session-123'
-);
-
-// Wrap a vector operation with performance tracking
-const result = await tracedVectorOperation(
-  'search',
-  () => performVectorSearch(query),
-  { query, params: { threshold: 0.65 } }
-);
-```
-
-## Development vs. Production
+## Environment-Aware Behavior
 
 ### Development Mode
 
-In development mode, the system provides:
-
-- Colorized output for different log levels
-- Pretty-printed JSON for complex objects
-- Special formatting for document results
-- Detailed error information with stack traces
-- Higher verbosity with all debug logs visible
+- Full colorized console output
+- Pretty-printed structured data
+- Special formatting for errors and complex data
+- All debug logs visible
+- No sampling (all logs shown)
+- Enhanced readability for document previews
+- Line breaks for better visualization
 
 Example development log:
 ```
@@ -130,40 +59,239 @@ Example development log:
 
 ### Production Mode
 
-In production, the system:
-
-- Outputs single-line JSON for Vercel's log dashboard
-- Limits log volume by only showing errors, warnings, and important info logs
-- Includes full context for error diagnostics
-- Maintains consistent correlation IDs for request tracing
+- JSON-formatted single-line logs for Vercel's log dashboard
+- Optimized for machine processing and structured querying
+- Log sampling to reduce volume based on importance
+- Extra context included for error diagnostics
+- Only important info logs, all warnings, and all errors shown
 
 Example production log:
 ```json
 {"level":"info","message":"Vector search completed","operation":"vector_results","queryLength":42,"resultCount":3,"averageSimilarity":0.68,"durationMs":124,"important":true,"timestamp":"2025-03-08T12:34:56.789Z"}
 ```
 
-## Performance Logging
+### Testing Mode
 
-The system automatically tracks and flags slow operations:
+- Simplified output optimized for test runners
+- Support for mocking and verification
+- Dedicated test files in `scripts/tests/logging.test.ts`
 
-- **Vector Searches**: Warns when searches exceed 500ms
-- **API Responses**: Logs when API responses take more than 1000ms
-- **AI Completions**: Tracks token usage and completion time
+## Specialized Loggers
+
+### Vector Logger
+
+Monitors vector database operations and formats document results:
+
+```typescript
+import { logger as vectorLogger } from '@/lib/logger/vector-logger';
+
+// Log vector search results with document previews
+vectorLogger.logVectorResults(
+  userQuery,
+  documentResults,
+  {
+    retrievalTimeMs: 120,
+    averageSimilarity: 0.72,
+    highestSimilarity: 0.85,
+    lowestSimilarity: 0.62
+  },
+  sessionId
+);
+
+// Performance tracking for vector operations
+const results = await tracedVectorOperation(
+  'search',
+  () => performVectorSearch(query),
+  { query, params: { threshold: 0.65 } }
+);
+```
+
+### AI Logger
+
+Monitors AI model interactions with token usage tracking:
+
+```typescript
+import { logger, tracedAIOperation } from '@/lib/logger/ai-logger';
+
+// Wrap AI operations with performance tracking
+const completion = await tracedAIOperation(
+  () => openai.chat.completions.create({
+    model: "gpt-4",
+    messages: [{ role: "user", content: userPrompt }]
+  }),
+  {
+    requestId: requestId,
+    model: "gpt-4",
+    promptTokens: calculateTokens(userPrompt)
+  }
+);
+
+// Log model performance directly
+logger.logInferenceComplete(
+  "gpt-4", 
+  2100, 
+  {
+    promptTokens: 450,
+    completionTokens: 320,
+    totalTokens: 770
+  }
+);
+```
+
+### API Logger
+
+Wraps API route handlers with request/response logging:
+
+```typescript
+import { withLogging } from '@/lib/logger/api-logger';
+
+// Using the HOC pattern to wrap API handlers
+export default withLogging(async function handler(req, res) {
+  // Your handler code here
+  // All requests, responses, and errors will be automatically logged
+});
+```
+
+### Client Logger
+
+Browser-side logging with throttling and error reporting:
+
+```typescript
+import { clientLogger } from '@/lib/logger/client-logger';
+
+// Basic usage
+clientLogger.info('User interaction', { 
+  action: 'button_click',
+  component: 'SearchButton' 
+});
+
+// Error reporting (only important errors sent to server)
+try {
+  // some operation
+} catch (error) {
+  clientLogger.error('Operation failed', { 
+    component: 'SearchComponent',
+    action: 'fetchResults',
+    error
+  });
+}
+```
+
+### Agent Logger
+
+For agent operations with context tracking:
+
+```typescript
+import { createAgentLogger } from '@/lib/agents/core/agent-logger';
+
+const logger = createAgentLogger('default', {
+  sessionId: 'session-123',
+  conversationId: 'conv-456'
+});
+
+logger.info('Agent processing request', {
+  toolsUsed: ['vector-search', 'web-search'],
+  processingTime: 350
+});
+```
+
+## Performance Monitoring
+
+The system automatically tracks and warns about slow operations:
+
+- **Vector Searches**: Warnings when searches exceed 500ms
+- **API Responses**: Warnings when endpoints take more than 1000ms
+- **AI Completions**: Warnings when model inference exceeds 2000ms
 
 Each performance log includes:
-- Duration in milliseconds
-- Operation type and context
-- Result metrics (count, token usage, etc.)
+- Operation duration
+- Context about the operation
+- Resource metrics (token usage, result count)
+- Helpful thresholds to identify bottlenecks
 
-## Correlation IDs
+## Client-Side Error Reporting
 
-Request correlation is maintained through:
+Browser errors are reported to the server through two mechanisms:
 
-- `x-request-id` headers in middleware
-- Session IDs for vector operations
-- User and conversation IDs for chat operations
+1. **Error Endpoint** (`/api/client-error.ts`):
+   - Used for critical errors
+   - Includes browser context and stack traces
+   - Throttled to prevent flooding
 
-This allows tracing requests across the entire application stack.
+2. **Logs Endpoint** (`/api/client-logs/route.ts`):
+   - Supports batch log processing
+   - Implements sampling based on log level
+   - Maps client levels to server levels
+   - Maintains correlation IDs
+
+## Request Correlation and Tracing
+
+Correlation is maintained through:
+
+- `x-request-id` headers in API requests
+- Session IDs for extended operations
+- Child loggers with inherited context
+- UUID generation for new requests
+- Consistent ID propagation across components
+
+Example of correlation:
+
+```typescript
+// Middleware adds request ID
+const requestId = req.headers['x-request-id'] || uuidv4();
+
+// Create a correlated logger
+const requestLogger = logger.child({ requestId });
+
+// Later in the request lifecycle
+requestLogger.info('Processing request step 2', { 
+  step: 'validation'
+});
+```
+
+## Debug View for Development
+
+In development mode, loggers create enhanced output:
+
+- Colorized console messages
+- Special formatting for errors with stack traces
+- Document previews with content snippets
+- Indented JSON for readability
+- Structured output sections
+
+## Log Sampling in Production
+
+To control volume in production, the system employs sampling:
+
+```typescript
+// Sampling rates from client-logs/route.ts
+const samplingRates = {
+  trace: 0.01,  // 1% of trace logs
+  debug: 0.05,  // 5% of debug logs
+  info: 0.2,    // 20% of info logs
+  warn: 1.0,    // 100% of warnings
+  error: 1.0    // 100% of errors
+};
+```
+
+This ensures critical issues are always logged while routine operations are sampled to reduce noise.
+
+## Testing the Logging System
+
+The system includes dedicated tests in `scripts/tests/logging.test.ts`:
+
+```bash
+# Run logging tests
+npm run test:logging
+
+# View output to verify formatting
+```
+
+The test suite verifies:
+- Proper formatting in different environments
+- Special handling for errors and complex data
+- Vector result formatting
+- Log level filtering
 
 ## Extending the System
 
@@ -195,13 +323,33 @@ export const myFeatureLogger = {
 ## Best Practices
 
 1. **Mark Important Logs**: Add `important: true` to ensure critical logs appear in production
-2. **Use Structured Context**: Always include relevant context as structured data
-3. **Error Objects**: Pass full error objects rather than just messages
-4. **Correlation IDs**: Include session/request IDs for traceability
-5. **Sensitive Data**: Never log passwords, tokens, or sensitive information
-6. **Document Results**: Use the specialized document formatters for vector search results
-7. **Performance Tracking**: Use the trace wrappers for operation performance monitoring
+2. **Use Structured Context**: Always include relevant context as structured data 
+3. **Use Child Loggers**: Create child loggers with context for better tracing
+4. **Full Error Objects**: Pass error objects rather than just messages to preserve stack traces
+5. **Performance Tracking**: Use the trace wrappers for operation monitoring
+6. **Environment Awareness**: Logs are handled differently based on environment - keep this in mind
+7. **Correlation IDs**: Maintain IDs across operations for request tracing
+8. **Avoid Sensitive Data**: Never log passwords, tokens, or sensitive information
+
+## Debugging in Production
+
+When debugging production issues:
+
+1. **Vercel Logs**: Access the Vercel dashboard log viewer
+2. **Filter by Correlation ID**: Use the requestId to trace a user journey
+3. **Filter by Operation Type**: Find all logs of a specific operation
+4. **Timestamps**: Use timestamps to correlate with user reports
+5. **Error Context**: Review full error context including stack traces
+
+## Local Development
+
+For local development, logs are optimized for readability:
+
+1. All log levels are visible, including debug
+2. Colorized output helps distinguish levels
+3. Document previews show content snippets
+4. Structured data is pretty-printed with indentation
 
 ## Conclusion
 
-This logging system balances the needs of development and production environments while providing specialized capabilities for vector operations. It focuses on developer experience in development mode and efficient machine-parseable logs in production.
+This logging system balances the needs of development, testing, and production environments while providing specialized capabilities for different application components. It focuses on developer experience in development and efficient, structured logs in production with built-in performance monitoring.

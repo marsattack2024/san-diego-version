@@ -37,6 +37,7 @@ function PureMessages({
   const [messagesContainerRef, messagesEndRef] =
     useScrollToBottom<HTMLDivElement>();
   const deepSearchEnabled = useChatStore(state => state.getDeepSearchEnabled());
+  const isDeepSearchInProgress = useChatStore(state => state.isDeepSearchInProgress);
 
   return (
     <div
@@ -59,7 +60,8 @@ function PureMessages({
         />
       ))}
 
-      {isLoading && messages[messages.length - 1]?.role === 'user' && (
+      {/* Show thinking indicator when either normal loading or deep search is in progress */}
+      {(isLoading || isDeepSearchInProgress) && messages[messages.length - 1]?.role === 'user' && (
         <div className="flex flex-col gap-2 px-4 md:px-6 w-full max-w-3xl mx-auto">
           <div className="flex justify-end">
             <div className="flex items-center gap-2 bg-background rounded-xl p-3 shadow-sm">
