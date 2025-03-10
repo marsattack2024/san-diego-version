@@ -97,10 +97,77 @@ export function Chat({
       // Update chat history
       mutate('/api/history');
     },
-    onError: () => {
-      toast.error('An error occurred, please try again!');
+    onError: (error) => {
+      // Only show toast for non-vote related errors
+      console.error('Chat error:', error);
+      
+      // Check if the error is related to voting (if it contains vote in the URL)
+      const errorUrl = error?.message || '';
+      if (!errorUrl.includes('/api/vote')) {
+        toast.error('An error occurred, please try again!');
+      }
     },
   });
+
+  // Function to save user message to the database
+  const saveUserMessage = async (content: string) => {
+    if (content.length > 0) {
+      try {
+        // Save the user message to Supabase
+        const response = await fetch(`/api/chat/${id}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: {
+              role: 'user',
+              content: content,
+            },
+          }),
+        });
+        
+        if (!response.ok) {
+          console.error('Failed to save user message');
+        } else {
+          // If this is the first message, update the chat title
+          const chatMessages = messages.filter(m => m.role === 'user');
+          if (chatMessages.length === 0) {
+            // Get truncated title from first message
+            const title = content.length > 30 
+              ? `${content.substring(0, 30)}...` 
+              : content;
+              
+            // Update the chat title
+            fetch(`/api/chat/${id}`, {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ title }),
+            }).catch(error => {
+              console.error('Error updating chat title:', error);
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error saving user message:', error);
+      }
+    }
+  };
+
+  // Wrap the original handleSubmit to save the user message first
+  const handleSubmitWithSave = async (event?: { preventDefault?: (() => void) } | undefined, chatRequestOptions?: any) => {
+    if (event?.preventDefault) {
+      event.preventDefault();
+    }
+    
+    if (input.trim()) {
+      await saveUserMessage(input);
+    }
+    
+    return handleSubmit(event, chatRequestOptions);
+  };
 
   // Use SWR to fetch votes with error handling and retry configuration
   const { data: votes, error: voteError } = useSWR<Array<Vote>>(
@@ -153,7 +220,7 @@ export function Chat({
                 chatId={id}
                 input={input}
                 setInput={setInput}
-                handleSubmit={handleSubmit}
+                handleSubmit={handleSubmitWithSave}
                 isLoading={isLoading}
                 stop={stop}
                 attachments={attachments}
@@ -170,7 +237,7 @@ export function Chat({
           chatId={id}
           input={input}
           setInput={setInput}
-          handleSubmit={handleSubmit}
+          handleSubmit={handleSubmitWithSave}
           isLoading={isLoading}
           stop={stop}
           attachments={attachments}

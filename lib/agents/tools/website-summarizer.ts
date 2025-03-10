@@ -15,7 +15,7 @@ import { openai } from '@ai-sdk/openai';
  */
 export async function generateWebsiteSummary(
   url: string, 
-  maxWords: number = 200,
+  maxWords: number = 600,
   userId?: string
 ): Promise<string> {
   const operation = 'website_summary';
@@ -102,8 +102,8 @@ async function generateSummary(
   const summaryStartTime = Date.now();
   
   try {
-    // Truncate content for faster processing
-    const truncatedContent = content.substring(0, 10000);
+    // Truncate content for faster processing - increased to 25,000 characters
+    const truncatedContent = content.substring(0, 25000);
     const truncated = truncatedContent.length < content.length;
     
     logger.info('Preparing content for summarization', {
@@ -113,17 +113,36 @@ async function generateSummary(
       operation
     });
 
-    // Prepare the prompt for the AI summary
-    const systemPrompt = "You are a professional content summarizer for photography businesses.";
+    // Enhanced prompt for more structured, comprehensive summary with testimonials
+    const systemPrompt = "You are a professional content researcher for photography businesses. Your task is to extract and organize key business information into a structured, comprehensive and verbose writeup. You MUST use the FULL word count allowed (no less than 90% of the maximum) to provide maximum detail and value. Pay special attention to finding and including actual client testimonials with attribution.";
     const userPrompt = `
-Create a clear, concise summary of this photography business website in under ${maxWords} words.
-Focus ONLY on these key aspects:
-- Type of photography (weddings, portraits, etc.)
-- Style and approach
-- Specializations and unique selling points
-- Geographic service areas
-- Target clientele
-- Special packages or services
+Extract and summarize the key features, benefits, and unique selling propositions (USPs) from the following photography business website content using EXACTLY ${maxWords} words. You MUST use at least 90% of the word count to create a comprehensive report.
+
+Focus on extracting these specific details:
+1. The primary value proposition and what makes this photography business unique
+2. Key features of their photography services and how they directly benefit customers
+3. The specific problems they solve for their target audience
+4. Pricing information, packages, and any special offers available
+5. Guarantees, satisfaction policies, or risk-reversals they offer
+6. Their credentials, experience, awards, or other trust factors
+7. The emotional and practical transformation clients can expect
+8. The booking process and what clients can expect at each stage
+9. Contact information and call-to-action details
+10. IMPORTANT: Find and include 3-5 DIRECT QUOTES from client testimonials with the client's name/attribution
+
+Format your summary into these clear sections:
+- Overview (3-4 sentences capturing the essence of the photography business)
+- Core Offerings (detailed bullet points of main photography services)
+- Pricing & Packages (summary of pricing structure and what's included)
+- The Photography Experience (detailed description of the client journey from booking to delivery)
+- Key Benefits & Differentiators (what sets them apart from other photographers)
+- Guarantees & Policies (any satisfaction guarantees or special policies)
+- Credentials & Social Proof (experience, awards)
+- Client Testimonials (include 3-5 direct quotes with attribution - "Name, Service Type")
+- Booking Process (how to get started, what to expect)
+- Contact Information (how to reach them, response times)
+- Call to Action (what they want visitors to do)
+- Additional Information (any other relevant information)
 
 Website information:
 Title: ${title}
@@ -131,11 +150,20 @@ URL: ${url}
 Content:
 ${truncatedContent}${truncated ? ' ... (content truncated for brevity)' : ''}
 
-Write in third person perspective. Be factual and objective with NO promotional language.
-IMPORTANT: Keep the summary under ${maxWords} words. Be concise.
+Keep the language comprehensive, benefit-focused, and persuasive while maintaining the brand's voice. Avoid generic descriptions and focus on specific, compelling aspects that would motivate potential photography clients.
+
+IMPORTANT INSTRUCTIONS:
+1. You MUST use at least 90% of the ${maxWords} word limit (no less than ${Math.floor(maxWords * 0.9)} words)
+2. Include 3-5 DIRECT QUOTES from client testimonials with attribution whenever possible
+3. If exact testimonials aren't available, note this briefly and expand other sections
+4. Format testimonials as: "Quote text." - Client Name, Service Type
+5. Use bullet points for services, benefits, and packages to improve readability
+6. Include specific details rather than generic descriptions
+
+Your goal is to create a comprehensive, persuasive report that captures the unique value of this photography business with specific details and social proof.
 `;
 
-    // Generate the summary using a faster model for better performance
+    // Generate the summary using a more capable model for better analysis
     const { text: aiSummary } = await generateText({
       model: openai('gpt-4o-mini'),
       messages: [
@@ -143,7 +171,7 @@ IMPORTANT: Keep the summary under ${maxWords} words. Be concise.
         { role: 'user', content: userPrompt }
       ],
       temperature: 0.3,
-      maxTokens: 250, // Tighter limit for faster generation
+      maxTokens: 1800, // Further increased to ensure full word count with testimonials
     });
     
     const summaryTime = Date.now() - summaryStartTime;
@@ -152,13 +180,27 @@ IMPORTANT: Keep the summary under ${maxWords} words. Be concise.
     // Format the summary with a consistent prefix
     const formattedSummary = `Website Summary: ${aiSummary}`;
     
+    // Log word count percentage of target
+    const wordCountPercentage = Math.floor((wordCount / maxWords) * 100);
+    
     logger.info('Summary generated successfully', { 
       url, 
       wordCount,
+      wordCountPercentage: `${wordCountPercentage}% of target`,
       summaryLength: formattedSummary.length,
       summaryTimeMs: summaryTime,
       operation
     });
+
+    // If word count is significantly below target, log a warning
+    if (wordCount < maxWords * 0.85) {
+      logger.warn('Summary word count below 85% of target', {
+        url,
+        targetWords: maxWords,
+        actualWords: wordCount,
+        percentOfTarget: wordCountPercentage
+      });
+    }
 
     logger.info('Website summarization process completed', {
       url,

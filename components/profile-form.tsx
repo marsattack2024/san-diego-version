@@ -299,7 +299,7 @@ export default function ProfileForm({ initialProfile, userId, isFirstLogin }: Pr
                   name="company_description"
                   placeholder={isFirstLogin 
                     ? "Tell us about your team, yearly revenue, years in business, etc." 
-                    : "Tell us about your photography studio..."}
+                    : "Tell us about your team, yearly revenue, years in business, etc."}
                   rows={4}
                   value={profile.company_description || ''}
                   onChange={handleChange}

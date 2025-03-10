@@ -276,7 +276,7 @@ function PureMultimodalInput({
               </span>
             </span>
           ) : (
-            "DeepSearch enabled"
+            <span className="sr-only">DeepSearch enabled</span>
           )}
         </div>
       )}
@@ -330,7 +330,7 @@ function PureDeepSearchButton({
         <Button
           data-testid="deep-search-button"
           className={cx(
-            "rounded-md rounded-bl-lg p-[7px] h-fit dark:border-zinc-700",
+            "rounded-md rounded-bl-lg p-[7px] h-fit dark:border-zinc-700 flex items-center gap-2",
             deepSearchEnabled 
               ? "bg-primary text-primary-foreground hover:bg-primary/90" 
               : "hover:dark:bg-zinc-900 hover:bg-zinc-200"
@@ -343,6 +343,7 @@ function PureDeepSearchButton({
           variant={deepSearchEnabled ? "default" : "ghost"}
         >
           <MagnifyingGlassIcon size={14} />
+          <span className="text-xs font-medium">Deep Search</span>
         </Button>
       </TooltipTrigger>
       <TooltipContent side="top">

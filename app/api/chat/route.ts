@@ -8,16 +8,34 @@ import { AgentRouter } from '@/lib/agents/agent-router';
 import { type AgentType } from '@/lib/agents/prompts';
 import { createServerClient } from '@/lib/supabase/server';
 import { cookies } from 'next/headers';
+import { z } from 'zod';
 
-// Import our new modules
+// Import our modules
 import { toolManager } from '@/lib/chat/tool-manager';
 import { createResponseValidator } from '@/lib/chat/response-validator';
-import { buildEnhancedSystemPrompt } from '@/lib/chat/prompt-builder';
+import { buildEnhancedSystemPrompt, buildAIMessages } from '@/lib/chat/prompt-builder';
 import { callPerplexityAPI } from '@/lib/agents/tools/perplexity/api';
 
 // Allow streaming responses up to 120 seconds
 export const maxDuration = 120;
 export const runtime = 'edge';
+
+// Define tool schemas using Zod for better type safety
+const getInformationSchema = z.object({
+  query: z.string().describe('The search query to find information about')
+});
+
+const addResourceSchema = z.object({
+  content: z.string().describe('The information to store')
+});
+
+const detectAndScrapeUrlsSchema = z.object({
+  text: z.string().describe('The text to extract URLs from')
+});
+
+const comprehensiveScraperSchema = z.object({
+  url: z.string().url().describe('The URL to scrape content from')
+});
 
 export async function POST(req: Request) {
   try {
@@ -95,7 +113,6 @@ export async function POST(req: Request) {
     }
     
     // 2. Deep Search - SECOND PRIORITY if enabled
-    // Note: Deep Search is not a tool, it's a pre-processing step controlled by UI toggle
     if (deepSearchEnabled) {
       edgeLogger.info('Running Deep Search for query (UI toggle enabled)', { 
         query: lastUserMessage.content.substring(0, 100) + '...'
@@ -174,15 +191,86 @@ export async function POST(req: Request) {
       }
     }
     
-    // Build the enhanced system prompt with tool results
-    let enhancedSystemPrompt = buildEnhancedSystemPrompt(
-      baseSystemPrompt,
-      toolManager.getToolResults(),
-      toolManager.getToolsUsed()
-    );
+    // Build AI messages with tool results and user profile data
+    const aiMessages = await buildAIMessages({
+      basePrompt: baseSystemPrompt,
+      toolResults: toolManager.getToolResults(),
+      toolsUsed: toolManager.getToolsUsed(),
+      userMessages: messages,
+      userId
+    });
     
-    // Get tools to provide to the model
-    const toolsToProvide = toolManager.getToolsToProvide();
+    // Define AI SDK tools using Zod schemas
+    const aiSdkTools = {
+      getInformation: {
+        description: 'Search for information in the knowledge base',
+        parameters: getInformationSchema,
+        execute: async ({ query }: { query: string }) => {
+          try {
+            const { chatTools } = await import('@/lib/chat/tools');
+            const result = await chatTools.getInformation.execute(
+              { query },
+              { toolCallId: 'ai-sdk-rag-search', messages: [] }
+            );
+            return typeof result === 'string' ? result : JSON.stringify(result);
+          } catch (error) {
+            edgeLogger.error('Error executing getInformation tool', { error });
+            return 'Error searching for information';
+          }
+        }
+      },
+      addResource: {
+        description: 'Store new information in the knowledge base',
+        parameters: addResourceSchema,
+        execute: async ({ content }: { content: string }) => {
+          try {
+            const { chatTools } = await import('@/lib/chat/tools');
+            const result = await chatTools.addResource.execute(
+              { content },
+              { toolCallId: 'ai-sdk-add-resource', messages: [] }
+            );
+            return typeof result === 'string' ? result : JSON.stringify(result);
+          } catch (error) {
+            edgeLogger.error('Error executing addResource tool', { error });
+            return 'Error storing information';
+          }
+        }
+      },
+      detectAndScrapeUrls: {
+        description: 'Extract and scrape URLs from text',
+        parameters: detectAndScrapeUrlsSchema,
+        execute: async ({ text }: { text: string }) => {
+          try {
+            const { chatTools } = await import('@/lib/chat/tools');
+            const result = await chatTools.detectAndScrapeUrls.execute(
+              { text },
+              { toolCallId: 'ai-sdk-detect-urls', messages: [] }
+            );
+            return typeof result === 'string' ? result : JSON.stringify(result);
+          } catch (error) {
+            edgeLogger.error('Error executing detectAndScrapeUrls tool', { error });
+            return 'Error detecting and scraping URLs';
+          }
+        }
+      },
+      comprehensiveScraper: {
+        description: 'Scrape content from a URL',
+        parameters: comprehensiveScraperSchema,
+        execute: async ({ url }: { url: string }) => {
+          try {
+            const { chatTools } = await import('@/lib/chat/tools');
+            const result = await chatTools.comprehensiveScraper.execute(
+              { url: ensureProtocol(url) },
+              { toolCallId: 'ai-sdk-scrape', messages: [] }
+            );
+            return typeof result === 'string' ? result : JSON.stringify(result);
+          } catch (error) {
+            edgeLogger.error('Error executing comprehensiveScraper tool', { error });
+            return 'Error scraping URL';
+          }
+        }
+      }
+    };
     
     // Create a response validator function
     const validateResponse = createResponseValidator({
@@ -192,139 +280,111 @@ export async function POST(req: Request) {
     });
     
     // Log the final system prompt size
-    edgeLogger.info('Final system prompt prepared', {
-      promptLength: enhancedSystemPrompt.length,
+    edgeLogger.info('Final AI messages prepared', {
+      messageCount: aiMessages.length,
       toolsUsed: toolManager.getToolsUsed(),
-      toolsCount: toolManager.getToolsUsed().length
+      toolsCount: toolManager.getToolsUsed().length,
+      includesUserProfile: !!userId
     });
     
-    // Generate the streaming response using streamText
-    const streamResponse = await streamText({
-      model: myProvider.languageModel(modelName),
-      system: enhancedSystemPrompt,
-      messages: messages,
-      tools: toolsToProvide,
-      maxSteps: urls.length > 0 ? 5 : 3, // More steps if URLs need processing
-      temperature: 0.4 // Lower temperature for more consistent formatting
-    });
-    
-    // Get the original response stream
-    const originalResponse = streamResponse.toDataStreamResponse();
-    
-    // Early exit if no body
-    if (!originalResponse.body) {
-      throw new Error('Response body is null');
-    }
-    
-    // Create a transform stream to process the response
-    class ResponseTransformer {
-      fullText: string = '';
-      textDecoder: TextDecoder = new TextDecoder();
-      
-      transform(chunk: Uint8Array, controller: TransformStreamDefaultController) {
-        // Pass the chunk through to the client unmodified
-        controller.enqueue(chunk);
-        
-        // Also accumulate it for processing later
-        this.fullText += this.textDecoder.decode(chunk, { stream: true });
-      }
-      
-      async flush(controller: TransformStreamDefaultController) {
-        try {
-          // Apply validation to the full text
-          const validatedText = validateResponse(this.fullText);
-          
-          // If validation modified the response, send the difference
-          if (validatedText !== this.fullText) {
-            edgeLogger.info('Fixed response with validation function', {
-              originalLength: this.fullText.length,
-              fixedLength: validatedText.length
+    try {
+      // Use the Vercel AI SDK's streamText function
+      const result = await streamText({
+        model: myProvider.languageModel(modelName),
+        messages: aiMessages,
+        temperature: 0.7,
+        maxTokens: 10000,
+        tools: aiSdkTools,
+        onFinish: async (completion) => {
+          try {
+            // Extract the text content from the completion object
+            // The AI SDK returns a complex object, not a simple string
+            let fullText = '';
+            
+            // Use a safer approach to extract text from the completion
+            // First try to get the text from the completion itself
+            if (typeof completion === 'object' && completion !== null) {
+              // Try to access text property if it exists
+              const textContent = completion.text || '';
+              
+              if (textContent && typeof textContent === 'string') {
+                fullText = textContent;
+              } else {
+                // If no text property, try to stringify the object
+                try {
+                  // Use JSON.stringify to get a string representation
+                  const stringified = JSON.stringify(completion);
+                  if (stringified && stringified !== '{}') {
+                    fullText = `Completion object: ${stringified}`;
+                  }
+                } catch (e) {
+                  edgeLogger.warn('Failed to stringify completion object', { error: e });
+                }
+              }
+            }
+            
+            // If we still don't have text, use a fallback
+            if (!fullText) {
+              fullText = 'No text content could be extracted from the completion.';
+              edgeLogger.warn('Could not extract text from completion object', { 
+                completionType: typeof completion,
+                isNull: completion === null,
+                hasSteps: completion && 'steps' in completion
+              });
+            }
+            
+            // Validate the response
+            const validatedText = validateResponse(fullText);
+            
+            // Log validation results
+            const wasModified = validatedText !== fullText;
+            edgeLogger.info(wasModified ? 'Fixed response with validation function' : 'Response validation completed', {
+              originalLength: fullText.length,
+              validatedLength: validatedText.length,
+              wasModified
             });
             
-            // Send the difference as a final chunk
-            const difference = validatedText.slice(this.fullText.length);
-            if (difference) {
-              controller.enqueue(new TextEncoder().encode(difference));
-            }
-          }
-          
-          // Store in database if needed
-          if (userId && id) {
-            try {
-              const supabase = await createServerClient();
-              await supabase
-                .from('sd_chat_messages')
-                .insert({
-                  chat_id: id,
-                  role: 'assistant',
-                  content: validatedText,
-                  user_id: userId
+            // Store in database
+            if (userId && id) {
+              try {
+                const supabase = await createServerClient();
+                await supabase
+                  .from('sd_chat_histories')
+                  .insert({
+                    session_id: id,
+                    role: 'assistant',
+                    content: validatedText,
+                    user_id: userId,
+                    tools_used: toolManager.getToolsUsed().length > 0 ? toolManager.getToolsUsed() : null
+                  });
+                
+                edgeLogger.info('Stored assistant response', {
+                  chatId: id,
+                  userId,
+                  contentLength: validatedText.length
                 });
-              
-              edgeLogger.info('Stored assistant response', {
-                chatId: id,
-                userId,
-                contentLength: validatedText.length
-              });
-              
-              // Add metadata in a special format the client can recognize
-              const metadata = {
-                validation: validatedText !== this.fullText ? 'modified' : 'unchanged',
-                storage: 'success'
-              };
-              
-              // Encode it as a special message the client can parse
-              const metadataChunk = `\n\n__METADATA__:${JSON.stringify(metadata)}`;
-              controller.enqueue(new TextEncoder().encode(metadataChunk));
-            } catch (error) {
-              edgeLogger.error('Failed to store assistant response', {
-                error,
-                chatId: id,
-                userId
-              });
-              
-              // Add error metadata
-              const metadata = {
-                validation: validatedText !== this.fullText ? 'modified' : 'unchanged',
-                storage: 'failed',
-                error: String(error)
-              };
-              
-              // Encode it as a special message the client can parse
-              const metadataChunk = `\n\n__METADATA__:${JSON.stringify(metadata)}`;
-              controller.enqueue(new TextEncoder().encode(metadataChunk));
+              } catch (dbError) {
+                edgeLogger.error('Failed to store assistant response', {
+                  error: dbError,
+                  chatId: id,
+                  userId
+                });
+              }
             }
+          } catch (error) {
+            edgeLogger.error('Error in onFinish callback', { error });
           }
-        } catch (error) {
-          edgeLogger.error('Error in stream processing', { error });
         }
-      }
+      });
+      
+      // Return the stream as a response using the SDK's helper
+      return result.toDataStreamResponse();
+    } catch (error) {
+      edgeLogger.error('Error in AI API call', { error });
+      return new Response(`Error: ${error instanceof Error ? error.message : String(error)}`, { status: 500 });
     }
-
-    const transformer = new ResponseTransformer();
-    const transformStream = new TransformStream({
-      transform(chunk, controller) {
-        transformer.transform(chunk, controller);
-      },
-      flush(controller) {
-        return transformer.flush(controller);
-      }
-    });
-    
-    // Pipe the original response through our transform stream
-    originalResponse.body.pipeTo(transformStream.writable).catch(error => {
-      edgeLogger.error('Error piping stream', { error });
-    });
-    
-    // Return a new response with our processed stream
-    return new Response(transformStream.readable, {
-      headers: {
-        'Content-Type': 'text/plain; charset=utf-8'
-      }
-    });
-  } catch (streamError) {
-    // Log specific error from streamText
-    edgeLogger.error('Error in chat stream', { streamError });
-    return new Response('Error processing chat request', { status: 500 });
+  } catch (error) {
+    edgeLogger.error('Unhandled error in chat API route', { error });
+    return new Response(`Error: ${error instanceof Error ? error.message : String(error)}`, { status: 500 });
   }
 }

@@ -75,7 +75,7 @@ export async function POST(request: Request) {
       });
       
       // Generate the summary - don't do this in the background
-      const summary = await generateWebsiteSummary(url, 400, userId);
+      const summary = await generateWebsiteSummary(url, 1000, userId);
       
       if (!summary) {
         logger.error('Failed to generate website summary', {
