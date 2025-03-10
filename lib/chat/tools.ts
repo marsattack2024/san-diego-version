@@ -31,7 +31,7 @@ interface ScraperStats {
 // Define the tools object
 export const chatTools = {
   getInformation: tool({
-    description: 'Search the knowledge base before answering any question',
+    description: 'Search the internal knowledge base for relevant information',
     parameters: z.object({
       query: z.string().describe('the question to search for')
     }),
@@ -104,54 +104,8 @@ export const chatTools = {
     }
   }),
 
-  // DeepSearch tool
-  deepSearch: tool({
-    description: 'Perform a deep search using Perplexity API to gather comprehensive information on a topic',
-    parameters: z.object({
-      query: z.string().describe('The search query to research')
-    }),
-    execute: async ({ query }): Promise<string> => {
-      try {
-        edgeLogger.info('[PERPLEXITY DEEP SEARCH] Starting search', { query });
-        
-        const apiKey = process.env.PERPLEXITY_API_KEY;
-        if (!apiKey) {
-          throw new Error('Perplexity API key is not configured');
-        }
-        
-        const openai = new OpenAI({
-          apiKey,
-          baseURL: 'https://api.perplexity.ai',
-        });
-        
-        const response = await openai.chat.completions.create({
-          model: 'sonar-pro', // Confirmed valid model from Perplexity docs
-          messages: [
-            { role: 'system', content: 'You are a helpful research assistant that provides comprehensive information.' },
-            { role: 'user', content: query }
-          ],
-          max_tokens: 12000,
-          temperature: 0.7,
-        });
-        
-        const result = response.choices[0]?.message?.content || 'No results found';
-        
-        edgeLogger.info('[PERPLEXITY DEEP SEARCH] Search completed', {
-          query,
-          resultLength: result.length
-        });
-        
-        return `DeepSearch Results for "${query}":\n\n${result}`;
-      } catch (error) {
-        edgeLogger.error('[PERPLEXITY DEEP SEARCH] Failed', {
-          query,
-          error
-        });
-        
-        return `DeepSearch failed: ${error instanceof Error ? error.message : String(error)}`;
-      }
-    }
-  }),
+  // Note: Deep Search is now exclusively a pre-processing step controlled by UI toggle
+  // The deepSearch tool has been removed to prevent the AI from calling it directly
 
   // URL detection tool
   detectAndScrapeUrls: tool({
@@ -206,7 +160,7 @@ export const chatTools = {
 
   // Add the comprehensive text scraper tool
   comprehensiveScraper: tool({
-    description: 'Scrapes all visible text from a webpage in a structured format, categorizing content into headers, paragraphs, lists, and more. Use this for detailed analysis of webpage content.',
+    description: 'Extract content from a webpage, including headers, paragraphs, and other structured content',
     parameters: z.object({
       url: z.string().describe('The URL to scrape')
     }),

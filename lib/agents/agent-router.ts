@@ -44,12 +44,12 @@ const AGENT_KEYWORDS: Record<AgentType, string[]> = {
 
 // Common tool description for all agents
 const COMMON_TOOL_DESCRIPTION = `
-You have access to the following tools:
-- RAG: Retrieve information from the knowledge base
-- WebScraper: Extract content from specific URLs provided by the user
-- DeepSearch: Conduct in-depth research on complex topics using Perplexity AI
+You have access to the following resources:
+- Knowledge Base: Retrieve information from our internal knowledge base
+- Web Scraper: Extract content from specific URLs provided by the user
+- Deep Search: Conduct in-depth research on complex topics using Perplexity AI
 
-Use these tools when appropriate to provide accurate and comprehensive responses.
+Use these resources when appropriate to provide accurate and comprehensive responses.
 `;
 
 export class AgentRouter {
@@ -216,7 +216,7 @@ export class AgentRouter {
         : "NOTE: DeepSearch is NOT enabled for this conversation. Do NOT use the deepSearch tool.",
       
       // 4. Add critical instruction to mention tools used
-      "CRITICAL INSTRUCTION: At the end of your response, you MUST include a section that explicitly states which tools you used (RAG Knowledge Base, Web Scraper, or Perplexity Deep Search). If you didn't use any of these resources, state that you didn't use any specific Photography to Profits or High Rollers Resources."
+      "CRITICAL INSTRUCTION: At the end of your response, you MUST include a section that explicitly states which resources you used (Knowledge Base, Web Scraper, or Deep Search). If you didn't use any of these resources, state that you didn't use any specific resources."
     ].join("\n\n");
     
     // Log the system prompt creation

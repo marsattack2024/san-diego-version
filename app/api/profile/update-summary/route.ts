@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { createServerClient } from '@/lib/supabase/server';
 import { logger } from '@/lib/logger';
+import { generateWebsiteSummary } from '@/lib/agents/tools/website-summarizer';
 
 /**
- * Endpoint to directly update a user's profile website summary
- * This uses admin permissions to bypass any RLS issues
+ * Endpoint to generate and update a user's profile website summary
  */
 export async function POST(request: Request) {
   const startTime = Date.now();
@@ -12,26 +12,31 @@ export async function POST(request: Request) {
   
   try {
     // Get request data
-    const { userId, summary } = await request.json();
+    const { url, userId } = await request.json();
     
-    if (!userId || !summary) {
+    if (!userId || !url) {
       return NextResponse.json(
-        { error: 'User ID and summary are required' },
+        { error: 'User ID and URL are required' },
         { status: 400 }
       );
     }
     
-    logger.info('Received direct summary update request', {
+    // Validate URL starts with https://
+    if (!url.startsWith('https://')) {
+      return NextResponse.json(
+        { error: 'URL must start with https://' },
+        { status: 400 }
+      );
+    }
+    
+    logger.info('Starting website summary generation and profile update', {
       userId,
-      summaryLength: summary.length,
+      urlDomain: new URL(url).hostname,
       operation
     });
     
-    // Create Supabase client with service role for admin access
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
+    // Get authenticated Supabase client
+    const supabase = await createServerClient();
     
     // Verify user exists
     const { data: user, error: userError } = await supabase
@@ -61,56 +66,92 @@ export async function POST(request: Request) {
       );
     }
     
-    // Attempt the update with admin privileges
-    const { data, error } = await supabase
-      .from('sd_user_profiles')
-      .update({
-        website_summary: summary,
-        updated_at: new Date().toISOString()
-      })
-      .eq('user_id', userId)
-      .select('updated_at');
-      
-    if (error) {
-      logger.error('Error updating website summary', {
+    // Generate the summary and update the profile directly in the request
+    try {
+      logger.info('Starting website summary generation', {
         userId,
-        error: error.message,
+        urlDomain: new URL(url).hostname,
         operation
       });
       
-      return NextResponse.json(
-        { error: 'Failed to update summary', details: error.message },
-        { status: 500 }
-      );
-    }
-    
-    // Verify the update worked
-    const { data: verifyData, error: verifyError } = await supabase
-      .from('sd_user_profiles')
-      .select('website_summary')
-      .eq('user_id', userId)
-      .single();
+      // Generate the summary - don't do this in the background
+      const summary = await generateWebsiteSummary(url, 400, userId);
       
-    const updateSuccessful = verifyData?.website_summary === summary;
-    
-    logger.info('Summary update completed', {
-      userId,
-      updateSuccessful,
-      processingTimeMs: Date.now() - startTime,
-      operation
-    });
-    
-    return NextResponse.json({
-      success: true,
-      updatedAt: data?.[0]?.updated_at,
-      summaryLength: summary.length,
-      verificationSuccessful: updateSuccessful
-    });
+      if (!summary) {
+        logger.error('Failed to generate website summary', {
+          userId,
+          url,
+          operation
+        });
+        return NextResponse.json({
+          success: false,
+          message: 'Failed to generate website summary'
+        }, { status: 500 });
+      }
+      
+      logger.info('Website summary generated successfully', {
+        userId,
+        summaryLength: summary.length,
+        operation
+      });
+      
+      // Get a fresh Supabase client for the update
+      const updateSupabase = await createServerClient();
+      
+      // Update the profile with the generated summary
+      const { error } = await updateSupabase
+        .from('sd_user_profiles')
+        .update({
+          website_summary: summary,
+          updated_at: new Date().toISOString()
+        })
+        .eq('user_id', userId);
+        
+      if (error) {
+        logger.error('Error updating website summary in profile', {
+          userId,
+          error: error.message,
+          operation
+        });
+        return NextResponse.json({
+          success: false,
+          message: 'Error updating profile with website summary'
+        }, { status: 500 });
+      }
+      
+      logger.info('Profile updated with website summary', {
+        userId,
+        processingTimeMs: Date.now() - startTime,
+        operation
+      });
+      
+      // Return success with the generated summary
+      return NextResponse.json({
+        success: true,
+        message: 'Website summary generated and saved',
+        summary
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      logger.error('Error in website summary generation', {
+        userId,
+        url,
+        error: errorMessage,
+        stack: error instanceof Error ? error.stack : 'No stack trace',
+        operation
+      });
+      
+      return NextResponse.json({
+        success: false,
+        message: 'Error generating website summary'
+      }, { status: 500 });
+    }
     
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     
-    logger.error('Unexpected error in summary update API', {
+    logger.error('Unexpected error in website summary API', {
       error: errorMessage,
       stack: error instanceof Error ? error.stack : undefined,
       operation

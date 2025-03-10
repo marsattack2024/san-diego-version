@@ -76,8 +76,8 @@ In `/app/api/chat/route.ts`, DeepSearch results are appended to the system promp
 ```typescript
 // Add deep search results to the system prompt if available
 if (toolResults.deepSearch) {
-  enhancedSystemPrompt += `\n\n### PERPLEXITY DEEP SEARCH TOOL RESULTS ###\nThe following information was retrieved using the Perplexity Deep Search tool:\n\n${toolResults.deepSearch}\n\n`;
-  toolsUsed.push('Perplexity Deep Search');
+  enhancedSystemPrompt += `\n\n### DEEP SEARCH RESULTS ###\nThe following information was retrieved through deep web research:\n\n${toolResults.deepSearch}\n\n`;
+  toolsUsed.push('Deep Search');
 }
 ```
 
@@ -146,7 +146,7 @@ If DeepSearch isn't working:
 
 1. Check if the Perplexity API key is correctly configured
 2. Ensure DeepSearch is enabled in the UI
-3. Look for errors in the server logs with the pattern `[PERPLEXITY DEEP SEARCH]`
+3. Look for errors in the server logs with the pattern `[DEEP SEARCH]`
 4. Verify the SSE connection for real-time updates is working
 
 ## Future Improvements
