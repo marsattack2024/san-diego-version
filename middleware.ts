@@ -13,10 +13,13 @@ function uuidv4() {
 }
 
 // List of paths that require authentication
-const protectedPaths = ['/chat', '/settings'];
+const protectedPaths = ['/chat', '/settings', '/profile'];
 
 // List of paths that should redirect to /chat if the user is already logged in
 const authPaths = ['/login'];
+
+// Profile path that needs special handling
+const PROFILE_PATH = '/profile';
 
 export async function middleware(request: NextRequest) {
   // Generate a unique request ID for tracing
@@ -75,6 +78,21 @@ export async function middleware(request: NextRequest) {
   // If the user is logged in and trying to access an auth path
   if (isAuthPath && user) {
     return NextResponse.redirect(new URL('/chat', request.url));
+  }
+  
+  // Check if the user has a profile when accessing protected content
+  if (user && pathname.startsWith('/chat')) {
+    // Get user profile
+    const { data: profile } = await supabase
+      .from('sd_user_profiles')
+      .select('*')
+      .eq('user_id', user.id)
+      .single();
+      
+    // If no profile exists, redirect to profile setup 
+    if (!profile && pathname !== PROFILE_PATH) {
+      return NextResponse.redirect(new URL('/profile', request.url));
+    }
   }
 
   // Log only in development or for important paths,

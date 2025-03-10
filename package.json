@@ -20,7 +20,11 @@
     "test:deep-search": "tsx lib/agents/tools/perplexity/test-deep-search.ts",
     "test:perplexity": "tsx lib/agents/tools/perplexity/test-deep-search-simple.ts",
     "test:tools": "tsx lib/agents/tools/test-tools.ts",
-    "test:perplexity-direct": "tsx lib/agents/tools/direct-perplexity-test.ts"
+    "test:perplexity-direct": "tsx lib/agents/tools/direct-perplexity-test.ts",
+    "test:website-summarizer": "tsx scripts/tests/website-summarizer.test.ts",
+    "test:profile-summary": "tsx scripts/tests/test-profile-summary.ts",
+    "test:fix-summary": "tsx scripts/tests/fix-summary.ts",
+    "test:direct-summary": "tsx scripts/tests/test-direct-summary.ts"
   },
   "dependencies": {
     "@ai-sdk/fireworks": "^0.1.12",
@@ -83,6 +87,7 @@
     "lucide-react": "^0.477.0",
     "next": "15.2.0",
     "next-themes": "^0.4.4",
+    "node-fetch": "^3.3.2",
     "openai": "^4.86.1",
     "orderedmap": "^2.1.1",
     "papaparse": "^5.5.2",

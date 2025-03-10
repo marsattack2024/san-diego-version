@@ -1,3 +1,14 @@
+export interface UserProfile {
+  user_id: string;
+  company_name: string;
+  website_url: string;
+  company_description: string;
+  location: string;
+  website_summary?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Chat {
   id: string;
   title?: string;

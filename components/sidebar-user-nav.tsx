@@ -1,8 +1,9 @@
 'use client';
-import { ChevronUp } from 'lucide-react';
+import { ChevronUp, User as UserIcon, Camera, Pencil } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
+import { useEffect, useState } from 'react';
 
 import {
   DropdownMenu,
@@ -16,7 +17,8 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar';
-import { createClient } from '@/lib/supabase/client';
+import { createBrowserClient } from '@/lib/supabase/client';
+import { UserProfile } from '@/lib/db/schema';
 
 // Define a User type that matches what we get from Supabase
 export interface User {
@@ -30,7 +32,26 @@ export interface User {
 export function SidebarUserNav({ user }: { user: User }) {
   const { setTheme, theme } = useTheme();
   const router = useRouter();
-  const supabase = createClient();
+  const supabase = createBrowserClient();
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  
+  useEffect(() => {
+    async function fetchUserProfile() {
+      if (user?.id) {
+        const { data, error } = await supabase
+          .from('sd_user_profiles')
+          .select('*')
+          .eq('user_id', user.id)
+          .single();
+          
+        if (data && !error) {
+          setUserProfile(data as UserProfile);
+        }
+      }
+    }
+    
+    fetchUserProfile();
+  }, [user, supabase]);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -44,14 +65,21 @@ export function SidebarUserNav({ user }: { user: User }) {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <SidebarMenuButton className="data-[state=open]:bg-sidebar-accent bg-background data-[state=open]:text-sidebar-accent-foreground h-10">
-              <Image
-                src={`https://avatar.vercel.sh/${user.email || user.id}`}
-                alt={user.email || user.id || 'User Avatar'}
-                width={24}
-                height={24}
-                className="rounded-full"
-              />
-              <span className="truncate">{user?.email || `User ${user.id.substring(0,8)}`}</span>
+              <div className="relative">
+                <Image
+                  src={`https://avatar.vercel.sh/${user.email || user.id}`}
+                  alt={user.email || user.id || 'User Avatar'}
+                  width={24}
+                  height={24}
+                  className="rounded-full"
+                />
+                {userProfile && (
+                  <div className="absolute -bottom-1 -right-1 h-3 w-3 rounded-full border-2 border-background bg-green-500" />
+                )}
+              </div>
+              <span className="truncate">
+                {userProfile?.company_name || user?.email || `User ${user.id.substring(0,8)}`}
+              </span>
               <ChevronUp className="ml-auto" />
             </SidebarMenuButton>
           </DropdownMenuTrigger>
@@ -59,6 +87,33 @@ export function SidebarUserNav({ user }: { user: User }) {
             side="top"
             className="w-[--radix-popper-anchor-width]"
           >
+            {userProfile && (
+              <>
+                <div className="px-2 py-1.5 text-sm">
+                  <div className="font-medium">{userProfile.company_name}</div>
+                  <div className="text-xs text-muted-foreground truncate">{userProfile.location || 'No location set'}</div>
+                </div>
+                <DropdownMenuSeparator />
+              </>
+            )}
+            
+            <DropdownMenuItem
+              className="cursor-pointer"
+              onSelect={() => router.push('/profile')}
+            >
+              {userProfile ? (
+                <>
+                  <Pencil className="mr-2 h-4 w-4" />
+                  Edit profile
+                </>
+              ) : (
+                <>
+                  <UserIcon className="mr-2 h-4 w-4" />
+                  Setup profile
+                </>
+              )}
+            </DropdownMenuItem>
+            
             <DropdownMenuItem
               className="cursor-pointer"
               onSelect={() => setTheme(theme === 'dark' ? 'light' : 'dark')}

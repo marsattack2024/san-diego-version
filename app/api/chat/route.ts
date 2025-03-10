@@ -51,6 +51,32 @@ export async function POST(req: Request) {
     
     // Create Supabase client if user is authenticated
     const supabase = userId ? await createServerClient() : null;
+    
+    // Get user profile for business context (if authenticated)
+    let userProfile = null;
+    if (userId && supabase) {
+      try {
+        const { data: profile } = await supabase
+          .from('sd_user_profiles')
+          .select('*')
+          .eq('user_id', userId)
+          .single();
+          
+        if (profile) {
+          userProfile = profile;
+          edgeLogger.info('Retrieved user profile for chat context', { 
+            userId,
+            hasProfile: true,
+            companyName: profile.company_name
+          });
+        }
+      } catch (profileError) {
+        edgeLogger.error('Failed to retrieve user profile', { 
+          error: profileError,
+          userId
+        });
+      }
+    }
 
     // Use the agentId from the request body, which comes from the user's selection in the UI
     let selectedAgentId: AgentType = agentId as AgentType;
@@ -278,6 +304,27 @@ export async function POST(req: Request) {
     // Enhance the system prompt with tool results instead of using tool messages
     // This approach is more compatible with the Vercel AI SDK
     let enhancedSystemPrompt = systemPrompt;
+    
+    // Add user business profile context if available
+    if (userProfile) {
+      enhancedSystemPrompt += `\n\n### PHOTOGRAPHY BUSINESS CONTEXT ###
+You are speaking with a photography studio with the following details:
+- Studio Name: ${userProfile.company_name}
+- Location: ${userProfile.location || 'Not provided'}
+- Description: ${userProfile.company_description}
+${userProfile.website_summary ? `\nWebsite Summary: ${userProfile.website_summary}` : ''}
+
+Please tailor your responses to be relevant to their photography business. This is a professional context where they are looking for assistance with their photography studio needs.
+\n\n`;
+      
+      edgeLogger.info('Added business context to system prompt', { 
+        businessName: userProfile.company_name,
+        hasLocation: !!userProfile.location,
+        descriptionLength: userProfile.company_description?.length || 0,
+        hasSummary: !!userProfile.website_summary,
+        summaryLength: userProfile.website_summary?.length || 0
+      });
+    }
     
     // Track which tools were used to inform the model
     const toolsUsed = [];
