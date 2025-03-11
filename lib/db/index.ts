@@ -4,18 +4,32 @@ import { createClient } from '@supabase/supabase-js';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-// Improved error handling to provide better diagnostics during build
-if (!supabaseUrl) {
-  console.error('ERROR: NEXT_PUBLIC_SUPABASE_URL environment variable is missing');
-  // In development, provide a more helpful error with placeholder for better debugging
-  throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL environment variable. Check your .env file.');
+// Check for missing environment variables
+if (!supabaseUrl || !supabaseKey) {
+  console.warn('Missing Supabase credentials. Some features will be disabled.');
 }
 
-if (!supabaseKey) {
-  console.error('ERROR: NEXT_PUBLIC_SUPABASE_ANON_KEY environment variable is missing');
-  // In development, provide a more helpful error with placeholder for better debugging
-  throw new Error('Missing NEXT_PUBLIC_SUPABASE_ANON_KEY environment variable. Check your .env file.');
+// Check for placeholder values
+if (supabaseUrl === 'your-supabase-url-here' || 
+    (supabaseUrl && supabaseUrl.includes('your-supabase')) || 
+    (supabaseKey && supabaseKey.includes('your-supabase'))) {
+  console.warn('Using placeholder Supabase credentials. Some features will be disabled.');
+}
+
+// Validate URL format before creating client
+let validSupabaseUrl = supabaseUrl;
+try {
+  if (supabaseUrl) {
+    new URL(supabaseUrl);
+  }
+} catch (error) {
+  console.error('Invalid Supabase URL format:', error instanceof Error ? error.message : String(error));
+  // Use a dummy URL that will pass URL validation but fail gracefully when used
+  validSupabaseUrl = 'https://example.com';
 }
 
 // Create and export the Supabase client
-export const supabase = createClient(supabaseUrl, supabaseKey); 
+export const supabase = createClient(
+  validSupabaseUrl || 'https://example.com', 
+  supabaseKey || 'dummy-key'
+); 

@@ -4,6 +4,11 @@ import { createServerClient } from '@/lib/supabase/server';
 import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 
+// Add after any runtime configuration, or at the top of the file
+export const dynamic = 'force-dynamic';
+
+import { getAuthenticatedUser } from '@/lib/supabase/auth-utils';
+
 // API route to fetch chat messages and handle chat-specific operations
 export async function GET(
   request: NextRequest,
@@ -15,39 +20,16 @@ export async function GET(
     
     edgeLogger.info('GET chat by ID request', { chatId: id });
     
-    // Create Supabase client for auth
-    const cookieStore = await cookies();
-    const supabase = createSupabaseServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
-              );
-            } catch {
-              // This can be ignored if you have middleware refreshing users
-            }
-          },
-        },
-      }
-    );
+    // Get authenticated user using the optimized utility
+    const { user, serverClient, errorResponse } = await getAuthenticatedUser(request);
     
-    // Get the current user
-    const { data: { user } } = await supabase.auth.getUser();
-    
-    if (!user) {
+    // Return error response if authentication failed
+    if (errorResponse) {
       edgeLogger.warn('User not authenticated when fetching chat messages');
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return errorResponse;
     }
     
-    // Create Supabase client for database operations
-    const serverClient = await createServerClient();
+    // serverClient is already provided by getAuthenticatedUser
     
     // Fetch the chat session first to ensure user has access
     const { data: chatSession, error: sessionError } = await serverClient
@@ -75,55 +57,11 @@ export async function GET(
         userId: user.id 
       });
       
-      // Let's create a new chat session for this ID if it doesn't exist yet
-      try {
-        const { data: newChat, error: createError } = await serverClient
-          .from('sd_chat_sessions')
-          .insert({
-            id,
-            user_id: user.id,
-            title: 'New Chat',
-            agent_id: 'default',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          })
-          .select()
-          .single();
-          
-        if (createError) {
-          edgeLogger.error('Failed to create new chat session', { 
-            error: createError, 
-            chatId: id 
-          });
-          return NextResponse.json(
-            { error: 'Failed to create chat session' },
-            { status: 500 }
-          );
-        }
-        
-        edgeLogger.info('Created new chat session on the fly', { 
-          chatId: id,
-          userId: user.id
-        });
-        
-        // Return empty chat session
-        return NextResponse.json({
-          id: id,
-          title: 'New Chat',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          userId: user.id,
-          agentId: 'default',
-          deepSearchEnabled: false,
-          messages: []
-        });
-      } catch (createError) {
-        edgeLogger.error('Error creating new chat session', { error: createError });
-        return NextResponse.json(
-          { error: 'Chat not found or access denied' },
-          { status: 404 }
-        );
-      }
+      // Return 404 instead of creating a new chat
+      return NextResponse.json(
+        { error: 'Chat not found or access denied' },
+        { status: 404 }
+      );
     }
     
     // Fetch chat messages
@@ -153,7 +91,7 @@ export async function GET(
       userId: chatSession.user_id,
       agentId: chatSession.agent_id,
       deepSearchEnabled: chatSession.deep_search_enabled,
-      messages: messages.map(msg => ({
+      messages: messages.map((msg: any) => ({
         id: msg.id,
         role: msg.role,
         content: msg.content,
@@ -182,38 +120,15 @@ export async function PATCH(
     const body = await request.json();
     const { title } = body;
     
-    // Create Supabase client for auth
-    const cookieStore = await cookies();
-    const supabase = createSupabaseServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
-              );
-            } catch {
-              // This can be ignored if you have middleware refreshing users
-            }
-          },
-        },
-      }
-    );
+    // Get authenticated user using the optimized utility
+    const { user, serverClient, errorResponse } = await getAuthenticatedUser(request);
     
-    // Get the current user
-    const { data: { user } } = await supabase.auth.getUser();
-    
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    // Return error response if authentication failed
+    if (errorResponse) {
+      return errorResponse;
     }
     
-    // Create Supabase client for database operations
-    const serverClient = await createServerClient();
+    // serverClient is already provided by getAuthenticatedUser
     
     // Update the chat session
     const { error } = await serverClient
@@ -258,40 +173,35 @@ export async function POST(
       );
     }
     
-    // Create Supabase client for auth
-    const cookieStore = await cookies();
-    const supabase = createSupabaseServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
-              );
-            } catch {
-              // This can be ignored if you have middleware refreshing users
-            }
-          },
-        },
-      }
-    );
+    // Get authenticated user using the optimized utility
+    const { user, serverClient, errorResponse } = await getAuthenticatedUser(request);
     
-    // Get the current user
-    const { data: { user } } = await supabase.auth.getUser();
-    
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    // Return error response if authentication failed
+    if (errorResponse) {
+      return errorResponse;
     }
     
-    // Create Supabase client for database operations
-    const serverClient = await createServerClient();
+    // serverClient is already provided by getAuthenticatedUser
     
     // Store the assistant message
+    // Properly format toolsUsed for database
+    let formattedToolsUsed = null;
+    if (toolsUsed) {
+      // Check if toolsUsed has a nested tools array and flatten it
+      if (toolsUsed.tools && Array.isArray(toolsUsed.tools)) {
+        formattedToolsUsed = toolsUsed.tools;
+      } else {
+        formattedToolsUsed = toolsUsed;
+      }
+    }
+    
+    edgeLogger.info('Saving message to chat history', { 
+      sessionId: id, 
+      role: message.role,
+      contentLength: message.content.length,
+      hasToolsUsed: formattedToolsUsed !== null
+    });
+    
     const { error } = await serverClient
       .from('sd_chat_histories')
       .insert({
@@ -299,13 +209,27 @@ export async function POST(
         role: message.role,
         content: message.content,
         user_id: user.id,
-        tools_used: toolsUsed || null
+        tools_used: formattedToolsUsed
       });
     
     if (error) {
-      edgeLogger.error('Failed to save assistant message', { error, chatId: id });
+      edgeLogger.error('Failed to save assistant message', { 
+        error, 
+        chatId: id,
+        errorCode: error.code,
+        errorMessage: error.message,
+        details: error.details
+      });
+      
       return NextResponse.json(
-        { error: 'Failed to save message' },
+        { 
+          error: 'Failed to save message', 
+          details: {
+            code: error.code,
+            message: error.message,
+            details: error.details
+          } 
+        },
         { status: 500 }
       );
     }

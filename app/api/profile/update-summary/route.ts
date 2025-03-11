@@ -3,6 +3,8 @@ import { createServerClient } from '@/lib/supabase/server';
 import { logger } from '@/lib/logger';
 import { generateWebsiteSummary } from '@/lib/agents/tools/website-summarizer';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * Endpoint to generate and update a user's profile website summary
  */

@@ -1,4 +1,4 @@
-# User Profiles Feature
+# User Profiles in San Diego Project
 
 This document describes the implementation of user business profiles and website summarization for our photography studio application.
 
@@ -9,6 +9,25 @@ The user profiles feature allows us to collect and store business information ab
 ## Database Structure
 
 The user profiles are stored in a `sd_user_profiles` table in Supabase with the following schema:
+
+### Table: sd_user_profiles
+
+| Column Name | Data Type | Description | Constraints |
+|-------------|-----------|-------------|------------|
+| user_id | UUID | Foreign key to auth.users | PRIMARY KEY, REFERENCES auth.users(id) ON DELETE CASCADE |
+| company_name | TEXT | Name of the photography business | NOT NULL |
+| website_url | TEXT | URL to the business website | NULL allowed |
+| company_description | TEXT | Description of the business | NOT NULL |
+| location | TEXT | Physical location or service area | NULL allowed |
+| created_at | TIMESTAMP WITH TIME ZONE | When the profile was created | DEFAULT NOW() |
+| updated_at | TIMESTAMP WITH TIME ZONE | When the profile was last updated | DEFAULT NOW() |
+| website_summary | TEXT | AI-generated summary of the website | NULL allowed |
+
+**Important Note**: The table does NOT have an `id` column. The primary key is `user_id`, which directly references the auth.users table.
+
+The table has a one-to-one relationship with the `auth.users` table, with cascading deletes to ensure data consistency.
+
+### SQL Definition
 
 ```sql
 CREATE TABLE IF NOT EXISTS sd_user_profiles (
@@ -23,39 +42,171 @@ CREATE TABLE IF NOT EXISTS sd_user_profiles (
 );
 ```
 
-The table has a one-to-one relationship with the `auth.users` table, with cascading deletes to ensure data consistency.
+## Key Files and Implementation Components
 
-## Implementation Components
+### Core Files
+
+1. **Profile Page**:
+   - **Path**: `/app/profile/page.tsx`
+   - **Purpose**: Server component that handles loading user profile data and renders the profile form
+   - **Key Functions**: 
+     - Fetches user profile data from Supabase
+     - Determines if this is a first login
+     - Redirects unauthenticated users to login
+   - **Dependencies**: ProfileForm component, createServerClient
+
+2. **Profile Form Component**:
+   - **Path**: `/components/profile-form.tsx`
+   - **Purpose**: Client component that handles the profile form UI and saving profile data
+   - **Key Functions**:
+     - Manages form state and validation
+     - Handles character limits and validations
+     - Performs profile upsert to Supabase
+     - Triggers website summarization API
+   - **Dependencies**: UI components, createBrowserClient
+
+3. **Middleware Profile Check**:
+   - **Path**: `/middleware.ts`
+   - **Purpose**: Checks if authenticated users have completed profile setup
+   - **Key Implementation Details**:
+     - Runs on protected routes (especially /chat)
+     - Queries `sd_user_profiles` using `user_id` (not id)
+     - Redirects to profile setup if no profile exists
+     - Sets profile status headers for caching
+   - **Dependencies**: createServerClient from Supabase
+
+4. **Website Summary API**:
+   - **Path**: `/app/api/profile/update-summary/route.ts`
+   - **Purpose**: API endpoint that handles website summarization
+   - **Key Functions**:
+     - Scrapes website content
+     - Generates AI summary
+     - Updates profile with the summary
+   - **Dependencies**: scraper tool, AI SDK, Supabase
+
+### Database and Schema
 
 1. **Supabase Migrations**: 
-   - `supabase/migrations/create_user_profiles_table.sql`: Creates the main profiles table
-   - `supabase/migrations/add_website_summary.sql`: Adds the website summary column
+   - **Path**: `supabase/migrations/create_user_profiles_table.sql`
+   - **Purpose**: Creates the main profiles table with correct schema
 
-2. **TypeScript Interfaces**: The schema is defined in TypeScript in `lib/db/schema.ts`.
+2. **TypeScript Interface**: 
+   - **Path**: `lib/db/schema.ts`
+   - **Purpose**: TypeScript definition of the UserProfile interface
+   - **Fields**: 
+     ```typescript
+     interface UserProfile {
+       user_id: string;
+       company_name: string;
+       website_url?: string;
+       company_description: string;
+       location?: string;
+       created_at?: string;
+       updated_at?: string;
+       website_summary?: string;
+     }
+     ```
 
-3. **Database Queries**: Functions for working with user profiles are in `lib/db/queries.ts`:
-   - `getUserProfile`: Retrieves a user profile by user ID
-   - `upsertUserProfile`: Creates or updates a user profile
+3. **Database Queries**: 
+   - **Path**: `lib/db/queries.ts`
+   - **Key Functions**:
+     - `getUserProfile`: Fetches user profile by user_id
+     - `upsertUserProfile`: Creates or updates a profile
 
-4. **Profile Setup UI**: The `components/profile-setup.tsx` component provides a form for users to enter their business information and triggers website summarization.
+### AI Integration
 
-5. **Website Summarizer**: The `lib/agents/tools/website-summarizer.ts` contains the logic for scraping website content and generating summaries using AI.
+1. **Prompt Builder**:
+   - **Path**: `/lib/chat/prompt-builder.ts`
+   - **Purpose**: Enhances chat prompts with user profile context
+   - **Key Implementation Detail**: Includes profile data in the system prompt
 
-6. **Profile Page**: The `/app/profile/page.tsx` handles both first-time setup and profile updates.
-
-7. **Middleware**: The middleware checks if a user has a profile when they access protected routes, redirecting to profile setup on first login.
-
-8. **Chat Context**: The chat API includes user profile information (including website summary) in the AI context.
+2. **Website Summarizer**:
+   - **Path**: `/lib/agents/tools/website-summarizer.ts`
+   - **Purpose**: Logic for summarizing website content using AI
+   - **Key Functions**: scrapeAndSummarize, generateSummaryFromContent
 
 ## User Profile Flow
 
+### Authentication and Profile Check
+
 1. User registers or logs in using standard authentication
-2. On first access to a protected route (like /chat), the middleware checks if they have a profile
-3. If no profile exists, they're redirected to the profile setup page
-4. User completes the profile setup form, including their website URL
-5. After completing the profile setup, they're redirected to their original destination
-6. In the background, the system generates a summary of their website content
-7. The business context, including the website summary, is automatically included in all AI interactions
+2. On first access to a protected route (like /chat), the middleware checks if they have a profile:
+   ```typescript
+   // In middleware.ts
+   const { data: profile } = await supabase
+     .from('sd_user_profiles')
+     .select('user_id')  // Important: selects user_id, not id
+     .eq('user_id', user.id)
+     .single();
+   ```
+3. If no profile exists, they're redirected to the profile setup page:
+   ```typescript
+   if (!profile && pathname !== PROFILE_PATH) {
+     return NextResponse.redirect(new URL('/profile', request.url));
+   }
+   ```
+
+### Profile Creation/Update
+
+4. The profile page loads initial profile data if it exists:
+   ```typescript
+   // In app/profile/page.tsx
+   const { data: profile } = await supabase
+     .from('sd_user_profiles')
+     .select('*')
+     .eq('user_id', user.id)
+     .single();
+   ```
+
+5. User completes/updates the profile form in the UI
+   - The form enforces character limits for fields:
+     - Company Name: 60 characters
+     - Company Description: 300 characters
+     - Location: 60 characters
+   - Website URL validation ensures it starts with https://
+
+6. Form submission saves profile data using upsert:
+   ```typescript
+   // In profile-form.tsx
+   const { error } = await supabase
+     .from('sd_user_profiles')
+     .upsert({
+       user_id: userId,
+       company_name: profile.company_name || '',
+       website_url: profile.website_url || '',
+       company_description: profile.company_description || '',
+       location: profile.location || '',
+       updated_at: new Date().toISOString(),
+       website_summary: profile.website_summary || ''
+     });
+   ```
+
+7. After completing the profile setup, new users are redirected to the chat page:
+   ```typescript
+   if (isFirstLogin) {
+     router.push('/chat');
+   }
+   ```
+
+### Website Summary Generation
+
+8. If a website URL is provided, the system generates a summary in the background:
+   ```typescript
+   // API call to generate summary
+   fetch('/api/profile/update-summary', {
+     method: 'POST',
+     headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ url, userId })
+   });
+   ```
+
+9. The summarizer API:
+   - Scrapes the website content
+   - Processes the content with AI
+   - Updates the user's profile with the summary
+   - Shows a success notification when complete
+
+10. The business context, including the website summary, is automatically included in all AI interactions
 
 ## Website Summarization Process
 
@@ -151,6 +302,43 @@ CREATE POLICY "Users can insert their own profile"
 
 ## Troubleshooting
 
+### Profile Redirect Issues
+
+If users are being redirected to the profile page even when they should have a profile:
+
+1. Check that the middleware is using the correct column name:
+   ```typescript
+   // CORRECT - using user_id column
+   const { data: profile } = await supabase
+     .from('sd_user_profiles')
+     .select('user_id')
+     .eq('user_id', user.id)
+     .single();
+   
+   // WRONG - the table does not have an id column
+   const { data: profile } = await supabase
+     .from('sd_user_profiles')
+     .select('id')
+     .eq('user_id', user.id)
+     .single();
+   ```
+
+2. Check that the user has a valid profile in the database:
+   ```sql
+   SELECT * FROM sd_user_profiles WHERE user_id = '5c80df74-1e2b-4435-89eb-b61b740120e9';
+   ```
+
+3. Check the Supabase logs for any errors related to the profile query:
+   - Look for PostgreSQL error messages like `column sd_user_profiles.id does not exist`
+   - Check if RLS policies are blocking access to the profile data
+
+4. Verify that the auth headers are being properly set for caching:
+   ```
+   x-has-profile: true
+   ```
+
+### Website Summarizer Issues
+
 If the website summarizer is not working:
 
 1. Check that the `OPENAI_API_KEY` environment variable is set correctly
@@ -159,12 +347,67 @@ If the website summarizer is not working:
 4. Check if the website can be scraped (some sites block scrapers)
 5. Look for detailed logging messages in the console or server logs
 
+### Common Errors and Solutions
+
+| Error | Description | Solution |
+|-------|-------------|----------|
+| `column sd_user_profiles.id does not exist` | The middleware is trying to query a non-existent column | Change `select('id')` to `select('user_id')` |
+| `Failed to update profile: duplicate key value violates unique constraint` | Trying to create a duplicate profile | Use upsert instead of insert |
+| `Failed to generate website summary` | Website summarization process failed | Check if website blocks scrapers, try with a different URL |
+| `Error: invalid input syntax for type uuid` | Invalid UUID format in a query | Ensure UUIDs are properly formatted |
+| `Error: new row violates row-level security policy` | RLS blocking an operation | Check RLS policies and user authentication
+
+## Best Practices
+
+1. **Always Use `user_id` as the Primary Key**:
+   - The table uses `user_id` as its primary key, not a separate `id` column
+   - All queries should use `user_id` for lookups and joins
+
+2. **Error Handling in Profile Queries**:
+   - Always include error handling when querying profiles
+   - Fallback gracefully when profile data can't be fetched
+
+3. **Character Limits**:
+   - Enforce character limits on the client side:
+     - Company Name: 60 characters
+     - Company Description: 300 characters
+     - Location: 60 characters
+
+4. **URL Validation**:
+   - Always validate that website URLs start with https://
+   - Don't attempt summarization on invalid URLs
+
+5. **Asynchronous Website Summarization**:
+   - Don't block the UI while generating website summaries
+   - Use placeholder text while summary is being generated
+   - Show success notification when summary completes
+
+6. **Middleware Profile Check**:
+   - Use `select('user_id')` not `select('id')` in middleware
+   - Cache profile checks with response headers
+   - Fallback to allowing access on errors rather than blocking users
+
 ## Future Enhancements
 
-1. Add caching to reduce API calls for website summarization
-2. Improve scraping for complex websites or single-page applications
-3. Add support for multi-language websites
-4. Allow uploading a business logo and portfolio examples
-5. Add photography specialties/categories selection
-6. Implement an admin panel for managing user profiles
-7. Add periodic re-summarization for websites that change frequently
+1. **Performance Improvements**:
+   - Add caching to reduce API calls for website summarization
+   - Implement background processing for summary generation
+   - Add batch summarization for multiple URLs
+
+2. **UX Improvements**:
+   - Show progress indicator during website summarization
+   - Add real-time updates for summary status
+   - Improve error messages for failed summarization
+
+3. **Feature Enhancements**:
+   - Add support for multi-language websites
+   - Allow uploading a business logo and portfolio examples
+   - Add photography specialties/categories selection
+   - Implement an admin panel for managing user profiles
+   - Add periodic re-summarization for websites that change frequently
+
+4. **Technology Improvements**:
+   - Use a more robust web scraper for complex websites
+   - Implement vector embeddings for better summarization
+   - Add a summary quality scoring system
+   - Implement WebSockets for real-time summary updates

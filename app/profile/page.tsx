@@ -2,6 +2,8 @@ import { redirect } from 'next/navigation';
 import ProfileForm from '@/components/profile-form';
 import { createServerClient } from '@/lib/supabase/server';
 
+export const dynamic = 'force-dynamic';
+
 export default async function ProfilePage() {
   // Get server-side Supabase client
   const supabase = await createServerClient();
@@ -15,11 +17,22 @@ export default async function ProfilePage() {
   }
   
   // Pre-fetch profile data server-side
-  const { data: profile } = await supabase
-    .from('sd_user_profiles')
-    .select('*')
-    .eq('user_id', user.id)
-    .single();
+  let profile = null;
+  try {
+    const { data, error } = await supabase
+      .from('sd_user_profiles')
+      .select('*')
+      .eq('user_id', user.id)
+      .single();
+      
+    if (error) {
+      console.error('Error fetching profile:', error);
+    } else {
+      profile = data;
+    }
+  } catch (error) {
+    console.error('Exception fetching profile:', error);
+  }
   
   // Check if this is first login or has existing profile
   const isFirstLogin = !profile;

@@ -248,11 +248,22 @@ export const useChatStore = create<ChatState>()(
         
         delete newConversations[conversationId];
         
-        // If we're deleting the current conversation, set current to null
-        const newCurrentId = 
-          currentConversationId === conversationId 
-            ? null 
-            : currentConversationId;
+        // If we're deleting the current conversation, set current to the most recent one
+        let newCurrentId = currentConversationId;
+        
+        if (currentConversationId === conversationId) {
+          // Find the most recent conversation
+          const remainingConversations = Object.values(newConversations);
+          if (remainingConversations.length > 0) {
+            // Sort by updatedAt in descending order
+            remainingConversations.sort((a, b) => 
+              new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+            );
+            newCurrentId = remainingConversations[0].id;
+          } else {
+            newCurrentId = null;
+          }
+        }
         
         set({
           conversations: newConversations,

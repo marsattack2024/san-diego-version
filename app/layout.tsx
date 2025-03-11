@@ -3,6 +3,8 @@ import { Toaster } from 'sonner';
 
 import { ThemeProvider } from '@/components/theme-provider';
 import { DeepSearchTracker } from '@/components/deep-search-tracker';
+import { AuthProvider } from '@/lib/supabase/auth-provider';
+import { AuthHeadersSetup } from '@/components/auth-headers-setup';
 
 import './globals.css';
 
@@ -68,7 +70,10 @@ export default async function RootLayout({
         >
           <Toaster position="top-center" />
           <DeepSearchTracker />
-          {children}
+          <AuthProvider>
+            <AuthHeadersSetup />
+            {children}
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>

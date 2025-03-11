@@ -10,26 +10,42 @@ export function initializeVectorSearch() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   
-  // Validation for environment variables
-  if (!supabaseUrl) {
-    logger.error('Missing NEXT_PUBLIC_SUPABASE_URL environment variable');
-    throw new Error('Supabase URL is required for vector search to work');
+  // Check for placeholder values or missing values
+  if (!supabaseUrl || !supabaseKey) {
+    console.warn('Missing Supabase credentials. Vector search will be disabled.');
+    return false;
   }
   
-  if (!supabaseKey) {
-    logger.error('Missing NEXT_PUBLIC_SUPABASE_ANON_KEY environment variable');
-    throw new Error('Supabase anonymous key is required for vector search to work');
+  // Check for placeholder values
+  if (supabaseUrl === 'your-supabase-url-here' || 
+      supabaseUrl.includes('your-supabase') || 
+      supabaseKey.includes('your-supabase')) {
+    console.warn('Using placeholder Supabase credentials. Vector search will be disabled.');
+    return false;
   }
   
+  // Validate URL format
   try {
-    // Validate that the URL is properly formatted
+    // Only validate the base URL without appending paths
     new URL(supabaseUrl);
-    logger.info('Vector search initialized successfully');
+    
+    // Log success with fallback
+    try {
+      logger.logVectorQuery('initialization', {}, 0, 0);
+      console.log('Vector search initialized successfully');
+    } catch (logError) {
+      console.log('Vector search initialized successfully');
+    }
+    
     return true;
   } catch (error) {
-    logger.error('Invalid NEXT_PUBLIC_SUPABASE_URL format', { error });
-    throw new Error(
-      `Supabase URL is not a valid URL. Please provide a URL in the format: https://your-project-id.supabase.co`
-    );
+    // Log URL validation error
+    console.error('Invalid Supabase URL format:', error instanceof Error ? error.message : String(error));
+    try {
+      logger.logVectorError('url_validation', error);
+    } catch (logError) {
+      // Silently continue if logger fails
+    }
+    return false;
   }
 }

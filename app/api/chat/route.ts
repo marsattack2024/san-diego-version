@@ -19,6 +19,7 @@ import { callPerplexityAPI } from '@/lib/agents/tools/perplexity/api';
 // Allow streaming responses up to 120 seconds
 export const maxDuration = 120;
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
 // Define tool schemas using Zod for better type safety
 const getInformationSchema = z.object({
@@ -95,9 +96,9 @@ export async function POST(req: Request) {
           if (!ragResult.includes("No relevant information found")) {
             toolManager.registerToolResult('Knowledge Base', ragResult);
             edgeLogger.info('RAG results found', { 
-              contentLength: ragResult.length,
+            contentLength: ragResult.length,
               firstChars: ragResult.substring(0, 100) + '...'
-            });
+          });
           } else {
             edgeLogger.info('No RAG results found');
           }
@@ -308,7 +309,20 @@ export async function POST(req: Request) {
               const textContent = completion.text || '';
               
               if (textContent && typeof textContent === 'string') {
-                fullText = textContent;
+                // Add information about tools used to ensure the client has this context
+                // This ensures the client-side storage has complete information
+                const toolsUsed = toolManager.getToolsUsed();
+                if (toolsUsed.length > 0) {
+                  // If there's no tools section yet, add one
+                  if (!textContent.includes("--- Tools and Resources Used ---")) {
+                    fullText = textContent + "\n\n--- Tools and Resources Used ---\n" + 
+                      toolsUsed.map(tool => `- ${tool}`).join('\n');
+                  } else {
+                    fullText = textContent;
+                  }
+                } else {
+                  fullText = textContent;
+                }
               } else {
                 // If no text property, try to stringify the object
                 try {
@@ -344,33 +358,16 @@ export async function POST(req: Request) {
               wasModified
             });
             
-            // Store in database
-            if (userId && id) {
-              try {
-                const supabase = await createServerClient();
-                await supabase
-                  .from('sd_chat_histories')
-                  .insert({
-                    session_id: id,
-                    role: 'assistant',
-                    content: validatedText,
-                    user_id: userId,
-                    tools_used: toolManager.getToolsUsed().length > 0 ? toolManager.getToolsUsed() : null
-                  });
-                
-                edgeLogger.info('Stored assistant response', {
-                  chatId: id,
-                  userId,
-                  contentLength: validatedText.length
-                });
-              } catch (dbError) {
-                edgeLogger.error('Failed to store assistant response', {
-                  error: dbError,
-                  chatId: id,
-                  userId
-                });
-              }
-            }
+            // We no longer store messages server-side to avoid duplicates
+            // The client-side onFinish callback in chat.tsx will handle storage
+            
+            // Just log that we completed response generation
+            edgeLogger.info('Generated assistant response', {
+              chatId: id,
+              userId,
+              contentLength: validatedText.length,
+              toolsUsed: toolManager.getToolsUsed().length
+            });
           } catch (error) {
             edgeLogger.error('Error in onFinish callback', { error });
           }

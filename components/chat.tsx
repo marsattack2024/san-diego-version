@@ -72,6 +72,15 @@ export function Chat({
           };
         }
         
+        // Check if the message content is excessively large
+        const contentLength = message.content.length;
+        const isLargeMessage = contentLength > 100000; // ~100KB threshold
+        
+        // If message is very large, trim it to prevent database issues
+        const trimmedContent = isLargeMessage 
+          ? message.content.substring(0, 100000) + `\n\n[Content truncated due to size. Original length: ${contentLength} characters]`
+          : message.content;
+        
         // Save the assistant message to Supabase
         const response = await fetch(`/api/chat/${id}`, {
           method: 'POST',
@@ -81,14 +90,19 @@ export function Chat({
           body: JSON.stringify({
             message: {
               role: message.role,
-              content: message.content,
+              content: trimmedContent,
             },
             toolsUsed,
           }),
         });
         
         if (!response.ok) {
-          console.error('Failed to save assistant message');
+          // Get detailed error information from the response
+          response.json().then(data => {
+            console.error('Failed to save assistant message:', data);
+          }).catch(err => {
+            console.error('Failed to save assistant message, could not parse error:', err);
+          });
         }
       } catch (error) {
         console.error('Error saving assistant message:', error);
@@ -128,7 +142,12 @@ export function Chat({
         });
         
         if (!response.ok) {
-          console.error('Failed to save user message');
+          // Get detailed error information from the response
+          response.json().then(data => {
+            console.error('Failed to save user message:', data);
+          }).catch(err => {
+            console.error('Failed to save user message, could not parse error:', err);
+          });
         } else {
           // If this is the first message, update the chat title
           const chatMessages = messages.filter(m => m.role === 'user');

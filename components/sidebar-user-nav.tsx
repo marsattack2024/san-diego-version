@@ -3,7 +3,6 @@ import { ChevronUp, User as UserIcon, Camera, Pencil } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
-import { useEffect, useState } from 'react';
 
 import {
   DropdownMenu,
@@ -17,8 +16,9 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar';
-import { createBrowserClient } from '@/lib/supabase/client';
 import { UserProfile } from '@/lib/db/schema';
+import { useAuth } from '@/lib/supabase/auth-provider';
+import { useAuthStore } from '@/stores/auth-store';
 
 // Define a User type that matches what we get from Supabase
 export interface User {
@@ -32,29 +32,13 @@ export interface User {
 export function SidebarUserNav({ user }: { user: User }) {
   const { setTheme, theme } = useTheme();
   const router = useRouter();
-  const supabase = createBrowserClient();
-  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const { profile } = useAuth(); // Use cached profile from auth context
+  const logout = useAuthStore(state => state.logout);
   
-  useEffect(() => {
-    async function fetchUserProfile() {
-      if (user?.id) {
-        const { data, error } = await supabase
-          .from('sd_user_profiles')
-          .select('*')
-          .eq('user_id', user.id)
-          .single();
-          
-        if (data && !error) {
-          setUserProfile(data as UserProfile);
-        }
-      }
-    }
-    
-    fetchUserProfile();
-  }, [user, supabase]);
+  // No need to fetch profile, it's already available from auth context
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    await logout(); // Use the logout function from auth store
     router.push('/login');
     router.refresh();
   };
@@ -73,12 +57,12 @@ export function SidebarUserNav({ user }: { user: User }) {
                   height={24}
                   className="rounded-full"
                 />
-                {userProfile && (
+                {profile && (
                   <div className="absolute -bottom-1 -right-1 h-3 w-3 rounded-full border-2 border-background bg-green-500" />
                 )}
               </div>
               <span className="truncate">
-                {userProfile?.company_name || user?.email || `User ${user.id.substring(0,8)}`}
+                {profile?.company_name || user?.email || `User ${user.id.substring(0,8)}`}
               </span>
               <ChevronUp className="ml-auto" />
             </SidebarMenuButton>
@@ -87,11 +71,11 @@ export function SidebarUserNav({ user }: { user: User }) {
             side="top"
             className="w-[--radix-popper-anchor-width]"
           >
-            {userProfile && (
+            {profile && (
               <>
                 <div className="px-2 py-1.5 text-sm">
-                  <div className="font-medium">{userProfile.company_name}</div>
-                  <div className="text-xs text-muted-foreground truncate">{userProfile.location || 'No location set'}</div>
+                  <div className="font-medium">{profile.company_name}</div>
+                  <div className="text-xs text-muted-foreground truncate">{profile.location || 'No location set'}</div>
                 </div>
                 <DropdownMenuSeparator />
               </>
@@ -101,7 +85,7 @@ export function SidebarUserNav({ user }: { user: User }) {
               className="cursor-pointer"
               onSelect={() => router.push('/profile')}
             >
-              {userProfile ? (
+              {profile ? (
                 <>
                   <Pencil className="mr-2 h-4 w-4" />
                   Edit profile

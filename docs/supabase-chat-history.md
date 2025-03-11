@@ -91,7 +91,9 @@ The following components interact with the chat history system:
 
 2. **Chat**
    - Manages the current chat session
-   - Stores user and assistant messages in Supabase
+   - Stores both user and assistant messages in Supabase
+   - Uses the `onFinish` callback to save assistant messages after streaming completes
+   - Extracts tool usage information from message content
    - Updates the chat session's updated_at timestamp
 
 3. **MessageActions**
@@ -105,8 +107,10 @@ The following components interact with the chat history system:
    - UUIDs are generated client-side and passed to Supabase for consistency
 
 2. **Message Storage**
-   - User messages are stored when sent
-   - Assistant messages are stored after streaming completes
+   - All message storage is handled by the client-side components
+   - The server ensures tool usage information is included in the response text
+   - User messages are stored immediately when sent
+   - Assistant messages are stored after streaming completes via client-side code
 
 3. **Deletion Behavior**
    - Deleting a chat session cascades to delete all messages
@@ -172,6 +176,53 @@ const updateVote = async (messageId: string, vote: 'up' | 'down' | null) => {
 - **Search Functionality**: Text search across chat history could be implemented using Supabase's full-text search.
 - **Pagination**: For users with many chats, pagination should be implemented to improve performance.
 - **Bulk Operations**: Adding bulk delete and export functionality would be useful for managing large numbers of chats.
+
+## Message Storage Flow
+
+The sequence for storing chat messages follows a specific pattern:
+
+1. **User Message Storage**:
+   - When a user submits a message, it's stored in Supabase before being sent to the AI
+   - The client-side `handleSubmitWithSave` function handles this synchronous storage
+   - This ensures the user's message is saved even if the AI response fails
+
+2. **AI Processing**:
+   - The message is sent to the AI for processing
+   - The server processes the request and generates a response
+   - Tools like RAG, Deep Search, and Web Scraper may be used in the process
+   - Tool usage information is appended to the response if not already present
+
+3. **Assistant Message Storage**:
+   - After streaming completes, the client-side `onFinish` callback saves the assistant message
+   - Tool usage information is extracted from the message content
+   - The message and tool usage are saved to Supabase via API call to `/api/chat/[id]`
+
+4. **History Update**:
+   - After successful save, the chat history in the sidebar is refreshed
+   - This ensures the conversation list stays up-to-date
+
+## Troubleshooting Chat Message Storage
+
+When working with chat message storage, be aware of the following potential issues:
+
+1. **Large Message Content**:
+   - Messages with extremely large content (>100KB) will be automatically truncated to prevent database issues
+   - A note is appended to inform users that content was truncated
+
+2. **Tools Used Format**:
+   - The `tools_used` field must be in a valid JSONB format
+   - For assistant messages, tools are extracted from the message content and properly formatted
+   - The system handles both array and object formats for tools_used
+
+3. **Error Handling**:
+   - Enhanced error logging provides detailed information in browser console and server logs
+   - API responses include detailed error information for debugging
+
+4. **Common Issues**:
+   - Authentication failures if user session expired during chat
+   - Message size limitations for very large responses
+   - Invalid format in tools_used field
+   - API request failures due to network issues
 
 ## Environment Variables
 

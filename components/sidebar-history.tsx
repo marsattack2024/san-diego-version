@@ -3,7 +3,6 @@
 import { isToday, isYesterday, subMonths, subWeeks } from 'date-fns';
 import Link from 'next/link';
 import { useParams, usePathname, useRouter } from 'next/navigation';
-import type { User } from 'next-auth';
 import { memo, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import useSWR from 'swr';
@@ -37,6 +36,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from '@/components/ui/sidebar';
+import type { User } from '@/components/sidebar-user-nav';
 import type { Chat } from '@/lib/db/schema';
 import { fetcher } from '@/lib/utils';
 
@@ -99,7 +99,8 @@ export const ChatItem = memo(PureChatItem, (prevProps, nextProps) => {
 
 export function SidebarHistory({ user }: { user: User | undefined }) {
   const { setOpenMobile } = useSidebar();
-  const { id } = useParams();
+  const params = useParams();
+  const id = params?.id as string;
   const pathname = usePathname();
   
   // Debug log to confirm user is received
@@ -120,28 +121,43 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const router = useRouter();
-  const handleDelete = async () => {
-    const deletePromise = fetch(`/api/history?id=${deleteId}`, {
-      method: 'DELETE',
-    });
+  const [isDeleting, setIsDeleting] = useState(false);
 
-    toast.promise(deletePromise, {
-      loading: 'Deleting chat...',
-      success: () => {
-        mutate((history) => {
-          if (history) {
-            return history.filter((h) => h.id !== deleteId);
-          }
-        });
-        return 'Chat deleted successfully';
-      },
-      error: 'Failed to delete chat',
-    });
-
-    setShowDeleteDialog(false);
-
-    if (deleteId === id) {
-      router.push('/');
+  const handleDelete = async (deleteId: string) => {
+    try {
+      setIsDeleting(true);
+      
+      // Send delete request to API
+      const response = await fetch(`/api/history?id=${deleteId}`, {
+        method: 'DELETE',
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to delete chat');
+      }
+      
+      // Update UI
+      mutate();
+      
+      // If we're deleting the current chat, navigate to the most recent one
+      if (id === deleteId) {
+        // Get the most recent chat from the updated data
+        const updatedData = await fetcher('/api/history');
+        if (updatedData && updatedData.length > 0) {
+          // Navigate to the most recent chat
+          router.push(`/chat/${updatedData[0].id}`);
+        } else {
+          // If no chats left, go to new chat page
+          router.push('/chat');
+        }
+      }
+      
+      toast.success('Chat deleted successfully');
+    } catch (error) {
+      console.error('Error deleting chat:', error);
+      toast.error('Failed to delete chat');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -358,7 +374,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete}>
+            <AlertDialogAction onClick={() => handleDelete(deleteId as string)}>
               Continue
             </AlertDialogAction>
           </AlertDialogFooter>

@@ -62,47 +62,13 @@ export async function GET(request: NextRequest) {
       .maybeSingle();
     
     if (sessionError || !session_data) {
-      edgeLogger.info('Chat session not found, attempting to create on the fly', { 
+      edgeLogger.info('Chat session not found for voting, returning empty votes', { 
         userId: user.id, 
         sessionId: chatId 
       });
       
-      // Create the chat session on the fly
-      try {
-        const { data: newChat, error: createError } = await serverClient
-          .from('sd_chat_sessions')
-          .insert({
-            id: chatId,
-            user_id: user.id,
-            title: 'New Chat',
-            agent_id: 'default',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          })
-          .select()
-          .single();
-        
-        if (createError) {
-          edgeLogger.error('Failed to create new chat session for voting', { 
-            error: createError, 
-            chatId 
-          });
-          // Return an empty array instead of an error
-          return NextResponse.json([]);
-        }
-        
-        edgeLogger.info('Created new chat session on the fly for voting', { 
-          chatId,
-          userId: user.id
-        });
-        
-        // Continue with empty votes since it's a new chat
-        return NextResponse.json([]);
-      } catch (createError) {
-        edgeLogger.error('Error creating new chat session for voting', { error: createError });
-        // Return an empty array instead of an error
-        return NextResponse.json([]);
-      }
+      // Return empty votes instead of creating a new chat
+      return NextResponse.json([]);
     }
     
     // Get all messages with votes for this chat
@@ -119,7 +85,7 @@ export async function GET(request: NextRequest) {
     }
     
     // Format the response to match frontend expectations
-    const votes = messages.map(message => ({
+    const votes = messages.map((message: any) => ({
       chatId,
       messageId: message.id,
       isUpvoted: message.vote === 'up'
@@ -189,7 +155,7 @@ export async function POST(request: NextRequest) {
     edgeLogger.info('Received vote request', { messageId: messageId, voteType: vote });
     
     // Check if we're dealing with a compound ID (chatId-msgId format which frontend now sends)
-    let actualMessageId = messageId;
+    const actualMessageId = messageId;
     let sessionId: string | null = null;
     
     if (messageId.includes('-msg-')) {
@@ -209,7 +175,7 @@ export async function POST(request: NextRequest) {
     // First check if this is a UUID that we can look up directly
     const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actualMessageId);
     
-    let message = null;
+    let message: { id: string; session_id: string } | null = null;
     let messageError = null;
     
     if (isUUID) {
@@ -266,49 +232,18 @@ export async function POST(request: NextRequest) {
     const { data: session_data, error: sessionError } = await serverClient
       .from('sd_chat_sessions')
       .select('id')
-      .eq('id', message.session_id)
+      .eq('id', message?.session_id || '')
       .eq('user_id', user.id)
       .maybeSingle();
     
-    if (sessionError || !session_data) {
-      edgeLogger.info('Chat session not found for voting, attempting to create on the fly', { 
+    if (sessionError || !session_data || !message) {
+      edgeLogger.info('Chat session not found for voting, skipping vote update', { 
         userId: user.id, 
-        sessionId: message.session_id 
+        sessionId: message?.session_id || 'unknown'
       });
       
-      // Create the chat session on the fly
-      try {
-        const { data: newChat, error: createError } = await serverClient
-          .from('sd_chat_sessions')
-          .insert({
-            id: message.session_id,
-            user_id: user.id,
-            title: 'New Chat',
-            agent_id: 'default',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          })
-          .select()
-          .single();
-        
-        if (createError) {
-          edgeLogger.error('Failed to create new chat session for message voting', { 
-            error: createError, 
-            sessionId: message.session_id 
-          });
-          // Return success instead of error
-          return NextResponse.json({ success: true });
-        }
-        
-        edgeLogger.info('Created new chat session on the fly for message voting', { 
-          sessionId: message.session_id,
-          userId: user.id
-        });
-      } catch (createError) {
-        edgeLogger.error('Error creating new chat session for message voting', { error: createError });
-        // Return success instead of error
-        return NextResponse.json({ success: true });
-      }
+      // Return success without creating a new chat
+      return NextResponse.json({ success: true });
     }
     
     // Update the vote using the actual database message ID we found

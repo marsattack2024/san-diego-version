@@ -165,7 +165,16 @@ export async function buildEnhancedSystemPrompt(
         // Group by session_id to get conversations
         const sessionGroups: Record<string, typeof chatHistory> = {};
         
-        chatHistory.forEach(msg => {
+        // Define chat history item interface
+        interface ChatHistoryItem {
+          session_id: string;
+          role: 'user' | 'assistant' | 'system' | 'tool';
+          content: string;
+          created_at: string;
+          tools_used?: any;
+        }
+        
+        chatHistory.forEach((msg: ChatHistoryItem) => {
           if (!sessionGroups[msg.session_id]) {
             sessionGroups[msg.session_id] = [];
           }
@@ -181,14 +190,14 @@ export async function buildEnhancedSystemPrompt(
           recentSessions.forEach(sessionId => {
             // Sort messages by created_at
             const sessionMessages = sessionGroups[sessionId].sort(
-              (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+              (a: ChatHistoryItem, b: ChatHistoryItem) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
             );
             
             if (sessionMessages.length > 0) {
               // Add only the 2-3 most recent exchanges per session to maintain context without overwhelming
               const recentMessages = sessionMessages.slice(-6);
               
-              recentMessages.forEach(msg => {
+              recentMessages.forEach((msg: ChatHistoryItem) => {
                 // Format the message content to be concise
                 let formattedContent = msg.content;
                 if (formattedContent.length > 150) {

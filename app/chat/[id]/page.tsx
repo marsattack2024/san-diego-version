@@ -1,5 +1,7 @@
 'use client';
 
+export const dynamic = 'force-dynamic';
+
 import { Chat } from '@/components/chat';
 import { ChatClient } from './chat-client';
 import { useEffect } from 'react';
