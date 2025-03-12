@@ -26,3 +26,7 @@
 Remember to follow Next.js App Router patterns and AI SDK best practices.
 
 Always look for files and directories to exist before creating your own.
+
+Always explain every step that you're doing to the user and update a readme file for the topic or create one if it doesn't exist in the docs folder. 
+
+Never assume that the user knows the most efficient way to operate, so when you're tasked to do something or tasked to make a plan, always look for an alternate, better solution than his. 

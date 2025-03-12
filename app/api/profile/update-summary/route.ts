@@ -4,6 +4,7 @@ import { logger } from '@/lib/logger';
 import { generateWebsiteSummary } from '@/lib/agents/tools/website-summarizer';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60; // Maximum allowed duration for Hobby plan (60 seconds)
 
 /**
  * Endpoint to generate and update a user's profile website summary

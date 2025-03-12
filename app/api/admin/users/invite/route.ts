@@ -11,7 +11,7 @@ async function isAdmin(supabase: any, userId: string) {
 
 // POST /api/admin/users/invite - Invite a new user
 export async function POST(request: Request) {
-  // Get cookies with pre-fetching
+  // Get cookies with pre-fetching (best practice for NextJS)
   const cookieStore = cookies();
   const cookieList = await cookieStore.getAll();
   
@@ -98,6 +98,35 @@ export async function POST(request: Request) {
       }
       
       console.log('User invited successfully:', data.user.id);
+      
+      // Create a minimal profile record so the user appears in the admin dashboard
+      try {
+        // Extract name from email for initial profile (e.g., john from john@example.com)
+        const emailName = email.split('@')[0];
+        const userName = emailName.charAt(0).toUpperCase() + emailName.slice(1);
+        
+        // Create minimal placeholder profile for the user
+        const { error: profileError } = await supabase
+          .from('sd_user_profiles')
+          .insert([{
+            user_id: data.user.id,
+            full_name: userName,
+            company_name: 'Pending Setup',
+            company_description: 'Pending profile completion',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          }]);
+          
+        if (profileError) {
+          console.warn('Created user but failed to create profile:', profileError);
+          // Don't fail the request, just log the warning
+        } else {
+          console.log('Created placeholder profile for user:', data.user.id);
+        }
+      } catch (profileErr) {
+        console.warn('Error creating placeholder profile:', profileErr);
+        // Don't fail the request, just log the warning
+      }
       
       // Return success response with the user data
       return NextResponse.json({ 

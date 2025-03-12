@@ -178,15 +178,21 @@ export async function middleware(request: NextRequest) {
       // Get user profile - use a cached profile check if possible
       const hasProfileHeader = request.headers.get('x-has-profile');
       
-      // For more reliable profile checking
-      if (hasProfileHeader === 'true') {
-        // If header indicates profile exists, trust it and continue
+      // Only trust the header if it's explicitly set to true and not too old
+      // This prevents issues with incorrect caching
+      const headerTimestamp = request.headers.get('x-profile-check-time');
+      const headerAge = headerTimestamp ? Date.now() - parseInt(headerTimestamp, 10) : Infinity;
+      const isHeaderValid = hasProfileHeader === 'true' && headerAge < 5 * 60 * 1000; // 5 minutes
+      
+      if (isHeaderValid) {
+        // If valid header indicates profile exists, trust it and continue
         // This speeds up navigation when we know the profile exists
         supabaseResponse.headers.set('x-has-profile', 'true');
+        supabaseResponse.headers.set('x-profile-check-time', headerTimestamp || Date.now().toString());
       } else {
-        // If no header or header is 'false', verify with database
+        // If no header, header is 'false', or header is too old, verify with database
         try {
-          console.log('Debug: Checking profile for user:', user.id);
+          edgeLogger.info('Middleware: Checking profile for user', { userId: user.id });
           const { data: profile, error } = await supabase
             .from('sd_user_profiles')
             .select('user_id') // Select user_id instead of id since that's the column we have
@@ -194,25 +200,27 @@ export async function middleware(request: NextRequest) {
             .single();
             
           if (error) {
-            console.error('Error checking profile:', error);
-            // In case of error, don't block access - just continue
-            supabaseResponse.headers.set('x-has-profile', 'true');
+            edgeLogger.error('Middleware: Error checking profile', { error, userId: user.id });
+            // In case of database error, redirect to profile page to be safe
+            // This ensures users don't bypass profile setup due to errors
+            return NextResponse.redirect(new URL('/profile', request.url));
           } else {
             // Set header based on profile existence
             const hasProfile = !!profile;
             supabaseResponse.headers.set('x-has-profile', hasProfile ? 'true' : 'false');
+            supabaseResponse.headers.set('x-profile-check-time', Date.now().toString());
               
             // Only redirect if explicitly no profile and not already on profile page
             if (!hasProfile && pathname !== PROFILE_PATH) {
-              console.log('Debug: No profile found, redirecting to profile setup');
+              edgeLogger.info('Middleware: No profile found, redirecting to profile setup', { userId: user.id });
               return NextResponse.redirect(new URL('/profile', request.url));
             }
           }
         } catch (error) {
-          console.error('Error checking user profile:', error);
-          // On error, don't redirect - let the user continue
-          // This prevents error loops
-          supabaseResponse.headers.set('x-has-profile', 'true');
+          edgeLogger.error('Middleware: Exception checking user profile', { error, userId: user.id });
+          // On unexpected error, redirect to profile page to be safe
+          // This ensures users don't bypass profile setup due to errors
+          return NextResponse.redirect(new URL('/profile', request.url));
         }
       }
     }

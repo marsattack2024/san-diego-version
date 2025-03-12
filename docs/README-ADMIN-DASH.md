@@ -804,7 +804,6 @@ To modify the theme:
 | `/api/admin/users/[userId]` | GET | Get user details |
 | `/api/admin/users/[userId]` | DELETE | Delete a user |
 | `/api/admin/users/invite` | POST | Send invitation to new user |
-| `/api/admin/users/make-admin` | POST | Make a user an admin |
 | `/api/admin/users/revoke-admin` | POST | Revoke admin role |
 
 ### Admin Client API
@@ -814,9 +813,628 @@ adminApi.getUsers(): Promise<User[]>
 adminApi.getUser(id: string): Promise<User>
 adminApi.inviteUser(email: string): Promise<{ success: boolean }>
 adminApi.deleteUser(id: string): Promise<{ success: boolean }>
-adminApi.makeAdmin(email: string): Promise<{ success: boolean }>
 adminApi.revokeAdmin(email: string): Promise<{ success: boolean }>
 adminApi.getDashboardStats(): Promise<DashboardStats>
 ```
 
 This comprehensive technical documentation should provide developers with all the information they need to understand, maintain, and extend the admin dashboard system.
+
+# Admin Dashboard System Documentation
+
+This comprehensive documentation explains how the admin dashboard system works, covering user setup, interface, features, and technical implementation details for developers.
+
+## 1. System Overview
+
+The admin dashboard is a secure, role-based administration interface that allows authorized users to:
+
+- View system statistics and user activity
+- Manage users (invite, view, promote, delete)
+- Configure system settings
+- Access specialized admin functions
+
+The system uses Supabase for authentication and data storage, with Next.js App Router for the frontend.
+
+## 2. Admin Setup and Access
+
+### Setting Up Your First Admin User
+
+When first deploying the application, you must designate an initial admin user:
+
+1. Register a standard user account through normal signup
+2. Configure environment variables:
+   ```
+   SUPABASE_URL=your-project-url
+   SUPABASE_KEY=your-service-role-key (not the anon key)
+   ```
+3. Run the setup script:
+   ```bash
+   npm run setup:first-admin your@email.com
+   ```
+
+### Admin Access Control
+
+The system enforces admin access through:
+
+1. **Middleware Protection**:
+   - All routes under `/admin/*` are protected
+   - Checks admin status through both profile flag and roles table
+   - Redirects unauthorized users to `/unauthorized`
+
+2. **Role Verification**:
+   - Admin API endpoints double-check admin status
+   - RLS policies enforce database-level access control 
+   - Admin status is stored redundantly for reliability
+
+## 3. Admin Dashboard Interface
+
+### Dashboard Layout
+
+The admin interface consists of:
+
+- **Sidebar Navigation**: Access to all admin sections
+- **Header**: User info, notifications, theme controls
+- **Main Content Area**: Section-specific content
+- **Modal Dialogs**: For actions like user invitation, deletion
+
+### Main Sections
+
+#### Dashboard Home (`/admin`)
+
+The home dashboard presents:
+- User statistics (total users, admins, active users)
+- System activity metrics
+- Recent user activities
+- Quick action buttons
+
+#### Users Management (`/admin/users`)
+
+The user management interface allows:
+- Viewing all users with search and filtering
+- Inviting new users via email
+- Viewing detailed user information
+- Granting/revoking admin privileges
+- Deleting user accounts
+
+#### Settings (`/admin/settings`)
+
+Settings sections include:
+- Account settings
+- Appearance settings (themes, UI preferences)
+- System configuration
+
+## 4. Technical Implementation
+
+### File Structure
+
+```
+/app/admin/                      # Next.js App Router admin pages
+├── layout.tsx                   # Admin layout with navigation
+├── page.tsx                     # Dashboard homepage
+├── error.tsx                    # Error boundary component
+├── users/                       # User management section
+│   ├── components/              # User-specific components
+│   │   └── users-adapter.tsx    # Data transformation
+│   └── page.tsx                 # Users listing page
+├── settings/                    # Settings section
+│   ├── page.tsx                 # Settings landing page
+│   ├── account/page.tsx         # Account settings
+│   └── appearance/page.tsx      # Appearance settings
+└── unauthorized/page.tsx        # Unauthorized access page
+
+/app/api/admin/                  # Admin API endpoints
+├── dashboard/route.ts           # Dashboard statistics
+├── users/                       # User management APIs
+│   ├── route.ts                 # List all users
+│   ├── [userId]/route.ts        # Single user operations
+│   ├── invite/route.ts          # User invitation
+│   ├── make-admin/route.ts      # Grant admin role
+│   └── revoke-admin/route.ts    # Revoke admin role
+
+/components/admin/               # Reusable admin components
+├── features/                    # Feature-specific components
+│   └── users/                   # User management components
+│       ├── components/          # User interface components
+│       │   ├── users-columns.tsx # Table column definitions
+│       │   └── users-table.tsx   # User data table
+│       ├── context/             # Context providers
+│       └── data/                # Data schemas and types
+
+/lib/admin/                      # Admin utilities and services
+└── api-client.ts                # API client for admin endpoints
+
+/stores/                         # State management
+└── auth-store.ts                # Authentication store with admin state
+
+/supabase/migrations/            # Database structure
+├── add_admin_role.sql           # Admin role setup
+└── ensure_cascade_deletes.sql   # Data integrity rules
+```
+
+### Key Technologies
+
+- **Frontend**: Next.js 14+ (App Router), React, TailwindCSS, shadcn/ui
+- **State Management**: Zustand, React Query
+- **Backend**: Next.js API routes, Supabase Admin API
+- **Database**: PostgreSQL via Supabase with RLS policies
+
+### Authentication Flow
+
+1. Users authenticate through standard application login
+2. The middleware checks admin status for protected routes
+3. Admin status is determined through:
+   - The `is_admin` flag in user profiles (fast check)
+   - The `is_admin()` database function (definitive check)
+4. Admin privileges grant access to the dashboard and API endpoints
+
+### User Management Features
+
+#### 1. User Listing and Search
+
+The users page (`/admin/users`) retrieves data from `/api/admin/users`:
+
+```javascript
+// In app/admin/users/page.tsx
+const fetchUsers = async () => {
+  setIsLoading(true);
+  try {
+    const response = await fetch('/api/admin/users');
+    const data = await response.json();
+    setUsers(data.users || []);
+    // Handle pagination, sorting, filtering
+  } catch (err) {
+    // Error handling
+  } finally {
+    setIsLoading(false);
+  }
+};
+```
+
+The API endpoint (`/app/api/admin/users/route.ts`) fetches user data from:
+- `sd_user_profiles` table for profile information
+- `auth.users` table for auth details when available
+- `sd_user_roles` table for role information
+
+##### Data Flow and Field Mapping
+
+The user data flows through the system as follows:
+
+1. **Database Layer**: 
+   - `auth.users` contains basic user information (email, created_at, last_sign_in_at)
+   - `sd_user_profiles` contains extended profile data (full_name, company_name, website_url, etc.)
+   - `sd_user_roles` contains role assignments (admin status)
+
+2. **API Layer** (`/app/api/admin/users/route.ts`):
+   - Fetches users from `auth.users` using `supabase.auth.admin.listUsers()`
+   - Fetches profiles from `sd_user_profiles` using `supabase.from('sd_user_profiles').select('*')`
+   - Maps auth users to their profiles using string comparison of IDs
+   - Combines data into a unified user object with all necessary fields:
+   
+   ```javascript
+   return {
+     user_id: authUser.id,
+     full_name: profile ? profile.full_name : (authUser.user_metadata?.name || "Unknown Name"),
+     email: authUser.email,
+     is_admin: profile ? (profile.is_admin === true || profile.is_admin === 'true') : false,
+     company: profile ? profile.company_name : "No profile",
+     has_profile: !!profile,
+     // Include auth user's created_at
+     created_at: authUser.created_at || (profile ? profile.created_at : null),
+     // Include all profile fields if available
+     ...(profile ? {
+       company_name: profile.company_name,
+       website_url: profile.website_url,
+       company_description: profile.company_description,
+       location: profile.location,
+       updated_at: profile.updated_at,
+       website_summary: profile.website_summary
+     } : {}),
+     // Include auth user fields
+     last_sign_in_at: authUser.last_sign_in_at
+   };
+   ```
+
+3. **Frontend Layer** (`/app/admin/users/page.tsx`):
+   - Receives the combined user objects from the API
+   - Displays user information in a table with columns for name, email, ID, created date, and admin status
+   - Shows company information under the user's name
+   - Provides a detailed view dialog that shows all user information
+
+##### Important Implementation Details
+
+1. **Field Mapping**: 
+   - The API returns both `company` (a processed field) and `company_name` (the raw database field)
+   - The frontend should check both fields: `{user.company || user.company_name || 'No company information'}`
+   - Similar approach for other fields that might have multiple sources
+
+2. **Type Handling**:
+   - `is_admin` can be a boolean or string ('true'/'false'), so comparisons should handle both:
+   ```javascript
+   user.is_admin === true || user.is_admin === 'true'
+   ```
+
+3. **Date Formatting**:
+   - Dates from the database need to be properly formatted for display:
+   ```javascript
+   {user.created_at ? new Date(user.created_at).toLocaleString() : '-'}
+   ```
+
+4. **User ID Comparison**:
+   - When matching auth users to profiles, always use string comparison:
+   ```javascript
+   profiles?.find(p => String(p.user_id) === String(authUser.id))
+   ```
+
+5. **Fallback Values**:
+   - Always provide fallbacks for missing data:
+   ```javascript
+   full_name: profile ? (profile.full_name || authUser.user_metadata?.name || "Unknown Name") : (authUser.user_metadata?.name || "Unknown Name")
+   ```
+
+#### 2. User Invitation System
+
+The invitation flow uses Supabase's `inviteUserByEmail` method:
+
+```javascript
+// In /app/api/admin/users/invite/route.ts
+const { data, error } = await supabase.auth.admin.inviteUserByEmail(email);
+```
+
+This process:
+1. Creates a new user in `auth.users`
+2. Generates a magic link with a secure token
+3. Sends an invitation email to the address
+4. When clicked, directs to password setup
+5. After first login, middleware directs to profile setup
+
+#### 3. User Detail View
+
+User details are displayed in a modal dialog showing:
+- Account information (email, ID, signup date)
+- Profile data (name, company, location)
+- Admin status
+- Actions (make admin, delete)
+
+The UI components are defined in `/components/admin/features/users/` and use a React Context for state management.
+
+#### 4. Admin Role Management
+
+Admin role assignment happens through:
+
+```javascript
+// In /app/api/admin/users/make-admin/route.ts
+const { data, error } = await supabase.rpc('make_user_admin', { user_email: email });
+```
+
+The database function:
+1. Adds a record to `sd_user_roles` with role='admin'
+2. Sets `is_admin=true` in the user's profile
+3. Returns success/failure message
+
+#### 5. User Deletion
+
+User deletion is handled by:
+
+```javascript
+// In /app/api/admin/users/[userId]/route.ts
+const { error } = await supabase.auth.admin.deleteUser(userId);
+```
+
+This process:
+1. Removes the user from `auth.users`
+2. Cascading deletes propagate to:
+   - `sd_user_profiles`
+   - `sd_user_roles`
+   - `sd_chat_sessions`
+   - `sd_chat_histories`
+   - Any other tables with foreign key relationships
+
+### Dashboard Statistics
+
+The dashboard stats are fetched from `/api/admin/dashboard`:
+
+```javascript
+// In /app/api/admin/dashboard/route.ts
+// Get user count
+const { count: userCount } = await supabase
+  .from('sd_user_profiles')
+  .select('*', { count: 'exact', head: true });
+
+// Get chat count
+const { count: chatCount } = await supabase
+  .from('sd_chat_histories')
+  .select('*', { count: 'exact', head: true });
+
+// Get admin count
+const { count: adminCount } = await supabase
+  .from('sd_user_roles')
+  .select('*', { count: 'exact', head: true })
+  .eq('role', 'admin');
+```
+
+### Database Structure
+
+The admin system relies on these key tables:
+
+1. **auth.users** - Core authentication table (managed by Supabase)
+   - Contains email, hashed password, and metadata
+   - Primary source of user identity
+
+2. **sd_user_profiles** - Extended user information
+   - `user_id` links to `auth.users.id` with `ON DELETE CASCADE`
+   - Contains `full_name`, `company_name`, and profile data
+   - Includes `is_admin` boolean flag for admin status
+
+3. **sd_user_roles** - Role assignments for permissions
+   - Links `user_id` to `auth.users.id` with `ON DELETE CASCADE`
+   - Used for 'admin' role and potentially other roles
+   - Each role is a separate row for flexibility
+
+4. **sd_chat_sessions & sd_chat_histories** - User content
+   - Linked to users with cascading references
+   - Contains the actual application data
+
+Database functions handle special operations:
+- `is_admin(uid)` - Checks admin status
+- `make_user_admin(email)` - Grants admin role
+- `revoke_admin(email)` - Removes admin role
+- `complete_user_deletion(uid)` - For manual deletion scenarios
+
+## 5. State Management
+
+### Auth Store
+
+The `auth-store.ts` manages authentication state:
+
+```javascript
+// In /stores/auth-store.ts
+interface AuthState {
+  user: User | null;
+  profile: UserProfile | null;
+  isAuthenticated: boolean;
+  isAdmin: boolean;
+  // More fields and methods...
+  
+  checkAdminRole: () => Promise<boolean>;
+  adminDeleteUser: (userId: string) => Promise<{ success: boolean, error?: string }>;
+}
+```
+
+This store:
+- Tracks user authentication state
+- Caches profile information
+- Maintains admin status
+- Provides admin-specific methods
+
+### Query Management
+
+React Query handles data fetching and caching:
+
+```javascript
+// In /app/admin/layout.tsx
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      staleTime: 10 * 1000, // 10s
+    },
+  },
+});
+
+export default function AdminLayout({ children }) {
+  return (
+    <QueryClientProvider client={queryClient}>
+      {/* Layout components */}
+    </QueryClientProvider>
+  );
+}
+```
+
+## 6. UI Components
+
+The admin UI uses these key component types:
+
+### Layout Components
+
+- `app/admin/layout.tsx` - Main admin layout
+- `components/admin/app-sidebar.tsx` - Navigation sidebar
+- `components/admin/header.tsx` - Top navigation bar
+
+### Data Display Components
+
+- `components/admin/users-table.tsx` - User listing with advanced features
+- `components/admin/data-table-column-header.tsx` - Sortable column headers
+- `components/admin/data-table-pagination.tsx` - Table pagination
+
+### Interactive Components
+
+- Dialog modals for user actions
+- Forms for data input
+- Confirmation alerts for destructive actions
+
+All components are built with shadcn/ui's accessible component library, which is based on Radix UI primitives and styled with Tailwind CSS.
+
+## 7. Security Considerations
+
+### Authentication Security
+
+- Uses Supabase Auth with JWT tokens
+- Admin checks occur at multiple levels:
+  - Middleware (route protection)
+  - API endpoints (action authorization)
+  - Database (row-level security)
+
+### API Security
+
+- Admin API uses service role key, never exposed to client
+- All endpoints verify admin status before operations
+- Rate limiting prevents abuse
+- Input validation prevents injection attacks
+
+### Data Security
+
+- Row Level Security (RLS) enforces access control at the database
+- Foreign key constraints maintain data integrity
+- Cascading deletes prevent orphaned records
+
+## 8. Troubleshooting
+
+### Common Issues
+
+#### Access Problems
+
+```
+Error: Unauthorized access or Forbidden (403)
+```
+
+Check:
+- User has admin role in `sd_user_roles`
+- `is_admin` flag is set in profile
+- Middleware is correctly evaluating admin status
+
+#### API Errors
+
+```
+Error: cookies().getAll() should be awaited
+```
+
+Check:
+- The API route properly prefetches cookies:
+  ```javascript
+  const cookieStore = cookies();
+  const cookieList = await cookieStore.getAll();
+  // Use cookieList in Supabase client creation
+  ```
+
+#### User Management Issues
+
+For invitation failures:
+- Verify service role key (SUPABASE_KEY) is set
+- Check Supabase email templates
+- Ensure proper error handling
+
+For deletion problems:
+- Verify cascade delete relationships
+- Check for locks or constraints
+- Use the manual deletion fallback
+
+For user data display issues:
+- **Field Mapping Problems**: If user profile data (company, website, etc.) appears in the main list but not in the detailed view:
+  - Ensure the API is returning both processed fields (`company`) and raw database fields (`company_name`)
+  - Check that the frontend is looking for both field names: `{user.company || user.company_name || 'No company information'}`
+  - Verify that all profile fields are being included in the API response
+
+- **Admin Status Issues**: If admin status isn't correctly reflected:
+  - Check both the `sd_user_profiles.is_admin` flag and `sd_user_roles` table
+  - Ensure the `is_admin` RPC function is working correctly
+  - Remember that `is_admin` can be a boolean or string, so use `user.is_admin === true || user.is_admin === 'true'`
+
+- **Missing Profile Data**: If users appear without profiles:
+  - Verify that the profile creation process completed successfully
+  - Check for ID mismatches between `auth.users.id` and `sd_user_profiles.user_id`
+  - Use string comparison when matching IDs: `String(profile.user_id) === String(authUser.id)`
+  - Add the "Create Profile" button functionality to generate missing profiles
+
+- **Row Level Security (RLS) Issues**: If admin users can't see all profiles:
+  - Ensure RLS policies are correctly configured to allow admins to view all profiles
+  - Use the service role key for admin operations to bypass RLS
+  - Check for recursive RLS policies that might cause infinite loops
+  - Consider adding fallback admin IDs for emergency access
+
+## 9. Best Practices for Admin Dashboard Development
+
+### Data Flow Best Practices
+
+When working with the admin dashboard, follow these best practices to ensure smooth data flow:
+
+1. **Complete Data Transfer**: 
+   - Always include all necessary fields from the database in the API response
+   - Use spread operators to include all profile fields: `...(profile ? { ...profile } : {})`
+   - Include both processed fields (e.g., `company`) and raw fields (e.g., `company_name`)
+
+2. **Robust Field Access**:
+   - Always use fallback patterns when accessing fields: `user.field || user.alternative_field || 'Default'`
+   - Handle both boolean and string representations of boolean values
+   - Use optional chaining to prevent null reference errors: `user?.field`
+
+3. **ID Handling**:
+   - Always use string comparison when matching IDs: `String(id1) === String(id2)`
+   - Be aware that UUIDs may have different case or formatting in different contexts
+   - Log ID comparisons when debugging matching issues
+
+4. **Type Safety**:
+   - Define comprehensive TypeScript interfaces for all data structures
+   - Include optional fields with proper types: `field?: string`
+   - Handle potential type variations: `is_admin: boolean | string`
+
+### Frontend Component Best Practices
+
+1. **Consistent Field Access**:
+   - Use the same field access patterns across all components
+   - Extract common field access logic into helper functions
+   - Document field mappings in comments
+
+2. **Detailed View Components**:
+   - Always check for both processed and raw fields
+   - Format dates consistently: `new Date(date).toLocaleString()`
+   - Provide meaningful fallbacks for missing data
+
+3. **Error Handling**:
+   - Display user-friendly messages for common errors
+   - Log detailed error information for debugging
+   - Provide retry mechanisms for transient failures
+
+4. **Performance Considerations**:
+   - Minimize unnecessary re-renders with memoization
+   - Use virtualization for long lists of users
+   - Implement pagination for large datasets
+
+## 10. Future Development
+
+### Planned Enhancements
+
+- Advanced user filtering and bulk operations
+- Content management for system resources
+- Audit logging for admin actions
+- Enhanced analytics dashboard
+- User activity timeline and engagement metrics
+- Role-based access control expansion
+
+### Extension Points
+
+To add new admin features:
+1. Add new page under `/app/admin/`
+2. Create corresponding API endpoints
+3. Add navigation item in the sidebar
+4. Implement UI components and data fetching
+
+To extend user management:
+1. Add new columns to the user table
+2. Extend API endpoints with additional data
+3. Update UI components to display/edit new fields
+
+## 11. Deployment Considerations
+
+### Environment Variables
+
+Required for admin functionality:
+```
+NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your-service-role-key
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+```
+
+### Initial Setup
+
+1. Run database migrations:
+   ```bash
+   npx supabase migration up
+   ```
+
+2. Setup first admin:
+   ```bash
+   npm run setup:first-admin your@email.com
+   ```
+
+3. Verify admin dashboard access at `/admin`
+
+This documentation provides a comprehensive overview of the admin dashboard system, from user-facing features to technical implementation details, enabling both users and developers to understand and extend the system effectively.

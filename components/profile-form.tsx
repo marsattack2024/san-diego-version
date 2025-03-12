@@ -188,6 +188,12 @@ export default function ProfileForm({ initialProfile, userId, isFirstLogin }: Pr
         throw error;
       }
       
+      // Update user metadata to indicate they have a profile
+      // This helps with efficient profile checks in middleware
+      await supabase.auth.updateUser({
+        data: { has_profile: true }
+      });
+      
       // No toast notification on save
       console.log('Profile saved successfully');
       

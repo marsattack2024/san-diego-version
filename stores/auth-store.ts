@@ -28,6 +28,7 @@ interface AuthState {
   profile: UserProfile | null;
   isAuthenticated: boolean;
   isAdmin: boolean;
+  hasProfile: boolean;
   lastChecked: number | null; // timestamp of last auth check
   authCheckInterval: number; // how often to check auth in ms
   
@@ -38,6 +39,7 @@ interface AuthState {
   checkAuth: () => Promise<User | null>;
   loadUserProfile: () => Promise<UserProfile | null>;
   checkAdminRole: () => Promise<boolean>;
+  checkProfileStatus: () => Promise<boolean>;
   shouldRefreshAuth: () => boolean;
   
   // Admin Actions
@@ -51,6 +53,7 @@ export const useAuthStore = create<AuthState>()(
       profile: null,
       isAuthenticated: false,
       isAdmin: false,
+      hasProfile: false,
       lastChecked: null,
       authCheckInterval: 5 * 60 * 1000, // 5 minutes
       
@@ -68,9 +71,12 @@ export const useAuthStore = create<AuthState>()(
           }
           
           if (data?.user) {
+            const hasProfile = data.user.user_metadata?.has_profile === true;
+            
             set({ 
               user: data.user, 
               isAuthenticated: true,
+              hasProfile,
               lastChecked: Date.now()
             });
             
@@ -95,6 +101,7 @@ export const useAuthStore = create<AuthState>()(
             profile: null,
             isAuthenticated: false,
             isAdmin: false,
+            hasProfile: false,
             lastChecked: null
           });
         } catch (error) {
@@ -106,12 +113,14 @@ export const useAuthStore = create<AuthState>()(
         set({ 
           user, 
           isAuthenticated: !!user,
+          hasProfile: user?.user_metadata?.has_profile === true,
           lastChecked: user ? Date.now() : null
         });
         
         // Load profile when user is set
         if (user) {
           get().loadUserProfile();
+          get().checkProfileStatus();
         }
       },
       
@@ -133,14 +142,18 @@ export const useAuthStore = create<AuthState>()(
               user: null, 
               isAuthenticated: false,
               isAdmin: false,
+              hasProfile: false,
               lastChecked: Date.now()
             });
             return null;
           }
           
+          const hasProfile = data?.user?.user_metadata?.has_profile === true;
+          
           set({ 
             user: data?.user || null,
             isAuthenticated: !!data?.user,
+            hasProfile,
             lastChecked: Date.now()
           });
           
@@ -152,6 +165,11 @@ export const useAuthStore = create<AuthState>()(
           // Check admin status if user exists
           if (data?.user) {
             await get().checkAdminRole();
+            
+            // Verify profile status if metadata doesn't indicate having a profile
+            if (!hasProfile) {
+              await get().checkProfileStatus();
+            }
           }
           
           return data?.user || null;
@@ -178,10 +196,27 @@ export const useAuthStore = create<AuthState>()(
             
           if (error) {
             console.error('Profile load error:', error);
+            set({ hasProfile: false });
             return null;
           }
           
-          set({ profile: data as UserProfile });
+          // Update hasProfile state based on actual profile data
+          set({ 
+            profile: data as UserProfile,
+            hasProfile: !!data
+          });
+          
+          // If we have a profile but metadata doesn't show it, update metadata
+          if (data && state.user?.user_metadata?.has_profile !== true) {
+            try {
+              await supabase.auth.updateUser({
+                data: { has_profile: true }
+              });
+            } catch (err) {
+              console.error('Error updating profile metadata:', err);
+            }
+          }
+          
           return data as UserProfile;
         } catch (error) {
           console.error('Profile load error:', error);
@@ -220,6 +255,65 @@ export const useAuthStore = create<AuthState>()(
         } catch (error) {
           console.error('Admin check error:', error);
           set({ isAdmin: false });
+          return false;
+        }
+      },
+      
+      checkProfileStatus: async () => {
+        const state = get();
+        
+        if (!state.user?.id) {
+          set({ hasProfile: false });
+          return false;
+        }
+        
+        try {
+          // First check user metadata (fastest)
+          if (state.user.user_metadata?.has_profile === true) {
+            set({ hasProfile: true });
+            return true;
+          }
+          
+          // If not in metadata, check database
+          const supabase = createBrowserClient();
+          const { data, error } = await supabase.rpc('has_profile', { 
+            uid: state.user.id 
+          });
+          
+          if (error) {
+            // Fallback to direct query if RPC fails
+            const { data: profile } = await supabase
+              .from('sd_user_profiles')
+              .select('user_id')
+              .eq('user_id', state.user.id)
+              .maybeSingle();
+              
+            const hasProfile = !!profile;
+            set({ hasProfile });
+            
+            // Update user metadata if profile exists
+            if (hasProfile) {
+              await supabase.auth.updateUser({
+                data: { has_profile: true }
+              });
+            }
+            
+            return hasProfile;
+          }
+          
+          const hasProfile = !!data;
+          set({ hasProfile });
+          
+          // Update user metadata if profile exists but metadata doesn't reflect it
+          if (hasProfile && state.user.user_metadata?.has_profile !== true) {
+            await supabase.auth.updateUser({
+              data: { has_profile: true }
+            });
+          }
+          
+          return hasProfile;
+        } catch (error) {
+          console.error('Profile check error:', error);
           return false;
         }
       },

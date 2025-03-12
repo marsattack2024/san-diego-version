@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { Trash2, UserPlus, Eye, UserCog } from 'lucide-react';
+import { Trash2, UserPlus, Eye } from 'lucide-react';
 import { toast } from '@/components/toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -28,21 +28,41 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 
+// Define user type
+interface User {
+  user_id: string;
+  full_name?: string;
+  name?: string;
+  email: string;
+  is_admin: boolean | string; // Can be boolean or string 'true'/'false'
+  company?: string;
+  company_name?: string;
+  has_profile?: boolean;
+  created_at?: string;
+  updated_at?: string;
+  // Additional fields from the API
+  website_url?: string;
+  company_description?: string;
+  location?: string;
+  website_summary?: string;
+  last_sign_in_at?: string;
+}
+
 export default function UsersPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteOpen, setInviteOpen] = useState(false);
-  const [viewUser, setViewUser] = useState<any>(null);
+  const [viewUser, setViewUser] = useState<User | null>(null);
   const [viewOpen, setViewOpen] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
   
   // State for data fetching
-  const [users, setUsers] = useState<any[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
   // State for mutations
   const [isSending, setIsSending] = useState(false);
-  const [isMakingAdmin, setIsMakingAdmin] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
   // Fetch users data
@@ -63,7 +83,26 @@ export default function UsersPage() {
       }
       
       const data = await response.json();
+      
       console.log("Admin page - Users data received:", data.users?.length || 0, "users");
+      console.log("Admin page - Full raw data:", data);
+      
+      // Enhanced debug logging to see all users in full detail
+      if (data.users && data.users.length > 0) {
+        console.log("Admin page - ALL USER DETAILS:", data.users.map((user: User) => ({
+          id: user.user_id,
+          name: user.full_name || user.name,
+          email: user.email,
+          is_admin: user.is_admin,
+          company: user.company,
+          created_at: user.created_at,
+          updated_at: user.updated_at
+        })));
+      } else {
+        console.warn("Admin page - NO USERS RETURNED FROM API");
+      }
+      
+      // Always set users, even if empty
       setUsers(data.users || []);
       setError(null);
     } catch (err) {
@@ -114,37 +153,6 @@ export default function UsersPage() {
     }
   };
 
-  // Make user an admin
-  const makeAdmin = async (email: string) => {
-    setIsMakingAdmin(true);
-    try {
-      const response = await fetch('/api/admin/users/make-admin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `Error ${response.status}`);
-      }
-      
-      toast({
-        title: "Admin role granted",
-        description: "The user has been made an admin.",
-      });
-      
-      fetchUsers(); // Refresh user list
-    } catch (error) {
-      toast({
-        title: "Action failed",
-        description: error instanceof Error ? error.message : "Could not make user admin",
-        variant: "destructive",
-      });
-    } finally {
-      setIsMakingAdmin(false);
-    }
-  };
 
   // Delete a user
   const deleteUser = async (userId: string) => {
@@ -176,14 +184,18 @@ export default function UsersPage() {
     }
   };
 
-  // Filter users based on search query
-  const filteredUsers = users?.filter(
-    (user) => 
-      (user.full_name?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
-      (user.name?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
-      (user.email?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
-      (user.company_name?.toLowerCase() || '').includes(searchQuery.toLowerCase())
-  ) || [];
+  // Just display all users, no filtering at all (unless search is provided)
+  const filteredUsers = searchQuery.trim() === '' 
+    ? users 
+    : users?.filter(
+        (user) => 
+          (user.full_name?.toLowerCase() || user.name?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+          (user.email?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+          (user.company_name?.toLowerCase() || '').includes(searchQuery.toLowerCase())
+      ) || [];
+  
+  // Debug info about filteredUsers
+  console.log("Admin page - DISPLAYING ALL USERS:", filteredUsers);
 
   // Handle user invitation
   const handleInviteUser = (e: React.FormEvent<HTMLFormElement>) => {
@@ -196,7 +208,19 @@ export default function UsersPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold tracking-tight">Users</h1>
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Users</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            {users.length} user{users.length !== 1 ? 's' : ''} found
+            <Button 
+              variant="link" 
+              className="text-xs text-gray-500 pl-2"
+              onClick={() => setShowDebug(!showDebug)}
+            >
+              {showDebug ? 'Hide Debug' : 'Show Debug'}
+            </Button>
+          </p>
+        </div>
         
         <div className="flex gap-4 items-center">
           {/* Search input */}
@@ -268,19 +292,59 @@ export default function UsersPage() {
             </Button>
           </div>
         </div>
+      ) : users.length === 0 ? (
+        <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-md">
+          <h3 className="font-bold text-yellow-700">No users found</h3>
+          <p className="text-sm mt-2">
+            This could be because:
+          </p>
+          <ul className="list-disc ml-5 mt-2 text-sm">
+            <li>No user profiles exist in the database</li>
+            <li>The users API is not returning profile data correctly</li>
+            <li>There is a mismatch between auth and profile data</li>
+          </ul>
+          <div className="mt-4">
+            <Button onClick={fetchUsers} variant="outline" size="sm">
+              Refresh
+            </Button>
+          </div>
+        </div>
       ) : (
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <table className="min-w-full divide-y divide-gray-200">
+        <>
+          {showDebug && (
+            <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200">
+              <h3 className="font-bold text-sm mb-2">Debug Information</h3>
+              <div className="text-xs overflow-auto max-h-40">
+                <pre className="whitespace-pre-wrap">
+                  {JSON.stringify({
+                    totalUsers: users.length,
+                    users: users.map(u => ({
+                      user_id: u.user_id,
+                      full_name: u.full_name,
+                      email: u.email,
+                      is_admin: u.is_admin,
+                      company: u.company,
+                    }))
+                  }, null, 2)}
+                </pre>
+              </div>
+            </div>
+          )}
+          <div className="bg-white rounded-lg shadow overflow-hidden">
+            <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Name
+                  Name/Company
                 </th>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Email
                 </th>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Status
+                  User ID
+                </th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Created At
                 </th>
                 <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Admin
@@ -293,7 +357,7 @@ export default function UsersPage() {
             <tbody className="bg-white divide-y divide-gray-200">
               {filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-6 py-4 text-center text-sm text-gray-500">
+                  <td colSpan={6} className="px-6 py-4 text-center text-sm text-gray-500">
                     No users found
                   </td>
                 </tr>
@@ -303,12 +367,15 @@ export default function UsersPage() {
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-gray-900">
                         {user.full_name || user.name || '-'}
+                        {!user.has_profile && (
+                          <span className="ml-2 px-1.5 py-0.5 bg-yellow-100 text-yellow-800 rounded text-xs">
+                            No Profile
+                          </span>
+                        )}
                       </div>
-                      {user.company_name && (
-                        <div className="text-xs text-gray-500">
-                          {user.company_name}
-                        </div>
-                      )}
+                      <div className="text-xs text-gray-500">
+                        {user.company || user.company_name || 'No company information'}
+                      </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-500">
@@ -316,12 +383,18 @@ export default function UsersPage() {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                        Active
-                      </span>
+                      <div className="text-xs font-mono text-gray-500 truncate max-w-[120px]">
+                        {user.user_id}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="text-xs text-gray-500">
+                        {user.created_at ? new Date(user.created_at).toLocaleDateString() : '-'}
+                      </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {user.is_admin ? 'Yes' : 'No'}
+                      {user.is_admin === true || user.is_admin === 'true' ? 'Yes' : 'No'} 
+                      {showDebug && <span className="text-xs ml-1">({typeof user.is_admin}: {String(user.is_admin)})</span>}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium flex gap-2">
                       {/* View user details */}
@@ -336,15 +409,39 @@ export default function UsersPage() {
                         <Eye className="h-4 w-4" />
                       </Button>
 
-                      {/* Make admin button */}
-                      {!user.is_admin && (
+                      
+                      {/* Create profile button */}
+                      {!user.has_profile && (
                         <Button
-                          variant="ghost"
+                          variant="outline"
                           size="sm"
-                          onClick={() => user.email && makeAdmin(user.email)}
-                          disabled={isMakingAdmin}
+                          className="text-xs"
+                          onClick={() => {
+                            if (user.email) {
+                              // Create minimal profile for this user
+                              fetch('/api/admin/users/create-profile', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ user_id: user.user_id })
+                              }).then(response => {
+                                if (response.ok) {
+                                  toast({
+                                    title: "Profile created",
+                                    description: `Created profile for ${user.email}`,
+                                  });
+                                  fetchUsers(); // Refresh
+                                } else {
+                                  toast({
+                                    title: "Error",
+                                    description: "Could not create profile",
+                                    variant: "destructive",
+                                  });
+                                }
+                              });
+                            }
+                          }}
                         >
-                          <UserCog className="h-4 w-4" />
+                          Create Profile
                         </Button>
                       )}
 
@@ -381,6 +478,7 @@ export default function UsersPage() {
             </tbody>
           </table>
         </div>
+        </>
       )}
 
       {/* User details dialog */}
@@ -412,9 +510,14 @@ export default function UsersPage() {
                 <div className="grid grid-cols-4 items-center gap-4 mb-2">
                   <Label className="text-right font-medium text-sm text-gray-600">Admin Status</Label>
                   <div className="col-span-3">
-                    {viewUser.is_admin ? 
+                    {viewUser.is_admin === true || viewUser.is_admin === 'true' ? 
                       <span className="px-2 py-1 rounded text-xs bg-blue-100 text-blue-800 font-medium">Yes</span> : 
                       <span className="px-2 py-1 rounded text-xs bg-gray-100 font-medium">No</span>}
+                    {showDebug && (
+                      <span className="ml-2 text-xs text-gray-500">
+                        (Raw: {String(viewUser.is_admin)}, Type: {typeof viewUser.is_admin})
+                      </span>
+                    )}
                   </div>
                 </div>
                 
@@ -446,7 +549,7 @@ export default function UsersPage() {
                 
                 <div className="grid grid-cols-4 items-center gap-4 mb-2">
                   <Label className="text-right font-medium text-sm text-gray-600">Company</Label>
-                  <div className="col-span-3 text-sm">{viewUser.company_name || '-'}</div>
+                  <div className="col-span-3 text-sm">{viewUser.company || viewUser.company_name || '-'}</div>
                 </div>
                 
                 <div className="grid grid-cols-4 items-center gap-4 mb-2">
@@ -466,7 +569,7 @@ export default function UsersPage() {
                   <div className="col-span-3 text-sm">{viewUser.location || '-'}</div>
                 </div>
                 
-                {viewUser.company_description && (
+                {(viewUser.company_description) && (
                   <div className="grid grid-cols-4 items-start gap-4 mb-2">
                     <Label className="text-right font-medium text-sm text-gray-600 mt-1">Description</Label>
                     <div className="col-span-3 text-sm">

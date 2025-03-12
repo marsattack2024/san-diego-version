@@ -53,11 +53,6 @@ export const adminApi = {
     return res.data.message;
   },
   
-  makeAdmin: async (email: string): Promise<string> => {
-    const res = await axios.post('/api/admin/users/make-admin', { email });
-    return res.data.message;
-  },
-  
   // Dashboard
   getDashboardStats: async (): Promise<DashboardStats> => {
     const res = await axios.get('/api/admin/dashboard');

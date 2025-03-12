@@ -1,5 +1,7 @@
 'use server';
 
+export const maxDuration = 60; // Maximum allowed duration for Hobby plan (60 seconds)
+
 import { myProvider } from '@/lib/ai/providers';
 import { logger } from '@/lib/logger';
 import { chatTools } from '@/lib/chat/tools';
