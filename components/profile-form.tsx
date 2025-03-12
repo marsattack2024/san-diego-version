@@ -19,6 +19,7 @@ interface ProfileFormProps {
 
 // Character limits for form fields
 const CHAR_LIMITS = {
+  FULL_NAME: 50,
   COMPANY_NAME: 60,
   COMPANY_DESCRIPTION: 300,
   LOCATION: 60
@@ -29,6 +30,7 @@ export default function ProfileForm({ initialProfile, userId, isFirstLogin }: Pr
   const [urlChanged, setUrlChanged] = useState(false);
   
   const [profile, setProfile] = useState<Partial<UserProfile>>({
+    full_name: initialProfile.full_name || '',
     company_name: initialProfile.company_name || '',
     website_url: initialProfile.website_url || '',
     company_description: initialProfile.company_description || '',
@@ -45,7 +47,9 @@ export default function ProfileForm({ initialProfile, userId, isFirstLogin }: Pr
     
     // Apply character limits based on field name
     let limitedValue = value;
-    if (name === 'company_name' && value.length > CHAR_LIMITS.COMPANY_NAME) {
+    if (name === 'full_name' && value.length > CHAR_LIMITS.FULL_NAME) {
+      limitedValue = value.slice(0, CHAR_LIMITS.FULL_NAME);
+    } else if (name === 'company_name' && value.length > CHAR_LIMITS.COMPANY_NAME) {
       limitedValue = value.slice(0, CHAR_LIMITS.COMPANY_NAME);
     } else if (name === 'company_description' && value.length > CHAR_LIMITS.COMPANY_DESCRIPTION) {
       limitedValue = value.slice(0, CHAR_LIMITS.COMPANY_DESCRIPTION);
@@ -165,6 +169,7 @@ export default function ProfileForm({ initialProfile, userId, isFirstLogin }: Pr
       // Prepare data with correct types
       const profileData = {
         user_id: userId,
+        full_name: profile.full_name || '',
         company_name: profile.company_name || '',
         website_url: profile.website_url || '',
         company_description: profile.company_description || '',
@@ -227,6 +232,26 @@ export default function ProfileForm({ initialProfile, userId, isFirstLogin }: Pr
         </CardHeader>
         <form onSubmit={handleSubmit}>
           <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="full_name">Your Full Name</Label>
+              <div className="relative">
+                <Input
+                  id="full_name"
+                  name="full_name"
+                  value={profile.full_name || ''}
+                  onChange={handleChange}
+                  required
+                  maxLength={CHAR_LIMITS.FULL_NAME}
+                  placeholder="John Doe"
+                />
+                {(profile.full_name?.length || 0) > CHAR_LIMITS.FULL_NAME * 0.8 && (
+                  <div className="absolute right-3 top-2 text-xs text-muted-foreground">
+                    {(profile.full_name?.length || 0)}/{CHAR_LIMITS.FULL_NAME}
+                  </div>
+                )}
+              </div>
+            </div>
+            
             <div className="space-y-2">
               <Label htmlFor="company_name">Company Name</Label>
               <div className="relative">

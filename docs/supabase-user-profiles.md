@@ -4,7 +4,7 @@ This document describes the implementation of user business profiles and website
 
 ## Overview
 
-The user profiles feature allows us to collect and store business information about photography studios when users first log in. This information is used to provide context to AI responses without requiring users to repeatedly provide the same information in each chat. Additionally, the website summarizer automatically generates concise summaries of users' business websites to further enhance the AI context.
+The user profiles feature allows us to collect and store business information about photography studios when users first log in. This includes the user's full name, business details, and website information. This information is used to provide context to AI responses without requiring users to repeatedly provide the same information in each chat. Additionally, the website summarizer automatically generates concise summaries of users' business websites to further enhance the AI context.
 
 ## Database Structure
 
@@ -15,6 +15,7 @@ The user profiles are stored in a `sd_user_profiles` table in Supabase with the 
 | Column Name | Data Type | Description | Constraints |
 |-------------|-----------|-------------|------------|
 | user_id | UUID | Foreign key to auth.users | PRIMARY KEY, REFERENCES auth.users(id) ON DELETE CASCADE |
+| full_name | TEXT | User's full name | NOT NULL |
 | company_name | TEXT | Name of the photography business | NOT NULL |
 | website_url | TEXT | URL to the business website | NULL allowed |
 | company_description | TEXT | Description of the business | NOT NULL |
@@ -22,6 +23,7 @@ The user profiles are stored in a `sd_user_profiles` table in Supabase with the 
 | created_at | TIMESTAMP WITH TIME ZONE | When the profile was created | DEFAULT NOW() |
 | updated_at | TIMESTAMP WITH TIME ZONE | When the profile was last updated | DEFAULT NOW() |
 | website_summary | TEXT | AI-generated summary of the website | NULL allowed |
+| is_admin | BOOLEAN | Whether the user has admin privileges | DEFAULT FALSE |
 
 **Important Note**: The table does NOT have an `id` column. The primary key is `user_id`, which directly references the auth.users table.
 
@@ -32,11 +34,13 @@ The table has a one-to-one relationship with the `auth.users` table, with cascad
 ```sql
 CREATE TABLE IF NOT EXISTS sd_user_profiles (
   user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  full_name TEXT NOT NULL,
   company_name TEXT NOT NULL,
   website_url TEXT,
   company_description TEXT NOT NULL,
   location TEXT,
   website_summary TEXT, -- Automated summary of the website content
+  is_admin BOOLEAN DEFAULT FALSE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -97,6 +101,7 @@ CREATE TABLE IF NOT EXISTS sd_user_profiles (
      ```typescript
      interface UserProfile {
        user_id: string;
+       full_name: string;
        company_name: string;
        website_url?: string;
        company_description: string;
@@ -104,6 +109,7 @@ CREATE TABLE IF NOT EXISTS sd_user_profiles (
        created_at?: string;
        updated_at?: string;
        website_summary?: string;
+       is_admin?: boolean;
      }
      ```
 
@@ -172,6 +178,7 @@ CREATE TABLE IF NOT EXISTS sd_user_profiles (
      .from('sd_user_profiles')
      .upsert({
        user_id: userId,
+       full_name: profile.full_name || '',
        company_name: profile.company_name || '',
        website_url: profile.website_url || '',
        company_description: profile.company_description || '',
@@ -229,6 +236,7 @@ When a user chats with the AI, their business profile and website summary are au
 ```
 ### PHOTOGRAPHY BUSINESS CONTEXT ###
 You are speaking with a photography studio with the following details:
+- Contact: [Full Name]
 - Studio Name: [Company Name]
 - Website: [Website URL]
 - Location: [Location]

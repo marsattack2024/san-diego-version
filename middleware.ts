@@ -13,7 +13,7 @@ function uuidv4() {
 }
 
 // List of paths that require authentication
-const protectedPaths = ['/chat', '/settings', '/profile'];
+const protectedPaths = ['/chat', '/settings', '/profile', '/admin'];
 
 // List of paths that should redirect to /chat if the user is already logged in
 const authPaths = ['/login'];
@@ -126,6 +126,45 @@ export async function middleware(request: NextRequest) {
       const redirectUrl = new URL('/login', request.url);
       redirectUrl.searchParams.set('next', pathname);
       return NextResponse.redirect(redirectUrl);
+    }
+    
+    // Check for admin role if accessing admin routes
+    if (user && pathname.startsWith('/admin')) {
+      try {
+        // First check the profile for is_admin flag (faster)
+        const { data: profile, error: profileError } = await supabase
+          .from('sd_user_profiles')
+          .select('is_admin')
+          .eq('user_id', user.id)
+          .single();
+        
+        let isAdmin = profile?.is_admin === true;
+        
+        // If profile check fails or is_admin is false, try the RPC function
+        if (profileError || !isAdmin) {
+          const { data: adminCheck, error: adminError } = await supabase.rpc('is_admin', { uid: user.id });
+          isAdmin = !!adminCheck;
+          
+          if (adminError) {
+            throw adminError;
+          }
+        }
+        
+        if (!isAdmin) {
+          edgeLogger.warn('Unauthorized admin access attempt', {
+            userId: user.id,
+            path: pathname,
+            error: 'User is not an admin'
+          });
+          return NextResponse.redirect(new URL('/unauthorized', request.url));
+        }
+        
+        // Set admin flag in headers for client use
+        supabaseResponse.headers.set('x-is-admin', 'true');
+      } catch (error) {
+        console.error('Error checking admin status:', error);
+        return NextResponse.redirect(new URL('/unauthorized', request.url));
+      }
     }
 
     // If the user is logged in and trying to access an auth path

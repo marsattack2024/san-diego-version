@@ -23,6 +23,7 @@
     "test:perplexity-direct": "tsx lib/agents/tools/direct-perplexity-test.ts",
     "test:website-summarizer": "tsx scripts/tests/website-summarizer.test.ts",
     "test:profile-summary": "tsx scripts/tests/test-profile-summary.ts",
+    "setup:first-admin": "node scripts/setup/setup-first-admin.js",
     "test:fix-summary": "tsx scripts/tests/fix-summary.ts",
     "test:direct-summary": "tsx scripts/tests/test-direct-summary.ts"
   },
@@ -67,7 +68,10 @@
     "@radix-ui/react-tooltip": "^1.1.8",
     "@supabase/ssr": "^0.5.2",
     "@supabase/supabase-js": "^2.49.1",
+    "@tabler/icons-react": "^3.31.0",
     "@tailwindcss/typography": "^0.5.16",
+    "@tanstack/react-query": "^5.67.3",
+    "@tanstack/react-table": "^8.21.2",
     "ai": "^4.1.50",
     "axios": "^1.8.1",
     "cheerio": "^1.0.0",

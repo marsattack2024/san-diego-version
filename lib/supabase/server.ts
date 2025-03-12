@@ -44,8 +44,8 @@ export const createServerClient = cache(async () => {
       supabaseKey || 'dummy-key',
       {
         cookies: {
-          getAll() {
-            return cookieStore.getAll();
+          async getAll() {
+            return await cookieStore.getAll();
           },
           setAll(cookiesToSet: Array<{ name: string; value: string; options?: any }>) {
             try {
