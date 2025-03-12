@@ -1,12 +1,10 @@
-'use server';
-
-export const maxDuration = 60; // Maximum allowed duration for Hobby plan (60 seconds)
-
 import { myProvider } from '@/lib/ai/providers';
 import { logger } from '@/lib/logger';
 import { chatTools } from '@/lib/chat/tools';
 import { generateText } from 'ai';
 import { openai } from '@ai-sdk/openai';
+
+export const maxDuration = 60; // Maximum allowed duration for Hobby plan (60 seconds)
 
 /**
  * Scrapes a website and generates a concise summary using AI
@@ -70,6 +68,14 @@ export async function generateWebsiteSummary(
       startTime
     );
     
+    // Log total processing time
+    const totalTime = Date.now() - startTime;
+    logger.info('Total website summarization process completed', {
+      url,
+      totalProcessingTimeMs: totalTime,
+      operation
+    });
+    
     return summary;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -104,7 +110,7 @@ async function generateSummary(
   const summaryStartTime = Date.now();
   
   try {
-    // Truncate content for faster processing - increased to 25,000 characters
+    // Truncate content for faster processing - using 25,000 characters as requested
     const truncatedContent = content.substring(0, 25000);
     const truncated = truncatedContent.length < content.length;
     
@@ -112,13 +118,14 @@ async function generateSummary(
       url,
       contentLength: content.length,
       truncatedLength: truncatedContent.length,
+      truncationPercentage: Math.round((truncatedContent.length / content.length) * 100),
       operation
     });
 
     // Enhanced prompt for more structured, comprehensive summary with testimonials
-    const systemPrompt = "You are a professional content researcher for photography businesses. Your task is to extract and organize key business information into a structured, comprehensive and verbose writeup. You MUST use the FULL word count allowed (no less than 90% of the maximum) to provide maximum detail and value. Pay special attention to finding and including actual client testimonials with attribution.";
+    const systemPrompt = "You are a professional content researcher for photography businesses. Your task is to extract and organize key business information into a structured, comprehensive writeup. Focus on extracting the most important information efficiently.";
     const userPrompt = `
-Extract and summarize the key features, benefits, and unique selling propositions (USPs) from the following photography business website content using EXACTLY ${maxWords} words. You MUST use at least 90% of the word count to create a comprehensive report.
+Extract and summarize the key features, benefits, and unique selling propositions (USPs) from the following photography business website content using EXACTLY ${maxWords} words.
 
 Focus on extracting these specific details:
 1. The primary value proposition and what makes this photography business unique
@@ -130,21 +137,15 @@ Focus on extracting these specific details:
 7. The emotional and practical transformation clients can expect
 8. The booking process and what clients can expect at each stage
 9. Contact information and call-to-action details
-10. IMPORTANT: Find and include 3-5 DIRECT QUOTES from client testimonials with the client's name/attribution
+10. IMPORTANT: Find and include 2-3 DIRECT QUOTES from client testimonials with the client's name/attribution
 
 Format your summary into these clear sections:
-- Overview (3-4 sentences capturing the essence of the photography business)
-- Core Offerings (detailed bullet points of main photography services)
-- Pricing & Packages (summary of pricing structure and what's included)
-- The Photography Experience (detailed description of the client journey from booking to delivery)
-- Key Benefits & Differentiators (what sets them apart from other photographers)
-- Guarantees & Policies (any satisfaction guarantees or special policies)
-- Credentials & Social Proof (experience, awards)
-- Client Testimonials (include 3-5 direct quotes with attribution - "Name, Service Type")
-- Booking Process (how to get started, what to expect)
-- Contact Information (how to reach them, response times)
-- Call to Action (what they want visitors to do)
-- Additional Information (any other relevant information)
+- Overview (2-3 sentences capturing the essence of the photography business)
+- Core Offerings (bullet points of main photography services)
+- Pricing & Packages (summary of pricing structure)
+- Key Benefits & Differentiators (what sets them apart)
+- Client Testimonials (include direct quotes with attribution)
+- Booking Process & Contact Information (how to get started)
 
 Website information:
 Title: ${title}
@@ -152,30 +153,30 @@ URL: ${url}
 Content:
 ${truncatedContent}${truncated ? ' ... (content truncated for brevity)' : ''}
 
-Keep the language comprehensive, benefit-focused, and persuasive while maintaining the brand's voice. Avoid generic descriptions and focus on specific, compelling aspects that would motivate potential photography clients.
-
-IMPORTANT INSTRUCTIONS:
-1. You MUST use at least 90% of the ${maxWords} word limit (no less than ${Math.floor(maxWords * 0.9)} words)
-2. Include 3-5 DIRECT QUOTES from client testimonials with attribution whenever possible
-3. If exact testimonials aren't available, note this briefly and expand other sections
-4. Format testimonials as: "Quote text." - Client Name, Service Type
-5. Use bullet points for services, benefits, and packages to improve readability
-6. Include specific details rather than generic descriptions
-
-Your goal is to create a comprehensive, persuasive report that captures the unique value of this photography business with specific details and social proof.
+Keep the language benefit-focused and persuasive while maintaining the brand's voice.
 `;
 
-    // Generate the summary using a more capable model for better analysis
+    // Log prompt preparation time
+    const promptPrepTime = Date.now() - summaryStartTime;
+    logger.info('Prompt preparation completed', {
+      url,
+      promptPrepTimeMs: promptPrepTime,
+      operation
+    });
+
+    // Generate the summary using a faster model for better performance
+    const aiStartTime = Date.now();
     const { text: aiSummary } = await generateText({
-      model: openai('gpt-4o-mini'),
+      model: openai('gpt-3.5-turbo'), // Using a faster model for better performance
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
       ],
       temperature: 0.3,
-      maxTokens: 1800, // Further increased to ensure full word count with testimonials
+      maxTokens: 1500, // Adjusted for the faster model
     });
     
+    const aiProcessingTime = Date.now() - aiStartTime;
     const summaryTime = Date.now() - summaryStartTime;
     const wordCount = aiSummary.split(/\s+/).filter(Boolean).length;
     
@@ -190,7 +191,8 @@ Your goal is to create a comprehensive, persuasive report that captures the uniq
       wordCount,
       wordCountPercentage: `${wordCountPercentage}% of target`,
       summaryLength: formattedSummary.length,
-      summaryTimeMs: summaryTime,
+      aiProcessingTimeMs: aiProcessingTime,
+      totalSummaryTimeMs: summaryTime,
       operation
     });
 
@@ -203,12 +205,6 @@ Your goal is to create a comprehensive, persuasive report that captures the uniq
         percentOfTarget: wordCountPercentage
       });
     }
-
-    logger.info('Website summarization process completed', {
-      url,
-      totalProcessingTimeMs: Date.now() - processStartTime,
-      operation
-    });
 
     return formattedSummary;
   } catch (error) {
