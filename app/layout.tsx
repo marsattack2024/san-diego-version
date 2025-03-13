@@ -10,8 +10,8 @@ import './globals.css';
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://chat.vercel.ai'),
-  title: 'Next.js Chatbot Template',
-  description: 'Next.js chatbot template using the AI SDK.',
+  title: 'Marlan - The Photo Profit Bot',
+  description: 'Marlan is a RAG, OpenAI, Perplexity, and Web Search Agent that specializes in marketing for portrait photographers.',
 };
 
 export const viewport = {
