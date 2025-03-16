@@ -5,9 +5,11 @@ export const QUIZ_SYSTEM_PROMPT = `Please format the following content in plain 
 
 Read the instructions and rules for quiz creation:
 
-Study and understand this process. 
+Study and understand this process. It's imperative that you put linebreaks between sections and between all questions, answer options, and statements. Output should be plain text and easy to read please.
 
-It's imperative that you put linebreaks between sections and between all questions, answer options, and statements. Output should be plain text and easy to read please.
+Your output should be comprosed of 8 total questions with answer options as well as a statement slide for each question of at least 175 words, 1 fair enough statement, 1 offer slide, and 1 thank you page.
+
+You should output this when asked for help with a quiz unless otherwise specified.
 
 Step-by-Step Instructions for Creating a High-Converting Quiz Popup for Photography Studios
 This comprehensive guide provides detailed steps for building an engaging quiz popup that collects leads, educates users, and encourages them to book a photography session with your studio. Designed for use with Typeform or similar quiz-building platforms, this quiz will consist of questions that address common objections and concerns specific to your photography genre (e.g., boudoir, weddings, newborn, maternity). Each question is followed by a statement slide with at least 175 words that provides informative answers and reassures potential clients. You'll also set up automation to ensure proper follow-up and lead management.
@@ -194,46 +196,6 @@ Content refinement based on data.
 A/B testing conducted.
 
 By following these detailed steps, you'll create an effective and engaging quiz that educates potential clients, addresses their concerns, and encourages them to book a session with your photography studio. This interactive approach not only generates leads but also builds trust and showcases your expertise in your specific photography niche.
-
-Remember: The success of your quiz relies on its ability to resonate with your target audience. Keep the tone friendly and professional, focus on providing value, and ensure every element aligns with your brand's identity and the unique benefits you offer.
-
-Tech Implementation Guide:
-Install the Quiz Using GTM: Watch the video here for step-by-step instructions.
-Typeform Quiz Code: Use the following code to ensure proper UTM tracking for your quiz popups. Paste the code directly into your site's header.
-
-html
-Copy code
-<script>
-  setTimeout(function() {
-    var urlParams = new URLSearchParams(window.location.search);
-    var utm_source = urlParams.get('utm_source');
-    var utm_medium = urlParams.get('utm_medium');
-    var utm_campaign = urlParams.get('utm_campaign');
-    var utm_term = urlParams.get('utm_term');
-    var utm_content = urlParams.get('utm_content');
-
-    var button = document.createElement('button');
-    button.setAttribute('data-tf-popup', '**TYPEFORMCODE**');
-    button.setAttribute('data-tf-opacity', '100');
-    button.setAttribute('data-tf-size', '100');
-    button.setAttribute('data-tf-iframe-props', 'title=**TFTITLE**');
-    button.setAttribute('data-tf-open', 'time');
-    button.setAttribute('data-tf-open-value', '8000');
-    button.setAttribute('data-tf-transitive-search-params', '');
-    button.setAttribute('data-tf-medium', 'snippet');
-    button.setAttribute('data-tf-hidden', 'utm_source=' + utm_source + ',utm_medium=' + utm_medium + ',utm_campaign=' + utm_campaign + ',utm_term=' + utm_term + ',utm_content=' + utm_content);
-    button.style.all = 'unset';
-    document.body.appendChild(button);
-
-    var script = document.createElement('script');
-    script.src = '//embed.typeform.com/next/embed.js';
-    document.body.appendChild(script);
-  }, 1000);
-</script>
-
-
-
-
 
 
 Quiz Examples:

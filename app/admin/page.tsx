@@ -1,12 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useIsMobile } from '@/hooks/use-mobile';
 
 export default function AdminDashboard() {
   // State for dashboard stats
   const [stats, setStats] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  const isMobile = useIsMobile();
 
   // Fetch dashboard stats
   useEffect(() => {
@@ -32,64 +34,67 @@ export default function AdminDashboard() {
   }, []);
 
   return (
-    <div className="flex flex-col space-y-6">
+    <div className="flex flex-col space-y-4 md:space-y-6 px-2 sm:px-0">
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
+        <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Dashboard</h1>
       </div>
       
-      {/* Stats Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-lg font-medium mb-2">User Accounts</h2>
-          <p className="text-3xl font-bold">
+      {/* Stats Overview - Enhanced responsive grid with better spacing */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 md:gap-6">
+        <div className="bg-white rounded-lg shadow p-4 md:p-6">
+          <h2 className="text-base md:text-lg font-medium mb-2">User Accounts</h2>
+          <p className="text-2xl md:text-3xl font-bold">
             {isLoading ? 'Loading...' : stats?.userCount || 0}
           </p>
-          <p className="text-gray-500 mt-1">Total registered users</p>
+          <p className="text-gray-500 mt-1 text-sm md:text-base">Total registered users</p>
         </div>
         
-        <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-lg font-medium mb-2">Chat Sessions</h2>
-          <p className="text-3xl font-bold">
+        <div className="bg-white rounded-lg shadow p-4 md:p-6">
+          <h2 className="text-base md:text-lg font-medium mb-2">Chat Sessions</h2>
+          <p className="text-2xl md:text-3xl font-bold">
             {isLoading ? 'Loading...' : stats?.chatCount || 0}
           </p>
-          <p className="text-gray-500 mt-1">Total conversations</p>
+          <p className="text-gray-500 mt-1 text-sm md:text-base">Total conversations</p>
         </div>
         
-        <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-lg font-medium mb-2">Admin Users</h2>
-          <p className="text-3xl font-bold">
+        <div className="bg-white rounded-lg shadow p-4 md:p-6 sm:col-span-2 md:col-span-1">
+          <h2 className="text-base md:text-lg font-medium mb-2">Admin Users</h2>
+          <p className="text-2xl md:text-3xl font-bold">
             {isLoading ? 'Loading...' : stats?.adminCount || 0}
           </p>
-          <p className="text-gray-500 mt-1">Users with admin privileges</p>
+          <p className="text-gray-500 mt-1 text-sm md:text-base">Users with admin privileges</p>
         </div>
       </div>
       
-      {/* Recent Activity */}
-      <div className="bg-white rounded-lg shadow">
-        <div className="px-6 py-4 border-b">
-          <h2 className="text-xl font-semibold">Recent Activity</h2>
+      {/* Recent Activity - Enhanced mobile optimization */}
+      <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="px-4 md:px-6 py-3 md:py-4 border-b">
+          <h2 className="text-lg md:text-xl font-semibold">Recent Activity</h2>
         </div>
-        <div className="p-6">
+        <div className="p-3 md:p-6">
           {isLoading ? (
-            <p>Loading activity data...</p>
+            <div className="py-2 text-center">Loading activity data...</div>
           ) : error ? (
-            <p className="text-red-500">Error loading activity data</p>
+            <div className="py-2 text-center text-red-500">Error loading activity data</div>
           ) : stats?.recentActivity?.length ? (
-            <div className="space-y-4">
+            <div className="space-y-3">
               {stats.recentActivity.map((activity: any, index: number) => (
-                <div key={index} className="flex items-start pb-4 border-b last:border-0">
-                  <div className="flex-1">
-                    <p className="font-medium">{activity.user?.email || 'Unknown user'}</p>
-                    <p className="text-sm text-gray-500">{activity.content || 'Activity recorded'}</p>
+                <div 
+                  key={index} 
+                  className="flex flex-col sm:flex-row sm:items-start pb-3 border-b last:border-0"
+                >
+                  <div className="flex-1 mb-2 sm:mb-0 min-w-0">
+                    <p className="font-medium text-sm md:text-base truncate">{activity.user?.email || 'Unknown user'}</p>
+                    <p className="text-xs md:text-sm text-gray-500 line-clamp-2">{activity.content || 'Activity recorded'}</p>
                   </div>
-                  <div className="text-sm text-gray-500">
+                  <div className="text-xs md:text-sm text-gray-500 sm:ml-4 sm:shrink-0">
                     {new Date(activity.created_at || Date.now()).toLocaleString()}
                   </div>
                 </div>
               ))}
             </div>
           ) : (
-            <p>No recent activities to display</p>
+            <div className="py-2 text-center text-sm md:text-base">No recent activities to display</div>
           )}
         </div>
       </div>

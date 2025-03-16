@@ -93,7 +93,9 @@ export const useChatStore = create<ChatState>()(
         const id = uuidv4();
         const timestamp = new Date().toISOString();
         const selectedAgentId = get().selectedAgentId;
+        const deepSearchEnabled = get().deepSearchEnabled;
         
+        // Update local state
         set((state) => ({
           conversations: {
             ...state.conversations,
@@ -108,6 +110,27 @@ export const useChatStore = create<ChatState>()(
           },
           currentConversationId: id
         }));
+        
+        // Create session in the database
+        if (typeof window !== 'undefined') {
+          // Use setTimeout to not block the UI while creating the session
+          setTimeout(async () => {
+            try {
+              console.debug(`[ChatStore] Creating session in database: ${id}`);
+              await fetch('/api/chat/session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                  id, 
+                  agentId: selectedAgentId,
+                  deepSearchEnabled
+                })
+              });
+            } catch (error) {
+              console.error('Failed to create chat session in database:', error);
+            }
+          }, 0);
+        }
         
         return id;
       },

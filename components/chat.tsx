@@ -181,6 +181,26 @@ export function Chat({
       event.preventDefault();
     }
     
+    // Ensure session exists before trying to save messages
+    try {
+      // Call the session endpoint to make sure the session exists
+      const sessionResponse = await fetch(`/api/chat/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          id,
+          agentId: selectedAgentId,
+          deepSearchEnabled
+        })
+      });
+      
+      if (!sessionResponse.ok) {
+        console.error('Error ensuring chat session exists:', await sessionResponse.text());
+      }
+    } catch (error) {
+      console.error('Failed to ensure chat session exists:', error);
+    }
+    
     if (input.trim()) {
       await saveUserMessage(input);
     }
