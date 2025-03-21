@@ -15,6 +15,7 @@ export interface Chat {
   id: string;
   title?: string;
   createdAt: string;
+  updatedAt?: string;
   userId: string;
   messages: Array<any>; // For MVP, we're not defining a strict message type
 }

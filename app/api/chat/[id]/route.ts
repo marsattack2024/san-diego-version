@@ -164,7 +164,7 @@ export async function POST(
     // Extract ID from params 
     const { id } = await Promise.resolve(params);
     const body = await request.json();
-    const { message, toolsUsed } = body;
+    const { message, toolsUsed, updateTimestamp } = body;
     
     if (!message || !message.content || !message.role) {
       return NextResponse.json(
@@ -199,9 +199,11 @@ export async function POST(
       sessionId: id, 
       role: message.role,
       contentLength: message.content.length,
-      hasToolsUsed: formattedToolsUsed !== null
+      hasToolsUsed: formattedToolsUsed !== null,
+      updateTimestamp: !!updateTimestamp
     });
     
+    // Insert the message into chat history
     const { error } = await serverClient
       .from('sd_chat_histories')
       .insert({
@@ -232,6 +234,22 @@ export async function POST(
         },
         { status: 500 }
       );
+    }
+    
+    // Update the session's updated_at timestamp if requested
+    if (updateTimestamp) {
+      edgeLogger.info('Updating chat session timestamp', { chatId: id });
+      
+      const { error: updateError } = await serverClient
+        .from('sd_chat_sessions')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .eq('user_id', user.id);
+      
+      if (updateError) {
+        edgeLogger.error('Failed to update chat timestamp', { error: updateError, chatId: id });
+        // Don't fail the whole request if just the timestamp update fails
+      }
     }
     
     return NextResponse.json({ success: true });

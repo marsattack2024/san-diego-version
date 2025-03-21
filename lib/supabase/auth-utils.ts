@@ -2,7 +2,40 @@ import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { createServerClient } from './server';
+import { createServerClient } from '@/lib/supabase/server';
+import { authCache } from '@/lib/auth/auth-cache';
+
+/**
+ * Get the currently authenticated user with caching
+ * @param ttlMs Cache TTL in milliseconds (defaults to 60 seconds)
+ */
+export async function getCachedUser(ttlMs: number = 60000) {
+  // Check if we have a valid cached user
+  const cachedUser = authCache.get(ttlMs);
+  if (cachedUser) {
+    console.log('Using cached user');
+    return cachedUser;
+  }
+  
+  // Cache miss - fetch from Supabase
+  try {
+    console.log('Fetching fresh user data');
+    const supabase = await createServerClient();
+    const { data: { user }, error } = await supabase.auth.getUser();
+    
+    if (error) throw error;
+    
+    if (user) {
+      // Store user in cache
+      authCache.set(user);
+    }
+    
+    return user;
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    return null;
+  }
+}
 
 /**
  * Helper function to get authenticated user for API routes
@@ -13,12 +46,9 @@ import { createServerClient } from './server';
  */
 export async function getAuthenticatedUser(request: NextRequest) {
   try {
-    // Use our optimized createServerClient with React cache
-    const serverClient = await createServerClient();
-    
-    // For auth-specific operations that need direct config
+    // Create Supabase client for auth
     const cookieStore = await cookies();
-    const supabase = createSupabaseServerClient(
+    const serverClient = createSupabaseServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
@@ -39,51 +69,15 @@ export async function getAuthenticatedUser(request: NextRequest) {
       }
     );
     
-    // For API routes, we need to verify the auth state
-    // We'll make full auth checks more often to ensure security
-    let user = null;
+    // Get the current user
+    const { data: { user }, error } = await serverClient.auth.getUser();
     
-    // Only use header-based auth for non-critical operations
-    // For most API routes, perform a full auth check
-    const isAuthOperation = request.nextUrl.pathname.includes('/auth/') ||
-                          request.nextUrl.pathname.includes('/login/');
-                          
-    // For auth-specific operations, always do a full check
-    if (isAuthOperation) {
-      // Full auth check for auth operations
-      const { data } = await supabase.auth.getUser();
-      user = data?.user;
-    } else {
-      // Check headers for potential optimization
-      const authToken = request.headers.get('x-supabase-auth');
-      const authTime = request.headers.get('x-auth-time');
-      const authValid = request.headers.get('x-auth-valid');
+    if (error || !user) {
+      console.error('Authentication error:', error || 'No user found');
       
-      // Only trust headers set by our own middleware (x-auth-valid)
-      // and only if they're recent
-      const useCache = authToken && 
-                      authTime && 
-                      authValid === 'true' &&
-                      (Date.now() - parseInt(authTime, 10) < 5 * 60 * 1000); // 5 minutes
-                  
-      if (useCache) {
-        // Use cached auth - skip full auth check for non-critical ops
-        user = { id: authToken };
-        edgeLogger.debug('Using cached auth in API route', {
-          userId: authToken,
-          path: request.nextUrl.pathname
-        });
-      } else {
-        // Full auth check
-        const { data } = await supabase.auth.getUser();
-        user = data?.user;
-      }
-    }
-    
-    if (!user) {
       return {
         user: null,
-        supabase: null,
+        serverClient,
         errorResponse: NextResponse.json(
           { error: 'Unauthorized' },
           { status: 401 }
@@ -93,19 +87,15 @@ export async function getAuthenticatedUser(request: NextRequest) {
     
     return {
       user,
-      supabase,
-      serverClient, // Also return our cached server client
+      serverClient,
       errorResponse: null
     };
   } catch (error) {
-    edgeLogger.error('Auth error in API route', { 
-      error,
-      path: request.nextUrl.pathname
-    });
+    console.error('Error in authentication:', error);
     
     return {
       user: null,
-      supabase: null,
+      serverClient: null,
       errorResponse: NextResponse.json(
         { error: 'Authentication error' },
         { status: 500 }

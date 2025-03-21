@@ -622,7 +622,8 @@ export async function POST(req: Request) {
                   
                   edgeLogger.info('Chat session updated successfully', { 
                     id,
-                    note: 'Message storage handled by client side to prevent duplication' 
+                    note: 'Message storage handled by client side to prevent duplication',
+                    titleSource: existingSession?.title ? 'preserved existing' : 'set from user message'
                   });
                 } catch (error) {
                   edgeLogger.error('Error storing chat session', { error });

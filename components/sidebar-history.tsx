@@ -3,9 +3,8 @@
 import { isToday, isYesterday, subMonths, subWeeks } from 'date-fns';
 import Link from 'next/link';
 import { useParams, usePathname, useRouter } from 'next/navigation';
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useState, useCallback } from 'react';
 import { toast } from 'sonner';
-import useSWR from 'swr';
 
 import {
   MoreHorizontalIcon,
@@ -38,7 +37,7 @@ import {
 } from '@/components/ui/sidebar';
 import type { User } from '@/components/sidebar-user-nav';
 import type { Chat } from '@/lib/db/schema';
-import { fetcher } from '@/lib/utils';
+import { historyService } from '@/lib/api/history-service';
 
 type GroupedChats = {
   today: Chat[];
@@ -97,55 +96,66 @@ export const ChatItem = memo(PureChatItem, (prevProps, nextProps) => {
   return true;
 });
 
-export function SidebarHistory({ user }: { user: User | undefined }) {
+const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   const { setOpenMobile } = useSidebar();
   const params = useParams();
   const id = params?.id as string;
   const pathname = usePathname();
+  const [history, setHistory] = useState<Array<Chat>>([]);
+  const [isLoading, setIsLoading] = useState(true);
   
   // Debug log to confirm user is received
   console.log("SidebarHistory received user:", user?.id); 
   
-  const {
-    data: history,
-    isLoading,
-    mutate,
-  } = useSWR<Array<Chat>>(user ? '/api/history' : null, fetcher, {
-    fallbackData: [],
-  });
-
+  // Use the optimized history service instead of direct SWR
+  const fetchChatHistory = useCallback(async () => {
+    if (!user) {
+      setHistory([]);
+      setIsLoading(false);
+      return;
+    }
+    
+    setIsLoading(true);
+    try {
+      const data = await historyService.fetchHistory(user.id);
+      setHistory(data);
+    } catch (error) {
+      console.error('Error fetching history:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user]);
+  
+  // Fetch chat history on mount and when pathname or user changes
   useEffect(() => {
-    mutate();
-  }, [pathname, mutate]);
+    fetchChatHistory();
+  }, [pathname, fetchChatHistory]);
 
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const router = useRouter();
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Optimized delete handler using the history service
   const handleDelete = async (deleteId: string) => {
     try {
       setIsDeleting(true);
       
-      // Send delete request to API
-      const response = await fetch(`/api/history?id=${deleteId}`, {
-        method: 'DELETE',
-      });
+      // Use the history service which handles cache invalidation
+      const success = await historyService.deleteChat(deleteId, user?.id);
       
-      if (!response.ok) {
+      if (!success) {
         throw new Error('Failed to delete chat');
       }
       
-      // Update UI
-      mutate();
+      // Refresh history
+      await fetchChatHistory();
       
       // If we're deleting the current chat, navigate to the most recent one
       if (id === deleteId) {
-        // Get the most recent chat from the updated data
-        const updatedData = await fetcher('/api/history');
-        if (updatedData && updatedData.length > 0) {
+        if (history.length > 0) {
           // Navigate to the most recent chat
-          router.push(`/chat/${updatedData[0].id}`);
+          router.push(`/chat/${history[0].id}`);
         } else {
           // If no chats left, go to new chat page
           router.push('/chat');
@@ -221,7 +231,7 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
 
     return chats.reduce(
       (groups, chat) => {
-        const chatDate = new Date(chat.createdAt);
+        const chatDate = new Date(chat.updatedAt || chat.createdAt);
 
         if (isToday(chatDate)) {
           groups.today.push(chat);
@@ -382,4 +392,9 @@ export function SidebarHistory({ user }: { user: User | undefined }) {
       </AlertDialog>
     </>
   );
-}
+};
+
+export const SidebarHistory = memo(PureSidebarHistory, (prevProps, nextProps) => {
+  // Only re-render if the user ID changes
+  return prevProps.user?.id === nextProps.user?.id;
+});

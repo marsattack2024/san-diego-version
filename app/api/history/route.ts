@@ -54,7 +54,7 @@ export async function GET() {
     if (data) {
       edgeLogger.info('Chat history fetch results', { 
         count: data.length,
-        chatIds: data.map(chat => chat.id).slice(0, 5) // Show first 5 IDs only
+        chatIds: data.map((chat: { id: string }) => chat.id).slice(0, 5) // Show first 5 IDs only
       });
     }
     
@@ -67,10 +67,17 @@ export async function GET() {
     }
     
     // Map the Supabase data to the Chat interface
-    const chats: Chat[] = data.map(chat => ({
+    const chats: Chat[] = data.map((chat: { 
+      id: string; 
+      title: string | null; 
+      created_at: string; 
+      updated_at: string;
+      user_id: string;
+    }) => ({
       id: chat.id,
       title: chat.title || 'New Chat',
       createdAt: chat.created_at,
+      updatedAt: chat.updated_at,
       userId: chat.user_id,
       messages: [] // We'll fetch messages separately when needed
     }));

@@ -14,6 +14,7 @@ import { useArtifactSelector } from '@/hooks/use-artifact';
 import { toast } from 'sonner';
 import { useChatStore } from '@/stores/chat-store';
 import { TooltipProvider } from './ui/tooltip';
+import { historyService } from '@/lib/api/history-service';
 
 export function Chat({
   id,
@@ -138,6 +139,7 @@ export function Chat({
               role: 'user',
               content: content,
             },
+            updateTimestamp: true, // Signal to update the session timestamp
           }),
         });
         
@@ -148,6 +150,9 @@ export function Chat({
           }).catch(err => {
             console.error('Failed to save user message, could not parse error:', err);
           });
+        } else {
+          // Force refresh the chat history to update sidebar position
+          historyService.invalidateCache();
         }
       } catch (error) {
         console.error('Error saving user message:', error);
@@ -198,7 +203,26 @@ export function Chat({
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({ title }),
-          }).catch(error => {
+          })
+          .then(() => {
+            // Get the current chat data to get the userId
+            fetch(`/api/chat/${id}`)
+              .then(res => res.json())
+              .then(data => {
+                // Invalidate history cache with the user ID
+                if (data.userId) {
+                  historyService.invalidateCache(data.userId);
+                } else {
+                  historyService.invalidateCache();
+                }
+              })
+              .catch(err => {
+                console.error('Error fetching chat data for cache invalidation:', err);
+                // Fall back to invalidating without user ID
+                historyService.invalidateCache();
+              });
+          })
+          .catch(error => {
             console.error('Error updating chat title:', error);
           });
         }
