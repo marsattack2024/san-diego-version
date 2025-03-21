@@ -3,12 +3,10 @@ import { z } from 'zod';
 import { findSimilarDocumentsOptimized } from '../vector/documentRetrieval';
 import { createResource } from '../actions/resources';
 import { edgeLogger } from '../logger/edge-logger';
-import { OpenAI } from 'openai';
-import axios from 'axios';
-import * as cheerio from 'cheerio';
 import { extractUrls, ensureProtocol } from './url-utils';
 import type { RetrievedDocument } from '../../types/vector/vector';
 import { callPerplexityAPI } from '../agents/tools/perplexity/api';
+import type { CheerioAPI } from 'cheerio';
 
 // Define interfaces for scraped content
 interface ScrapedContent {
@@ -277,6 +275,10 @@ async function scrapeComprehensively(url: string): Promise<{
     other: string[];
   }
 }> {
+  // Dynamically import axios and cheerio only when needed
+  const axios = (await import('axios')).default;
+  const cheerioModule = await import('cheerio');
+  
   const fullUrl = ensureProtocol(url);
   
   const response = await axios.get(fullUrl, {
@@ -292,7 +294,7 @@ async function scrapeComprehensively(url: string): Promise<{
   });
   
   const html = response.data;
-  const $ = cheerio.load(html);
+  const $: CheerioAPI = cheerioModule.load(html);
   
   // Extract metadata
   const title = $('title').text().trim() || $('h1').first().text().trim() || 'No title found';
@@ -317,24 +319,24 @@ async function scrapeComprehensively(url: string): Promise<{
   // First, get all the structured content to maintain organization
   
   // Extract headers (h1-h6)
-  $('h1, h2, h3, h4, h5, h6').each((_, el) => {
+  $('h1, h2, h3, h4, h5, h6').each((index: number, el) => {
     const text = $(el).text().trim();
     if (text) textContent.headers.push(`${el.name.toUpperCase()}: ${text}`);
   });
   
   // Extract paragraphs - include more text-containing elements
-  $('p, div > p, article > p, section > p, main > p, .content p, [class*="content"] p, [class*="text"] p, [class*="body"] p').each((_, el) => {
+  $('p, div > p, article > p, section > p, main > p, .content p, [class*="content"] p, [class*="text"] p, [class*="body"] p').each((index: number, el) => {
     const text = $(el).text().trim();
     if (text) textContent.paragraphs.push(text);
   });
   
   // Extract lists (ul, ol)
-  $('ul, ol, div > ul, div > ol, article > ul, article > ol, section > ul, section > ol, .content ul, .content ol').each((_, el) => {
+  $('ul, ol, div > ul, div > ol, article > ul, article > ol, section > ul, section > ol, .content ul, .content ol').each((index: number, el) => {
     const items = $(el)
       .find('li')
-      .map((_, li) => $(li).text().trim())
+      .map((liIndex: number, li) => $(li).text().trim())
       .get()
-      .filter(text => text);
+      .filter((text: string) => text);
     
     if (items.length) {
       textContent.lists.push({

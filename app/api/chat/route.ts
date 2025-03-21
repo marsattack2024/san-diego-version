@@ -1,20 +1,13 @@
 import { validateChatRequest } from '@/lib/chat/validator';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { streamText } from 'ai';
-import { Message } from 'ai/react';
-import { myProvider } from '@/lib/ai/providers';
-import { extractUrls, ensureProtocol } from '@/lib/chat/url-utils';
-import { AgentRouter } from '@/lib/agents/agent-router';
 import { type AgentType } from '@/lib/agents/prompts';
 import { createServerClient } from '@/lib/supabase/server';
 import { cookies } from 'next/headers';
 import { z } from 'zod';
 
-// Import our modules
+// Import only validation & utility modules at the top level
+import { extractUrls, ensureProtocol } from '@/lib/chat/url-utils';
 import { toolManager } from '@/lib/chat/tool-manager';
-import { createResponseValidator } from '@/lib/chat/response-validator';
-import { buildEnhancedSystemPrompt, buildAIMessages } from '@/lib/chat/prompt-builder';
-import { callPerplexityAPI } from '@/lib/agents/tools/perplexity/api';
 
 // Allow streaming responses up to 120 seconds
 export const maxDuration = 120;
@@ -68,9 +61,36 @@ export async function POST(req: Request) {
     // Clear any previous tool results
     toolManager.clear();
     
-    // Get the base system prompt from the agent router
+    // Dynamically import dependencies only when needed
+    const [
+      { AgentRouter },
+      { streamText },
+      { createResponseValidator },
+      { buildAIMessages }
+    ] = await Promise.all([
+      import('@/lib/agents/agent-router'),
+      import('ai'),
+      import('@/lib/chat/response-validator'),
+      import('@/lib/chat/prompt-builder')
+    ]);
+    
     const agentRouter = new AgentRouter();
-    const baseSystemPrompt = agentRouter.getSystemPrompt(agentId as AgentType, deepSearchEnabled);
+    
+    // Apply auto-routing only when the default agent is selected
+    // This ensures explicit agent selections from UI are respected
+    const routedAgentId = agentId === 'default' 
+      ? agentRouter.routeMessage(agentId, messages)
+      : agentId;
+    
+    edgeLogger.info('Agent routing decision', {
+      originalAgentId: agentId,
+      finalAgentId: routedAgentId,
+      wasAutoRouted: agentId === 'default' && routedAgentId !== 'default',
+      method: agentId === 'default' ? 'auto-routing' : 'user-selected'
+    });
+    
+    // Use the final (potentially routed) agent ID for building the system prompt
+    const baseSystemPrompt = agentRouter.getSystemPrompt(routedAgentId as AgentType, deepSearchEnabled);
     
     // Process resources in the correct priority order (as specified in requirements)
     // Order of importance: 1. System Message 2. RAG 3. Web Scraper 4. Deep Search
@@ -116,52 +136,39 @@ export async function POST(req: Request) {
       }
     }
     
-    // 3. Web Scraper - MEDIUM PRIORITY
+    // 3. Web Scraper - MEDIUM PRIORITY (if URLs are detected)
     if (urls.length > 0) {
-      edgeLogger.info('Pre-scraping URLs from message', { 
-        urlCount: urls.length, 
-        urls 
+      edgeLogger.info('URLs detected in user message, running web scraper', { 
+        urlCount: urls.length,
+        firstUrl: urls[0]
       });
       
       try {
-        // Import the tools dynamically to avoid circular dependencies
+        // Dynamically import the tools
         const { chatTools } = await import('@/lib/chat/tools');
         
-        // Scrape all URLs in parallel
-        const scrapingPromises = urls.map(url => 
-          chatTools.comprehensiveScraper.execute(
-            { url: ensureProtocol(url) },
-            { toolCallId: `pre-scrape-${url}`, messages: [] }
-          )
+        // Only use the first URL to limit token usage
+        const firstUrl = urls[0];
+        
+        // Execute the comprehensive scraper
+        const scraperResult = await chatTools.comprehensiveScraper.execute!(
+          { url: firstUrl },
+          { toolCallId: 'web-scraper', messages: [] }
         );
         
-        // Wait for all scraping to complete
-        const scrapingResults = await Promise.allSettled(scrapingPromises);
-        
-        // Format successful results
-        const successfulResults = scrapingResults
-          .filter((result): result is PromiseFulfilledResult<any> => result.status === 'fulfilled')
-          .map(result => {
-            const data = result.value;
-            return `URL: ${data.url || 'Unknown'}\n` +
-                   `Title: ${data.title || 'No title'}\n` +
-                   `Description: ${data.description || 'No description'}\n\n` +
-                   `${data.content || 'No content available'}`;
-          });
-        
-        if (successfulResults.length > 0) {
-          const combinedResults = successfulResults.join('\n\n--- Next URL ---\n\n');
-          toolManager.registerToolResult('Web Scraper', combinedResults);
-          edgeLogger.info('Web scraping results found', { 
-            contentLength: combinedResults.length,
-            successCount: successfulResults.length,
-            failCount: scrapingResults.length - successfulResults.length
+        // Check if we got valid results
+        if (scraperResult && scraperResult.content) {
+          toolManager.registerToolResult('Web Content', scraperResult.content);
+          edgeLogger.info('Scraper results found', { 
+            url: firstUrl,
+            contentLength: scraperResult.content.length,
+            firstChars: scraperResult.content.substring(0, 100) + '...'
           });
         } else {
-          edgeLogger.info('No web scraping results found');
+          edgeLogger.info('No valid scraper results found');
         }
       } catch (error) {
-        edgeLogger.error('Error pre-scraping URLs', { error });
+        edgeLogger.error('Error running web scraper', { error });
       }
     }
     
@@ -172,6 +179,8 @@ export async function POST(req: Request) {
       });
       
       try {
+        // Dynamically import Perplexity API
+        const { callPerplexityAPI } = await import('@/lib/agents/tools/perplexity/api');
         const deepSearchResponse = await callPerplexityAPI(lastUserMessage.content);
         
         // Extract the content from the response object
@@ -204,77 +213,120 @@ export async function POST(req: Request) {
       userId
     });
     
-    // Define AI SDK tools using Zod schemas
-    const aiSdkTools = {
-      getInformation: {
-        description: 'Search for information in the knowledge base',
-        parameters: getInformationSchema,
-        execute: async ({ query }: { query: string }) => {
-          try {
-            const { chatTools } = await import('@/lib/chat/tools');
-            const result = await chatTools.getInformation.execute(
-              { query },
-              { toolCallId: 'ai-sdk-rag-search', messages: [] }
-            );
-            return typeof result === 'string' ? result : JSON.stringify(result);
-          } catch (error) {
-            edgeLogger.error('Error executing getInformation tool', { error });
-            return 'Error searching for information';
+    // Add tools to the AI using the AI SDK
+    // Initialize an empty collection of tools
+    let aiSdkTools = {};
+    
+    try {
+      // Dynamically import AI SDK tool utilities
+      const { tool } = await import('ai');
+      
+      // Dynamically import the tools
+      const { chatTools } = await import('@/lib/chat/tools');
+      
+      // Convert our tools to AI SDK format
+      aiSdkTools = {
+        getInformation: tool({
+          description: 'Search the internal knowledge base for relevant information',
+          parameters: getInformationSchema,
+          execute: async ({ query }) => {
+            const startTime = performance.now();
+            
+            try {
+              const result = await chatTools.getInformation.execute({ query }, { 
+                toolCallId: 'ai-initiated-search',
+                messages: []
+              });
+              
+              const duration = Math.round(performance.now() - startTime);
+              edgeLogger.info('Knowledge base search completed', { 
+                query, 
+                durationMs: duration,
+                resultLength: typeof result === 'string' ? result.length : 0
+              });
+              
+              return result;
+            } catch (error) {
+              const duration = Math.round(performance.now() - startTime);
+              edgeLogger.error('Knowledge base search failed', { 
+                query, 
+                durationMs: duration,
+                error
+              });
+              
+              throw error;
+            }
           }
-        }
-      },
-      addResource: {
-        description: 'Store new information in the knowledge base',
-        parameters: addResourceSchema,
-        execute: async ({ content }: { content: string }) => {
-          try {
-            const { chatTools } = await import('@/lib/chat/tools');
-            const result = await chatTools.addResource.execute(
-              { content },
-              { toolCallId: 'ai-sdk-add-resource', messages: [] }
-            );
-            return typeof result === 'string' ? result : JSON.stringify(result);
-          } catch (error) {
-            edgeLogger.error('Error executing addResource tool', { error });
-            return 'Error storing information';
+        }),
+        
+        addResource: tool({
+          description: 'Store new information in the knowledge base',
+          parameters: addResourceSchema,
+          execute: async ({ content }) => {
+            const startTime = performance.now();
+            
+            try {
+              const result = await chatTools.addResource.execute({ content }, { 
+                toolCallId: 'ai-initiated-store',
+                messages: []
+              });
+              
+              const duration = Math.round(performance.now() - startTime);
+              edgeLogger.info('Resource storage completed', { 
+                contentLength: content.length,
+                durationMs: duration 
+              });
+              
+              return result;
+            } catch (error) {
+              const duration = Math.round(performance.now() - startTime);
+              edgeLogger.error('Resource storage failed', { 
+                contentLength: content.length,
+                durationMs: duration,
+                error
+              });
+              
+              throw error;
+            }
           }
-        }
-      },
-      detectAndScrapeUrls: {
-        description: 'Extract and scrape URLs from text',
-        parameters: detectAndScrapeUrlsSchema,
-        execute: async ({ text }: { text: string }) => {
-          try {
-            const { chatTools } = await import('@/lib/chat/tools');
-            const result = await chatTools.detectAndScrapeUrls.execute(
-              { text },
-              { toolCallId: 'ai-sdk-detect-urls', messages: [] }
-            );
-            return typeof result === 'string' ? result : JSON.stringify(result);
-          } catch (error) {
-            edgeLogger.error('Error executing detectAndScrapeUrls tool', { error });
-            return 'Error detecting and scraping URLs';
+        }),
+        
+        detectAndScrapeUrls: tool({
+          description: 'Automatically detects URLs in text and scrapes their content',
+          parameters: detectAndScrapeUrlsSchema,
+          execute: async ({ text }) => {
+            const startTime = performance.now();
+            
+            try {
+              const result = await chatTools.detectAndScrapeUrls.execute({ text }, { 
+                toolCallId: 'ai-initiated-url-detection',
+                messages: []
+              });
+              
+              const duration = Math.round(performance.now() - startTime);
+              edgeLogger.info('URL detection completed', { 
+                textLength: text.length,
+                durationMs: duration,
+                urlsFound: result.urls.length
+              });
+              
+              return result;
+            } catch (error) {
+              const duration = Math.round(performance.now() - startTime);
+              edgeLogger.error('URL detection failed', { 
+                textLength: text.length,
+                durationMs: duration,
+                error
+              });
+              
+              throw error;
+            }
           }
-        }
-      },
-      comprehensiveScraper: {
-        description: 'Scrape content from a URL',
-        parameters: comprehensiveScraperSchema,
-        execute: async ({ url }: { url: string }) => {
-          try {
-            const { chatTools } = await import('@/lib/chat/tools');
-            const result = await chatTools.comprehensiveScraper.execute(
-              { url: ensureProtocol(url) },
-              { toolCallId: 'ai-sdk-scrape', messages: [] }
-            );
-            return typeof result === 'string' ? result : JSON.stringify(result);
-          } catch (error) {
-            edgeLogger.error('Error executing comprehensiveScraper tool', { error });
-            return 'Error scraping URL';
-          }
-        }
-      }
-    };
+        })
+      };
+    } catch (error) {
+      edgeLogger.error('Error initializing tools', { error });
+    }
     
     // Create a response validator function
     const validateResponse = createResponseValidator({
@@ -292,9 +344,12 @@ export async function POST(req: Request) {
     });
     
     try {
+      // Dynamically import the OpenAI model directly
+      const { openai } = await import('@ai-sdk/openai');
+      
       // Use the Vercel AI SDK's streamText function
       const result = await streamText({
-        model: myProvider.languageModel(modelName),
+        model: openai(modelName), // Directly use the OpenAI model
         messages: aiMessages,
         temperature: 0.7,
         maxTokens: 10000,
@@ -308,46 +363,55 @@ export async function POST(req: Request) {
             // Use a safer approach to extract text from the completion
             // First try to get the text from the completion itself
             if (typeof completion === 'object' && completion !== null) {
-              // Try to access text property if it exists
-              const textContent = completion.text || '';
-              
-              if (textContent && typeof textContent === 'string') {
-                // Add information about tools used to ensure the client has this context
-                // This ensures the client-side storage has complete information
-                const toolsUsed = toolManager.getToolsUsed();
-                if (toolsUsed.length > 0) {
-                  // If there's no tools section yet, add one
-                  if (!textContent.includes("--- Tools and Resources Used ---")) {
-                    fullText = textContent + "\n\n--- Tools and Resources Used ---\n" + 
-                      toolsUsed.map(tool => `- ${tool}`).join('\n');
-                  } else {
-                    fullText = textContent;
-                  }
-                } else {
-                  fullText = textContent;
-                }
-              } else {
-                // If no text property, try to stringify the object
-                try {
-                  // Use JSON.stringify to get a string representation
-                  const stringified = JSON.stringify(completion);
-                  if (stringified && stringified !== '{}') {
-                    fullText = `Completion object: ${stringified}`;
-                  }
-                } catch (e) {
-                  edgeLogger.warn('Failed to stringify completion object', { error: e });
-                }
+              // Check for the completion.text property (most common format)
+              if ('text' in completion && typeof completion.text === 'string') {
+                fullText = completion.text;
+              } 
+              // Check for more complex structures
+              else if ('content' in completion && typeof completion.content === 'string') {
+                fullText = completion.content;
               }
+              // Convert the whole object to string if we can't find the text
+              else {
+                fullText = JSON.stringify(completion);
+              }
+            } else if (typeof completion === 'string') {
+              // If it's already a string, use it directly
+              fullText = completion;
+            } else {
+              // Fallback to a safe default
+              fullText = `Response: ${String(completion)}`;
             }
             
-            // If we still don't have text, use a fallback
-            if (!fullText) {
-              fullText = 'No text content could be extracted from the completion.';
-              edgeLogger.warn('Could not extract text from completion object', { 
-                completionType: typeof completion,
-                isNull: completion === null,
-                hasSteps: completion && 'steps' in completion
-              });
+            // Create Supabase client for session storage
+            if (id) {
+              edgeLogger.debug('Storing chat session', { id });
+              try {
+                const authClient = await createServerClient();
+                
+                // Only store/update the session record, not messages
+                // Messages are saved by the client-side onFinish callback
+                const sessionResponse = await authClient
+                  .from('sd_chat_sessions')
+                  .upsert({
+                    id,
+                    user_id: userId,
+                    title: lastUserMessage.content.substring(0, 50),
+                    updated_at: new Date().toISOString(),
+                    agent_id: routedAgentId  // Use the routed agent ID
+                  });
+                
+                if (sessionResponse.error) {
+                  throw new Error(`Failed to store session: ${sessionResponse.error.message}`);
+                }
+                
+                edgeLogger.info('Chat session updated successfully', { 
+                  id,
+                  note: 'Message storage handled by client side to prevent duplication' 
+                });
+              } catch (error) {
+                edgeLogger.error('Error storing chat session', { error });
+              }
             }
             
             // Validate the response

@@ -1,3 +1,5 @@
+import withBundleAnalyzer from '@next/bundle-analyzer';
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   eslint: {
@@ -53,8 +55,25 @@ const nextConfig = {
       };
     }
     
+    // Enable tree shaking optimizations
+    config.optimization = {
+      ...config.optimization,
+      sideEffects: true,
+    };
+    
+    // Improve module resolution
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      // Add any specific aliases to optimize imports here
+    };
+    
     return config;
   },
 }
 
-export default nextConfig
+// Wrap with bundle analyzer
+const analyzeBundles = withBundleAnalyzer({
+  enabled: process.env.ANALYZE === 'true',
+});
+
+export default analyzeBundles(nextConfig);

@@ -1,15 +1,42 @@
-import { logger as baseLogger } from './base-logger';
+import { logger } from './base-logger';
 import type { RetrievedDocument } from '../../types/vector/vector';
 import type { DocumentSearchMetrics } from '../vector/documentRetrieval';
+
+/**
+ * Configuration for sampling rates (adjust as needed for MVP)
+ */
+const SAMPLING_RATES = {
+  // Lower sampling rates reduce logging volume
+  debug: 0.1,  // Log 10% of debug events
+  info: 0.25,  // Log 25% of info events
+  warn: 0.5,   // Log 50% of warning events
+  error: 1.0,  // Log 100% of errors
+  performance: 0.2  // Log 20% of performance events
+};
+
+/**
+ * Determine if we should log based on sampling rate
+ * @param level - The level of logging to check
+ * @returns - True if the log should be emitted, false otherwise
+ */
+function shouldLog(level: keyof typeof SAMPLING_RATES): boolean {
+  // Always log in development environment
+  if (process.env.NODE_ENV === 'development') {
+    return true;
+  }
+  
+  const rate = SAMPLING_RATES[level] || 1.0;
+  return Math.random() <= rate;
+}
 
 /**
  * Specialized logger for Supabase Vector operations
  * Provides monitoring for vector embedding creation and searches
  */
-export const logger = {
+export const vectorLogger = {
   // Log embedding creation
   logEmbeddingCreation: (documentId: string, metadata: Record<string, any> = {}) => {
-    baseLogger.info('Vector embedding created', {
+    logger.info('Vector embedding created', {
       operation: 'embedding_creation',
       documentId,
       ...metadata,
@@ -24,27 +51,20 @@ export const logger = {
     resultCount: number, 
     durationMs: number
   ) => {
-    // Only log if slow or in development
+    // Only log if high response time (>500ms) or no results, or by sampling rate
     const isSlowQuery = durationMs > 500;
+    const hasNoResults = resultCount === 0;
     
-    if (process.env.NODE_ENV === 'development' || isSlowQuery) {
-      baseLogger.info(`Vector search completed in ${durationMs}ms`, {
+    if (isSlowQuery || hasNoResults || shouldLog('performance')) {
+      logger.info(`Vector search query: ${query.substring(0, 50)}${query.length > 50 ? '...' : ''}`, {
         operation: 'vector_query',
         queryType: params.type || 'similarity',
         resultCount,
         durationMs,
         dimensions: params.dimensions,
-        important: isSlowQuery
-      });
-    }
-    
-    // Always log slow queries as warnings
-    if (isSlowQuery) {
-      baseLogger.warn(`Slow vector query (${durationMs}ms)`, {
-        operation: 'vector_query',
-        queryType: params.type || 'similarity',
-        resultCount,
-        durationMs
+        isSlowQuery,
+        hasNoResults,
+        component: 'vector-search'
       });
     }
   },
@@ -56,82 +76,73 @@ export const logger = {
     metrics: DocumentSearchMetrics,
     sessionId: string
   ) => {
-    // Format document summaries with better organization and line breaks
-    const documentSummaries = documents.map((doc, index) => {
-      // Safely handle ID - ensure it's a string
-      const id = doc.id !== undefined ? doc.id : 'unknown';
+    // Only log detailed results for slow queries or by sampling 
+    if (metrics.isSlowQuery || shouldLog('debug')) {
+      // Format document summaries with better organization and line breaks
+      const documentSummaries = documents.slice(0, 3).map((doc, index) => {
+        // Safely handle ID - ensure it's a string
+        const id = doc.id !== undefined ? doc.id : 'unknown';
+        
+        // Get title from metadata or use ID
+        const title = doc.metadata?.title || `Doc ${String(id).substring(0, 8)}`;
+        
+        // Format the preview with proper line breaks
+        const content = typeof doc.content === 'string' ? doc.content : String(doc.content || '');
+        const preview = content.length > 100 ? content.substring(0, 100) + '...' : content;
+        // Replace any existing line breaks with spaces to prevent JSON formatting issues
+        const cleanPreview = preview.replace(/\r?\n/g, ' ');
+        
+        const similarityPercent = Math.round(doc.similarity * 100);
+        
+        return {
+          id,
+          title,
+          preview: cleanPreview,
+          similarity: doc.similarity,
+          similarityPercent
+        };
+      });
       
-      // Get title from metadata or use ID
-      const title = doc.metadata?.title || `Doc ${String(id).substring(0, 8)}`;
+      // For development, create a nicely formatted message
+      const formattedMessage = process.env.NODE_ENV === 'development' 
+        ? `Vector search for query (${query.length} chars)`
+        : 'Vector search results';
+        
+      // Create a well-structured log object for both human and machine readability
+      const summarizedResults = documentSummaries.map(doc => ({
+        id: doc.id,
+        title: doc.title,
+        similarity: `${doc.similarityPercent}%`
+      }));
       
-      // Format the preview with proper line breaks
-      const content = typeof doc.content === 'string' ? doc.content : String(doc.content || '');
-      const preview = content.length > 100 ? content.substring(0, 100) + '...' : content;
-      // Replace any existing line breaks with spaces to prevent JSON formatting issues
-      const cleanPreview = preview.replace(/\r?\n/g, ' ');
-      
-      const similarityPercent = Math.round(doc.similarity * 100);
-      
-      return {
-        id,
-        title,
-        preview: cleanPreview,
-        similarity: doc.similarity,
-        similarityPercent
-      };
-    });
-
-    // For development, create a nicely formatted message
-    const formattedMessage = process.env.NODE_ENV === 'development' 
-      ? `Vector search for query (${query.length} chars)`
-      : 'Vector search results';
-      
-    // Create a well-structured log object for both human and machine readability
-    const structuredOutput = {
-      search: {
-        query: {
-          text: query.substring(0, 50) + (query.length > 50 ? '...' : ''),
-          length: query.length
-        },
+      logger.debug(formattedMessage, {
+        sessionId,
+        resultCount: documents.length,
+        topResults: summarizedResults,
         metrics: {
-          resultCount: documents.length,
-          avgSimilarity: `${Math.round(metrics.averageSimilarity * 100)}%`,
-          highSimilarity: `${Math.round(metrics.highestSimilarity * 100)}%`,
-          lowSimilarity: `${Math.round(metrics.lowestSimilarity * 100)}%`,
-          durationMs: metrics.retrievalTimeMs
+          retrievalTimeMs: metrics.retrievalTimeMs,
+          averageSimilarity: metrics.averageSimilarity,
+          fromCache: metrics.fromCache || false
         },
-        results: documentSummaries.map(doc => ({
-          id: doc.id,
-          title: doc.title,
-          similarity: `${doc.similarityPercent}%`
-        }))
-      }
-    };
-
-    // Log the results with better formatting
-    baseLogger.info(formattedMessage, {
-      operation: 'vector_results',
-      queryLength: query.length,
-      resultCount: documents.length,
-      averageSimilarity: Math.round(metrics.averageSimilarity * 100) / 100,
-      highestSimilarity: Math.round(metrics.highestSimilarity * 100) / 100,
-      lowestSimilarity: Math.round(metrics.lowestSimilarity * 100) / 100,
-      durationMs: metrics.retrievalTimeMs,
-      sessionId,
-      documents: documentSummaries,
-      structuredOutput, // Include the nicely structured output
-      important: true
-    });
+        component: 'vector-search'
+      });
+    }
   },
   
   // Log vector operations errors
   logVectorError: (operation: string, error: any, context: Record<string, any> = {}) => {
-    baseLogger.error(`Vector operation failed`, {
-      operation,
-      error,
-      ...context,
-      important: true
-    });
+    // Always log errors, but with sampling in production
+    if (shouldLog('error')) {
+      logger.error(`Vector search error in ${operation}`, {
+        ...context,
+        error: {
+          message: error.message,
+          code: error.code,
+          status: error.status
+        },
+        component: 'vector-search'
+      });
+    }
   }
 };
 
@@ -157,14 +168,14 @@ export async function tracedVectorOperation<T>(
     // Log success based on operation type
     if (operationName === 'search') {
       const resultCount = Array.isArray(result) ? result.length : 1;
-      logger.logVectorQuery(
+      vectorLogger.logVectorQuery(
         metadata.query || 'unknown',
         metadata.params || {},
         resultCount,
         durationMs
       );
     } else {
-      baseLogger.info(`Vector operation completed: ${operationName}`, {
+      logger.info(`Vector operation completed: ${operationName}`, {
         durationMs,
         ...metadata,
         important: durationMs > 500
@@ -173,11 +184,14 @@ export async function tracedVectorOperation<T>(
     
     return result;
   } catch (error) {
-    logger.logVectorError(operationName, error, {
+    vectorLogger.logVectorError(operationName, error, {
       requestId,
       durationMs: Math.round(performance.now() - startTime),
       ...metadata
     });
     throw error;
   }
-} 
+}
+
+// Export only the default
+export default vectorLogger; 

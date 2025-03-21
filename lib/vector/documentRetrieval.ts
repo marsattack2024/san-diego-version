@@ -1,13 +1,66 @@
-import { logger } from '../logger/vector-logger';
+import vectorLogger from '../logger/vector-logger';
 import type { RetrievedDocument } from '../../types/vector/vector.js';
 import { supabase } from '../db';
 import { createEmbedding } from './embeddings';
+
+// Simple in-memory cache for vector search results
+// Cache structure: Map<queryHash, {documents, timestamp, metrics}>
+interface CacheEntry {
+  documents: RetrievedDocument[];
+  metrics: DocumentSearchMetrics;
+  timestamp: number;
+}
+
+// Cache configuration
+const CACHE_SIZE_LIMIT = 100; // Maximum number of entries in cache
+const CACHE_TTL = 5 * 60 * 1000; // Time-to-live: 5 minutes (in milliseconds)
+const vectorSearchCache = new Map<string, CacheEntry>();
+
+// Simple cache cleanup function
+if (typeof setInterval !== 'undefined') {
+  setInterval(() => {
+    const now = Date.now();
+    let expiredCount = 0;
+    
+    // Remove expired entries
+    for (const [key, entry] of vectorSearchCache.entries()) {
+      if (now - entry.timestamp > CACHE_TTL) {
+        vectorSearchCache.delete(key);
+        expiredCount++;
+      }
+    }
+    
+    // If we're over the size limit, remove oldest entries
+    if (vectorSearchCache.size > CACHE_SIZE_LIMIT) {
+      const entries = Array.from(vectorSearchCache.entries());
+      entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+      
+      const toRemove = entries.slice(0, entries.length - CACHE_SIZE_LIMIT);
+      toRemove.forEach(([key]) => {
+        vectorSearchCache.delete(key);
+        expiredCount++;
+      });
+    }
+    
+    if (expiredCount > 0 && process.env.NODE_ENV === 'development') {
+      console.log(`[Vector Cache] Cleaned up ${expiredCount} entries, current size: ${vectorSearchCache.size}`);
+    }
+  }, 60 * 1000); // Run every minute
+}
+
+// Simple hash function for query + options
+function hashQueryOptions(query: string, options: DocumentSearchOptions): string {
+  const { limit = 5, similarityThreshold, metadataFilter, sessionId } = options;
+  const filterStr = metadataFilter ? JSON.stringify(metadataFilter) : '';
+  return `${query}:${limit}:${similarityThreshold}:${filterStr}:${sessionId || ''}`;
+}
 
 interface DocumentSearchOptions {
   limit?: number;
   similarityThreshold?: number;
   metadataFilter?: Record<string, any>;
   sessionId?: string;
+  skipCache?: boolean; // Added option to bypass cache when needed
 }
 
 export interface DocumentSearchMetrics {
@@ -18,6 +71,7 @@ export interface DocumentSearchMetrics {
   retrievalTimeMs: number;
   isSlowQuery: boolean;
   usedFallbackThreshold?: boolean;
+  fromCache?: boolean; // New field to track cache hits
 }
 
 interface SupabaseDocument {
@@ -100,7 +154,7 @@ export async function findSimilarDocumentsWithPerformance(
     const endTime = performance.now();
     const retrievalTimeMs = Math.round(endTime - startTime);
     
-    logger.logVectorError('vector-search', error, {
+    vectorLogger.logVectorError('vector-search', error, {
       queryLength: queryText.length,
       retrievalTimeMs,
       sessionId,
@@ -111,7 +165,7 @@ export async function findSimilarDocumentsWithPerformance(
 }
 
 function logQueryPerformance(queryText: string, retrievalTimeMs: number, count: number, sessionId: string, isSlowQuery: boolean) {
-  logger.logVectorQuery(queryText, {
+  vectorLogger.logVectorQuery(queryText, {
     retrievalTimeMs,
     documentCount: count,
     sessionId,
@@ -123,6 +177,7 @@ function logQueryPerformance(queryText: string, retrievalTimeMs: number, count: 
  * 1. Query preprocessing to improve match quality
  * 2. Performance monitoring
  * 3. Automatic retry with adjusted parameters for failed searches
+ * 4. In-memory caching for recent queries
  */
 
 export async function findSimilarDocumentsOptimized(
@@ -133,6 +188,34 @@ export async function findSimilarDocumentsOptimized(
   const startTime = performance.now();
   
   const processedQuery = preprocessQuery(queryText);
+  
+  // Check cache first (unless skipCache is true)
+  if (!options.skipCache) {
+    const cacheKey = hashQueryOptions(processedQuery, options);
+    const cachedResult = vectorSearchCache.get(cacheKey);
+    
+    if (cachedResult && (Date.now() - cachedResult.timestamp) < CACHE_TTL) {
+      // Add cache hit information to metrics
+      const cachedMetrics = {
+        ...cachedResult.metrics,
+        fromCache: true,
+        retrievalTimeMs: Math.round(performance.now() - startTime) // Measure cache retrieval time
+      };
+      
+      // Log cache hit
+      vectorLogger.logVectorQuery(queryText, {
+        fromCache: true,
+        originalRetrievalTimeMs: cachedResult.metrics.retrievalTimeMs,
+        cacheRetrievalTimeMs: cachedMetrics.retrievalTimeMs,
+        sessionId,
+      }, cachedResult.documents.length, cachedMetrics.retrievalTimeMs);
+      
+      return {
+        documents: cachedResult.documents,
+        metrics: cachedMetrics
+      };
+    }
+  }
   
   try {
     // The thresholds are now handled in the SQL function directly (0.6 initial, 0.4 fallback)
@@ -153,7 +236,7 @@ export async function findSimilarDocumentsOptimized(
     );
     
     if (usedFallback) {
-      logger.logVectorQuery(queryText, {
+      vectorLogger.logVectorQuery(queryText, {
         originalThreshold: 0.6,
         newThreshold: 0.4,
         sessionId,
@@ -161,20 +244,20 @@ export async function findSimilarDocumentsOptimized(
       }, result.documents.length, retrievalTimeMs);
       
       result.metrics.usedFallbackThreshold = true;
-      
-      // Log detailed results with the new logger function
-      logger.logVectorResults(
-        queryText,
-        result.documents,
-        result.metrics,
-        sessionId
-      );
-      
-      return result;
+    }
+    
+    // Store in cache (unless skipCache is true)
+    if (!options.skipCache) {
+      const cacheKey = hashQueryOptions(processedQuery, options);
+      vectorSearchCache.set(cacheKey, {
+        documents: result.documents,
+        metrics: result.metrics,
+        timestamp: Date.now()
+      });
     }
     
     // Log detailed results with the new logger function
-    logger.logVectorResults(
+    vectorLogger.logVectorResults(
       queryText,
       result.documents,
       result.metrics,
@@ -186,7 +269,7 @@ export async function findSimilarDocumentsOptimized(
     const endTime = performance.now();
     const retrievalTimeMs = Math.round(endTime - startTime);
     
-    logger.logVectorError('optimized-vector-search', error, {
+    vectorLogger.logVectorError('optimized-vector-search', error, {
       queryLength: queryText.length,
       retrievalTimeMs,
       sessionId,

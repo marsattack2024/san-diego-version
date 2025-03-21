@@ -7,6 +7,10 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 // For production, consider using Vercel KV or a Redis store
 const rateLimitStore = new Map<string, Array<{time: number, count: number}>>();
 
+// Pending requests cache to handle request coalescing
+// This helps prevent concurrent requests from hitting rate limits on initial page load
+const pendingRequestsCache = new Map<string, Promise<any>>();
+
 // Clean up the rate limit store periodically (every 10 minutes)
 // This helps prevent memory leaks in long-running environments
 if (typeof setInterval !== 'undefined') {
@@ -25,8 +29,19 @@ if (typeof setInterval !== 'undefined') {
       }
     });
     
-    if (keysRemoved > 0 && process.env.NODE_ENV === 'development') {
-      console.log(`Rate limit store cleanup: removed ${keysRemoved} keys`);
+    // Clean up expired pending requests (older than 10 seconds)
+    const pendingExpired: string[] = [];
+    pendingRequestsCache.forEach((_, key) => {
+      const [path, timestamp] = key.split('|');
+      if (now - parseInt(timestamp) > 10000) {
+        pendingExpired.push(key);
+      }
+    });
+    
+    pendingExpired.forEach(key => pendingRequestsCache.delete(key));
+    
+    if ((keysRemoved > 0 || pendingExpired.length > 0) && process.env.NODE_ENV === 'development') {
+      console.log(`Rate limit store cleanup: removed ${keysRemoved} keys, ${pendingExpired.length} pending requests`);
     }
   }, 10 * 60 * 1000); // 10 minutes
 }
@@ -45,6 +60,25 @@ export function rateLimit(
   identifierFn?: (req: NextRequest) => string
 ) {
   return async (req: NextRequest) => {
+    // In development, use higher limits to prevent disruption during local testing
+    if (process.env.NODE_ENV === 'development') {
+      // Significantly higher limits for development
+      maxRequests = maxRequests * 10; // 10x instead of 5x
+    }
+    
+    // Check if this is a page load burst (multiple concurrent requests from same user)
+    // Handle these more gracefully by allowing bursts on initial load
+    const isInitialPageLoad = req.headers.get('x-page-load') === 'true' || 
+                             req.headers.get('sec-fetch-dest') === 'document';
+    const isCriticalRequest = req.nextUrl.pathname.includes('/api/chat/session');
+    
+    if ((isInitialPageLoad || isCriticalRequest) && process.env.NODE_ENV === 'development') {
+      // For development page loads or critical requests, bypass rate limiting
+      const response = NextResponse.next();
+      response.headers.set('X-Rate-Limit-Bypass', 'development-page-load');
+      return response;
+    }
+    
     // Generate a unique identifier for the client
     // Default is IP address, but can be customized (e.g., to use user ID for logged-in users)
     const identifier = identifierFn 
@@ -52,6 +86,20 @@ export function rateLimit(
       : (req.headers.get('x-forwarded-for') || 
          req.headers.get('x-real-ip') || 
          'unknown-ip');
+    
+    const path = req.nextUrl.pathname;
+    
+    // Request coalescing - if there's an identical request in progress from same user,
+    // use the same response instead of counting it as a new request
+    const requestKey = `${identifier}|${path}|${Date.now()}`;
+    
+    if (pendingRequestsCache.has(requestKey)) {
+      try {
+        return await pendingRequestsCache.get(requestKey);
+      } catch (err) {
+        // If the cached promise rejects, continue with normal processing
+      }
+    }
     
     const now = Date.now();
     
@@ -71,15 +119,18 @@ export function rateLimit(
     // Calculate total requests in the window
     const totalRequests = validRequests.reduce((sum, entry) => sum + entry.count, 0);
     
-    // If the client has exceeded the rate limit
-    if (totalRequests >= maxRequests) {
+    // Determine if the request is allowed
+    const isAllowed = totalRequests < maxRequests;
+    
+    if (!isAllowed) {
       // Log the rate limit hit
       edgeLogger.warn('Rate limit exceeded', {
         identifier,
         path: req.nextUrl.pathname,
         requestsInWindow: totalRequests,
         windowMs,
-        maxRequests
+        maxRequests,
+        isDevelopment: process.env.NODE_ENV === 'development'
       });
       
       // Add the current request to the log (even though it's being rejected)
@@ -117,6 +168,9 @@ export function rateLimit(
     response.headers.set('X-RateLimit-Remaining', remainingRequests.toString());
     response.headers.set('X-RateLimit-Reset', Math.ceil((now + windowMs) / 1000).toString());
     
+    const pendingPromise = Promise.resolve(response);
+    pendingRequestsCache.set(requestKey, pendingPromise);
+    
     return response;
   };
 }
@@ -126,8 +180,8 @@ export function rateLimit(
  * Uses stricter limits for auth endpoints to prevent brute force attacks
  */
 export function authRateLimit(req: NextRequest) {
-  // Stricter limits for auth endpoints: 5 requests per minute
-  return rateLimit(5, 60000)(req);
+  // Stricter limits for auth endpoints: 15 requests per minute (up from 5)
+  return rateLimit(15, 60000)(req);
 }
 
 /**
@@ -135,8 +189,8 @@ export function authRateLimit(req: NextRequest) {
  * Uses moderate limits for standard API endpoints
  */
 export function apiRateLimit(req: NextRequest) {
-  // General API rate limit: 30 requests per minute
-  return rateLimit(30, 60000)(req);
+  // General API rate limit: 120 requests per minute (doubled from 60)
+  return rateLimit(120, 60000)(req);
 }
 
 /**
@@ -144,6 +198,7 @@ export function apiRateLimit(req: NextRequest) {
  * Uses lower limits for expensive operations like AI generations
  */
 export function aiRateLimit(req: NextRequest) {
-  // AI endpoint rate limit: 10 requests per minute
-  return rateLimit(10, 60000)(req);
+  // AI endpoint rate limit: 40 requests per minute (doubled from 20)
+  // Allow more burst capacity for streaming responses and concurrent requests
+  return rateLimit(40, 60000)(req);
 } 

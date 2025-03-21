@@ -78,7 +78,8 @@ export async function POST(request: Request) {
         session_id,
         role,
         content: message,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        user_id: userId
       })
       .select()
       .single();

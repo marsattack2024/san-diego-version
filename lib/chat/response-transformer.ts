@@ -63,32 +63,16 @@ export class ResponseTransformer extends TransformStream<Uint8Array, Uint8Array>
             controller.enqueue(textEncoder.encode(appendedText));
           }
           
-          // Store in database if needed
+          // Don't store in database - client side handles this
+          // This prevents duplicate message entries
+          
+          // Log that we're delegating storage to the client
           if (options.userId && options.chatId) {
-            try {
-              const supabase = await createServerClient();
-              await supabase
-                .from('sd_chat_histories')
-                .insert({
-                  session_id: options.chatId,
-                  role: 'assistant',
-                  content: validatedText,
-                  user_id: options.userId,
-                  tools_used: options.toolsUsed.length > 0 ? options.toolsUsed : null
-                });
-              
-              edgeLogger.info('Stored assistant response', {
-                chatId: options.chatId,
-                userId: options.userId,
-                contentLength: validatedText.length
-              });
-            } catch (dbError) {
-              edgeLogger.error('Failed to store assistant response', {
-                error: dbError,
-                chatId: options.chatId,
-                userId: options.userId
-              });
-            }
+            edgeLogger.debug('Skipping server-side message storage (delegated to client)', {
+              chatId: options.chatId,
+              contentLength: validatedText.length,
+              reason: 'Prevents duplicate entries'
+            });
           }
         } catch (error) {
           edgeLogger.error('Error in response transformer flush', { error });

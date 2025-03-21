@@ -1,4 +1,5 @@
-import { OpenAI } from 'openai';
+// Remove static import 
+// import { OpenAI } from 'openai';
 
 // Simple console logger for testing
 const logger = {
@@ -13,16 +14,21 @@ const BASE_URL = 'https://api.perplexity.ai';
 const DEFAULT_MODEL = 'sonar-pro';
 const SYSTEM_PROMPT = 'You are a deep research agent for an agent team. Please bring back the most comprehensive and relevant context in your searches. Focus on factual information, include specific details, statistics, and cite sources when possible. Format your response in a structured way that will be easy for other agents to parse and utilize.';
 
-let perplexityClient: OpenAI | null = null;
+// Use a reference type for the client to properly handle dynamic imports
+type PerplexityClient = any;
+let perplexityClient: PerplexityClient | null = null;
 
 /**
  * Get or create the Perplexity API client
  */
-function getClient() {
+async function getClient() {
   if (!perplexityClient) {
     if (!process.env.PERPLEXITY_API_KEY) {
       throw new Error('PERPLEXITY_API_KEY environment variable is required');
     }
+    
+    // Dynamically import OpenAI only when needed
+    const { OpenAI } = await import('openai');
     
     perplexityClient = new OpenAI({
       apiKey: process.env.PERPLEXITY_API_KEY,
@@ -40,7 +46,7 @@ export async function callPerplexityAPI(query: string) {
   const startTime = performance.now();
   
   try {
-    const client = getClient();
+    const client = await getClient();
     
     logger.debug('Calling Perplexity API', { 
       query,
@@ -95,7 +101,7 @@ export async function streamPerplexityAPI(query: string, onChunk: (chunk: string
   try {
     logger.debug('Starting streaming Perplexity API call', { query });
     
-    const client = getClient();
+    const client = await getClient();
     
     const stream = await client.chat.completions.create({
       model: DEFAULT_MODEL,
