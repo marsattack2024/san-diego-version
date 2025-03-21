@@ -1,4 +1,5 @@
 import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
+import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 import { logger } from '@/lib/logger';
 import { cache } from 'react';
@@ -68,6 +69,43 @@ export const createServerClient = cache(async () => {
   }
 });
 
+/**
+ * Creates a Supabase client with service role key to bypass RLS policies
+ * This should ONLY be used for trusted server-side operations
+ * that need to bypass Row Level Security
+ * @returns Supabase admin client with service role
+ */
+export const createAdminClient = () => {
+  try {
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    
+    // Check for missing key
+    if (!serviceRoleKey) {
+      logger.error('Missing Supabase service role key. Admin operations will fail.');
+      return createMockAdminClient();
+    }
+    
+    // Validate URL format
+    let validSupabaseUrl = supabaseUrl;
+    try {
+      if (supabaseUrl) {
+        new URL(supabaseUrl);
+      } else {
+        throw new Error('Missing Supabase URL');
+      }
+    } catch (error) {
+      logger.error('Invalid Supabase URL format:', error instanceof Error ? error.message : String(error));
+      return createMockAdminClient();
+    }
+    
+    return createClient(validSupabaseUrl, serviceRoleKey);
+  } catch (error) {
+    logger.error('Failed to create admin client', { error });
+    return createMockAdminClient();
+  }
+};
+
 // Create a mock Supabase client that won't throw errors
 function createMockSupabaseClient() {
   const mockMethods = {
@@ -82,6 +120,26 @@ function createMockSupabaseClient() {
       getSession: () => Promise.resolve({ data: { session: null }, error: null }),
       signOut: () => Promise.resolve({ error: null })
     }
+  };
+  
+  return mockMethods as any;
+}
+
+// Create a mock Supabase admin client that won't throw errors
+function createMockAdminClient() {
+  const mockMethods = {
+    from: () => mockMethods,
+    select: () => mockMethods,
+    insert: () => Promise.resolve({ data: null, error: new Error('Supabase admin client unavailable') }),
+    update: () => Promise.resolve({ data: null, error: new Error('Supabase admin client unavailable') }),
+    delete: () => Promise.resolve({ data: null, error: new Error('Supabase admin client unavailable') }),
+    eq: () => mockMethods,
+    auth: {
+      admin: {
+        updateUserById: () => Promise.resolve({ data: null, error: new Error('Supabase admin client unavailable') })
+      }
+    },
+    rpc: () => Promise.resolve({ data: null, error: new Error('Supabase admin client unavailable') })
   };
   
   return mockMethods as any;

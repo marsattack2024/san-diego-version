@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { apiRateLimit, authRateLimit, aiRateLimit } from '@/lib/middleware/rate-limit';
 
 // Generate a valid UUID v4 that works in Edge Runtime
 function uuidv4() {
@@ -32,6 +33,30 @@ export async function middleware(request: NextRequest) {
   // Check if this is an important path for logging
   const isImportantPath = request.nextUrl.pathname.startsWith('/api/');
   
+  // Apply rate limiting for API routes
+  if (isImportantPath) {
+    const { pathname } = request.nextUrl;
+    
+    // Different rate limits based on endpoint type
+    let rateLimitResponse = null;
+    
+    if (pathname.startsWith('/api/auth/')) {
+      // Apply stricter rate limits for auth endpoints
+      rateLimitResponse = await authRateLimit(request);
+    } else if (pathname.startsWith('/api/chat/') || pathname.includes('/ai/')) {
+      // Apply special limits for AI-related endpoints
+      rateLimitResponse = await aiRateLimit(request);
+    } else if (pathname.startsWith('/api/')) {
+      // Apply standard API rate limits
+      rateLimitResponse = await apiRateLimit(request);
+    }
+    
+    // If rate limit was exceeded, return the 429 response
+    if (rateLimitResponse) {
+      return rateLimitResponse;
+    }
+  }
+
   let supabaseResponse = NextResponse.next({
     request,
   });

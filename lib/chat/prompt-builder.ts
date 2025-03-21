@@ -95,7 +95,7 @@ export async function buildEnhancedSystemPrompt(
   // Optimize tool results to reduce token usage
   const optimizedResults = optimizeToolResults(toolResults);
   
-  // Add a summary of tools used at the beginning
+  // Add a summary of tools used at the beginning in priority order
   let enhancedPrompt = `RESOURCES USED IN THIS RESPONSE:\n${toolsUsed.map(tool => {
     if (tool === 'Knowledge Base' && optimizedResults.ragContent) {
       return `- Knowledge Base: ${optimizedResults.ragContent.length} characters`;
@@ -236,11 +236,35 @@ export async function buildEnhancedSystemPrompt(
     }
   }
   
-  // Add the base prompt
+  // Add the base prompt (System Message is the highest priority)
   enhancedPrompt += basePrompt;
   
-  // Enhance with tool results
-  enhancedPrompt = enhancePromptWithToolResults(enhancedPrompt, optimizedResults);
+  // Enhance with tool results in priority order (manually instead of using enhancePromptWithToolResults)
+  // This ensures we follow priority: 1. System Message 2. RAG 3. Web Scraper 4. Deep Search
+  
+  // Add Knowledge Base (RAG) results - highest priority after system message
+  if (optimizedResults.ragContent && toolsUsed.includes('Knowledge Base')) {
+    enhancedPrompt += `\n\n### KNOWLEDGE BASE RESULTS ###\n${optimizedResults.ragContent}`;
+    edgeLogger.info('Added Knowledge Base results to prompt', {
+      contentLength: optimizedResults.ragContent.length
+    });
+  }
+  
+  // Add Web Scraper results - second priority
+  if (optimizedResults.webScraper && toolsUsed.includes('Web Scraper')) {
+    enhancedPrompt += `\n\n### WEB CONTENT ###\n${optimizedResults.webScraper}`;
+    edgeLogger.info('Added Web Scraper results to prompt', {
+      contentLength: optimizedResults.webScraper.length
+    });
+  }
+  
+  // Add Deep Search results - lowest priority
+  if (optimizedResults.deepSearch && toolsUsed.includes('Deep Search')) {
+    enhancedPrompt += `\n\n### DEEP SEARCH RESULTS ###\n${optimizedResults.deepSearch}`;
+    edgeLogger.info('Added Deep Search results to prompt', {
+      contentLength: optimizedResults.deepSearch.length
+    });
+  }
   
   // Add detailed instructions for reporting tools used
   enhancedPrompt += `\n\nIMPORTANT: At the end of your response, you MUST include a section titled "--- Tools and Resources Used ---" that lists all the resources used to generate your response. Format it exactly like this:
@@ -265,7 +289,8 @@ This section is REQUIRED and must be included at the end of EVERY response.`;
     promptLength: enhancedPrompt.length,
     toolsUsed,
     includesUserProfile: !!userId,
-    includesTools: toolsUsed.length > 0
+    includesTools: toolsUsed.length > 0,
+    toolPriorities: 'System > RAG > Web Scraper > Deep Search'
   });
   
   return enhancedPrompt;
@@ -303,9 +328,11 @@ export async function buildAIMessages({
     content: enhancedSystemPrompt,
   };
   
-  // Create tool messages for each tool result
+  // Create tool messages for each tool result in the correct priority order:
+  // 1. Knowledge Base (RAG), 2. Web Scraper, 3. Deep Search
   const toolMessages: Message[] = [];
   
+  // 1. Knowledge Base (RAG) - Highest priority after system message
   if (toolResults.ragContent && toolsUsed.includes('Knowledge Base')) {
     toolMessages.push({
       id: 'tool-kb-' + Date.now().toString(),
@@ -314,14 +341,7 @@ export async function buildAIMessages({
     });
   }
   
-  if (toolResults.deepSearch && toolsUsed.includes('Deep Search')) {
-    toolMessages.push({
-      id: 'tool-ds-' + Date.now().toString(),
-      role: 'assistant',
-      content: `[Deep Search Results]\n${toolResults.deepSearch}`
-    });
-  }
-  
+  // 2. Web Scraper - Second priority
   if (toolResults.webScraper && toolsUsed.includes('Web Scraper')) {
     toolMessages.push({
       id: 'tool-ws-' + Date.now().toString(),
@@ -330,12 +350,22 @@ export async function buildAIMessages({
     });
   }
   
+  // 3. Deep Search - Lowest priority
+  if (toolResults.deepSearch && toolsUsed.includes('Deep Search')) {
+    toolMessages.push({
+      id: 'tool-ds-' + Date.now().toString(),
+      role: 'assistant',
+      content: `[Deep Search Results]\n${toolResults.deepSearch}`
+    });
+  }
+  
   // Log what we're building
   edgeLogger.info('Building AI SDK message array', {
     systemPromptLength: enhancedSystemPrompt.length,
     toolMessagesCount: toolMessages.length,
     userMessagesCount: userMessages.length,
-    toolsUsed
+    toolsUsed,
+    toolPriorities: 'System > RAG > Web Scraper > Deep Search'
   });
   
   // Return the complete message array

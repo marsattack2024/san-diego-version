@@ -72,9 +72,12 @@ export async function POST(req: Request) {
     const agentRouter = new AgentRouter();
     const baseSystemPrompt = agentRouter.getSystemPrompt(agentId as AgentType, deepSearchEnabled);
     
-    // Process resources in the correct priority order
+    // Process resources in the correct priority order (as specified in requirements)
+    // Order of importance: 1. System Message 2. RAG 3. Web Scraper 4. Deep Search
     
-    // 1. RAG (Knowledge Base) - HIGHEST PRIORITY for queries over 15 characters
+    // 1. System Message is already prioritized in the buildAIMessages function
+    
+    // 2. RAG (Knowledge Base) - HIGH PRIORITY for queries over 15 characters
     if (lastUserMessage.content.length > 15) {
       edgeLogger.info('Running RAG for query', { 
         query: lastUserMessage.content.substring(0, 100) + '...',
@@ -113,37 +116,7 @@ export async function POST(req: Request) {
       }
     }
     
-    // 2. Deep Search - SECOND PRIORITY if enabled
-    if (deepSearchEnabled) {
-      edgeLogger.info('Running Deep Search for query (UI toggle enabled)', { 
-        query: lastUserMessage.content.substring(0, 100) + '...'
-      });
-      
-      try {
-        const deepSearchResponse = await callPerplexityAPI(lastUserMessage.content);
-        
-        // Extract the content from the response object
-        const deepSearchContent = deepSearchResponse.content;
-        
-        if (deepSearchContent && deepSearchContent.length > 0) {
-          toolManager.registerToolResult('Deep Search', deepSearchContent);
-          edgeLogger.info('Deep Search results found', { 
-            contentLength: deepSearchContent.length,
-            firstChars: deepSearchContent.substring(0, 100) + '...',
-            model: deepSearchResponse.model,
-            responseTime: deepSearchResponse.timing.total
-          });
-        } else {
-          edgeLogger.info('No Deep Search results found');
-        }
-      } catch (error) {
-        edgeLogger.error('Error running Deep Search', { error });
-      }
-    } else {
-      edgeLogger.info('Deep Search skipped (UI toggle disabled)');
-    }
-    
-    // 3. Web Scraper - LOWEST PRIORITY
+    // 3. Web Scraper - MEDIUM PRIORITY
     if (urls.length > 0) {
       edgeLogger.info('Pre-scraping URLs from message', { 
         urlCount: urls.length, 
@@ -190,6 +163,36 @@ export async function POST(req: Request) {
       } catch (error) {
         edgeLogger.error('Error pre-scraping URLs', { error });
       }
+    }
+    
+    // 4. Deep Search - LOWEST PRIORITY (if enabled)
+    if (deepSearchEnabled) {
+      edgeLogger.info('Running Deep Search for query (UI toggle enabled)', { 
+        query: lastUserMessage.content.substring(0, 100) + '...'
+      });
+      
+      try {
+        const deepSearchResponse = await callPerplexityAPI(lastUserMessage.content);
+        
+        // Extract the content from the response object
+        const deepSearchContent = deepSearchResponse.content;
+        
+        if (deepSearchContent && deepSearchContent.length > 0) {
+          toolManager.registerToolResult('Deep Search', deepSearchContent);
+          edgeLogger.info('Deep Search results found', { 
+            contentLength: deepSearchContent.length,
+            firstChars: deepSearchContent.substring(0, 100) + '...',
+            model: deepSearchResponse.model,
+            responseTime: deepSearchResponse.timing.total
+          });
+        } else {
+          edgeLogger.info('No Deep Search results found');
+        }
+      } catch (error) {
+        edgeLogger.error('Error running Deep Search', { error });
+      }
+    } else {
+      edgeLogger.info('Deep Search skipped (UI toggle disabled)');
     }
     
     // Build AI messages with tool results and user profile data
