@@ -25,11 +25,21 @@ const CHAR_LIMITS = {
   LOCATION: 60
 };
 
+// Define our own profile state interface to ensure type safety
+interface ProfileState {
+  full_name: string;
+  company_name: string;
+  website_url: string;
+  company_description: string;
+  location: string;
+  website_summary: string;
+}
+
 export default function ProfileForm({ initialProfile, userId, isFirstLogin }: ProfileFormProps) {
   // Add state to track if the website URL has changed from the initial value
   const [urlChanged, setUrlChanged] = useState(false);
   
-  const [profile, setProfile] = useState<Partial<UserProfile>>({
+  const [profile, setProfile] = useState<ProfileState>({
     full_name: initialProfile.full_name || '',
     company_name: initialProfile.company_name || '',
     website_url: initialProfile.website_url || '',
@@ -189,10 +199,25 @@ export default function ProfileForm({ initialProfile, userId, isFirstLogin }: Pr
       }
       
       // Update user metadata to indicate they have a profile
-      // This helps with efficient profile checks in middleware
-      await supabase.auth.updateUser({
-        data: { has_profile: true }
+      // This optimization reduces the need for database queries in middleware
+      const metadata = {
+        has_profile: true,
+        profile_updated_at: new Date().toISOString(),
+        profile_summary: {
+          full_name: profile.full_name,
+          company_name: profile.company_name,
+          // Don't include is_admin here as it should only be set by admin functions
+        }
+      };
+      
+      const { error: metadataError } = await supabase.auth.updateUser({
+        data: metadata
       });
+      
+      if (metadataError) {
+        console.error('Error updating user metadata:', metadataError);
+        // Continue even if metadata update fails - the trigger will sync it eventually
+      }
       
       // No toast notification on save
       console.log('Profile saved successfully');

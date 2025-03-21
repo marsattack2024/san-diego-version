@@ -1,5 +1,6 @@
 export interface UserProfile {
   user_id: string;
+  full_name: string;
   company_name: string;
   website_url: string;
   company_description: string;
@@ -7,6 +8,7 @@ export interface UserProfile {
   website_summary?: string;
   created_at: string;
   updated_at: string;
+  is_admin?: boolean;
 }
 
 export interface Chat {

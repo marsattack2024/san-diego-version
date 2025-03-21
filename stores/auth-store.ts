@@ -13,6 +13,7 @@ interface User {
 interface UserProfile {
   id: string;
   user_id: string;
+  full_name: string;
   company_name?: string;
   website_url?: string;
   location?: string;
@@ -270,45 +271,85 @@ export const useAuthStore = create<AuthState>()(
         try {
           // First check user metadata (fastest)
           if (state.user.user_metadata?.has_profile === true) {
+            // If we have profile metadata but no profile object, try to load it
+            if (!state.profile) {
+              // Check if we have enough metadata to create a minimal profile object
+              if (state.user.user_metadata?.profile_summary) {
+                const summary = state.user.user_metadata.profile_summary;
+                // Create a minimal profile from metadata to avoid a DB query
+                const metadataProfile: UserProfile = {
+                  id: state.user.id,
+                  user_id: state.user.id,
+                  full_name: summary.full_name || '',
+                  company_name: summary.company_name || '',
+                  is_admin: summary.is_admin || false,
+                  // Other fields will be loaded when full profile is requested
+                };
+                set({ 
+                  profile: metadataProfile,
+                  hasProfile: true
+                });
+              } else {
+                // If not enough metadata, load the full profile in the background
+                get().loadUserProfile();
+              }
+            }
+            
             set({ hasProfile: true });
             return true;
           }
           
           // If not in metadata, check database
           const supabase = createBrowserClient();
-          const { data, error } = await supabase.rpc('has_profile', { 
-            uid: state.user.id 
-          });
           
-          if (error) {
-            // Fallback to direct query if RPC fails
-            const { data: profile } = await supabase
-              .from('sd_user_profiles')
-              .select('user_id')
-              .eq('user_id', state.user.id)
-              .maybeSingle();
+          // First try the more efficient RPC function
+          try {
+            const { data, error } = await supabase.rpc('has_profile', { 
+              uid: state.user.id 
+            });
+            
+            if (!error) {
+              const hasProfile = !!data;
+              set({ hasProfile });
               
-            const hasProfile = !!profile;
-            set({ hasProfile });
-            
-            // Update user metadata if profile exists
-            if (hasProfile) {
-              await supabase.auth.updateUser({
-                data: { has_profile: true }
-              });
+              // Update user metadata if profile exists but metadata doesn't reflect it
+              if (hasProfile && state.user.user_metadata?.has_profile !== true) {
+                await supabase.auth.updateUser({
+                  data: { has_profile: true }
+                });
+              }
+              
+              // Load full profile if needed
+              if (hasProfile && !state.profile) {
+                get().loadUserProfile();
+              }
+              
+              return hasProfile;
             }
-            
-            return hasProfile;
+          } catch (rpcError) {
+            console.warn('RPC has_profile failed, falling back to direct query', rpcError);
           }
           
-          const hasProfile = !!data;
+          // Fallback to direct query if RPC fails
+          const { data: profile } = await supabase
+            .from('sd_user_profiles')
+            .select('user_id')
+            .eq('user_id', state.user.id)
+            .maybeSingle();
+            
+          const hasProfile = !!profile;
           set({ hasProfile });
           
-          // Update user metadata if profile exists but metadata doesn't reflect it
-          if (hasProfile && state.user.user_metadata?.has_profile !== true) {
+          // Update user metadata if profile exists
+          if (hasProfile) {
             await supabase.auth.updateUser({
               data: { has_profile: true }
             });
+            
+            // Load full profile if needed
+            if (!state.profile) {
+              get().loadUserProfile();
+            }
           }
           
           return hasProfile;

@@ -21,6 +21,9 @@ const authPaths = ['/login'];
 // Profile path that needs special handling
 const PROFILE_PATH = '/profile';
 
+// Cache duration in milliseconds (30 minutes)
+const CACHE_DURATION = 30 * 60 * 1000;
+
 export async function middleware(request: NextRequest) {
   // Generate a unique request ID for tracing
   const requestId = uuidv4();
@@ -115,7 +118,7 @@ export async function middleware(request: NextRequest) {
         supabaseResponse.headers.set('x-supabase-auth', user.id);
       }
     } else if (authToken && authTime && 
-               (Date.now() - parseInt(authTime, 10) < 5 * 60 * 1000)) {
+               (Date.now() - parseInt(authTime, 10) < CACHE_DURATION)) {
       // For non-protected routes, we can use cached auth state if available
       // This optimizes things like API calls and asset loading
       user = { id: authToken }; // Simplified user object from cached token
@@ -131,30 +134,36 @@ export async function middleware(request: NextRequest) {
     // Check for admin role if accessing admin routes
     if (user && pathname.startsWith('/admin')) {
       try {
-        // First check the profile for is_admin flag (faster)
-        const { data: profile, error: profileError } = await supabase
-          .from('sd_user_profiles')
-          .select('is_admin')
-          .eq('user_id', user.id)
-          .single();
+        // First check admin status from metadata if available
+        const isAdminMetadata = user.user_metadata?.is_admin === true;
+        let isAdmin = isAdminMetadata;
         
-        let isAdmin = profile?.is_admin === true;
-        
-        // If profile check fails or is_admin is false, try the RPC function
-        if (profileError || !isAdmin) {
-          const { data: adminCheck, error: adminError } = await supabase.rpc('is_admin', { uid: user.id });
-          isAdmin = !!adminCheck;
+        if (!isAdminMetadata) {
+          // Check both profile and admin status in a single query when possible
+          const { data: profile, error: profileError } = await supabase
+            .from('sd_user_profiles')
+            .select('is_admin')
+            .eq('user_id', user.id)
+            .single();
           
-          if (adminError) {
-            throw adminError;
+          isAdmin = profile?.is_admin === true;
+          
+          // If profile check fails or is_admin is false, try the RPC function as last resort
+          if (profileError || !isAdmin) {
+            const { data: adminCheck, error: adminError } = await supabase.rpc('is_admin', { uid: user.id });
+            isAdmin = !!adminCheck;
+            
+            if (adminError) {
+              throw adminError;
+            }
           }
         }
         
         if (!isAdmin) {
+          // Only log serious access attempts
           edgeLogger.warn('Unauthorized admin access attempt', {
             userId: user.id,
-            path: pathname,
-            error: 'User is not an admin'
+            path: pathname
           });
           return NextResponse.redirect(new URL('/unauthorized', request.url));
         }
@@ -172,67 +181,103 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(new URL('/chat', request.url));
     }
     
-    // Check if the user has a profile when accessing protected content
-    // But only if this is an actual chat page - skip for assets and API calls
-    if (user && pathname.startsWith('/chat') && !pathname.includes('.') && !pathname.includes('/api/')) {
-      // Get user profile - use a cached profile check if possible
-      const hasProfileHeader = request.headers.get('x-has-profile');
+    // Skip profile checks for API routes and asset requests
+    if (user && pathname.startsWith('/chat') && !pathname.includes('/api/') && !pathname.includes('.')) {
+      // First, check user metadata for profile existence flag (fastest approach)
+      // This avoids a database query in most cases
+      const hasProfileMetadata = user.user_metadata?.has_profile ?? false;
       
-      // Only trust the header if it's explicitly set to true and not too old
-      // This prevents issues with incorrect caching
-      const headerTimestamp = request.headers.get('x-profile-check-time');
-      const headerAge = headerTimestamp ? Date.now() - parseInt(headerTimestamp, 10) : Infinity;
-      const isHeaderValid = hasProfileHeader === 'true' && headerAge < 5 * 60 * 1000; // 5 minutes
-      
-      if (isHeaderValid) {
-        // If valid header indicates profile exists, trust it and continue
-        // This speeds up navigation when we know the profile exists
+      if (hasProfileMetadata) {
+        // If metadata indicates profile exists, set the header and continue
         supabaseResponse.headers.set('x-has-profile', 'true');
-        supabaseResponse.headers.set('x-profile-check-time', headerTimestamp || Date.now().toString());
+        supabaseResponse.headers.set('x-profile-check-time', Date.now().toString());
+        
+        // Add profile summary header if available in metadata
+        if (user.user_metadata?.profile_summary) {
+          supabaseResponse.headers.set('x-profile-summary', JSON.stringify(user.user_metadata.profile_summary));
+        }
       } else {
-        // If no header, header is 'false', or header is too old, verify with database
-        try {
-          edgeLogger.info('Middleware: Checking profile for user', { userId: user.id });
-          const { data: profile, error } = await supabase
-            .from('sd_user_profiles')
-            .select('user_id') // Select user_id instead of id since that's the column we have
-            .eq('user_id', user.id)
-            .single();
+        // Get user profile from cached header if possible
+        const hasProfileHeader = request.headers.get('x-has-profile');
+        const headerTimestamp = request.headers.get('x-profile-check-time');
+        const headerAge = headerTimestamp ? Date.now() - parseInt(headerTimestamp, 10) : Infinity;
+        const isHeaderValid = hasProfileHeader === 'true' && headerAge < CACHE_DURATION;
+        
+        if (isHeaderValid) {
+          // If valid header indicates profile exists, trust it and continue
+          supabaseResponse.headers.set('x-has-profile', 'true');
+          supabaseResponse.headers.set('x-profile-check-time', headerTimestamp || Date.now().toString());
+        } else {
+          // If no metadata and no valid header, check the database as last resort
+          try {
+            // Use the optimized RPC function first if available
+            let hasProfile = false;
+            try {
+              const { data, error } = await supabase.rpc('has_profile', { uid: user.id });
+              if (!error) {
+                hasProfile = !!data;
+              }
+            } catch (rpcError) {
+              // Only log RPC failures, not profile checks
+              edgeLogger.warn('Middleware: RPC has_profile failed, falling back to direct query', { 
+                userId: user.id 
+              });
+            }
             
-          if (error) {
-            edgeLogger.error('Middleware: Error checking profile', { error, userId: user.id });
-            // In case of database error, redirect to profile page to be safe
-            // This ensures users don't bypass profile setup due to errors
-            return NextResponse.redirect(new URL('/profile', request.url));
-          } else {
+            // Fall back to direct query if RPC fails
+            if (!hasProfile) {
+              const { data: profile, error } = await supabase
+                .from('sd_user_profiles')
+                .select('user_id')
+                .eq('user_id', user.id)
+                .single();
+                
+              if (error) {
+                // Keep error logs for database errors
+                edgeLogger.error('Middleware: Error checking profile', { error, userId: user.id });
+                // In case of database error, redirect to profile page to be safe
+                return NextResponse.redirect(new URL('/profile', request.url));
+              }
+              
+              hasProfile = !!profile;
+            }
+            
             // Set header based on profile existence
-            const hasProfile = !!profile;
             supabaseResponse.headers.set('x-has-profile', hasProfile ? 'true' : 'false');
             supabaseResponse.headers.set('x-profile-check-time', Date.now().toString());
               
-            // Only redirect if explicitly no profile and not already on profile page
+            // Redirect if no profile and not already on profile page
             if (!hasProfile && pathname !== PROFILE_PATH) {
-              edgeLogger.info('Middleware: No profile found, redirecting to profile setup', { userId: user.id });
               return NextResponse.redirect(new URL('/profile', request.url));
             }
+            
+            // If profile exists but metadata doesn't indicate it, update user metadata
+            // This sync happens in the background and doesn't block the response
+            if (hasProfile && !hasProfileMetadata) {
+              try {
+                supabase.auth.updateUser({
+                  data: { has_profile: true }
+                }).then(() => {
+                  // Success update logs not needed for MVP
+                });
+              } catch (updateError) {
+                edgeLogger.warn('Middleware: Failed to update user metadata', { userId: user.id });
+              }
+            }
+          } catch (error) {
+            edgeLogger.error('Middleware: Exception checking user profile', { userId: user.id });
+            // On unexpected error, redirect to profile page to be safe
+            return NextResponse.redirect(new URL('/profile', request.url));
           }
-        } catch (error) {
-          edgeLogger.error('Middleware: Exception checking user profile', { error, userId: user.id });
-          // On unexpected error, redirect to profile page to be safe
-          // This ensures users don't bypass profile setup due to errors
-          return NextResponse.redirect(new URL('/profile', request.url));
         }
       }
     }
 
-    // Log only in development or for important paths,
-    // to avoid excessive logging in production
+    // Only log in development or for truly important paths
     if (process.env.NODE_ENV === 'development' || isImportantPath) {
       edgeLogger.info('Middleware request', {
         requestId,
-        method: request.method,
         path: request.nextUrl.pathname,
-        important: isImportantPath,
         user: user ? { id: user.id } : null
       });
     }
