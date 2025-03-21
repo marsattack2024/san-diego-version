@@ -1,8 +1,17 @@
 import { z } from 'zod';
 import { AgentTool } from './agent-types';
-import { createLogger } from '../../utils/client-logger';
+import { clientLogger } from '../../logger/client-logger';
 
-const logger = createLogger('agent:tools');
+// Create a logger with the agent:tools prefix
+const logger = {
+  debug: (message: string, data?: any) => clientLogger.debug(`agent:tools - ${message}`, data),
+  info: (message: string, data?: any) => clientLogger.info(`agent:tools - ${message}`, data),
+  warn: (message: string, data?: any) => clientLogger.warn(`agent:tools - ${message}`, data),
+  error: (message: string | Error, data?: any) => clientLogger.error(
+    message instanceof Error ? `agent:tools - ${message.message}` : `agent:tools - ${message}`,
+    { ...data, stack: message instanceof Error ? message.stack : undefined }
+  )
+};
 
 /**
  * Create a basic tool that logs its usage
@@ -20,29 +29,29 @@ export function createBasicTool<T extends z.ZodType<any, any>>(
     execute: async (params: z.infer<T>) => {
       const startTime = performance.now();
       
-      logger.debug({
+      logger.debug(`Executing tool ${name}`, {
         tool: name,
         params
-      }, `Executing tool ${name}`);
+      });
       
       try {
         const result = await executeFn(params);
         const endTime = performance.now();
         
-        logger.debug({
+        logger.debug(`Tool ${name} executed successfully`, {
           tool: name,
           executionTimeMs: Math.round(endTime - startTime)
-        }, `Tool ${name} executed successfully`);
+        });
         
         return result;
       } catch (error) {
         const endTime = performance.now();
         
-        logger.error({
+        logger.error(`Error executing tool ${name}`, {
           tool: name,
-          error,
+          error: error instanceof Error ? error : new Error(String(error)),
           executionTimeMs: Math.round(endTime - startTime)
-        }, `Error executing tool ${name}`);
+        });
         
         throw error;
       }

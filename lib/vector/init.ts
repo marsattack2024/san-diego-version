@@ -3,7 +3,7 @@
  * Makes sure all required environment variables are loaded
  */
 
-import { logger } from '../logger/vector-logger';
+import vectorLogger from '../logger/vector-logger';
 
 // Initialize and validate environment variables needed for vector search
 export function initializeVectorSearch() {
@@ -31,7 +31,7 @@ export function initializeVectorSearch() {
     
     // Log success with fallback
     try {
-      logger.logVectorQuery('initialization', {}, 0, 0);
+      vectorLogger.logVectorQuery('initialization', {}, 0, 0);
       console.log('Vector search initialized successfully');
     } catch (logError) {
       console.log('Vector search initialized successfully');
@@ -42,7 +42,7 @@ export function initializeVectorSearch() {
     // Log URL validation error
     console.error('Invalid Supabase URL format:', error instanceof Error ? error.message : String(error));
     try {
-      logger.logVectorError('url_validation', error);
+      vectorLogger.logVectorError('url_validation', error);
     } catch (logError) {
       // Silently continue if logger fails
     }

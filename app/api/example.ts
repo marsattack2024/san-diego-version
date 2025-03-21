@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { withLogging } from '../../utils/api-logger';
-import { logger } from '../../utils/logger';
+import { withLogging } from '@/lib/logger/api-logger';
+import { logger } from '@/lib/logger';
 
 /**
  * Example API route that demonstrates the use of our logging system

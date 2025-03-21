@@ -4,7 +4,7 @@ import '../lib/env-loader';
 import { runTest, runTests } from '../lib/test-utils';
 import { fileURLToPath } from 'url';
 import { edgeLogger } from '../../lib/logger/edge-logger';
-import { logger as vectorLogger } from '../../lib/logger/vector-logger';
+import vectorLogger from '../../lib/logger/vector-logger';
 
 // Mock browser environment for client logger tests if needed
 const mockBrowserEnv = () => {

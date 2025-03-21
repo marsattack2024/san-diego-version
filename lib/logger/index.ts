@@ -1,22 +1,28 @@
-import { logger as baseLogger, LogLevel, LogContext } from './base-logger';
+import { logger, LogLevel, LogContext } from './base-logger';
 import { clientLogger } from './client-logger';
-import { logger as vectorLogger } from './vector-logger';
+import vectorLogger from './vector-logger';
+import { logger as edgeLogger } from './edge-logger';
 import { logger as aiLogger } from './ai-logger';
-import { logger as apiLogger } from './api-logger';
 
 // Export types
 export type { LogLevel, LogContext };
 
 // Export individual loggers
-export { baseLogger, clientLogger, vectorLogger, aiLogger, apiLogger };
+export { 
+  logger, 
+  clientLogger,
+  vectorLogger,
+  edgeLogger,
+  aiLogger
+};
 
 // Create a unified logger interface
 export const loggers = {
-  base: baseLogger,
+  base: logger,
   client: clientLogger,
   vector: vectorLogger,
   ai: aiLogger,
-  api: apiLogger
+  edge: edgeLogger
 };
 
 // Export default logger factory for convenience

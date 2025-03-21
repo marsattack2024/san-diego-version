@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { findSimilarDocumentsOptimized } from '@/lib/vector/documentRetrieval';
 import { formatDocumentsForDisplay } from '@/lib/vector/formatters';
-import { logger } from '@/lib/logger/vector-logger';
+import vectorLogger from '@/lib/logger/vector-logger';
 import { initializeVectorSearch } from '@/lib/vector/init';
 
 // Initialize vector search on module load with robust error handling
@@ -13,7 +13,7 @@ try {
   
   // Also try the logger, but in a way that won't break if methods are missing
   try {
-    logger.logVectorError('vector_initialization', error);
+    vectorLogger.logVectorError('vector_initialization', error);
   } catch (logError) {
     // Silently continue if logger fails
   }
@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
     
     // Log successful search with additional details
     try {
-      logger.logVectorResults(query, documents, searchMetrics, sessionId || 'unknown');
+      vectorLogger.logVectorResults(query, documents, searchMetrics, sessionId || 'unknown');
     } catch (logError) {
       console.error('Failed to log vector results:', logError);
     }
@@ -92,7 +92,7 @@ export async function POST(req: NextRequest) {
     // Use console.error as fallback if logger fails
     console.error('Error in vector search:', error);
     try {
-      logger.logVectorError('vector_search', error, { durationMs: duration });
+      vectorLogger.logVectorError('vector_search', error, { durationMs: duration });
     } catch (logError) {
       console.error('Failed to log error:', logError);
     }

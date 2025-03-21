@@ -3,18 +3,28 @@ import type { NextRequest } from 'next/server';
 import { apiRateLimit, authRateLimit, aiRateLimit } from '@/lib/middleware/rate-limit';
 import { createServerClient } from '@supabase/ssr';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { corsMiddleware, CorsOptions } from '@/lib/middleware/cors';
 
 /**
  * API middleware to handle:
- * 1. Rate limiting based on endpoint type
- * 2. Authentication verification for protected endpoints
- * 3. Request logging and error handling
+ * 1. CORS headers for cross-origin requests
+ * 2. Rate limiting based on endpoint type
+ * 3. Authentication verification for protected endpoints
+ * 4. Request logging and error handling
  */
 export async function apiMiddleware(request: NextRequest) {
   const startTime = Date.now();
   const { pathname } = request.nextUrl;
   
   try {
+    // Apply CORS middleware first
+    const corsResponse = await corsMiddleware(request);
+    
+    // Handle OPTIONS requests (preflight)
+    if (corsResponse && request.method === 'OPTIONS') {
+      return corsResponse;
+    }
+    
     // Apply rate limiting based on API route type
     let rateLimitResponse = null;
     

@@ -3,8 +3,6 @@
  */
 export const QUIZ_SYSTEM_PROMPT = `Please format the following content in plain text without using markdown syntax like hashes (#) or asterisks (*). Use clear headings, paragraphs, and spacing to make it readable. No bullet points or markdown-style headings—just plain text formatting.
 
-Read the instructions and rules for quiz creation:
-
 Study and understand this process. It's imperative that you put linebreaks between sections and between all questions, answer options, and statements. Output should be plain text and easy to read please.
 
 Your output should be comprosed of 8 total questions with answer options as well as a statement slide for each question of at least 175 words, 1 fair enough statement, 1 offer slide, and 1 thank you page.
@@ -15,6 +13,12 @@ Step-by-Step Instructions for Creating a High-Converting Quiz Popup for Photogra
 This comprehensive guide provides detailed steps for building an engaging quiz popup that collects leads, educates users, and encourages them to book a photography session with your studio. Designed for use with Typeform or similar quiz-building platforms, this quiz will consist of questions that address common objections and concerns specific to your photography genre (e.g., boudoir, weddings, newborn, maternity). Each question is followed by a statement slide with at least 175 words that provides informative answers and reassures potential clients. You'll also set up automation to ensure proper follow-up and lead management.
 
 When choosing what type of questions to use, highlight the most common objections and questions our new client's studio might face. This can usually include topics like posing, editing, products (albums, digital files, wall art), privacy, timelines, experience, wardrobe and styling, and genre-specific objections.
+
+The live quiz will be between 3-4 questions long but you should create 8 questions and statements total. 4 additional questions and statements can be put after the initial quiz is completed make sure to add a section that says 4 additional questions and statements can be put after the initial quiz is completed.
+
+Make sure your response to the query also includes basic instructions to use typeform and what the following steps are to install it on their website such as following the tutorials and using Google Tag manager to install it using our template.
+
+At the end of the quiz always share this link for the full guide: https://tdms.notion.site/Typeform-Quiz-Popup-60b1f46c79ba4eb49827ccfe0cd1e3b7?pvs=4
 
 1. Define the Goals of Your Quiz
 Before you begin, clearly establish the objectives of your quiz:

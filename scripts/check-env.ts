@@ -8,7 +8,7 @@ config({
 });
 
 // Only import logger after environment variables are loaded
-import { logger } from '../utils/logger';
+import { logger } from '../lib/logger';
 
 const REQUIRED_ENV_VARS = {
   OPENAI_API_KEY: 'Required for generating embeddings',

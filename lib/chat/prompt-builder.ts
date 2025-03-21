@@ -13,12 +13,13 @@ export interface TruncationConfig {
 }
 
 /**
- * Default truncation limits
+ * Default truncation limits - optimized for large content
+ * Reduced to prevent memory issues while maintaining useful context
  */
 const DEFAULT_TRUNCATION_LIMITS: TruncationConfig = {
-  ragMaxLength: 10000,
-  deepSearchMaxLength: 5000,
-  webScraperMaxLength: 8000
+  ragMaxLength: 6000,       // Further reduced from 8000 to prevent timeout
+  deepSearchMaxLength: 3000, // Further reduced from 4000 to prevent timeout
+  webScraperMaxLength: 5000  // Further reduced from 6000 to prevent timeout
 };
 
 /**
@@ -40,11 +41,133 @@ export function truncateContent(content: string, maxLength: number, label: strin
 }
 
 /**
- * Optimizes tool results by truncating long content
+ * Extracts the most relevant parts of content by:
+ * 1. Keeping essential elements (headings, first sentences of paragraphs)
+ * 2. Prioritizing key sections based on semantic relevance
+ * 3. Ensuring key information isn't truncated mid-section
+ * 
+ * This is more sophisticated than simple truncation and preserves meaning better.
+ */
+export function extractRelevantContent(content: string, maxLength: number, query: string = ""): string {
+  if (!content) return '';
+  if (content.length <= maxLength) return content;
+  
+  // Log original content size
+  edgeLogger.info('Smart content extraction starting', {
+    originalLength: content.length,
+    targetLength: maxLength,
+    hasQuery: !!query
+  });
+  
+  // For extremely large content, do a preliminary truncation to avoid memory issues
+  // This is a safeguard for the edge function memory limits
+  const MAX_SAFE_PROCESSING_LENGTH = 150000;
+  let preprocessedContent = content;
+  if (content.length > MAX_SAFE_PROCESSING_LENGTH) {
+    edgeLogger.warn('Content too large for smart extraction, performing pre-truncation', {
+      originalLength: content.length,
+      truncatedTo: MAX_SAFE_PROCESSING_LENGTH
+    });
+    
+    // Extract beginning and end portions, as they're often most important
+    const startPortion = content.substring(0, Math.floor(MAX_SAFE_PROCESSING_LENGTH * 0.6));
+    const endPortion = content.substring(content.length - Math.floor(MAX_SAFE_PROCESSING_LENGTH * 0.4));
+    preprocessedContent = startPortion + "\n\n[... content truncated for processing ...]\n\n" + endPortion;
+  }
+  
+  // Split content into sections (using headings as delimiters)
+  const sections = preprocessedContent.split(/\n(?=#{1,6}\s|<h[1-6]>)/);
+  
+  // If we have a query, score sections by relevance
+  let scoredSections = sections.map((section, index) => {
+    // Calculate a basic relevance score based on keyword matching
+    let score = 0;
+    
+    // Higher score for earlier sections (often more important)
+    score += Math.max(0, 10 - (index * 0.5));
+    
+    // If we have a query, check for keyword matches
+    if (query) {
+      const keywords = query.toLowerCase().split(/\s+/).filter(k => k.length > 3);
+      keywords.forEach(keyword => {
+        const matches = (section.toLowerCase().match(new RegExp(keyword, 'g')) || []).length;
+        score += matches * 2;
+      });
+    }
+    
+    // Higher score for sections with headings, lists, and structured content
+    if (section.match(/^#{1,3}\s|<h[1-3]>/)) score += 5;  // Main headings
+    if (section.match(/\n[-*+]\s|\n\d+\.\s/)) score += 3; // Lists
+    if (section.match(/\b(features?|benefits?|how to|why|what|when|where)\b/i)) score += 2; // Key terms
+    
+    return { section, score };
+  });
+  
+  // Sort sections by score (high to low)
+  scoredSections.sort((a, b) => b.score - a.score);
+  
+  // Set a lower target length to account for the note we'll add at the end
+  const effectiveMaxLength = Math.max(maxLength - 100, Math.floor(maxLength * 0.95));
+  
+  // Start building final content with highest-scored sections
+  let result = '';
+  let addedSections = 0;
+  
+  for (const { section, score } of scoredSections) {
+    // Skip empty sections
+    if (!section.trim()) continue;
+    
+    // Add full sections until we approach the limit
+    if (result.length + section.length <= effectiveMaxLength) {
+      result += (result ? "\n\n" : "") + section;
+      addedSections++;
+      continue;
+    }
+    
+    // If we've already added some sections and we're close to the limit, stop
+    if (addedSections > 0 && result.length > effectiveMaxLength * 0.8) {
+      break;
+    }
+    
+    // For the last section, try to extract the most important part
+    // Extract first sentence and/or heading from remaining section
+    const firstSentenceMatch = section.match(/^([^.!?]*[.!?])/);
+    const headingMatch = section.match(/^(#{1,6}\s.+|<h[1-6]>.+?<\/h[1-6]>)/);
+    
+    const extractedPart = headingMatch ? 
+                        headingMatch[0] + "\n" + (firstSentenceMatch ? firstSentenceMatch[0] : "") :
+                        (firstSentenceMatch ? firstSentenceMatch[0] : section.slice(0, Math.min(100, section.length)));
+    
+    // Only add if we have space
+    if (result.length + extractedPart.length <= effectiveMaxLength) {
+      result += (result ? "\n\n" : "") + extractedPart;
+    }
+    
+    // Check if we've reached target length
+    if (result.length >= effectiveMaxLength * 0.9) break;
+  }
+  
+  // Add a note indicating content was intelligently extracted
+  result += `\n\n[Content intelligently extracted from ${content.length} characters of original material, prioritizing ${query ? "content relevant to your query" : "the most important information"}]`;
+  
+  edgeLogger.info('Smart content extraction complete', {
+    originalLength: content.length,
+    extractedLength: result.length,
+    compressionRatio: (result.length / content.length).toFixed(2),
+    sectionsIncluded: addedSections
+  });
+  
+  return result;
+}
+
+/**
+ * Optimizes tool results by intelligently extracting the most relevant content
+ * rather than just truncating, to maximize relevance while controlling token usage
  */
 export function optimizeToolResults(
   toolResults: ToolResults,
-  config: TruncationConfig = DEFAULT_TRUNCATION_LIMITS
+  config: TruncationConfig = DEFAULT_TRUNCATION_LIMITS,
+  query: string = ""
 ): ToolResults {
   const { ragMaxLength, deepSearchMaxLength, webScraperMaxLength } = {
     ...DEFAULT_TRUNCATION_LIMITS,
@@ -53,30 +176,30 @@ export function optimizeToolResults(
   
   const optimizedResults: ToolResults = {};
   
-  // Truncate RAG content if available
+  // Optimize RAG content if available
   if (toolResults.ragContent) {
-    optimizedResults.ragContent = truncateContent(
+    optimizedResults.ragContent = extractRelevantContent(
       toolResults.ragContent,
       ragMaxLength!,
-      'Knowledge Base'
+      query
     );
   }
   
-  // Truncate Deep Search content if available
+  // Optimize Deep Search content if available
   if (toolResults.deepSearch) {
-    optimizedResults.deepSearch = truncateContent(
+    optimizedResults.deepSearch = extractRelevantContent(
       toolResults.deepSearch,
       deepSearchMaxLength!,
-      'Deep Search'
+      query
     );
   }
   
-  // Truncate Web Scraper content if available
+  // Optimize Web Scraper content if available
   if (toolResults.webScraper) {
-    optimizedResults.webScraper = truncateContent(
+    optimizedResults.webScraper = extractRelevantContent(
       toolResults.webScraper,
       webScraperMaxLength!,
-      'Web Scraper'
+      query
     );
   }
   
@@ -90,10 +213,11 @@ export async function buildEnhancedSystemPrompt(
   basePrompt: string,
   toolResults: ToolResults,
   toolsUsed: string[],
-  userId?: string
+  userId?: string,
+  userQuery?: string
 ): Promise<string> {
-  // Optimize tool results to reduce token usage
-  const optimizedResults = optimizeToolResults(toolResults);
+  // Optimize tool results to reduce token usage - now with query context for better relevance
+  const optimizedResults = optimizeToolResults(toolResults, undefined, userQuery);
   
   // Add a summary of tools used at the beginning in priority order
   let enhancedPrompt = `RESOURCES USED IN THIS RESPONSE:\n${toolsUsed.map(tool => {
@@ -313,12 +437,19 @@ export async function buildAIMessages({
   userMessages: Message[];
   userId?: string;
 }): Promise<Message[]> {
+  // Extract the last user query to use for content optimization
+  const lastUserMessage = userMessages
+    .filter(msg => msg.role === 'user')
+    .pop();
+  const userQuery = lastUserMessage?.content || '';
+  
   // Build the enhanced system prompt
   const enhancedSystemPrompt = await buildEnhancedSystemPrompt(
     basePrompt,
     toolResults,
     toolsUsed,
-    userId
+    userId,
+    userQuery // Pass the user query for more relevant context extraction
   );
   
   // Create the system message
@@ -410,6 +541,6 @@ export async function buildAIRequest({
     messages: aiMessages,
     model: modelName,
     tools: tools.length > 0 ? tools : undefined,
-    temperature: 0.7,
+    temperature: 0.4,
   };
-} 
+}

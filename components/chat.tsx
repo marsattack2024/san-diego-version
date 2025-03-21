@@ -148,26 +148,6 @@ export function Chat({
           }).catch(err => {
             console.error('Failed to save user message, could not parse error:', err);
           });
-        } else {
-          // If this is the first message, update the chat title
-          const chatMessages = messages.filter(m => m.role === 'user');
-          if (chatMessages.length === 0) {
-            // Get truncated title from first message
-            const title = content.length > 30 
-              ? `${content.substring(0, 30)}...` 
-              : content;
-              
-            // Update the chat title
-            fetch(`/api/chat/${id}`, {
-              method: 'PATCH',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ title }),
-            }).catch(error => {
-              console.error('Error updating chat title:', error);
-            });
-          }
         }
       } catch (error) {
         console.error('Error saving user message:', error);
@@ -197,12 +177,34 @@ export function Chat({
       if (!sessionResponse.ok) {
         console.error('Error ensuring chat session exists:', await sessionResponse.text());
       }
+      
+      // Check if this is the first message in the conversation
+      const isFirstMessage = messages.filter(m => m.role === 'user').length === 0;
+      
+      if (input.trim()) {
+        await saveUserMessage(input);
+        
+        // Only update the title if this is the first message
+        if (isFirstMessage) {
+          // Get truncated title from first message
+          const title = input.length > 30 
+            ? `${input.substring(0, 30)}...` 
+            : input;
+            
+          // Update the chat title
+          fetch(`/api/chat/${id}`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ title }),
+          }).catch(error => {
+            console.error('Error updating chat title:', error);
+          });
+        }
+      }
     } catch (error) {
       console.error('Failed to ensure chat session exists:', error);
-    }
-    
-    if (input.trim()) {
-      await saveUserMessage(input);
     }
     
     return handleSubmit(event, chatRequestOptions);

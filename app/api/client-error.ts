@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { logger } from '../../utils/logger';
-import { withLogging } from '../../utils/api-logger';
+import { logger } from '@/lib/logger';
+import { withLogging } from '@/lib/logger/api-logger';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {

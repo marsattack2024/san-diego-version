@@ -1,31 +1,53 @@
-import { createLogger } from '../../utils/client-logger';
+import { clientLogger } from '../../logger/client-logger';
 import { AgentType } from './agent-types';
 
 /**
- * Create a logger for an agent with the appropriate context
+ * Creates a logger for a specific agent
  */
-export function createAgentLogger(agentId: AgentType, context?: { 
+export function createAgentLogger(agentId: AgentType, {
+  userId,
+  sessionId,
+  conversationId
+}: {
+  userId?: string;
   sessionId?: string;
   conversationId?: string;
 }) {
-  const logger = createLogger(`agent:${agentId}`);
+  // Create a prefix for all log messages
+  const prefix = `agent:${agentId}`;
   
   // Add context to the logger if provided
-  if (context) {
-    const contextualLogger = logger.child({
-      sessionId: context.sessionId,
-      conversationId: context.conversationId
-    });
-    
-    return contextualLogger;
-  }
+  const context = {
+    agentId,
+    ...(userId && { userId }),
+    ...(sessionId && { sessionId }),
+    ...(conversationId && { conversationId })
+  };
   
-  return logger;
+  return {
+    debug: (message: string, data?: any) => clientLogger.debug(`${prefix} - ${message}`, { ...context, ...data }),
+    info: (message: string, data?: any) => clientLogger.info(`${prefix} - ${message}`, { ...context, ...data }),
+    warn: (message: string, data?: any) => clientLogger.warn(`${prefix} - ${message}`, { ...context, ...data }),
+    error: (message: string | Error, data?: any) => clientLogger.error(
+      message instanceof Error ? `${prefix} - ${message.message}` : `${prefix} - ${message}`,
+      { ...context, ...data, stack: message instanceof Error ? message.stack : undefined }
+    )
+  };
 }
 
 /**
- * Create a logger for the agent router
+ * Creates a logger for the agent router
  */
 export function createRouterLogger() {
-  return createLogger('agent:router');
+  const prefix = 'agent:router';
+  
+  return {
+    debug: (message: string, data?: any) => clientLogger.debug(`${prefix} - ${message}`, data),
+    info: (message: string, data?: any) => clientLogger.info(`${prefix} - ${message}`, data),
+    warn: (message: string, data?: any) => clientLogger.warn(`${prefix} - ${message}`, data),
+    error: (message: string | Error, data?: any) => clientLogger.error(
+      message instanceof Error ? `${prefix} - ${message.message}` : `${prefix} - ${message}`,
+      { ...data, stack: message instanceof Error ? message.stack : undefined }
+    )
+  };
 } 
