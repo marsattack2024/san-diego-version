@@ -21,17 +21,33 @@ export function sendEventToClients(event: { type: string; status: string; detail
       client.enqueue(data);
     } catch (err) {
       edgeLogger.error('Error sending event to client', { error: err });
+      // Remove failed clients from the set
+      clients.delete(client);
     }
   });
 }
 
 // Connect to the event stream
 export async function GET(req: NextRequest) {
+  // Performance optimization: Set a maximum client limit to prevent memory issues
+  if (clients.size >= 100) {
+    edgeLogger.warn('Too many event stream connections', { connectionCount: clients.size });
+    return new Response('Too many connections', { status: 503 });
+  }
+
+  // Log connection for debugging
+  const connectionId = Math.random().toString(36).substring(2, 10);
+  edgeLogger.info('New event stream connection', { connectionId });
+
   // Create a new readable stream
   const stream = new ReadableStream({
     start(controller) {
       // Store the controller for later use
       clients.add(controller);
+      
+      // Send initial connection event
+      const connectionEvent = `data: {"type":"connected","connectionId":"${connectionId}"}\n\n`;
+      controller.enqueue(new TextEncoder().encode(connectionEvent));
       
       // Send a ping event every 30 seconds to keep the connection alive
       const pingInterval = setInterval(() => {
@@ -42,6 +58,7 @@ export async function GET(req: NextRequest) {
           // If there's an error, the client is probably disconnected
           clearInterval(pingInterval);
           clients.delete(controller);
+          edgeLogger.info('Client disconnected during ping', { connectionId });
         }
       }, 30000);
       
@@ -49,6 +66,7 @@ export async function GET(req: NextRequest) {
       req.signal.addEventListener('abort', () => {
         clearInterval(pingInterval);
         clients.delete(controller);
+        edgeLogger.info('Client disconnected', { connectionId });
       });
     }
   });

@@ -46,9 +46,45 @@ export async function getCachedUser(ttlMs: number = 60000) {
  */
 export async function getAuthenticatedUser(request: NextRequest) {
   try {
-    // Create Supabase client for auth
+    // Initialize server client using cookies from request
     const cookieStore = await cookies();
-    const serverClient = createSupabaseServerClient(
+    
+    // Enhanced logging for cookie debugging
+    const allCookies = cookieStore.getAll();
+    const hasCookies = allCookies.length > 0;
+    const hasAuthCookie = allCookies.some(c => c.name.includes('auth-token'));
+    
+    edgeLogger.debug('Cookie information in getAuthenticatedUser', {
+      cookieCount: allCookies.length,
+      hasCookies,
+      hasAuthCookie,
+      path: request.nextUrl.pathname,
+      method: request.method
+    });
+    
+    if (!hasCookies || !hasAuthCookie) {
+      edgeLogger.warn('Missing authentication cookies', {
+        path: request.nextUrl.pathname,
+        method: request.method
+      });
+      
+      return {
+        user: null,
+        serverClient: null,
+        errorResponse: new Response(
+          JSON.stringify({ 
+            error: 'Not authenticated',
+            message: 'Missing authentication cookies'
+          }),
+          { 
+            status: 401,
+            headers: { 'Content-Type': 'application/json' }
+          }
+        ),
+      };
+    }
+    
+    const supabase = createSupabaseServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
@@ -56,50 +92,92 @@ export async function getAuthenticatedUser(request: NextRequest) {
           getAll() {
             return cookieStore.getAll();
           },
-          setAll(cookiesToSet) {
+          setAll(cookiesToSet: Array<{ name: string; value: string; options?: any }>) {
             try {
               cookiesToSet.forEach(({ name, value, options }) =>
                 cookieStore.set(name, value, options)
               );
-            } catch {
-              // This can be ignored if you have middleware refreshing users
+            } catch (e) {
+              // Log error for better debugging
+              edgeLogger.error('Error setting cookies in getAuthenticatedUser', {
+                error: e,
+                path: request.nextUrl.pathname
+              });
             }
           },
         },
       }
     );
     
-    // Get the current user
-    const { data: { user }, error } = await serverClient.auth.getUser();
+    // Fetch user information
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
     
-    if (error || !user) {
-      console.error('Authentication error:', error || 'No user found');
+    // Log access attempts for debugging
+    if (userError) {
+      edgeLogger.warn('Auth error while getting user', { 
+        errorMessage: userError.message,
+        path: request.nextUrl.pathname
+      });
+    }
+    
+    if (!user) {
+      edgeLogger.warn('No authenticated user found for API request', { 
+        path: request.nextUrl.pathname,
+        method: request.method
+      });
       
+      // Return unauthorized response
       return {
         user: null,
-        serverClient,
-        errorResponse: NextResponse.json(
-          { error: 'Unauthorized' },
-          { status: 401 }
-        )
+        serverClient: null,
+        errorResponse: new Response(
+          JSON.stringify({ 
+            error: 'Not authenticated',
+            message: 'You must be logged in to access this endpoint'
+          }),
+          { 
+            status: 401,
+            headers: { 'Content-Type': 'application/json' }
+          }
+        ),
       };
     }
     
+    // Create authenticated server client
+    const serverClient = await createServerClient();
+    
+    // Return user and client
     return {
       user,
       serverClient,
-      errorResponse: null
+      errorResponse: null,
     };
   } catch (error) {
-    console.error('Error in authentication:', error);
+    // Handle unexpected errors
+    edgeLogger.error('Unexpected authentication error', { 
+      error,
+      path: request.nextUrl.pathname,
+      method: request.method,
+      errorMessage: typeof error === 'object' ? (error as any).message : String(error)
+    });
     
+    // Return server error response
     return {
       user: null,
       serverClient: null,
-      errorResponse: NextResponse.json(
-        { error: 'Authentication error' },
-        { status: 500 }
-      )
+      errorResponse: new Response(
+        JSON.stringify({ 
+          error: 'Authentication error',
+          message: 'An error occurred during authentication'
+        }),
+        { 
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        }
+      ),
     };
   }
 }

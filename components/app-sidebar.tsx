@@ -3,10 +3,12 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { historyService } from '@/lib/api/history-service';
+import { type User } from '@supabase/supabase-js';
 
 import { PlusIcon } from '@/components/icons';
 import { SidebarHistory } from '@/components/sidebar-history';
-import { SidebarUserNav, type User } from '@/components/sidebar-user-nav';
+import { SidebarUserNav } from '@/components/sidebar-user-nav';
 import { Button } from '@/components/ui/button';
 import {
   Sidebar,
@@ -23,6 +25,7 @@ export function AppSidebar({ user: serverUser }: { user: User | undefined }) {
   const router = useRouter();
   const { setOpenMobile } = useSidebar();
   const [user, setUser] = useState<User | undefined>(serverUser);
+  const [isCreatingChat, setIsCreatingChat] = useState(false);
   
   // If no user was provided from the server, try to get it on the client side
   useEffect(() => {
@@ -76,13 +79,37 @@ export function AppSidebar({ user: serverUser }: { user: User | undefined }) {
                   variant="ghost"
                   type="button"
                   className="p-2 h-fit"
-                  onClick={() => {
+                  onClick={async () => {
+                    // Prevent multiple clicks
+                    if (isCreatingChat) return;
+                    
+                    setIsCreatingChat(true);
                     setOpenMobile(false);
-                    // Force a new chat to be created with a unique timestamp to prevent caching
-                    const timestamp = Date.now();
-                    // Using replace instead of push for a hard navigation
-                    window.location.href = `/chat?new=true&t=${timestamp}`;
+                    
+                    try {
+                      // Create a new session in the database first
+                      const { id, success, error } = await historyService.createNewSession();
+                      
+                      if (success) {
+                        // Navigate to the new chat directly
+                        router.push(`/chat/${id}`);
+                      } else {
+                        console.error('Failed to create new chat session:', error);
+                        // Fallback to old method if creation fails
+                        const timestamp = Date.now();
+                        window.location.href = `/chat?new=true&t=${timestamp}`;
+                      }
+                    } catch (error) {
+                      console.error('Error creating new chat:', error);
+                      // Fallback to old method
+                      const timestamp = Date.now();
+                      window.location.href = `/chat?new=true&t=${timestamp}`;
+                    } finally {
+                      // Reset creating state after a short delay
+                      setTimeout(() => setIsCreatingChat(false), 500);
+                    }
                   }}
+                  disabled={isCreatingChat}
                 >
                   <PlusIcon />
                 </Button>

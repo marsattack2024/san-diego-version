@@ -41,8 +41,8 @@ export async function GET() {
     // Create Supabase client for database operations
     const serverClient = await createServerClient();
     
-    // Log the current user ID for debugging
-    edgeLogger.info('Fetching chat history for user', { userId: user.id });
+    // Only log at debug level to reduce log noise in development
+    edgeLogger.debug('Fetching chat history for user', { userId: user.id });
     
     // Fetch chat history for the current user
     const { data, error } = await serverClient
@@ -51,19 +51,23 @@ export async function GET() {
       .eq('user_id', user.id)
       .order('updated_at', { ascending: false });
       
-    if (data) {
-      edgeLogger.info('Chat history fetch results', { 
-        count: data.length,
-        chatIds: data.map((chat: { id: string }) => chat.id).slice(0, 5) // Show first 5 IDs only
-      });
-    }
-    
     if (error) {
       edgeLogger.error('Failed to fetch chat history from Supabase', { error });
       return NextResponse.json(
         { error: 'Failed to fetch chat history' },
         { status: 500 }
       );
+    }
+    
+    // Log only if there's new data or issues
+    if (data?.length > 0) {
+      edgeLogger.debug('Chat history fetch results', { 
+        count: data.length,
+        // Only log IDs in development, not in production
+        chatIds: process.env.NODE_ENV === 'development' 
+          ? data.map((chat: { id: string }) => chat.id).slice(0, 5) 
+          : undefined
+      });
     }
     
     // Map the Supabase data to the Chat interface
@@ -82,12 +86,12 @@ export async function GET() {
       messages: [] // We'll fetch messages separately when needed
     }));
     
-    edgeLogger.info('Successfully fetched chat history', { 
-      count: chats.length,
-      userId: user.id
-    });
+    // Add cache control headers for better client-side caching
+    // Assuming history can be stale for 30 seconds
+    const response = NextResponse.json(chats);
+    response.headers.set('Cache-Control', 'private, max-age=30');
     
-    return NextResponse.json(chats);
+    return response;
   } catch (error) {
     edgeLogger.error('Failed to fetch chat history', { error });
     

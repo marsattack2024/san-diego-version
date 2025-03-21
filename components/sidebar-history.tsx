@@ -1,11 +1,30 @@
 'use client';
 
-import { isToday, isYesterday, subMonths, subWeeks } from 'date-fns';
+import React, { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useParams, usePathname, useRouter } from 'next/navigation';
-import { memo, useEffect, useState, useCallback } from 'react';
+import { Chat } from '@/lib/db/schema';
+import { historyService } from '@/lib/api/history-service';
 import { toast } from 'sonner';
-
+import {
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarMenu,
+  SidebarMenuAction,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  useSidebar,
+} from '@/components/ui/sidebar';
+import { Button } from '@/components/ui/button';
+import { 
+  AlertCircle, 
+  RefreshCcw, 
+  Loader2, 
+  MessageSquare,
+  PlusCircle
+} from 'lucide-react';
+import { User } from '@supabase/supabase-js';
 import {
   MoreHorizontalIcon,
   TrashIcon,
@@ -26,366 +45,496 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import {
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarMenu,
-  SidebarMenuAction,
-  SidebarMenuButton,
-  SidebarMenuItem,
-  useSidebar,
-} from '@/components/ui/sidebar';
-import type { User } from '@/components/sidebar-user-nav';
-import type { Chat } from '@/lib/db/schema';
-import { historyService } from '@/lib/api/history-service';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 
+// Consistent type definition for grouped chats
 type GroupedChats = {
   today: Chat[];
-  yesterday: Chat[];
-  lastWeek: Chat[];
-  lastMonth: Chat[];
+  pastWeek: Chat[];
   older: Chat[];
 };
 
+// Simplified and standardized groupChatsByDate function
+const groupChatsByDate = (chats: Array<Chat>): GroupedChats => {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const lastWeekDate = new Date(today);
+  lastWeekDate.setDate(lastWeekDate.getDate() - 7);
+  
+  return {
+    today: chats.filter((chat) => {
+      const chatDate = new Date(chat.updatedAt || chat.createdAt);
+      return chatDate >= today;
+    }),
+    pastWeek: chats.filter((chat) => {
+      const chatDate = new Date(chat.updatedAt || chat.createdAt);
+      return chatDate < today && chatDate >= lastWeekDate;
+    }),
+    older: chats.filter((chat) => {
+      const chatDate = new Date(chat.updatedAt || chat.createdAt);
+      return chatDate < lastWeekDate;
+    }),
+  };
+};
+
+// Chat item component with proper typing
 const PureChatItem = ({
   chat,
   isActive,
   onDelete,
   setOpenMobile,
+  isDeleting = false,
 }: {
   chat: Chat;
   isActive: boolean;
   onDelete: (chatId: string) => void;
   setOpenMobile: (open: boolean) => void;
+  isDeleting?: boolean;
 }) => {
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton asChild isActive={isActive}>
-        <Link href={`/chat/${chat.id}`} onClick={() => setOpenMobile(false)}>
-          <span>{chat.title}</span>
-        </Link>
-      </SidebarMenuButton>
-
-      <DropdownMenu modal={true}>
-        <DropdownMenuTrigger asChild>
-          <SidebarMenuAction
-            className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground mr-0.5"
-            showOnHover={!isActive}
-          >
-            <MoreHorizontalIcon />
-            <span className="sr-only">More</span>
-          </SidebarMenuAction>
-        </DropdownMenuTrigger>
-
-        <DropdownMenuContent side="bottom" align="end">
-          <DropdownMenuItem
-            className="cursor-pointer text-destructive focus:bg-destructive/15 focus:text-destructive dark:text-red-500"
-            onSelect={() => onDelete(chat.id)}
-          >
-            <TrashIcon />
-            <span>Delete</span>
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <Link href={`/chat/${chat.id}`} onClick={() => setOpenMobile(false)} legacyBehavior>
+        <SidebarMenuButton
+          asChild={false}
+          isActive={isActive}
+          className="flex items-center group"
+        >
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <MessageSquare size={16} />
+            <span className="truncate">{chat.title || "New Chat"}</span>
+          </div>
+        </SidebarMenuButton>
+      </Link>
+      
+      <div className="opacity-0 group-hover:opacity-100 transition-opacity absolute right-1 top-1.5">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 text-sidebar-foreground/50 hover:text-sidebar-foreground"
+            >
+              <MoreHorizontalIcon size={16} />
+              <span className="sr-only">Menu</span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.preventDefault();
+                onDelete(chat.id);
+              }}
+              className="text-red-500 hover:text-red-600 focus:text-red-500"
+              disabled={isDeleting}
+            >
+              <TrashIcon size={16} />
+              <span>{isDeleting ? "Deleting..." : "Delete"}</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </SidebarMenuItem>
   );
 };
-
-export const ChatItem = memo(PureChatItem, (prevProps, nextProps) => {
-  if (prevProps.isActive !== nextProps.isActive) return false;
-  return true;
-});
 
 const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   const { setOpenMobile } = useSidebar();
   const params = useParams();
   const id = params?.id as string;
   const pathname = usePathname();
+  const router = useRouter();
   const [history, setHistory] = useState<Array<Chat>>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const [chatWarning, setChatWarning] = useState<string | null>(null);
+  const [lastRefresh, setLastRefresh] = useState(Date.now());
+  const [isDeleting, setIsDeleting] = useState<Record<string, boolean>>({});
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  // State for showing all older chats
+  const [showAllOlder, setShowAllOlder] = useState(false);
+  // Add debugging counter
+  const [renderCount, setRenderCount] = useState(0);
   
-  // Debug log to confirm user is received
-  console.log("SidebarHistory received user:", user?.id); 
+  // Log render cycle for debugging - FIXED to avoid infinite loop
+  useEffect(() => {
+    // Only increment on mount and when key data changes
+    setRenderCount(prev => prev + 1);
+    console.log(`SidebarHistory rendered (count: ${renderCount + 1})`, {
+      historyLength: history.length,
+      isLoading,
+      isRefreshing,
+      userId: user?.id?.slice(0, 8)
+    });
+    // Removed renderCount from dependencies
+  }, [history.length, isLoading, isRefreshing, user?.id]);
   
-  // Use the optimized history service instead of direct SWR
-  const fetchChatHistory = useCallback(async () => {
-    if (!user) {
-      setHistory([]);
-      setIsLoading(false);
+  // Optimized function to fetch chat history using the service
+  const fetchChatHistory = useCallback(async (forceRefresh = false, isManual = false) => {
+    // Prevent duplicate requests while another fetch is in progress
+    if ((isLoading && !forceRefresh) || isRefreshing) {
+      console.log('Skipping fetch: already loading or refreshing');
       return;
     }
     
-    setIsLoading(true);
     try {
-      const data = await historyService.fetchHistory(user.id);
-      setHistory(data);
+      // Set appropriate loading state
+      if (history.length === 0) {
+        setIsLoading(true);
+      } else if (forceRefresh) {
+        setIsRefreshing(true);
+      }
+      
+      setError(null);
+      
+      // Let the historyService handle caching and optimizations
+      const data = await historyService.fetchHistory(forceRefresh);
+      
+      // Only update state if the data has actually changed
+      const currentIds = history.map(chat => chat.id).sort().join(',');
+      const newIds = data.map(chat => chat.id).sort().join(',');
+      
+      if (currentIds !== newIds || history.length !== data.length) {
+        console.log('History data changed, updating state');
+        setHistory(data);
+      } else {
+        console.log('History data unchanged, skipping update');
+      }
+      
+      // Clear any existing warning after successful fetch
+      setChatWarning(null);
+      
+      // Update lastRefresh timestamp
+      setLastRefresh(Date.now());
+      
+      // Show success toast ONLY for manual refreshes
+      if (isManual) {
+        toast.success('Chat history refreshed', {
+          duration: 2000,
+          position: 'bottom-right'
+        });
+      }
     } catch (error) {
       console.error('Error fetching history:', error);
+      setError(error as Error);
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
-  }, [user]);
+  }, [history, isLoading, isRefreshing]);
   
-  // Fetch chat history on mount and when pathname or user changes
+  // Initial fetch when component mounts or user changes
   useEffect(() => {
-    fetchChatHistory();
-  }, [pathname, fetchChatHistory]);
+    // Don't fetch if user isn't logged in
+    if (!user) {
+      setHistory([]);
+      return;
+    }
+    
+    // Log initial load attempt
+    console.log('Initial SidebarHistory mount with user - attempting history fetch');
+    
+    // Always force refresh on initial component mount to ensure data is fresh
+    fetchChatHistory(true, false); // Force refresh but not manual
+    
+    // Cleanup
+    return () => {
+      console.log('SidebarHistory unmounted');
+    };
+  }, [user, fetchChatHistory]); // Only depend on user - this effect should run only once when user is available
 
-  const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const router = useRouter();
-  const [isDeleting, setIsDeleting] = useState(false);
+  // Update history-service.ts polling mechanism
+  useEffect(() => {
+    if (!user) return;
+    
+    // Set up polling to refresh data periodically
+    const interval = setInterval(() => {
+      if (!isRefreshing && !isLoading) {
+        console.log('Auto-refreshing chat history (background)');
+        fetchChatHistory(true, false); // Force refresh but not manual
+      }
+    }, 30000); // Poll every 30 seconds
+    
+    return () => clearInterval(interval);
+  }, [user, fetchChatHistory, isRefreshing, isLoading]);
+  
+  // Manual refresh function for the refresh button
+  const refreshHistory = useCallback(async () => {
+    console.log('Manually refreshing chat history (button click)');
+    await fetchChatHistory(true, true); // Force refresh AND manual (show toast)
+  }, [fetchChatHistory]);
+  
+  // Handle navigation back to main chat page
+  useEffect(() => {
+    if (user && pathname === '/chat' && !id && history.length > 0) {
+      // Only refresh when returning to main chat page
+      const lastUpdateTime = localStorage.getItem('lastHistoryUpdate');
+      const now = Date.now();
+      
+      // Only refresh if we haven't updated in the last minute
+      if (!lastUpdateTime || now - parseInt(lastUpdateTime) > 60000) {
+        console.log('Refreshing history after returning to chat main page');
+        fetchChatHistory(true, false);
+        localStorage.setItem('lastHistoryUpdate', now.toString());
+      }
+    }
+  }, [user, id, pathname, fetchChatHistory, history.length]);
 
-  // Optimized delete handler using the history service
-  const handleDelete = async (deleteId: string) => {
+  // Add auto-retry when errors occur
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => {
+        console.log('Auto-retrying after error');
+        fetchChatHistory(true, false);
+      }, 5000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [error, fetchChatHistory]);
+
+  // When navigating between chats, check if the current chat exists in history
+  useEffect(() => {
+    // Only check if we have an ID, we're not loading, we have history, and we're on a chat page
+    if (id && !isLoading && history.length > 0 && pathname?.startsWith('/chat/')) {
+      const chatExists = history.some(chat => chat.id === id);
+      
+      if (!chatExists) {
+        console.warn('Current chat ID not found in history:', id);
+        setChatWarning(`Chat ${id.slice(0, 8)}... not found in your history`);
+        
+        // Automatically refresh to see if it appears
+        refreshHistory();
+      } else {
+        // Clear any warning if the chat exists
+        setChatWarning(null);
+      }
+    }
+  }, [id, history, isLoading, pathname, refreshHistory]);
+
+  // Delete a chat with confirmation
+  const handleDeleteWithConfirmation = useCallback((chatId: string) => {
+    setDeleteId(chatId);
+    setShowDeleteDialog(true);
+  }, []);
+  
+  // Handle delete function with state management
+  const handleDelete = useCallback(async (chatId: string) => {
+    if (!chatId) return;
+    
     try {
-      setIsDeleting(true);
+      setIsDeleting(prev => ({ ...prev, [chatId]: true }));
+      await historyService.deleteChat(chatId);
       
-      // Use the history service which handles cache invalidation
-      const success = await historyService.deleteChat(deleteId, user?.id);
+      // Update the history in memory
+      setHistory(prev => prev.filter(chat => chat.id !== chatId));
       
-      if (!success) {
-        throw new Error('Failed to delete chat');
+      // If we delete the current chat, navigate to main chat page
+      if (id === chatId) {
+        router.push('/chat');
       }
       
-      // Refresh history
-      await fetchChatHistory();
-      
-      // If we're deleting the current chat, navigate to the most recent one
-      if (id === deleteId) {
-        if (history.length > 0) {
-          // Navigate to the most recent chat
-          router.push(`/chat/${history[0].id}`);
-        } else {
-          // If no chats left, go to new chat page
-          router.push('/chat');
-        }
+      // Show success toast in development mode
+      if (process.env.NODE_ENV === 'development') {
+        toast.success('Chat deleted successfully', {
+          duration: 2000,
+          position: 'bottom-right'
+        });
       }
-      
-      toast.success('Chat deleted successfully');
     } catch (error) {
       console.error('Error deleting chat:', error);
       toast.error('Failed to delete chat');
     } finally {
-      setIsDeleting(false);
+      setIsDeleting(prev => ({ ...prev, [chatId]: false }));
     }
-  };
+  }, [router, id]);
+  
+  // Function to handle delete confirmation
+  const handleConfirmDelete = useCallback(() => {
+    if (deleteId) {
+      handleDelete(deleteId);
+      setShowDeleteDialog(false);
+    }
+  }, [deleteId, handleDelete]);
 
-  if (!user) {
-    return (
-      <SidebarGroup>
-        <SidebarGroupContent>
-          <div className="px-2 text-zinc-500 w-full flex flex-row justify-center items-center text-sm gap-2">
-            Login to save and revisit previous chats!
-          </div>
-        </SidebarGroupContent>
-      </SidebarGroup>
-    );
-  }
-
-  if (isLoading) {
-    return (
-      <SidebarGroup>
-        <div className="px-2 py-1 text-xs text-sidebar-foreground/50">
-          Today
+  // Render grouped chats and empty state
+  const renderChats = (chats: Array<Chat>) => {
+    if (chats.length === 0 && !isLoading) {
+      return (
+        <div className="flex flex-col items-center justify-center h-40 text-center space-y-2">
+          <p className="text-sm text-sidebar-foreground/70">No chats found</p>
+          <Link
+            href="/chat"
+            className="text-xs text-blue-500 hover:underline"
+            onClick={() => setOpenMobile(false)}
+          >
+            Start a new chat
+          </Link>
         </div>
-        <SidebarGroupContent>
-          <div className="flex flex-col">
-            {[44, 32, 28, 64, 52].map((item) => (
-              <div
-                key={item}
-                className="rounded-md h-8 flex gap-2 px-2 items-center"
-              >
-                <div
-                  className="h-4 rounded-md flex-1 max-w-[--skeleton-width] bg-sidebar-accent-foreground/10"
-                  style={
-                    {
-                      '--skeleton-width': `${item}%`,
-                    } as React.CSSProperties
-                  }
-                />
-              </div>
-            ))}
-          </div>
-        </SidebarGroupContent>
-      </SidebarGroup>
-    );
-  }
+      );
+    }
 
-  if (history?.length === 0) {
+    // Group chats by date
+    const groupedChats = groupChatsByDate(chats);
+
     return (
-      <SidebarGroup>
-        <SidebarGroupContent>
-          <div className="px-2 text-zinc-500 w-full flex flex-row justify-center items-center text-sm gap-2">
-            Your conversations will appear here once you start chatting!
-          </div>
-        </SidebarGroupContent>
-      </SidebarGroup>
-    );
-  }
+      <div className="space-y-2">
+        {/* Today's chats */}
+        {groupedChats.today.length > 0 && (
+          <>
+            <div className="px-2 py-1 text-xs text-sidebar-foreground/50">
+              Today
+            </div>
+            {groupedChats.today.map((chat) => (
+              <ChatItem
+                key={chat.id}
+                chat={chat}
+                isActive={chat.id === id}
+                onDelete={handleDeleteWithConfirmation}
+                setOpenMobile={setOpenMobile}
+                isDeleting={isDeleting[chat.id] || false}
+              />
+            ))}
+          </>
+        )}
 
-  const groupChatsByDate = (chats: Chat[]): GroupedChats => {
-    const now = new Date();
-    const oneWeekAgo = subWeeks(now, 1);
-    const oneMonthAgo = subMonths(now, 1);
+        {/* Past week */}
+        {groupedChats.pastWeek.length > 0 && (
+          <>
+            <div className="px-2 py-1 text-xs text-sidebar-foreground/50 mt-6">
+              Past 7 days
+            </div>
+            {groupedChats.pastWeek.map((chat) => (
+              <ChatItem
+                key={chat.id}
+                chat={chat}
+                isActive={chat.id === id}
+                onDelete={handleDeleteWithConfirmation}
+                setOpenMobile={setOpenMobile}
+                isDeleting={isDeleting[chat.id] || false}
+              />
+            ))}
+          </>
+        )}
 
-    return chats.reduce(
-      (groups, chat) => {
-        const chatDate = new Date(chat.updatedAt || chat.createdAt);
-
-        if (isToday(chatDate)) {
-          groups.today.push(chat);
-        } else if (isYesterday(chatDate)) {
-          groups.yesterday.push(chat);
-        } else if (chatDate > oneWeekAgo) {
-          groups.lastWeek.push(chat);
-        } else if (chatDate > oneMonthAgo) {
-          groups.lastMonth.push(chat);
-        } else {
-          groups.older.push(chat);
-        }
-
-        return groups;
-      },
-      {
-        today: [],
-        yesterday: [],
-        lastWeek: [],
-        lastMonth: [],
-        older: [],
-      } as GroupedChats,
+        {/* Older */}
+        {groupedChats.older.length > 0 && (
+          <>
+            <div className="px-2 py-1 text-xs text-sidebar-foreground/50 mt-6">
+              Older ({groupedChats.older.length})
+            </div>
+            {/* Show limited number of older chats if there are many */}
+            {groupedChats.older.length > 10 ? (
+              <>
+                {(showAllOlder ? groupedChats.older : groupedChats.older.slice(0, 10)).map((chat) => (
+                  <ChatItem
+                    key={chat.id}
+                    chat={chat}
+                    isActive={chat.id === id}
+                    onDelete={handleDeleteWithConfirmation}
+                    setOpenMobile={setOpenMobile}
+                    isDeleting={isDeleting[chat.id] || false}
+                  />
+                ))}
+                <button 
+                  onClick={() => setShowAllOlder(!showAllOlder)}
+                  className="w-full text-xs py-1 text-blue-500 hover:underline text-center"
+                >
+                  {showAllOlder ? "Show less" : `Show ${groupedChats.older.length - 10} more`}
+                </button>
+              </>
+            ) : (
+              // Just show all if there are 10 or fewer
+              groupedChats.older.map((chat) => (
+                <ChatItem
+                  key={chat.id}
+                  chat={chat}
+                  isActive={chat.id === id}
+                  onDelete={handleDeleteWithConfirmation}
+                  setOpenMobile={setOpenMobile}
+                  isDeleting={isDeleting[chat.id] || false}
+                />
+              ))
+            )}
+          </>
+        )}
+      </div>
     );
   };
 
+  // Main component render
   return (
     <>
-      <SidebarGroup>
+      <SidebarGroup className="flex-shrink-0">
+        <SidebarGroupLabel>
+          {chatWarning ? (
+            <div className="flex items-center justify-between px-2 py-2 bg-orange-100 dark:bg-orange-950/30 text-orange-800 dark:text-orange-300 text-xs rounded mb-2">
+              <div className="flex items-center">
+                <AlertCircle className="h-3 w-3 mr-1.5" />
+                <span className="truncate">{chatWarning}</span>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5 text-orange-800 dark:text-orange-300 hover:text-orange-600 dark:hover:text-orange-100 hover:bg-orange-200 dark:hover:bg-orange-900/50"
+                onClick={refreshHistory}
+                disabled={isRefreshing}
+              >
+                <RefreshCcw className="h-3 w-3" />
+              </Button>
+            </div>
+          ) : null}
+          <div className="flex items-center justify-between px-2 py-2">
+            <span className="text-xs font-medium text-sidebar-foreground/70">
+              Chat History
+            </span>
+            <div className="flex space-x-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-sidebar-foreground/50 hover:text-sidebar-foreground"
+                onClick={refreshHistory}
+                disabled={isRefreshing}
+              >
+                <RefreshCcw
+                  className={`h-3.5 w-3.5 ${
+                    isRefreshing ? 'animate-spin' : ''
+                  }`}
+                />
+              </Button>
+            </div>
+          </div>
+        </SidebarGroupLabel>
         <SidebarGroupContent>
           <SidebarMenu>
-            {history &&
-              (() => {
-                const groupedChats = groupChatsByDate(history);
-
-                return (
-                  <>
-                    {groupedChats.today.length > 0 && (
-                      <>
-                        <div className="px-2 py-1 text-xs text-sidebar-foreground/50">
-                          Today
-                        </div>
-                        {groupedChats.today.map((chat) => (
-                          <ChatItem
-                            key={chat.id}
-                            chat={chat}
-                            isActive={chat.id === id}
-                            onDelete={(chatId) => {
-                              setDeleteId(chatId);
-                              setShowDeleteDialog(true);
-                            }}
-                            setOpenMobile={setOpenMobile}
-                          />
-                        ))}
-                      </>
-                    )}
-
-                    {groupedChats.yesterday.length > 0 && (
-                      <>
-                        <div className="px-2 py-1 text-xs text-sidebar-foreground/50 mt-6">
-                          Yesterday
-                        </div>
-                        {groupedChats.yesterday.map((chat) => (
-                          <ChatItem
-                            key={chat.id}
-                            chat={chat}
-                            isActive={chat.id === id}
-                            onDelete={(chatId) => {
-                              setDeleteId(chatId);
-                              setShowDeleteDialog(true);
-                            }}
-                            setOpenMobile={setOpenMobile}
-                          />
-                        ))}
-                      </>
-                    )}
-
-                    {groupedChats.lastWeek.length > 0 && (
-                      <>
-                        <div className="px-2 py-1 text-xs text-sidebar-foreground/50 mt-6">
-                          Last 7 days
-                        </div>
-                        {groupedChats.lastWeek.map((chat) => (
-                          <ChatItem
-                            key={chat.id}
-                            chat={chat}
-                            isActive={chat.id === id}
-                            onDelete={(chatId) => {
-                              setDeleteId(chatId);
-                              setShowDeleteDialog(true);
-                            }}
-                            setOpenMobile={setOpenMobile}
-                          />
-                        ))}
-                      </>
-                    )}
-
-                    {groupedChats.lastMonth.length > 0 && (
-                      <>
-                        <div className="px-2 py-1 text-xs text-sidebar-foreground/50 mt-6">
-                          Last 30 days
-                        </div>
-                        {groupedChats.lastMonth.map((chat) => (
-                          <ChatItem
-                            key={chat.id}
-                            chat={chat}
-                            isActive={chat.id === id}
-                            onDelete={(chatId) => {
-                              setDeleteId(chatId);
-                              setShowDeleteDialog(true);
-                            }}
-                            setOpenMobile={setOpenMobile}
-                          />
-                        ))}
-                      </>
-                    )}
-
-                    {groupedChats.older.length > 0 && (
-                      <>
-                        <div className="px-2 py-1 text-xs text-sidebar-foreground/50 mt-6">
-                          Older
-                        </div>
-                        {groupedChats.older.map((chat) => (
-                          <ChatItem
-                            key={chat.id}
-                            chat={chat}
-                            isActive={chat.id === id}
-                            onDelete={(chatId) => {
-                              setDeleteId(chatId);
-                              setShowDeleteDialog(true);
-                            }}
-                            setOpenMobile={setOpenMobile}
-                          />
-                        ))}
-                      </>
-                    )}
-                  </>
-                );
-              })()}
+            {isLoading ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+              </div>
+            ) : (
+              renderChats(history)
+            )}
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+      <AlertDialog
+        open={showDeleteDialog}
+        onOpenChange={setShowDeleteDialog}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. This will permanently delete your
-              chat and remove it from our servers.
+              This will permanently delete this chat and all of its messages.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => handleDelete(deleteId as string)}>
-              Continue
+            <AlertDialogAction
+              onClick={handleConfirmDelete}
+              className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+            >
+              Delete
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -394,7 +543,20 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   );
 };
 
-export const SidebarHistory = memo(PureSidebarHistory, (prevProps, nextProps) => {
+// Properly memoize the component to prevent unnecessary re-renders
+export const ChatItem = React.memo(PureChatItem, (prevProps, nextProps) => {
+  return (
+    prevProps.isActive === nextProps.isActive &&
+    prevProps.chat.id === nextProps.chat.id &&
+    prevProps.chat.title === nextProps.chat.title &&
+    prevProps.isDeleting === nextProps.isDeleting
+  );
+});
+
+// Export the component with memoization
+export const SidebarHistory = React.memo(PureSidebarHistory, (prevProps, nextProps) => {
   // Only re-render if the user ID changes
   return prevProps.user?.id === nextProps.user?.id;
 });
+
+export default SidebarHistory;

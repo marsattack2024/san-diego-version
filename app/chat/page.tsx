@@ -4,11 +4,10 @@ export const dynamic = 'force-dynamic';
 
 import { Chat } from '@/components/chat';
 import { useChatStore } from '@/stores/chat-store';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { clientLogger } from '@/lib/logger/client-logger';
-import useSWR from 'swr';
-import { fetcher } from '@/lib/utils';
 import { useRouter } from 'next/navigation';
+import { historyService } from '@/lib/api/history-service';
 
 const log = clientLogger;
 
@@ -16,15 +15,28 @@ export default function ChatPage() {
   const currentConversationId = useChatStore(state => state.currentConversationId);
   const conversations = useChatStore(state => state.conversations);
   const createConversation = useChatStore(state => state.createConversation);
-  const setCurrentConversation = useChatStore(state => state.setCurrentConversation);
   const router = useRouter();
   const [isInitialized, setIsInitialized] = useState(false);
+  const [history, setHistory] = useState<any[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
   
-  // Fetch chat history from the server
-  const { data: history, isLoading: historyLoading } = useSWR('/api/history', fetcher, {
-    revalidateOnFocus: false,
-    dedupingInterval: 10000, // 10 seconds
-  });
+  // Optimized history fetching using the history service
+  const fetchHistory = useCallback(async () => {
+    try {
+      setHistoryLoading(true);
+      const data = await historyService.fetchHistory();
+      setHistory(data);
+    } catch (error) {
+      log.error('Error fetching history:', error);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+  
+  // Fetch history on component mount
+  useEffect(() => {
+    fetchHistory();
+  }, [fetchHistory]);
   
   // Check for a newChat parameter which forces creation of a new chat
   useEffect(() => {
@@ -38,7 +50,7 @@ export default function ChatPage() {
       
       if (isNewChat) {
         // Force creation of a new chat and clear existing conversation
-        log.info('Creating new chat from URL parameter', { timestamp });
+        log.debug('Creating new chat from URL parameter', { timestamp });
         
         // Clear existing conversation state first to ensure full refresh
         useChatStore.setState({
@@ -55,18 +67,18 @@ export default function ChatPage() {
         // If no current conversation, try to load the most recent one from history
         if (history && history.length > 0) {
           const mostRecentChat = history[0]; // History is sorted by updated_at desc
-          log.info('Loading most recent chat from history', { id: mostRecentChat.id });
+          log.debug('Loading most recent chat from history', { id: mostRecentChat.id });
           
           // Redirect to the specific chat page
           router.push(`/chat/${mostRecentChat.id}`);
         } else {
           // If no history, create a new conversation
-          log.info('No chat history found, creating a new one');
+          log.debug('No chat history found, creating a new one');
           createConversation();
           setIsInitialized(true);
         }
       } else {
-        log.info('Using existing conversation', { id: currentConversationId });
+        log.debug('Using existing conversation', { id: currentConversationId });
         setIsInitialized(true);
       }
     }
@@ -82,7 +94,8 @@ export default function ChatPage() {
     return <div className="h-screen flex items-center justify-center">Loading...</div>;
   }
   
-  log.info('Rendering chat with conversation', { 
+  // Reduce log verbosity in development
+  log.debug('Rendering chat with conversation', { 
     id: currentConversationId,
     messageCount: currentConversation?.messages?.length || 0
   });
