@@ -248,15 +248,59 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   useEffect(() => {
     if (!user) return;
     
+    // Detect if we're on mobile using a responsive approach
+    const detectMobile = () => {
+      return typeof window !== 'undefined' && window.innerWidth < 768;
+    };
+    
+    // Use different polling intervals for mobile vs desktop
+    const getMobilePollInterval = () => 5 * 60 * 1000; // 5 minutes for mobile
+    const getDesktopPollInterval = () => 2 * 60 * 1000; // 2 minutes for desktop
+    
+    // Determine initial poll interval
+    let pollInterval = detectMobile() ? getMobilePollInterval() : getDesktopPollInterval();
+    
+    console.log(`Setting up history polling with ${pollInterval/1000}s interval (${detectMobile() ? 'mobile' : 'desktop'})`);
+    
     // Set up polling to refresh data periodically
-    const interval = setInterval(() => {
+    let interval = setInterval(() => {
       if (!isRefreshing && !isLoading) {
         console.log('Auto-refreshing chat history (background)');
         fetchChatHistory(true, false); // Force refresh but not manual
       }
-    }, 30000); // Poll every 30 seconds
+    }, pollInterval);
     
-    return () => clearInterval(interval);
+    // Update interval if window size changes (responsive)
+    const handleResize = () => {
+      const newPollInterval = detectMobile() ? getMobilePollInterval() : getDesktopPollInterval();
+      
+      // Only update if it changed
+      if (newPollInterval !== pollInterval) {
+        pollInterval = newPollInterval;
+        console.log(`Updating history polling interval to ${pollInterval/1000}s (${detectMobile() ? 'mobile' : 'desktop'})`);
+        
+        // Clear and reset interval
+        clearInterval(interval);
+        interval = setInterval(() => {
+          if (!isRefreshing && !isLoading) {
+            console.log('Auto-refreshing chat history (background)');
+            fetchChatHistory(true, false);
+          }
+        }, pollInterval);
+      }
+    };
+    
+    // Listen for resize events
+    if (typeof window !== 'undefined') {
+      window.addEventListener('resize', handleResize);
+    }
+    
+    return () => {
+      clearInterval(interval);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('resize', handleResize);
+      }
+    };
   }, [user, fetchChatHistory, isRefreshing, isLoading]);
   
   // Manual refresh function for the refresh button

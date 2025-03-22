@@ -43,7 +43,7 @@ const nextConfig = {
       }
     ];
   },
-  webpack: (config, { isServer }) => {
+  webpack: (config, { isServer, dev }) => {
     // Fix for ESM modules
     if (!isServer) {
       config.resolve.fallback = {
@@ -66,6 +66,22 @@ const nextConfig = {
       ...config.resolve.alias,
       // Add any specific aliases to optimize imports here
     };
+    
+    // Optimize dev experience by reducing HMR frequency
+    if (dev) {
+      // Reduce the frequency of HMR checks to improve development performance
+      config.watchOptions = {
+        ...config.watchOptions,
+        aggregateTimeout: 300, // Delay rebuild after the first change
+        poll: false, // Use native file system events instead of polling
+        ignored: [
+          '**/node_modules/**',
+          '**/.git/**',
+          '**/dist/**',
+          '**/.next/**',
+        ],
+      };
+    }
     
     return config;
   },

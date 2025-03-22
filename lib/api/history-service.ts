@@ -7,7 +7,8 @@ let pendingRequests: Record<string, Promise<Chat[]> | null> = {};
 
 // Track last refresh time
 let lastRefreshTime = 0;
-const REFRESH_INTERVAL = 30 * 1000; // 30 seconds
+const REFRESH_INTERVAL = 60 * 1000; // 60 seconds (increased from 30)
+const CACHE_TTL = 120 * 1000; // 2 minutes cache TTL
 
 /**
  * History service provides methods for fetching and managing chat history
@@ -27,14 +28,6 @@ export const historyService = {
       // Create a unique cache key based on user
       const cacheKey = 'chat_history';
       
-      // Log fetching attempt
-      console.log(`[History:${operationId}] Fetching chat history`, {
-        forceRefresh,
-        cacheKey,
-        hasPendingRequest: !!pendingRequests[cacheKey],
-        timestamp: new Date().toISOString()
-      });
-      
       // Track this refresh time regardless of success/failure
       lastRefreshTime = Date.now();
       
@@ -50,23 +43,38 @@ export const historyService = {
         }
       }
       
+      // Log fetching attempt
+      console.log(`[History:${operationId}] Fetching chat history`, {
+        forceRefresh,
+        cacheKey,
+        hasPendingRequest: !!pendingRequests[cacheKey],
+        timestamp: new Date().toISOString()
+      });
+      
       // Try cache first if not forcing refresh
       if (!forceRefresh) {
         try {
-          const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
+          // Use the TTL parameter of the client cache (2 minutes)
+          const cachedData = clientCache.get(cacheKey, CACHE_TTL) as Chat[] | undefined;
           if (cachedData && cachedData.length > 0) {
             console.log(`[History:${operationId}] Using cached data with ${cachedData.length} items`);
             
-            // Even when using cache, schedule a background refresh for next time
-            setTimeout(() => {
-              console.log(`[History:${operationId}] Background refresh after using cache`);
-              this.fetchHistoryFromAPI(cacheKey, `${operationId}-background`)
-                .then(freshData => {
-                  // Update cache with fresh data
-                  clientCache.set(cacheKey, freshData);
-                })
-                .catch(err => console.error('Background refresh failed:', err));
-            }, 100);
+            // Check if we need a background refresh (only if not accessed recently)
+            const timeSinceLastRefresh = Date.now() - lastRefreshTime;
+            if (timeSinceLastRefresh > REFRESH_INTERVAL) {
+              console.log(`[History:${operationId}] Starting background refresh after using cache (${Math.round(timeSinceLastRefresh / 1000)}s since last refresh)`);
+              // Schedule a background refresh after a short delay
+              setTimeout(() => {
+                this.fetchHistoryFromAPI(cacheKey, `${operationId}-background`)
+                  .then(freshData => {
+                    // Update cache with fresh data
+                    clientCache.set(cacheKey, freshData);
+                  })
+                  .catch(err => console.error('Background refresh failed:', err));
+              }, 100);
+            } else {
+              console.log(`[History:${operationId}] Skipping background refresh (only ${Math.round(timeSinceLastRefresh / 1000)}s since last refresh)`);
+            }
             
             return cachedData;
           } else {
@@ -112,7 +120,7 @@ export const historyService = {
     try {
       // Add timeout to avoid hanging requests
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout (increased from 10)
       
       const response = await fetch('/api/history', {
         method: 'GET',
@@ -338,51 +346,131 @@ export const historyService = {
   async createNewSession(): Promise<{ id: string; success: boolean; error?: string }> {
     const operationId = Math.random().toString(36).substring(2, 10);
     const sessionId = randomUUID();
+    
+    // Track pending session creation requests
+    const pendingKey = `creating_session_${sessionId}`;
+    
+    // Check if there's already a request in flight for this session
+    if (typeof window !== 'undefined' && (window as any)[pendingKey]) {
+      console.log(`[History:${operationId}] Reusing existing session creation request for ${sessionId}`);
+      return (window as any)[pendingKey];
+    }
 
     console.log(`[History:${operationId}] Creating new chat session`, { sessionId });
     
     try {
-      const response = await fetch('/api/chat/session', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          id: sessionId,
-          title: 'New Conversation', // Default title
-          agentId: 'default',
-          deepSearchEnabled: false
-        })
-      });
-      
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      // Store the promise for potential reuse
+      if (typeof window !== 'undefined') {
+        (window as any)[pendingKey] = (async () => {
+          try {
+            const response = await fetch('/api/chat/session', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                id: sessionId,
+                title: 'New Conversation', // Default title
+                agentId: 'default',
+                deepSearchEnabled: false
+              })
+            });
+            
+            if (!response.ok) {
+              const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+              
+              console.error(`[History:${operationId}] Failed to create chat session:`, { 
+                statusCode: response.status,
+                statusText: response.statusText,
+                errorData,
+                sessionId
+              });
+              
+              return { 
+                id: sessionId, 
+                success: false, 
+                error: errorData.error || `Server error: ${response.status}` 
+              };
+            }
+            
+            const data = await response.json();
+            
+            console.log(`[History:${operationId}] Successfully created chat session`, {
+              sessionId,
+              responseData: data
+            });
+            
+            // Invalidate chat history cache to ensure the new session shows up
+            this.invalidateCache();
+            
+            return { id: sessionId, success: true };
+          } catch (error) {
+            console.error(`[History:${operationId}] Error creating new chat session:`, {
+              error,
+              sessionId,
+              message: error instanceof Error ? error.message : String(error)
+            });
+            
+            return { 
+              id: sessionId, 
+              success: false, 
+              error: error instanceof Error ? error.message : String(error)
+            };
+          } finally {
+            // Clear the pending request reference after a delay
+            setTimeout(() => {
+              if (typeof window !== 'undefined') {
+                (window as any)[pendingKey] = null;
+              }
+            }, 1000);
+          }
+        })();
         
-        console.error(`[History:${operationId}] Failed to create chat session:`, { 
-          statusCode: response.status,
-          statusText: response.statusText,
-          errorData,
-          sessionId
+        return (window as any)[pendingKey];
+      } else {
+        // Server-side fallback
+        const response = await fetch('/api/chat/session', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            id: sessionId,
+            title: 'New Conversation', // Default title
+            agentId: 'default',
+            deepSearchEnabled: false
+          })
         });
         
-        return { 
-          id: sessionId, 
-          success: false, 
-          error: errorData.error || `Server error: ${response.status}` 
-        };
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+          
+          console.error(`[History:${operationId}] Failed to create chat session:`, { 
+            statusCode: response.status,
+            statusText: response.statusText,
+            errorData,
+            sessionId
+          });
+          
+          return { 
+            id: sessionId, 
+            success: false, 
+            error: errorData.error || `Server error: ${response.status}` 
+          };
+        }
+        
+        const data = await response.json();
+        
+        console.log(`[History:${operationId}] Successfully created chat session`, {
+          sessionId,
+          responseData: data
+        });
+        
+        // Invalidate chat history cache to ensure the new session shows up
+        this.invalidateCache();
+        
+        return { id: sessionId, success: true };
       }
-      
-      const data = await response.json();
-      
-      console.log(`[History:${operationId}] Successfully created chat session`, {
-        sessionId,
-        responseData: data
-      });
-      
-      // Invalidate chat history cache to ensure the new session shows up
-      this.invalidateCache();
-      
-      return { id: sessionId, success: true };
     } catch (error) {
       console.error(`[History:${operationId}] Error creating new chat session:`, {
         error,
