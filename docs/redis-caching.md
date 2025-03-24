@@ -277,6 +277,184 @@ async setDeepSearch(tenantId: string, query: string, result: any): Promise<void>
 }
 ```
 
+## Perplexity DeepSearch Caching
+
+### Overview
+
+Our application uses Perplexity's API for enhanced web search capabilities (DeepSearch). Since these API calls are expensive, rate-limited, and relatively stable in results over short time periods, we implement dedicated caching for DeepSearch results with specialized configuration.
+
+### DeepSearch Implementation
+
+The DeepSearch feature is implemented as a wrapper around Perplexity's API, which provides advanced web search capabilities:
+
+```typescript
+export async function callPerplexityAPI(query: string): Promise<{
+  content: string;
+  model: string;
+  timing: { total: number };
+}> {
+  // Implementation details in lib/agents/tools/perplexity/api.ts
+}
+```
+
+This function makes requests to our serverless API route (`/api/perplexity/route.ts`), which in turn calls Perplexity's API with appropriate authentication and parameters.
+
+### Cache Key Strategy
+
+The DeepSearch cache implementation uses a specialized naming convention and hashing strategy:
+
+```typescript
+// In lib/cache/redis-client.ts or lib/vector/rag-cache.ts
+async getDeepSearch(tenantId: string, query: string): Promise<any> {
+  // Generate a consistent hash from the query to handle long queries
+  const hash = await hashKey(query);
+  
+  // Create a structured cache key with tenant isolation and type prefix
+  const key = `${tenantId}:deepsearch:${hash}`;
+  
+  return this.get(key);
+}
+
+async setDeepSearch(tenantId: string, query: string, result: any): Promise<void> {
+  const hash = await hashKey(query);
+  const key = `${tenantId}:deepsearch:${hash}`;
+  
+  // Use a shorter TTL (1 hour) for DeepSearch results
+  // Web search results become stale faster than other content
+  await this.set(key, result, CACHE_CONFIG.shortTtl);
+}
+```
+
+Key characteristics:
+- Tenant isolation with a prefix (`tenantId:deepsearch:`)
+- Uses the hashed query to generate a consistent, fixed-length key
+- Applies a shorter TTL (1 hour) compared to other cached content (12 hours)
+
+### Implementation in Chat Route
+
+The DeepSearch caching is integrated in the chat API route (`app/api/chat/route.ts`) with the following pattern:
+
+```typescript
+// Simplified implementation from app/api/chat/route.ts
+if (deepSearchEnabled) {
+  // Create a meaningful operation ID for tracing
+  const operationId = `deepsearch-${Date.now().toString(36)}`;
+  const query = lastUserMessage.content;
+  
+  try {
+    // First check cache for existing results
+    const redisCache = new RedisCache(); // or imported instance
+    const cachedResults = await redisCache.getDeepSearch('global', query);
+    
+    if (cachedResults) {
+      // Cache hit - use the cached results
+      toolManager.registerToolResult('Deep Search', cachedResults);
+      
+      edgeLogger.info('Using cached DeepSearch results', {
+        operation: 'deep_search_cache_hit',
+        operationId,
+        contentLength: typeof cachedResults === 'string' 
+          ? cachedResults.length 
+          : JSON.stringify(cachedResults).length
+      });
+      
+      // Notify client that DeepSearch is complete
+      eventHandler({
+        type: 'deepSearch',
+        status: 'completed',
+        details: `Using cached results (${
+          typeof cachedResults === 'string' 
+            ? cachedResults.length 
+            : JSON.stringify(cachedResults).length
+        } characters)`
+      });
+    } else {
+      // Cache miss - call Perplexity API
+      edgeLogger.info('No cached DeepSearch results found', {
+        operation: 'deep_search_cache_miss',
+        operationId
+      });
+      
+      // Call Perplexity API with timeout protection
+      const deepSearchResponse = await Promise.race([
+        callPerplexityAPI(query),
+        // Timeout promise
+      ]);
+      
+      const deepSearchContent = deepSearchResponse.content;
+      
+      if (deepSearchContent && 
+          deepSearchContent.length > 0 && 
+          !deepSearchContent.includes("timed out")) {
+        
+        // Store successful results in cache
+        await redisCache.setDeepSearch('global', query, deepSearchContent);
+        
+        edgeLogger.info('Cached new DeepSearch results', {
+          operation: 'deep_search_cache_set',
+          operationId,
+          contentLength: deepSearchContent.length,
+          ttl: CACHE_CONFIG.shortTtl
+        });
+        
+        // Use the results
+        toolManager.registerToolResult('Deep Search', deepSearchContent);
+      }
+    }
+  } catch (error) {
+    // Error handling...
+  }
+}
+```
+
+### Performance Benefits
+
+The DeepSearch caching system provides several key benefits:
+
+1. **Reduced API Costs**: By reusing previous search results, we minimize the number of calls to the paid Perplexity API.
+
+2. **Faster Response Times**: Cache hits deliver results immediately (typically <50ms) compared to new API calls (3-15 seconds).
+
+3. **Rate Limit Protection**: Caching helps avoid exceeding Perplexity's rate limits during high traffic periods.
+
+4. **Consistent Answers**: Users asking similar questions within the cache window receive consistent information.
+
+### Data Structure
+
+DeepSearch results are stored as plain strings to simplify processing:
+
+```typescript
+// Example cached DeepSearch content (abbreviated)
+"According to recent market research data for portrait photographers in Miami, the competitive landscape includes several established studios specializing in boudoir photography. Top competitors include Miami Boudoir Studio (specializing in empowering women-focused photography with packages ranging $500-2000), Intimate Photography Miami (known for luxury boudoir sessions starting at $750), and South Beach Boudoir (targeting high-end clients with average bookings of $1500+). Most successful studios emphasize privacy, comfort-focused studios, and specialized lighting techniques..."
+```
+
+### Monitoring and Optimization
+
+The system includes comprehensive logging for DeepSearch cache operations:
+
+```typescript
+// Logging for cache hit
+edgeLogger.info('Using cached DeepSearch results', {
+  operation: 'deep_search_cache_hit',
+  operationId,
+  queryLength: query.length,
+  cachedResultLength: cachedContent.length,
+  age: Date.now() - (parsedMetadata?.timestamp || Date.now()),
+  ttlRemaining: 'estimated based on creation time'
+});
+
+// Logging for cache set
+edgeLogger.info('Cached new DeepSearch results', {
+  operation: 'deep_search_cache_set',
+  operationId,
+  queryLength: query.length,
+  resultLength: deepSearchContent.length,
+  ttl: CACHE_CONFIG.shortTtl
+});
+```
+
+These logs help optimize cache TTL values and diagnose any issues with the DeepSearch functionality.
+
 ## Integration with RAG (Retrieval Augmented Generation)
 
 Our RAG system in `lib/vector/documentRetrieval.ts` uses Redis caching to avoid duplicate vector searches. Here's how it works:
