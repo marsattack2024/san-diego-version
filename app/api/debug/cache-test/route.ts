@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { redisCache } from '../../../../lib/cache/redis-client';
 import { edgeLogger } from '../../../../lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '../../../../lib/logger/constants';
+import { Redis } from '@upstash/redis';
 
 /**
  * API endpoint to test the Redis caching system.
@@ -9,6 +10,36 @@ import { LOG_CATEGORIES } from '../../../../lib/logger/constants';
  */
 export async function GET(request: NextRequest) {
   try {
+    // Use Redis.fromEnv() for consistent initialization across the codebase
+    const redis = Redis.fromEnv();
+    
+    // Perform a connection test first
+    try {
+      await redis.set('connection-test', 'ok', { ex: 60 });
+      const testResult = await redis.get('connection-test');
+      
+      if (testResult !== 'ok') {
+        throw new Error('Connection test failed');
+      }
+      
+      // Log successful connection
+      edgeLogger.info('Redis connection test successful for cache test endpoint', {
+        category: LOG_CATEGORIES.SYSTEM
+      });
+    } catch (connError) {
+      edgeLogger.error('Redis connection test failed for cache test endpoint', {
+        category: LOG_CATEGORIES.SYSTEM,
+        error: connError instanceof Error ? connError.message : String(connError)
+      });
+      
+      // Return error response if the Redis connection fails
+      return NextResponse.json({
+        success: false,
+        error: 'Redis connection failed',
+        details: connError instanceof Error ? connError.message : String(connError)
+      }, { status: 500 });
+    }
+    
     // Generate a unique key for testing
     const testKey = `test:cache:${Date.now()}`;
     
@@ -36,21 +67,26 @@ export async function GET(request: NextRequest) {
       testKey
     });
     
-    // Set the test object in cache
-    await redisCache.set(testKey, testObject);
+    // Set the test object in cache - direct Redis usage
+    await redis.set(testKey, JSON.stringify(testObject), { ex: 60 });
     
     // Get the object back
     let retrievedObject = null;
     let retrievalError = null;
     
     try {
-      retrievedObject = await redisCache.get(testKey);
+      const rawResult = await redis.get(testKey);
+      if (rawResult && typeof rawResult === 'string') {
+        retrievedObject = JSON.parse(rawResult);
+      } else {
+        retrievedObject = rawResult;
+      }
     } catch (error) {
       retrievalError = error instanceof Error ? error.message : String(error);
     }
     
     // Clean up
-    await redisCache.set(testKey, null, 1); // Short TTL for cleanup
+    await redis.set(testKey, null, { ex: 1 }); // Short TTL for cleanup
     
     // JSON string to test serialization
     const jsonString = JSON.stringify({ data: "This is a JSON string" });
@@ -61,13 +97,14 @@ export async function GET(request: NextRequest) {
     let jsonStringError = null;
     
     try {
-      await redisCache.set(jsonStringKey, jsonString);
-      retrievedJsonString = await redisCache.get(jsonStringKey);
+      await redis.set(jsonStringKey, jsonString, { ex: 60 });
+      const result = await redis.get(jsonStringKey);
+      retrievedJsonString = result;
     } catch (error) {
       jsonStringError = error instanceof Error ? error.message : String(error);
     }
     
-    await redisCache.set(jsonStringKey, null, 1); // Clean up
+    await redis.set(jsonStringKey, null, { ex: 1 }); // Clean up
     
     // Test a regular string
     const regularString = "This is a regular string";
@@ -77,13 +114,13 @@ export async function GET(request: NextRequest) {
     let regularStringError = null;
     
     try {
-      await redisCache.set(regularStringKey, regularString);
-      retrievedRegularString = await redisCache.get(regularStringKey);
+      await redis.set(regularStringKey, regularString, { ex: 60 });
+      retrievedRegularString = await redis.get(regularStringKey);
     } catch (error) {
       regularStringError = error instanceof Error ? error.message : String(error);
     }
     
-    await redisCache.set(regularStringKey, null, 1); // Clean up
+    await redis.set(regularStringKey, null, { ex: 1 }); // Clean up
     
     // Prepare response data
     const responseData = {
@@ -110,7 +147,7 @@ export async function GET(request: NextRequest) {
         error: regularStringError
       },
       cacheParseError: null,
-      timeToLive: 1 // 1 second TTL for test keys
+      timeToLive: 60 // 60 second TTL for test keys
     };
     
     return NextResponse.json(responseData);
