@@ -5,6 +5,7 @@ import { type AgentType } from '@/lib/agents/prompts';
 import { createServerClient } from '@/lib/supabase/server';
 import { cookies } from 'next/headers';
 import { z } from 'zod';
+import { Redis } from '@upstash/redis';
 
 // Import only validation & utility modules at the top level
 import { extractUrls } from '@/lib/chat/url-utils';
@@ -12,12 +13,8 @@ import { ToolManager } from '@/lib/chat/tool-manager';
 import { buildAIMessages } from '@/lib/chat/prompt-builder';
 import { createResponseValidator } from '@/lib/chat/response-validator';
 
-// Import the caching and scraping middleware
-import { cacheMiddleware } from '@/lib/cache/ai-middleware';
-import { urlScrapingMiddleware } from '@/lib/middleware/url-scraping-middleware';
-
 // Import the wrapLanguageModel function
-import { wrapLanguageModel } from 'ai';
+import { streamText } from 'ai';
 
 // Allow streaming responses up to 120 seconds instead of 60
 export const maxDuration = 120;
@@ -248,23 +245,22 @@ export async function POST(req: Request) {
         tool: 'RAG'
       });
       
-      // 3. Web Scraper - Remove automatic preprocessing and URL instructions
-      // We now use the urlScrapingMiddleware instead of this section
+      // 3. Web Scraper - Detect and process URLs directly in the route handler
       if (urls.length > 0) {
-        // Just log they were detected, middleware will handle the scraping
+        // Log URLs detected in the user message
         edgeLogger.info('URLs detected in user message', { 
           urlCount: urls.length,
           firstUrl: urls[0],
-          message: "These will be processed via middleware auto-scraping rather than explicit AI tool calls"
+          message: "These will be processed directly via our Puppeteer scraper"
         });
       }
       
-      // Memory usage checkpoint after Web Scraper
+      // Memory usage checkpoint after URL detection
       edgeLogger.debug('Memory checkpoint after URL detection', {
         elapsedMs: Date.now() - startTime,
         tool: 'URL detection',
         automaticProcessing: true,
-        message: "URLs will be processed via scraping middleware"
+        message: "URLs will be processed directly in the route handler"
       });
       
       // 4. Deep Search - LOWEST PRIORITY (if enabled)
@@ -709,58 +705,187 @@ export async function POST(req: Request) {
           systemPromptSize: aiMessages[0]?.content?.length || 0
         });
         
-        // Create a wrapped model with our middlewares - ⚠️ Note: Order matters here!
-        // URL scraping should happen before caching since it modifies the prompt
-        const wrappedModel = wrapLanguageModel({
-          model: openai('gpt-4o'),
-          middleware: [
-            // First, process URLs and enhance the prompt
-            urlScrapingMiddleware,
-            // Then, cache the result based on the enhanced prompt
-            cacheMiddleware
-          ]
-        });
-        
-        // Log that we're using middleware-based URL scraping
-        edgeLogger.info('Using middleware for URL scraping', {
-          middlewareOrder: ['urlScrapingMiddleware', 'cacheMiddleware'],
-          messageCount: aiMessages.length,
-          systemMessageSize: aiMessages[0]?.content?.length || 0,
-          containsUrls: urls.length > 0,
-          urlCount: urls.length
-        });
-
-        // Diagnostic log for URL detection
+        // Process detected URLs directly
         if (urls.length > 0) {
-          edgeLogger.info('URLs detected that should be processed by middleware', {
-            urlsToScrape: urls.slice(0, 3), // Log up to 3 URLs
-            lastUserMessage: lastUserMessage.content.substring(0, 100) + (lastUserMessage.content.length > 100 ? '...' : '')
+          edgeLogger.info('Processing detected URLs directly', {
+            urlCount: urls.length,
+            urls: urls.slice(0, 3) // Log up to 3 URLs
           });
           
-          // Add a special marker in the system message to help middleware find URLs
-          // This is a workaround for the tokenized prompt issue
-          if (aiMessages.length > 0 && aiMessages[0].role === 'system' && typeof aiMessages[0].content === 'string') {
-            // Include URLs in system message for middleware to find
-            aiMessages[0].content += `\n\n<!-- URL_SCRAPING_MIDDLEWARE_MARKER: ${JSON.stringify({
-              urls: urls.slice(0, 3),
-              userMessage: lastUserMessage.content
-            })} -->\n\n`;
+          // Import the necessary tools for URL scraping
+          const { callPuppeteerScraper, validateAndSanitizeUrl } = await import('@/lib/agents/tools/web-scraper-tool');
+          const { ensureProtocol } = await import('@/lib/chat/url-utils');
+          
+          // Function to format scraped content in a structured way
+          function formatScrapedContent(content: any): string {
+            const { title, description, content: mainContent, url } = content;
             
-            edgeLogger.info('Added URL marker to system message for middleware', {
-              urlCount: urls.length
+            return `
+# SCRAPED CONTENT FROM URL: ${url}
+
+## Title: ${title || 'Untitled Page'}
+
+${description ? `## Description:\n${description}\n` : ''}
+
+## Main Content:
+${mainContent}
+
+---
+SOURCE: ${url}
+`.trim();
+          }
+          
+          try {
+            // Process the first URL (limit to avoid overwhelming the response)
+            const fullUrl = ensureProtocol(urls[0]);
+            const validUrl = validateAndSanitizeUrl(fullUrl);
+            
+            // Check cache first - Redis requires explicit JSON serialization
+            const cacheKey = `scrape:${validUrl}`;
+            const redis = Redis.fromEnv();
+            let result;
+            
+            try {
+              const cachedContentStr = await redis.get(cacheKey);
+              if (cachedContentStr) {
+                // Parse cached content with error handling
+                try {
+                  const parsedContent = JSON.parse(cachedContentStr as string);
+                  
+                  // Validate the parsed content has the required fields
+                  if (parsedContent && typeof parsedContent === 'object' && 
+                      parsedContent.content && parsedContent.title && parsedContent.url) {
+                    result = parsedContent;
+                    edgeLogger.info('Redis cache hit for URL', {
+                      url: validUrl,
+                      cacheHit: true,
+                      contentLength: result.content.length,
+                      cacheSource: 'redis',
+                      durationMs: Date.now() - startTime
+                    });
+                  } else {
+                    throw new Error('Missing required fields in cached content');
+                  }
+                } catch (parseError: unknown) {
+                  edgeLogger.error('Error parsing cached content', {
+                    url: validUrl,
+                    error: parseError instanceof Error ? parseError.message : String(parseError),
+                    cachedContentSample: typeof cachedContentStr === 'string' 
+                      ? cachedContentStr.substring(0, 100) + '...' 
+                      : `type: ${typeof cachedContentStr}`
+                  });
+                  // Continue with scraping since parsing failed
+                }
+              }
+            } catch (cacheError) {
+              edgeLogger.error('Error checking Redis cache', {
+                url: validUrl,
+                error: cacheError instanceof Error ? cacheError.message : String(cacheError)
+              });
+            }
+            
+            // If not in cache or parsing failed, perform scraping
+            if (!result) {
+              // Call the puppeteer scraper with timeout protection
+              edgeLogger.info('No Redis cache hit - calling puppeteer scraper', { url: validUrl });
+              
+              const scrapingPromise = callPuppeteerScraper(validUrl);
+              const timeoutPromise = new Promise<never>((_, reject) => {
+                setTimeout(() => reject(new Error('Scraping timed out')), 15000);
+              });
+              
+              const scraperResult = await Promise.race([scrapingPromise, timeoutPromise]);
+              
+              // Handle potential string responses from the scraper
+              // This ensures we always have a proper object before stringifying
+              try {
+                if (typeof scraperResult === 'string') {
+                  // If it's a JSON string, parse it
+                  result = JSON.parse(scraperResult);
+                  edgeLogger.info('Parsed string result from scraper', {
+                    resultType: 'json-string',
+                    parsed: true
+                  });
+                } else if (scraperResult && typeof scraperResult === 'object') {
+                  // If it's already an object, use it directly
+                  result = scraperResult;
+                  edgeLogger.info('Using object result from scraper', {
+                    resultType: 'object'
+                  });
+                } else {
+                  throw new Error(`Invalid scraper result: ${typeof scraperResult}`);
+                }
+                
+                // Validate the result has the required fields
+                if (!result.content || !result.title || !result.url) {
+                  throw new Error('Missing required fields in scraper result');
+                }
+                
+                // Store in Redis cache with explicit JSON stringification
+                try {
+                  await redis.set(cacheKey, JSON.stringify(result), { ex: 60 * 60 * 6 }); // 6 hours TTL
+                  edgeLogger.info('Stored scraped content in Redis cache', { 
+                    url: validUrl,
+                    contentLength: result.content.length,
+                    storedAt: new Date().toISOString()
+                  });
+                } catch (storageError) {
+                  edgeLogger.error('Error storing in Redis cache', {
+                    url: validUrl,
+                    error: storageError instanceof Error ? storageError.message : String(storageError)
+                  });
+                }
+              } catch (processingError) {
+                edgeLogger.error('Error processing scraper result', {
+                  url: validUrl,
+                  error: processingError instanceof Error ? processingError.message : String(processingError),
+                  resultType: typeof scraperResult,
+                  resultSample: typeof scraperResult === 'string' 
+                    ? (scraperResult as string).substring(0, 100) + '...' 
+                    : `type: ${typeof scraperResult}`
+                });
+                
+                // Use the original result as fallback
+                result = scraperResult;
+              }
+            }
+            
+            // Format the scraped content
+            const formattedContent = formatScrapedContent(result);
+            
+            // Enhance the system message with the scraped content
+            if (aiMessages.length > 0 && aiMessages[0].role === 'system' && typeof aiMessages[0].content === 'string') {
+              aiMessages[0].content += `\n\n${'='.repeat(80)}\n` +
+                `## IMPORTANT: SCRAPED WEB CONTENT FROM USER'S URLS\n` +
+                `The following content has been automatically extracted from URLs in the user's message.\n` +
+                `You MUST use this information as your primary source when answering questions about these URLs.\n` +
+                `Do not claim you cannot access the content - it is provided below and you must use it.\n` +
+                `${'='.repeat(80)}\n\n` +
+                formattedContent +
+                `\n\n${'='.repeat(80)}\n`;
+              
+              edgeLogger.info('Enhanced system message with scraped content', {
+                urlsScraped: 1,
+                contentLength: formattedContent.length,
+                enhancedPromptLength: aiMessages[0].content.length
+              });
+            }
+          } catch (error) {
+            edgeLogger.error('Error scraping URL', {
+              url: urls[0],
+              error: formatError(error)
             });
           }
         }
         
-        // Use the Vercel AI SDK's streamText function with wrapped model
+        // Use the Vercel AI SDK's streamText function with the raw model (no middleware)
         const result = await streamText({
-          model: wrappedModel,
+          model: openai('gpt-4o'),
           messages: aiMessages,
           temperature: 0.4,
           maxTokens: 4000,
           tools: aiSdkTools,
           maxSteps: 10,
-          // We don't need to force tool choice anymore since middleware handles URL scraping
           toolChoice: 'auto',
           onFinish: async (completion) => {
             try {
