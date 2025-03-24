@@ -327,8 +327,8 @@ export async function buildEnhancedSystemPrompt(
               recentMessages.forEach((msg: ChatHistoryItem) => {
                 // Format the message content to be concise
                 let formattedContent = msg.content;
-                if (formattedContent.length > 150) {
-                  formattedContent = formattedContent.substring(0, 150) + '...';
+                if (formattedContent.length > 1000) {
+                  formattedContent = formattedContent.substring(0, 1000) + '...';
                 }
                 
                 // Add role-specific formatting
