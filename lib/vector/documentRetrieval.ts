@@ -1,51 +1,104 @@
-import vectorLogger from '../logger/vector-logger';
+import { logger } from '../logger';
 import type { RetrievedDocument } from '../../types/vector/vector.js';
 import { supabase } from '../db';
 import { createEmbedding } from './embeddings';
 
-// Simple in-memory cache for vector search results
+// Cache configuration
+const CACHE_CONFIG = {
+  maxSize: 100,          // Maximum number of entries in cache
+  ttl: 15 * 60 * 1000,  // Time-to-live: 15 minutes (increased from 5)
+  similarityThreshold: 0.92, // Threshold for semantic deduplication
+  warmupInterval: 5 * 60 * 1000 // Warm up cache every 5 minutes
+};
+
 // Cache structure: Map<queryHash, {documents, timestamp, metrics}>
 interface CacheEntry {
   documents: RetrievedDocument[];
   metrics: DocumentSearchMetrics;
   timestamp: number;
+  embedding?: number[]; // Store query embedding for similarity checks
+  accessCount: number;
 }
 
-// Cache configuration
-const CACHE_SIZE_LIMIT = 100; // Maximum number of entries in cache
-const CACHE_TTL = 5 * 60 * 1000; // Time-to-live: 5 minutes (in milliseconds)
 const vectorSearchCache = new Map<string, CacheEntry>();
 
-// Simple cache cleanup function
-if (typeof setInterval !== 'undefined') {
-  setInterval(() => {
-    const now = Date.now();
-    let expiredCount = 0;
+// Cache statistics
+const cacheStats = {
+  hits: 0,
+  misses: 0,
+  semanticHits: 0,
+  warmups: 0,
+  lastWarmup: 0
+};
+
+// Find semantically similar cached query
+async function findSimilarCachedQuery(queryEmbedding: number[]): Promise<CacheEntry | null> {
+  for (const entry of vectorSearchCache.values()) {
+    if (!entry.embedding) continue;
     
-    // Remove expired entries
-    for (const [key, entry] of vectorSearchCache.entries()) {
-      if (now - entry.timestamp > CACHE_TTL) {
-        vectorSearchCache.delete(key);
-        expiredCount++;
+    const similarity = cosineSimilarity(queryEmbedding, entry.embedding);
+    if (similarity >= CACHE_CONFIG.similarityThreshold) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+// Cosine similarity calculation
+function cosineSimilarity(a: number[], b: number[]): number {
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+  
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+// Cache warming function
+async function warmCache() {
+  const now = Date.now();
+  if (now - cacheStats.lastWarmup < CACHE_CONFIG.warmupInterval) {
+    return; // Skip if last warmup was too recent
+  }
+  
+  try {
+    // Get most frequently accessed entries
+    const entries = Array.from(vectorSearchCache.entries())
+      .sort((a, b) => b[1].accessCount - a[1].accessCount)
+      .slice(0, 5); // Warm up top 5 most accessed queries
+    
+    for (const [hash, entry] of entries) {
+      if (vectorSearchCache.has(hash)) {
+        // Only warm up if close to expiration
+        const timeLeft = now - entry.timestamp;
+        if (timeLeft > CACHE_CONFIG.ttl / 2) {
+          const query = hash.split(':')[0]; // Extract original query from hash
+          await findSimilarDocumentsOptimized(query, { skipCache: true });
+          cacheStats.warmups++;
+        }
       }
     }
     
-    // If we're over the size limit, remove oldest entries
-    if (vectorSearchCache.size > CACHE_SIZE_LIMIT) {
-      const entries = Array.from(vectorSearchCache.entries());
-      entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
-      
-      const toRemove = entries.slice(0, entries.length - CACHE_SIZE_LIMIT);
-      toRemove.forEach(([key]) => {
-        vectorSearchCache.delete(key);
-        expiredCount++;
-      });
-    }
+    cacheStats.lastWarmup = now;
     
-    if (expiredCount > 0 && process.env.NODE_ENV === 'development') {
-      console.log(`[Vector Cache] Cleaned up ${expiredCount} entries, current size: ${vectorSearchCache.size}`);
-    }
-  }, 60 * 1000); // Run every minute
+    // Log cache statistics
+    logger.info('Vector cache statistics', {
+      ...cacheStats,
+      cacheSize: vectorSearchCache.size
+    });
+  } catch (error) {
+    logger.error('Vector cache warmup failed', { error });
+  }
+}
+
+// Set up periodic cache warming
+if (typeof setInterval !== 'undefined') {
+  setInterval(warmCache, CACHE_CONFIG.warmupInterval);
 }
 
 // Simple hash function for query + options
@@ -71,7 +124,8 @@ export interface DocumentSearchMetrics {
   retrievalTimeMs: number;
   isSlowQuery: boolean;
   usedFallbackThreshold?: boolean;
-  fromCache?: boolean; // New field to track cache hits
+  fromCache?: boolean;
+  semanticMatch?: boolean; // Add support for semantic match indicator
 }
 
 interface SupabaseDocument {
@@ -137,7 +191,7 @@ export async function findSimilarDocumentsWithPerformance(
     }
     
     const isSlowQuery = retrievalTimeMs > 500; // Consider queries taking more than 500ms as slow
-    logQueryPerformance(queryText, retrievalTimeMs, count, sessionId, isSlowQuery);
+    logQueryPerformance(queryText, retrievalTimeMs, count, sessionId);
     
     return {
       documents,
@@ -154,7 +208,8 @@ export async function findSimilarDocumentsWithPerformance(
     const endTime = performance.now();
     const retrievalTimeMs = Math.round(endTime - startTime);
     
-    vectorLogger.logVectorError('vector-search', error, {
+    logger.error('Vector search failed', {
+      error,
       queryLength: queryText.length,
       retrievalTimeMs,
       sessionId,
@@ -164,12 +219,14 @@ export async function findSimilarDocumentsWithPerformance(
   }
 }
 
-function logQueryPerformance(queryText: string, retrievalTimeMs: number, count: number, sessionId: string, isSlowQuery: boolean) {
-  vectorLogger.logVectorQuery(queryText, {
+function logQueryPerformance(queryText: string, retrievalTimeMs: number, count: number, sessionId: string) {
+  logger.info('Vector query performance', {
+    queryLength: queryText.length,
     retrievalTimeMs,
     documentCount: count,
     sessionId,
-  }, count, retrievalTimeMs);
+    slow: retrievalTimeMs > 500
+  });
 }
 
 /**
@@ -194,89 +251,67 @@ export async function findSimilarDocumentsOptimized(
     const cacheKey = hashQueryOptions(processedQuery, options);
     const cachedResult = vectorSearchCache.get(cacheKey);
     
-    if (cachedResult && (Date.now() - cachedResult.timestamp) < CACHE_TTL) {
-      // Add cache hit information to metrics
-      const cachedMetrics = {
-        ...cachedResult.metrics,
-        fromCache: true,
-        retrievalTimeMs: Math.round(performance.now() - startTime) // Measure cache retrieval time
-      };
-      
-      // Log cache hit
-      vectorLogger.logVectorQuery(queryText, {
-        fromCache: true,
-        originalRetrievalTimeMs: cachedResult.metrics.retrievalTimeMs,
-        cacheRetrievalTimeMs: cachedMetrics.retrievalTimeMs,
-        sessionId,
-      }, cachedResult.documents.length, cachedMetrics.retrievalTimeMs);
-      
+    if (cachedResult) {
+      const timeLeft = Date.now() - cachedResult.timestamp;
+      if (timeLeft < CACHE_CONFIG.ttl) {
+        // Update access count
+        cachedResult.accessCount++;
+        vectorSearchCache.set(cacheKey, cachedResult);
+        
+        cacheStats.hits++;
+        return {
+          documents: cachedResult.documents,
+          metrics: {
+            ...cachedResult.metrics,
+            fromCache: true,
+            retrievalTimeMs: Math.round(performance.now() - startTime)
+          }
+        };
+      }
+    }
+    
+    // Try to find semantically similar cached query
+    const queryEmbedding = await createEmbedding(processedQuery);
+    const similarEntry = await findSimilarCachedQuery(queryEmbedding);
+    
+    if (similarEntry) {
+      cacheStats.semanticHits++;
       return {
-        documents: cachedResult.documents,
-        metrics: cachedMetrics
+        documents: similarEntry.documents,
+        metrics: {
+          ...similarEntry.metrics,
+          fromCache: true,
+          semanticMatch: true,
+          retrievalTimeMs: Math.round(performance.now() - startTime)
+        }
       };
     }
   }
   
-  try {
-    // The thresholds are now handled in the SQL function directly (0.6 initial, 0.4 fallback)
-    // No need to retry with lower threshold in the application code
-    const result = await findSimilarDocumentsWithPerformance(processedQuery, {
-      ...options,
-      limit: options.limit || 5,
-      sessionId,
+  cacheStats.misses++;
+  
+  // Perform the search
+  const result = await findSimilarDocumentsWithPerformance(processedQuery, {
+    ...options,
+    limit: options.limit || 5,
+    sessionId,
+  });
+  
+  // Store in cache (unless skipCache is true)
+  if (!options.skipCache) {
+    const cacheKey = hashQueryOptions(processedQuery, options);
+    const queryEmbedding = await createEmbedding(processedQuery);
+    
+    vectorSearchCache.set(cacheKey, {
+      documents: result.documents,
+      metrics: result.metrics,
+      timestamp: Date.now(),
+      embedding: queryEmbedding,
+      accessCount: 1
     });
-    
-    const endTime = performance.now();
-    const retrievalTimeMs = Math.round(endTime - startTime);
-    
-    // Set usedFallbackThreshold based on similarity values
-    // If any documents have similarity between 0.4 and 0.6, fallback was used
-    const usedFallback = result.documents.some(doc => 
-      doc.similarity >= 0.4 && doc.similarity < 0.6
-    );
-    
-    if (usedFallback) {
-      vectorLogger.logVectorQuery(queryText, {
-        originalThreshold: 0.6,
-        newThreshold: 0.4,
-        sessionId,
-        retrievalTimeMs,
-      }, result.documents.length, retrievalTimeMs);
-      
-      result.metrics.usedFallbackThreshold = true;
-    }
-    
-    // Store in cache (unless skipCache is true)
-    if (!options.skipCache) {
-      const cacheKey = hashQueryOptions(processedQuery, options);
-      vectorSearchCache.set(cacheKey, {
-        documents: result.documents,
-        metrics: result.metrics,
-        timestamp: Date.now()
-      });
-    }
-    
-    // Log detailed results with the new logger function
-    vectorLogger.logVectorResults(
-      queryText,
-      result.documents,
-      result.metrics,
-      sessionId
-    );
-    
-    return result;
-  } catch (error) {
-    const endTime = performance.now();
-    const retrievalTimeMs = Math.round(endTime - startTime);
-    
-    vectorLogger.logVectorError('optimized-vector-search', error, {
-      queryLength: queryText.length,
-      retrievalTimeMs,
-      sessionId,
-    });
-    
-    throw error;
   }
+  
+  return result;
 }
 
 /**
@@ -308,4 +343,61 @@ function preprocessQuery(query: string): string {
   processed = processed.replace(/\s+/g, ' ').trim();
   
   return processed;
+}
+
+// Update vector logging calls to use the unified logger
+const logVectorOperation = async (operation: string, data: any) => {
+  logger.info(`Vector ${operation}`, {
+    operation: `vector_${operation}`,
+    ...data,
+    important: true
+  });
+};
+
+export async function retrieveDocuments(
+  query: string,
+  options: {
+    limit?: number;
+    threshold?: number;
+    metadata?: Record<string, any>;
+  } = {}
+): Promise<RetrievedDocument[]> {
+  const startTime = performance.now();
+  
+  try {
+    const embedding = await createEmbedding(query);
+    const { limit = 5, threshold = 0.7, metadata = {} } = options;
+
+    const { data: documents, error } = await supabase.rpc('match_documents', {
+      query_embedding: embedding,
+      match_threshold: threshold,
+      match_count: limit
+    });
+
+    if (error) {
+      logger.error('Vector search failed', { error, query, options });
+      throw error;
+    }
+
+    const duration = Math.round(performance.now() - startTime);
+    
+    // Log vector search results
+    await logVectorOperation('search', {
+      query,
+      documentCount: documents.length,
+      threshold,
+      durationMs: duration,
+      metadata
+    });
+
+    return documents;
+  } catch (error) {
+    logger.error('Document retrieval failed', {
+      error,
+      query,
+      options,
+      durationMs: Math.round(performance.now() - startTime)
+    });
+    throw error;
+  }
 } 

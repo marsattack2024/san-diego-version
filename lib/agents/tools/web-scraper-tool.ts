@@ -38,6 +38,7 @@ interface PuppeteerResponseData {
   paragraphs?: string[];
   metadata?: Record<string, any>;
   [key: string]: any;  // Allow for additional fields in the response
+  accessCount?: number;
 }
 
 /**
@@ -57,17 +58,77 @@ const rateLimiter = {
   }
 };
 
+// Cache configuration
+const CACHE_CONFIG = {
+  maxSize: 50,           // Store up to 50 URLs
+  ttl: 1000 * 60 * 360, // Cache for 6 hours (increased from 30 minutes)
+  warmupInterval: 1000 * 60 * 180 // Warm up cache every 3 hours
+};
+
 // Add cache for scraped content
 const scraperCache = new LRUCache<string, PuppeteerResponseData>({
-  max: 50, // Store up to 50 URLs
-  ttl: 1000 * 60 * 30, // Cache for 30 minutes
+  max: CACHE_CONFIG.maxSize,
+  ttl: CACHE_CONFIG.ttl
 });
 
 // Add cache for formatted content
 const formattedContentCache = new LRUCache<string, string>({
-  max: 50,
-  ttl: 1000 * 60 * 30,
+  max: CACHE_CONFIG.maxSize,
+  ttl: CACHE_CONFIG.ttl
 });
+
+// Cache statistics
+const cacheStats = {
+  hits: 0,
+  misses: 0,
+  warmups: 0,
+  lastWarmup: 0
+};
+
+// Cache warming function
+async function warmCache() {
+  const now = Date.now();
+  if (now - cacheStats.lastWarmup < CACHE_CONFIG.warmupInterval) {
+    return; // Skip if last warmup was too recent
+  }
+  
+  try {
+    // Get most frequently accessed URLs from cache
+    const entries = Array.from(scraperCache.entries())
+      .sort((a, b) => (b[1].accessCount || 0) - (a[1].accessCount || 0))
+      .slice(0, 5); // Warm up top 5 most accessed URLs
+    
+    for (const [url, data] of entries) {
+      if (scraperCache.has(url)) {
+        // Only warm up if close to expiration
+        const ttlRemaining = scraperCache.getRemainingTTL(url);
+        if (ttlRemaining && ttlRemaining < CACHE_CONFIG.ttl / 2) {
+          edgeLogger.info('Warming up cache for URL', { url });
+          await callPuppeteerScraper(url);
+          cacheStats.warmups++;
+        }
+      }
+    }
+    
+    cacheStats.lastWarmup = now;
+    
+    // Log cache statistics
+    edgeLogger.info('Cache statistics', { 
+      ...cacheStats,
+      cacheSize: scraperCache.size,
+      formattedCacheSize: formattedContentCache.size
+    });
+  } catch (error) {
+    edgeLogger.error('Cache warmup failed', { 
+      error: error instanceof Error ? error : new Error(String(error))
+    });
+  }
+}
+
+// Set up periodic cache warming
+if (typeof setInterval !== 'undefined') {
+  setInterval(warmCache, CACHE_CONFIG.warmupInterval);
+}
 
 /**
  * Call the Google Cloud Puppeteer function to scrape a URL
@@ -79,12 +140,20 @@ async function callPuppeteerScraper(url: string): Promise<PuppeteerResponseData>
   // Check cache first
   const cachedResult = scraperCache.get(fullUrl);
   if (cachedResult) {
+    // Update access count
+    cachedResult.accessCount = (cachedResult.accessCount || 0) + 1;
+    scraperCache.set(fullUrl, cachedResult); // Update in cache
+    
+    cacheStats.hits++;
     edgeLogger.info('[PUPPETEER SCRAPER] Cache hit', { 
       url: fullUrl, 
-      cacheHit: true
+      cacheHit: true,
+      accessCount: cachedResult.accessCount
     });
     return cachedResult;
   }
+  
+  cacheStats.misses++;
   
   try {
     edgeLogger.info('[PUPPETEER SCRAPER] Starting to scrape URL', { url: fullUrl });
@@ -245,10 +314,10 @@ async function callPuppeteerScraper(url: string): Promise<PuppeteerResponseData>
     edgeLogger.error('[PUPPETEER SCRAPER] Failed to scrape URL', { 
       url: fullUrl,
       executionTimeMs,
-      error: error instanceof Error ? error.message : String(error)
+      error: error instanceof Error ? error : new Error(String(error))
     });
     
-    // Return a minimal error response
+    // Return error information
     return {
       url: fullUrl,
       title: 'Error',
@@ -369,7 +438,9 @@ function calculateStats(data: PuppeteerResponseData): ScraperStats {
       wordCount: Math.min(wordCount, 100000) // Cap at 100k to prevent integer overflow
     };
   } catch (error) {
-    edgeLogger.error('[PUPPETEER STATS] Error calculating stats', { error });
+    edgeLogger.error('[PUPPETEER STATS] Error calculating stats', { 
+      error: error instanceof Error ? error : new Error(String(error))
+    });
     // Return empty stats on error
     return {
       headers: 0,
@@ -445,7 +516,7 @@ export const webScraperTool = tool({
       edgeLogger.error('[WEB SCRAPER TOOL] Failed to process URL', { 
         url: fullUrl, 
         executionTimeMs,
-        error: error instanceof Error ? error.message : String(error)
+        error: error instanceof Error ? error : new Error(String(error))
       });
       
       // Return error information

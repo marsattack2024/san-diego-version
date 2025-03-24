@@ -3,8 +3,7 @@ import '../lib/env-loader';
 
 import { runTest, runTests } from '../lib/test-utils';
 import { fileURLToPath } from 'url';
-import { edgeLogger } from '../../lib/logger/edge-logger';
-import vectorLogger from '../../lib/logger/vector-logger';
+import { logger } from '../../lib/logger';
 
 // Mock browser environment for client logger tests if needed
 const mockBrowserEnv = () => {
@@ -23,9 +22,6 @@ const mockBrowserEnv = () => {
  */
 async function testServerLogging(): Promise<void> {
   console.log('\n--- Testing Server Logger ---');
-  
-  // Create a logger instance
-  const logger = edgeLogger;
   
   // Test different log levels
   logger.debug('This is a debug message', { source: 'test-script' });
@@ -57,28 +53,44 @@ async function testServerLogging(): Promise<void> {
 async function testVectorLogging(): Promise<void> {
   console.log('\n--- Testing Vector Logger ---');
   
-  // Test vector-specific logging
-  vectorLogger.logVectorQuery(
-    'What is RAG?',
-    { type: 'similarity', dimensions: 1536 },
-    5,
-    120
-  );
+  const requestId = 'test-req-123';
   
-  // Test slow query
-  vectorLogger.logVectorQuery(
-    'How do embeddings work?',
-    { type: 'similarity', dimensions: 1536 },
-    3,
-    850
-  );
+  // Test vector search logging
+  logger.info('Vector search request', {
+    operation: 'vector_search',
+    query: 'What is RAG?',
+    requestId,
+    metadata: {
+      type: 'similarity',
+      dimensions: 1536
+    }
+  });
+  
+  // Test slow query logging
+  logger.info('Vector search completed', {
+    operation: 'vector_search_complete',
+    query: 'How do embeddings work?',
+    requestId,
+    durationMs: 850,
+    slow: true,
+    documentCount: 3,
+    metrics: {
+      averageSimilarity: 0.85,
+      highestSimilarity: 0.92,
+      lowestSimilarity: 0.78
+    }
+  });
   
   // Test error logging
-  vectorLogger.logVectorError(
-    'embedding_creation',
-    new Error('Test error'),
-    { documentId: 'doc-123', metadata: { source: 'test' } }
-  );
+  logger.error('Vector operation failed', {
+    operation: 'embedding_creation',
+    error: new Error('Test error'),
+    requestId,
+    metadata: {
+      documentId: 'doc-123',
+      source: 'test'
+    }
+  });
   
   console.log('Vector logging test completed');
 }

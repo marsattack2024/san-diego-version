@@ -353,3 +353,70 @@ The database schema consists of the following key tables:
 This RAG system provides a robust mechanism for enhancing AI responses with relevant information from a knowledge base. By using vector embeddings and similarity search, it can find semantically relevant documents even when exact keyword matches are not present. The system's configurable parameters, fallback mechanisms, and comprehensive logging make it adaptable to various use cases and easy to troubleshoot. 
 
 The database schema is designed with proper normalization, referential integrity, and security in mind, ensuring that only administrators can manage documents while allowing all users to benefit from the RAG capabilities.
+
+## Components
+
+1. **Unified Logger**: Use `lib/logger` to log detailed information about vector operations:
+
+```typescript
+import { logger } from '@/lib/logger';
+
+// Log vector search request
+logger.info('Vector search request', {
+  operation: 'vector_search',
+  query: 'user query',
+  requestId,
+  metadata: {
+    type: 'similarity',
+    dimensions: 1536
+  }
+});
+
+// Log vector search results
+logger.info('Vector search completed', {
+  operation: 'vector_search_complete',
+  documentCount: documents.length,
+  durationMs: duration,
+  slow: duration > 500,
+  metrics: {
+    averageSimilarity: 0.85,
+    highestSimilarity: 0.92,
+    lowestSimilarity: 0.78
+  }
+});
+
+// Log vector errors
+logger.error('Vector operation failed', {
+  operation: 'embedding_creation',
+  error,
+  requestId,
+  metadata: {
+    documentId: 'doc-123'
+  }
+});
+```
+
+2. **Document Retrieval**: Use `lib/vector/documentRetrieval.ts` for semantic search functionality.
+3. **Embeddings**: Use `lib/vector/embeddings.ts` for text-to-vector conversion.
+4. **Formatters**: Use `lib/vector/formatters.ts` for consistent document display.
+
+## Best Practices
+
+1. Always include `requestId` for request tracing
+2. Log performance metrics for all vector operations
+3. Use appropriate log levels:
+   - `info` for normal operations
+   - `error` for failures
+   - Mark slow operations with `slow: true`
+4. Include relevant metadata with each log
+5. Use consistent operation names for easier filtering
+
+## Performance Monitoring
+
+The unified logger automatically tracks:
+- Query latency
+- Cache hit rates
+- Embedding generation time
+- Document retrieval performance
+
+Slow operations (>500ms) are automatically flagged and logged with additional context.

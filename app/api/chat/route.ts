@@ -33,6 +33,12 @@ const comprehensiveScraperSchema = z.object({
   url: z.string().url().describe('The URL to scrape content from')
 });
 
+// Add at the top of the file after imports
+function formatError(error: unknown): Error {
+  if (error instanceof Error) return error;
+  return new Error(typeof error === 'string' ? error : JSON.stringify(error));
+}
+
 export async function POST(req: Request) {
   try {
     const startTime = Date.now(); // Add timestamp for performance tracking
@@ -221,7 +227,7 @@ export async function POST(req: Request) {
           }
         } catch (error) {
           edgeLogger.error('Error running RAG', { 
-            error,
+            error: formatError(error),
             durationMs: Date.now() - ragStartTime
           });
         }
@@ -305,7 +311,7 @@ export async function POST(req: Request) {
           }
         } catch (error) {
           edgeLogger.error('Error running web scraper', { 
-            error,
+            error: formatError(error),
             durationMs: Date.now() - scraperStartTime
           });
         }
@@ -507,11 +513,7 @@ export async function POST(req: Request) {
             edgeLogger.error('Error running Deep Search', { 
               operation: 'deep_search_error',
               operationId,
-              error: error instanceof Error ? {
-                name: error.name,
-                message: error.message,
-                stack: error.stack
-              } : String(error),
+              error: formatError(error),
               durationMs: Date.now() - deepSearchStartTime,
               important: true
             });
@@ -529,7 +531,7 @@ export async function POST(req: Request) {
               } catch (e) {
                 edgeLogger.error('Failed to send event for DeepSearch error', { 
                   operation: 'deep_search_event_error',
-                  error: e 
+                  error: formatError(e) 
                 });
               }
             } else {
@@ -651,7 +653,7 @@ export async function POST(req: Request) {
                 edgeLogger.error('Knowledge base search failed', { 
                   query, 
                   durationMs: duration,
-                  error
+                  error: formatError(error)
                 });
                 
                 throw error;
@@ -683,7 +685,7 @@ export async function POST(req: Request) {
                 edgeLogger.error('Resource storage failed', { 
                   contentLength: content.length,
                   durationMs: duration,
-                  error
+                  error: formatError(error)
                 });
                 
                 throw error;
@@ -716,7 +718,7 @@ export async function POST(req: Request) {
                 edgeLogger.error('URL detection failed', { 
                   textLength: text.length,
                   durationMs: duration,
-                  error
+                  error: formatError(error)
                 });
                 
                 throw error;
@@ -749,7 +751,7 @@ export async function POST(req: Request) {
                 edgeLogger.error('Web scraper failed', { 
                   url,
                   durationMs: duration,
-                  error
+                  error: formatError(error)
                 });
                 
                 throw error;
@@ -758,7 +760,7 @@ export async function POST(req: Request) {
           })
         };
       } catch (error) {
-        edgeLogger.error('Error initializing tools', { error });
+        edgeLogger.error('Error initializing tools', { error: formatError(error) });
       }
       
       // Create a response validator function
@@ -878,7 +880,7 @@ export async function POST(req: Request) {
                     titleSource: existingSession?.title ? 'preserved existing' : 'set from user message'
                   });
                 } catch (error) {
-                  edgeLogger.error('Error storing chat session', { error });
+                  edgeLogger.error('Error storing chat session', { error: formatError(error) });
                 }
               }
               
@@ -911,7 +913,7 @@ export async function POST(req: Request) {
                 operationTimeoutId = undefined;
               }
             } catch (error) {
-              edgeLogger.error('Error in onFinish callback', { error });
+              edgeLogger.error('Error in onFinish callback', { error: formatError(error) });
             }
           }
         });
@@ -922,7 +924,7 @@ export async function POST(req: Request) {
         resolve(result.toDataStreamResponse());
       } catch (error) {
         edgeLogger.error('Error in AI API call', { 
-          error,
+          error: formatError(error),
           elapsedTimeMs: Date.now() - startTime
         });
         clearTimeout(operationTimeoutId);
@@ -935,7 +937,7 @@ export async function POST(req: Request) {
     return await operationPromise;
     
   } catch (error) {
-    edgeLogger.error('Unhandled error in chat API route', { error });
+    edgeLogger.error('Unhandled error in chat API route', { error: formatError(error) });
     return new Response(`Error: ${error instanceof Error ? error.message : String(error)}`, { status: 500 });
   }
 }

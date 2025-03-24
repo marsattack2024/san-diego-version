@@ -1,28 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { findSimilarDocumentsOptimized } from '@/lib/vector/documentRetrieval';
+import { retrieveDocuments } from '@/lib/vector/documentRetrieval';
 import { formatDocumentsForDisplay } from '@/lib/vector/formatters';
-import vectorLogger from '@/lib/logger/vector-logger';
-import { initializeVectorSearch } from '@/lib/vector/init';
+import { logger } from '@/lib/logger';
+import { initializeVectorStore } from '@/lib/vector/init';
 
-// Initialize vector search on module load with robust error handling
-try {
-  initializeVectorSearch();
-} catch (error) {
-  // Use console.error as a fallback in case logger methods aren't available
-  console.error('Failed to initialize vector search:', error instanceof Error ? error.message : String(error));
-  
-  // Also try the logger, but in a way that won't break if methods are missing
-  try {
-    vectorLogger.logVectorError('vector_initialization', error);
-  } catch (logError) {
-    // Silently continue if logger fails
-  }
-}
+// Initialize vector store on module load
+initializeVectorStore().catch(error => {
+  logger.error('Vector store initialization failed', { error });
+});
 
 export const dynamic = 'force-dynamic';
-
-// Initialize vector search when this route is first loaded
-const isInitialized = initializeVectorSearch();
 
 /**
  * API route for vector search
@@ -30,17 +17,9 @@ const isInitialized = initializeVectorSearch();
  */
 export async function POST(req: NextRequest) {
   const startTime = performance.now();
+  const requestId = crypto.randomUUID();
   
   try {
-    // Check if vector search is initialized
-    if (!isInitialized) {
-      console.warn('Vector search is not initialized. Returning empty results.');
-      return NextResponse.json({ 
-        results: [], 
-        message: 'Vector search is not available in this environment' 
-      });
-    }
-
     const { query, limit, similarityThreshold, metadataFilter } = await req.json();
     
     // Validate input
@@ -54,49 +33,66 @@ export async function POST(req: NextRequest) {
     // Get session ID from headers for tracking
     const sessionId = req.headers.get('x-session-id') || undefined;
     
-    // Find similar documents
-    const { documents, metrics: searchMetrics } = await findSimilarDocumentsOptimized(query, {
-      limit,
-      similarityThreshold,
-      metadataFilter,
+    logger.info('Vector search request received', {
+      requestId,
+      operation: 'vector_search_start',
+      queryLength: query.length,
       sessionId
+    });
+
+    // Find similar documents
+    const documents = await retrieveDocuments(query, {
+      limit,
+      threshold: similarityThreshold,
+      metadata: {
+        ...metadataFilter,
+        sessionId,
+        requestId
+      }
     });
     
     // Format documents for display
     const formattedDocuments = formatDocumentsForDisplay(documents);
     
-    // Enhanced metrics to include in the response
-    const enhancedMetrics = {
-      ...searchMetrics,
+    // Calculate metrics
+    const metrics = {
       resultCount: documents.length,
-      averageSimilarityPercent: Math.round(searchMetrics.averageSimilarity * 100),
-      highestSimilarityPercent: Math.round(searchMetrics.highestSimilarity * 100),
-      lowestSimilarityPercent: Math.round(searchMetrics.lowestSimilarity * 100),
+      averageSimilarity: documents.reduce((acc, doc) => acc + doc.similarity, 0) / documents.length,
+      highestSimilarity: Math.max(...documents.map(doc => doc.similarity)),
+      lowestSimilarity: Math.min(...documents.map(doc => doc.similarity))
     };
     
-    // Log successful search with additional details
-    try {
-      vectorLogger.logVectorResults(query, documents, searchMetrics, sessionId || 'unknown');
-    } catch (logError) {
-      console.error('Failed to log vector results:', logError);
-    }
+    const duration = Math.round(performance.now() - startTime);
     
+    logger.info('Vector search completed', {
+      requestId,
+      operation: 'vector_search_complete',
+      documentCount: documents.length,
+      durationMs: duration,
+      slow: duration > 500,
+      metrics: {
+        ...metrics,
+        averageSimilarityPercent: Math.round(metrics.averageSimilarity * 100),
+        highestSimilarityPercent: Math.round(metrics.highestSimilarity * 100),
+        lowestSimilarityPercent: Math.round(metrics.lowestSimilarity * 100)
+      }
+    });
+
     // Return enhanced results
     return NextResponse.json({
       documents: formattedDocuments,
-      metrics: enhancedMetrics
+      metrics
     });
   } catch (error) {
     const duration = Math.round(performance.now() - startTime);
     
-    // Use console.error as fallback if logger fails
-    console.error('Error in vector search:', error);
-    try {
-      vectorLogger.logVectorError('vector_search', error, { durationMs: duration });
-    } catch (logError) {
-      console.error('Failed to log error:', logError);
-    }
-    
+    logger.error('Vector search failed', {
+      requestId,
+      error,
+      operation: 'vector_search_error',
+      durationMs: duration
+    });
+
     // Return error response
     return NextResponse.json(
       { error: 'Failed to perform vector search' },

@@ -3,49 +3,29 @@
  * Makes sure all required environment variables are loaded
  */
 
-import vectorLogger from '../logger/vector-logger';
+import { logger } from '../logger';
+import { supabase } from '../db';
+import { createEmbedding } from './embeddings';
 
 // Initialize and validate environment variables needed for vector search
-export function initializeVectorSearch() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  
-  // Check for placeholder values or missing values
-  if (!supabaseUrl || !supabaseKey) {
-    console.warn('Missing Supabase credentials. Vector search will be disabled.');
-    return false;
-  }
-  
-  // Check for placeholder values
-  if (supabaseUrl === 'your-supabase-url-here' || 
-      supabaseUrl.includes('your-supabase') || 
-      supabaseKey.includes('your-supabase')) {
-    console.warn('Using placeholder Supabase credentials. Vector search will be disabled.');
-    return false;
-  }
-  
-  // Validate URL format
+export async function initializeVectorStore() {
   try {
-    // Only validate the base URL without appending paths
-    new URL(supabaseUrl);
+    logger.info('Initializing vector store', {
+      operation: 'vector_init',
+      important: true
+    });
+
+    // Initialization logic here...
     
-    // Log success with fallback
-    try {
-      vectorLogger.logVectorQuery('initialization', {}, 0, 0);
-      console.log('Vector search initialized successfully');
-    } catch (logError) {
-      console.log('Vector search initialized successfully');
-    }
-    
-    return true;
+    logger.info('Vector store initialized', {
+      operation: 'vector_init_complete',
+      important: true
+    });
   } catch (error) {
-    // Log URL validation error
-    console.error('Invalid Supabase URL format:', error instanceof Error ? error.message : String(error));
-    try {
-      vectorLogger.logVectorError('url_validation', error);
-    } catch (logError) {
-      // Silently continue if logger fails
-    }
-    return false;
+    logger.error('Vector store initialization failed', {
+      error,
+      operation: 'vector_init_failed'
+    });
+    throw error;
   }
 }

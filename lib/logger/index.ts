@@ -1,34 +1,58 @@
-import { logger, LogLevel, LogContext } from './base-logger';
+import { edgeLogger } from './edge-logger';
 import { clientLogger } from './client-logger';
-import vectorLogger from './vector-logger';
-import { logger as edgeLogger } from './edge-logger';
-import { logger as aiLogger } from './ai-logger';
+import { LogContext, getContext, withContext } from './context';
 
 // Export types
-export type { LogLevel, LogContext };
+export type { LogContext };
 
-// Export individual loggers
-export { 
-  logger, 
-  clientLogger,
-  vectorLogger,
-  edgeLogger,
-  aiLogger
-};
+// Export context utilities
+export { getContext, withContext };
 
-// Create a unified logger interface
-export const loggers = {
-  base: logger,
+// Export consolidated loggers
+export const logger = {
+  // Server-side logging (uses edge-logger)
+  server: edgeLogger,
+  
+  // Client-side logging
   client: clientLogger,
-  vector: vectorLogger,
-  ai: aiLogger,
-  edge: edgeLogger
+  
+  // Convenience methods that automatically use the right logger based on environment
+  debug: (message: string, context = {}) => {
+    if (typeof window === 'undefined') {
+      edgeLogger.debug(message, { ...getContext(), ...context });
+    } else {
+      clientLogger.debug(message, context);
+    }
+  },
+  
+  info: (message: string, context = {}) => {
+    if (typeof window === 'undefined') {
+      edgeLogger.info(message, { ...getContext(), ...context });
+    } else {
+      clientLogger.info(message, context);
+    }
+  },
+  
+  warn: (message: string, context = {}) => {
+    if (typeof window === 'undefined') {
+      edgeLogger.warn(message, { ...getContext(), ...context });
+    } else {
+      clientLogger.warn(message, context);
+    }
+  },
+  
+  error: (message: string, context = {}) => {
+    if (typeof window === 'undefined') {
+      edgeLogger.error(message, { ...getContext(), ...context });
+    } else {
+      clientLogger.error(message, context);
+    }
+  },
+  
+  // Operation tracking (server-side only)
+  trackOperation: edgeLogger.trackOperation,
+  startBatch: edgeLogger.startBatch
 };
 
-// Export default logger factory for convenience
-export const createLogger = (component: string) => ({
-  debug: (message: string, context = {}) => clientLogger.debug(`[${component}] ${message}`, context),
-  info: (message: string, context = {}) => clientLogger.info(`[${component}] ${message}`, context),
-  warn: (message: string, context = {}) => clientLogger.warn(`[${component}] ${message}`, context),
-  error: (message: string | Error, context = {}) => clientLogger.error(`[${component}] ${message}`, context)
-});
+// Default export for convenience
+export default logger;
