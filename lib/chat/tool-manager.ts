@@ -34,13 +34,31 @@ export class ToolManager {
   /**
    * Register a result from a tool
    */
-  registerToolResult(toolName: string, content: string | { content: string }): void {
+  registerToolResult(toolName: string, content: string | { content: string }, options?: { fromExplicitToolCall?: boolean }): void {
     // Handle both string and object with content property
     const finalContent = typeof content === 'object' && content.content ? content.content : content;
     
     if (typeof finalContent === 'string' && finalContent.trim()) {
       this.toolResults[toolName] = finalContent;
-      this.toolsUsed.add(toolName);
+      
+      // Only add to toolsUsed if it's from an explicit tool call or specified in options
+      const isExplicitToolCall = options?.fromExplicitToolCall !== false;
+      
+      if (isExplicitToolCall) {
+        this.toolsUsed.add(toolName);
+        edgeLogger.debug(`Tool registered with result: ${toolName}`, {
+          operation: 'tool_result_register',
+          toolName,
+          contentLength: finalContent.length,
+          fromExplicit: isExplicitToolCall
+        });
+      } else {
+        edgeLogger.debug(`Tool result stored but not marked as used: ${toolName}`, {
+          operation: 'tool_result_store_only',
+          toolName,
+          contentLength: finalContent.length
+        });
+      }
     }
   }
   
@@ -64,7 +82,7 @@ export class ToolManager {
   getToolResults(): ToolResults {
     return {
       ragContent: this.toolResults['Knowledge Base'],
-      webScraper: this.toolResults['Web Content'],
+      webScraper: this.toolResults['Web Scraper'],
       deepSearch: this.toolResults['Deep Search']
     };
   }

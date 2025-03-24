@@ -225,7 +225,7 @@ export async function buildEnhancedSystemPrompt(
   
   // 2. Add web scraper results - medium priority context
   if (toolResults.webScraper && toolsUsed.includes('Web Scraper')) {
-    enhancedSystemPrompt += `\n\n### WEB CONTENT RESULTS ###\nI have scraped the following content directly from the requested web pages. This is authoritative content from the source and should be used as the primary basis for your response when answering questions about these pages:\n\n${toolResults.webScraper}\n\nIMPORTANT: When discussing content from these web pages, use the actual information provided above rather than making assumptions or using general knowledge. If the content contains specific details, numbers, quotes, or facts, include those in your response.\n\n`;
+    enhancedSystemPrompt += `\n\n### WEB SCRAPER RESULTS ###\nI have scraped the following content directly from the requested web pages. This is authoritative content from the source and should be used as the primary basis for your response when answering questions about these pages:\n\n${toolResults.webScraper}\n\nIMPORTANT: When discussing content from these web pages, use the actual information provided above rather than making assumptions or using general knowledge. If the content contains specific details, numbers, quotes, or facts, include those in your response.\n\n`;
   }
   
   // 3. Add Deep Search results - useful additional context
@@ -358,7 +358,9 @@ export async function buildEnhancedSystemPrompt(
         }
       }
     } catch (error) {
-      edgeLogger.error('Error fetching user data for prompt enhancement', { error });
+      edgeLogger.error('Error fetching user data for prompt enhancement', { 
+        error: error instanceof Error ? error : String(error) 
+      });
       // Continue without user data if there's an error
     }
   }

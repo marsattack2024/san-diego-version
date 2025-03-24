@@ -110,6 +110,7 @@ export const chatTools = {
   // URL detection tool - now uses the puppeteer-based implementation
   detectAndScrapeUrls: detectAndScrapeUrlsTool,
 
-  // Comprehensive web scraper tool - now uses the puppeteer-based implementation
-  comprehensiveScraper: webScraperTool
+  // Web scraper tool with puppeteer implementation
+  // The name "webScraper" will be used consistently throughout the app
+  webScraper: webScraperTool
 };

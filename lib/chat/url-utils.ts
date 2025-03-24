@@ -8,6 +8,9 @@ const COMMON_FALSE_POSITIVES = [
   'fig.', 'ca.', 'et al.', 'n.b.', 'p.s.'
 ];
 
+// Import logger
+import { edgeLogger } from '@/lib/logger/edge-logger';
+
 // Test if a string looks like a domain name (without protocol)
 export function isDomainLike(text: string): boolean {
   // Skip common abbreviations that might look like domains
@@ -55,6 +58,16 @@ export function extractUrls(text: string): string[] {
         result.push(cleanWord);
       }
     }
+  }
+  
+  // Log URL detection results
+  if (result.length > 0) {
+    edgeLogger.info('URLs detected in text', {
+      urlCount: result.length,
+      urls: result.map(url => ensureProtocol(url)),
+      detection: 'automatic',
+      actionRequired: 'AI tool call needed to process'
+    });
   }
   
   return Array.from(new Set(result)); // Remove duplicates

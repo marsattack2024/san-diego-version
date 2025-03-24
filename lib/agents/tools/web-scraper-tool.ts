@@ -618,7 +618,7 @@ export const webScraperTool = tool({
   experimental_toToolResultContent: (result) => {
     return [{
       type: 'text',
-      text: `Web Content from ${result.url}:\n\n${result.content}`
+      text: `Web Scraper Content from ${result.url}:\n\n${result.content}`
     }];
   }
 });

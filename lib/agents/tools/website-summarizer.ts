@@ -39,8 +39,8 @@ export async function generateWebsiteSummary(
 
     // Step 1: Scrape the website using the existing tool
     const scrapeStartTime = Date.now();
-    const scrapeResult = await chatTools.comprehensiveScraper.execute({ url }, {
-      toolCallId: `website-summary-scrape-${Date.now()}`,
+    const scrapeResult = await chatTools.webScraper.execute({ url }, {
+      toolCallId: 'internal-website-summarizer',
       messages: []
     });
 
