@@ -277,183 +277,86 @@ async setDeepSearch(tenantId: string, query: string, result: any): Promise<void>
 }
 ```
 
-## Perplexity DeepSearch Caching
+## Perplexity DeepSearch Caching Improvements
 
-### Overview
+Recent updates have enhanced the caching mechanism for Perplexity DeepSearch results, implementing the same consistent patterns used for web scraper caching and RAG. These improvements ensure that DeepSearch results are properly serialized, validated, and stored in Redis.
 
-Our application uses Perplexity's API for enhanced web search capabilities (DeepSearch). Since these API calls are expensive, rate-limited, and relatively stable in results over short time periods, we implement dedicated caching for DeepSearch results with specialized configuration.
+### Key Improvements to DeepSearch Caching
 
-### DeepSearch Implementation
-
-The DeepSearch feature is implemented as a wrapper around Perplexity's API, which provides advanced web search capabilities:
+1. **Structured Object Storage**: All DeepSearch results are now stored with a consistent structure:
 
 ```typescript
-export async function callPerplexityAPI(query: string): Promise<{
-  content: string;
-  model: string;
-  timing: { total: number };
-}> {
-  // Implementation details in lib/agents/tools/perplexity/api.ts
+const cacheableResult = {
+  content: deepSearchContent,
+  model: deepSearchResponse.model,
+  timestamp: Date.now(),
+  query: deepSearchQuery.substring(0, 200) // Store truncated query for reference
+};
+```
+
+2. **Explicit JSON Serialization**: All data is explicitly serialized before storage:
+
+```typescript
+const jsonString = JSON.stringify(cacheableResult);
+await redis.set(cacheKey, jsonString, { ex: 60 * 60 }); // 1 hour TTL
+```
+
+3. **Robust Type Validation**: When retrieving cached content, we implement strict validation:
+
+```typescript
+// Ensure we're working with a string before parsing
+const parsedContent = typeof cachedContentStr === 'string' 
+  ? JSON.parse(cachedContentStr) 
+  : cachedContentStr; // If it's already an object, use it directly
+
+// Validate the parsed content has the required structure
+if (parsedContent && 
+    typeof parsedContent === 'object' && 
+    typeof parsedContent.content === 'string' && 
+    typeof parsedContent.model === 'string' && 
+    typeof parsedContent.timestamp === 'number') {
+  // Use the cached content
 }
 ```
 
-This function makes requests to our serverless API route (`/api/perplexity/route.ts`), which in turn calls Perplexity's API with appropriate authentication and parameters.
-
-### Cache Key Strategy
-
-The DeepSearch cache implementation uses a specialized naming convention and hashing strategy:
+4. **Comprehensive Error Handling**: All cache operations are wrapped in try/catch blocks with detailed logging:
 
 ```typescript
-// In lib/cache/redis-client.ts or lib/vector/rag-cache.ts
-async getDeepSearch(tenantId: string, query: string): Promise<any> {
-  // Generate a consistent hash from the query to handle long queries
-  const hash = await hashKey(query);
-  
-  // Create a structured cache key with tenant isolation and type prefix
-  const key = `${tenantId}:deepsearch:${hash}`;
-  
-  return this.get(key);
-}
-
-async setDeepSearch(tenantId: string, query: string, result: any): Promise<void> {
-  const hash = await hashKey(query);
-  const key = `${tenantId}:deepsearch:${hash}`;
-  
-  // Use a shorter TTL (1 hour) for DeepSearch results
-  // Web search results become stale faster than other content
-  await this.set(key, result, CACHE_CONFIG.shortTtl);
+try {
+  // Cache retrieval or storage operations
+} catch (cacheError) {
+  edgeLogger.error('Error with DeepSearch Redis cache', {
+    operation: 'deep_search_cache_error',
+    operationId,
+    error: cacheError instanceof Error ? cacheError.message : String(cacheError)
+  });
 }
 ```
 
-Key characteristics:
-- Tenant isolation with a prefix (`tenantId:deepsearch:`)
-- Uses the hashed query to generate a consistent, fixed-length key
-- Applies a shorter TTL (1 hour) compared to other cached content (12 hours)
-
-### Implementation in Chat Route
-
-The DeepSearch caching is integrated in the chat API route (`app/api/chat/route.ts`) with the following pattern:
+5. **Cache Key Strategy**: We use a shortened query string to create manageable cache keys:
 
 ```typescript
-// Simplified implementation from app/api/chat/route.ts
-if (deepSearchEnabled) {
-  // Create a meaningful operation ID for tracing
-  const operationId = `deepsearch-${Date.now().toString(36)}`;
-  const query = lastUserMessage.content;
-  
-  try {
-    // First check cache for existing results
-    const redisCache = new RedisCache(); // or imported instance
-    const cachedResults = await redisCache.getDeepSearch('global', query);
-    
-    if (cachedResults) {
-      // Cache hit - use the cached results
-      toolManager.registerToolResult('Deep Search', cachedResults);
-      
-      edgeLogger.info('Using cached DeepSearch results', {
-        operation: 'deep_search_cache_hit',
-        operationId,
-        contentLength: typeof cachedResults === 'string' 
-          ? cachedResults.length 
-          : JSON.stringify(cachedResults).length
-      });
-      
-      // Notify client that DeepSearch is complete
-      eventHandler({
-        type: 'deepSearch',
-        status: 'completed',
-        details: `Using cached results (${
-          typeof cachedResults === 'string' 
-            ? cachedResults.length 
-            : JSON.stringify(cachedResults).length
-        } characters)`
-      });
-    } else {
-      // Cache miss - call Perplexity API
-      edgeLogger.info('No cached DeepSearch results found', {
-        operation: 'deep_search_cache_miss',
-        operationId
-      });
-      
-      // Call Perplexity API with timeout protection
-      const deepSearchResponse = await Promise.race([
-        callPerplexityAPI(query),
-        // Timeout promise
-      ]);
-      
-      const deepSearchContent = deepSearchResponse.content;
-      
-      if (deepSearchContent && 
-          deepSearchContent.length > 0 && 
-          !deepSearchContent.includes("timed out")) {
-        
-        // Store successful results in cache
-        await redisCache.setDeepSearch('global', query, deepSearchContent);
-        
-        edgeLogger.info('Cached new DeepSearch results', {
-          operation: 'deep_search_cache_set',
-          operationId,
-          contentLength: deepSearchContent.length,
-          ttl: CACHE_CONFIG.shortTtl
-        });
-        
-        // Use the results
-        toolManager.registerToolResult('Deep Search', deepSearchContent);
-      }
-    }
-  } catch (error) {
-    // Error handling...
-  }
-}
+const deepSearchQuery = lastUserMessage.content.trim();
+const cacheKey = `deepsearch:${deepSearchQuery.substring(0, 200)}`;
 ```
 
-### Performance Benefits
+### DeepSearch-Specific Considerations
 
-The DeepSearch caching system provides several key benefits:
+- **Shorter TTL**: DeepSearch results use a 1-hour TTL compared to 6 hours for web scraper content, as search results may change more frequently.
+- **Query Truncation**: Since DeepSearch queries can be long, we limit the key length by truncating to 200 characters.
+- **Model Validation**: We only cache responses with valid models, excluding error responses and timeouts.
+- **Cache Bypassing for Errors**: Results containing errors or timeout messages are not cached.
 
-1. **Reduced API Costs**: By reusing previous search results, we minimize the number of calls to the paid Perplexity API.
+### Complete DeepSearch Caching Flow
 
-2. **Faster Response Times**: Cache hits deliver results immediately (typically <50ms) compared to new API calls (3-15 seconds).
+1. **Check Cache**: First attempt to retrieve cached content using the query as a key
+2. **Validate Response**: If found, ensure cached content has the required structure
+3. **Call API If Needed**: If cache miss or validation fails, call Perplexity API
+4. **Process Response**: Extract and format the API response
+5. **Cache Valid Results**: Store successful responses with explicit serialization
+6. **Register Result**: Add the DeepSearch content to the Tool Manager
 
-3. **Rate Limit Protection**: Caching helps avoid exceeding Perplexity's rate limits during high traffic periods.
-
-4. **Consistent Answers**: Users asking similar questions within the cache window receive consistent information.
-
-### Data Structure
-
-DeepSearch results are stored as plain strings to simplify processing:
-
-```typescript
-// Example cached DeepSearch content (abbreviated)
-"According to recent market research data for portrait photographers in Miami, the competitive landscape includes several established studios specializing in boudoir photography. Top competitors include Miami Boudoir Studio (specializing in empowering women-focused photography with packages ranging $500-2000), Intimate Photography Miami (known for luxury boudoir sessions starting at $750), and South Beach Boudoir (targeting high-end clients with average bookings of $1500+). Most successful studios emphasize privacy, comfort-focused studios, and specialized lighting techniques..."
-```
-
-### Monitoring and Optimization
-
-The system includes comprehensive logging for DeepSearch cache operations:
-
-```typescript
-// Logging for cache hit
-edgeLogger.info('Using cached DeepSearch results', {
-  operation: 'deep_search_cache_hit',
-  operationId,
-  queryLength: query.length,
-  cachedResultLength: cachedContent.length,
-  age: Date.now() - (parsedMetadata?.timestamp || Date.now()),
-  ttlRemaining: 'estimated based on creation time'
-});
-
-// Logging for cache set
-edgeLogger.info('Cached new DeepSearch results', {
-  operation: 'deep_search_cache_set',
-  operationId,
-  queryLength: query.length,
-  resultLength: deepSearchContent.length,
-  ttl: CACHE_CONFIG.shortTtl
-});
-```
-
-These logs help optimize cache TTL values and diagnose any issues with the DeepSearch functionality.
+These improvements ensure DeepSearch results are cached consistently, improving response times and reducing API calls to Perplexity.
 
 ## Integration with RAG (Retrieval Augmented Generation)
 

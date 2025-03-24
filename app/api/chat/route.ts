@@ -365,45 +365,157 @@ export async function POST(req: Request) {
                 process.env.PERPLEXITY_MODEL = 'sonar';
               }
               
-              // Note: Direct API testing has been removed as we now use the serverless endpoint
+              // Redis caching for DeepSearch
+              let deepSearchContent = null;
+              let deepSearchResponse: { content: string; model: string; timing: { total: number } } | undefined;
+              const redis = Redis.fromEnv();
+              const deepSearchQuery = lastUserMessage.content.trim();
+              const cacheKey = `deepsearch:${deepSearchQuery.substring(0, 200)}`; // Limit key size for very long queries
               
-              // Set a 20-second timeout for Deep Search operations
-              const deepSearchPromise = callPerplexityAPI(lastUserMessage.content);
-              const deepSearchResponse = await Promise.race([
-                deepSearchPromise,
-                new Promise<{
-                  content: string;
-                  model: string;
-                  timing: { total: number };
-                }>((resolve) => {
-                  setTimeout(() => {
-                    edgeLogger.warn('Deep Search operation timed out', {
-                      operation: 'deep_search_timeout',
+              // Check cache first
+              try {
+                const cachedContentStr = await redis.get(cacheKey);
+                
+                if (cachedContentStr) {
+                  try {
+                    // Ensure we're working with a string before parsing
+                    const parsedContent = typeof cachedContentStr === 'string' 
+                      ? JSON.parse(cachedContentStr) 
+                      : cachedContentStr; // If it's already an object, use it directly
+                    
+                    // Validate the parsed content has the required structure
+                    if (parsedContent && 
+                        typeof parsedContent === 'object' && 
+                        typeof parsedContent.content === 'string' && 
+                        typeof parsedContent.model === 'string' && 
+                        typeof parsedContent.timestamp === 'number') {
+                      
+                      deepSearchContent = parsedContent.content;
+                      
+                      edgeLogger.info('DeepSearch cache hit', {
+                        operation: 'deep_search_cache_hit',
+                        operationId,
+                        contentLength: deepSearchContent.length,
+                        model: parsedContent.model,
+                        cacheAge: Date.now() - parsedContent.timestamp,
+                        cacheSource: 'redis'
+                      });
+                      
+                      // Send event to client that DeepSearch was retrieved from cache
+                      eventHandler({
+                        type: 'deepSearch',
+                        status: 'completed',
+                        details: `Retrieved ${deepSearchContent.length} characters from cache`
+                      });
+                      
+                      // Register the cached result in the tool manager
+                      toolManager.registerToolResult('Deep Search', deepSearchContent);
+                    } else {
+                      edgeLogger.warn('Invalid DeepSearch cache structure', {
+                        operation: 'deep_search_cache_invalid',
+                        operationId,
+                        fields: parsedContent ? Object.keys(parsedContent) : 'none'
+                      });
+                    }
+                  } catch (parseError) {
+                    edgeLogger.error('Error parsing DeepSearch cached content', {
+                      operation: 'deep_search_cache_parse_error',
                       operationId,
-                      durationMs: Date.now() - deepSearchStartTime,
-                      threshold: 20000,
-                      important: true
+                      error: parseError instanceof Error ? parseError.message : String(parseError),
+                      cachedContentSample: typeof cachedContentStr === 'string' 
+                        ? cachedContentStr.substring(0, 100) + '...' 
+                        : `type: ${typeof cachedContentStr}`
                     });
-                    resolve({ 
-                      content: "Deep Search timed out after 20 seconds. The AI will continue without these results and use only internal knowledge and any other available sources.",
-                      model: "timeout",
-                      timing: { total: Date.now() - deepSearchStartTime }
+                  }
+                }
+              } catch (cacheError) {
+                edgeLogger.error('Error checking DeepSearch Redis cache', {
+                  operation: 'deep_search_cache_error',
+                  operationId,
+                  error: cacheError instanceof Error ? cacheError.message : String(cacheError)
+                });
+              }
+              
+              // If no valid cached content, perform DeepSearch
+              if (!deepSearchContent) {
+                // Note: Direct API testing has been removed as we now use the serverless endpoint
+                
+                // Set a 20-second timeout for Deep Search operations
+                const deepSearchPromise = callPerplexityAPI(deepSearchQuery);
+                const deepSearchResponse = await Promise.race([
+                  deepSearchPromise,
+                  new Promise<{
+                    content: string;
+                    model: string;
+                    timing: { total: number };
+                  }>((resolve) => {
+                    setTimeout(() => {
+                      edgeLogger.warn('Deep Search operation timed out', {
+                        operation: 'deep_search_timeout',
+                        operationId,
+                        durationMs: Date.now() - deepSearchStartTime,
+                        threshold: 20000,
+                        important: true
+                      });
+                      resolve({ 
+                        content: "Deep Search timed out after 20 seconds. The AI will continue without these results and use only internal knowledge and any other available sources.",
+                        model: "timeout",
+                        timing: { total: Date.now() - deepSearchStartTime }
+                      });
+                    }, 20000);
+                  })
+                ]);
+                
+                // Extract the content from the response object
+                deepSearchContent = deepSearchResponse.content;
+                
+                edgeLogger.info('DeepSearch response received', {
+                  operation: 'deep_search_response',
+                  operationId,
+                  responseLength: deepSearchContent.length,
+                  model: deepSearchResponse.model,
+                  timingMs: deepSearchResponse.timing.total,
+                  isError: deepSearchResponse.model === 'error'
+                });
+                
+                // Store successful DeepSearch results in Redis cache
+                if (deepSearchContent && 
+                    deepSearchContent.length > 0 && 
+                    !deepSearchContent.includes("timed out") &&
+                    !deepSearchResponse.model.includes("error")) {
+                  
+                  try {
+                    // Create a cache-friendly structure
+                    const cacheableResult = {
+                      content: deepSearchContent,
+                      model: deepSearchResponse.model,
+                      timestamp: Date.now(),
+                      query: deepSearchQuery.substring(0, 200) // Store truncated query for reference
+                    };
+                    
+                    // Store in Redis cache with explicit JSON stringification
+                    const jsonString = JSON.stringify(cacheableResult);
+                    
+                    // Use a shorter TTL for DeepSearch results (1 hour)
+                    await redis.set(cacheKey, jsonString, { ex: 60 * 60 }); // 1 hour TTL
+                    
+                    edgeLogger.info('Stored DeepSearch content in Redis cache', { 
+                      operation: 'deep_search_cache_set',
+                      operationId,
+                      contentLength: deepSearchContent.length,
+                      jsonStringLength: jsonString.length,
+                      ttl: 60 * 60,
+                      model: deepSearchResponse.model
                     });
-                  }, 20000);
-                })
-              ]);
-              
-              // Extract the content from the response object
-              const deepSearchContent = deepSearchResponse.content;
-              
-              edgeLogger.info('DeepSearch response received', {
-                operation: 'deep_search_response',
-                operationId,
-                responseLength: deepSearchContent.length,
-                model: deepSearchResponse.model,
-                timingMs: deepSearchResponse.timing.total,
-                isError: deepSearchResponse.model === 'error'
-              });
+                  } catch (storageError) {
+                    edgeLogger.error('Error storing DeepSearch in Redis cache', {
+                      operation: 'deep_search_cache_store_error',
+                      operationId,
+                      error: storageError instanceof Error ? storageError.message : String(storageError)
+                    });
+                  }
+                }
+              }
               
               if (deepSearchContent && 
                   deepSearchContent.length > 0 && 
@@ -416,8 +528,7 @@ export async function POST(req: Request) {
                   operationId,
                   contentLength: deepSearchContent.length,
                   firstChars: deepSearchContent.substring(0, 100) + '...',
-                  model: deepSearchResponse.model,
-                  responseTime: deepSearchResponse.timing.total,
+                  fromCache: deepSearchResponse ? deepSearchContent !== deepSearchResponse.content : true,
                   durationMs: Date.now() - deepSearchStartTime,
                   important: true
                 });
