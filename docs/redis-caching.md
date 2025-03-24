@@ -539,6 +539,83 @@ export async function findSimilarDocumentsOptimized(
 }
 ```
 
+## Web Scraper Cache Improvements
+
+Recent updates have improved the reliability of the web scraper's caching mechanism to resolve issues with object serialization and validation. These improvements were applied to both the direct route handler (`app/api/chat/route.ts`) and the middleware implementation (`lib/middleware/url-scraping-middleware.ts`).
+
+### Key Improvements
+
+1. **Consistent Object Structure**: We now ensure a consistent structure for cached scraper results:
+
+```typescript
+const cacheableResult = {
+  url: result.url,
+  title: result.title,
+  description: result.description || '',
+  content: result.content,
+  timestamp: Date.now()
+};
+```
+
+2. **Explicit JSON Serialization**: All data is explicitly serialized before storage:
+
+```typescript
+const jsonString = JSON.stringify(cacheableResult);
+await redis.set(cacheKey, jsonString, { ex: CACHE_CONFIG.ttl });
+```
+
+3. **Robust Type Validation**: When retrieving cached content, we now apply strict validation:
+
+```typescript
+// Ensure we're working with a string before parsing
+const parsedContent = typeof cachedContentStr === 'string' 
+  ? JSON.parse(cachedContentStr) 
+  : cachedContentStr; // If it's already an object, use it directly
+
+// Validate the parsed content has the required fields
+if (parsedContent && 
+    typeof parsedContent === 'object' && 
+    typeof parsedContent.content === 'string' && 
+    typeof parsedContent.title === 'string' && 
+    typeof parsedContent.url === 'string') {
+  // Use the cached content
+}
+```
+
+4. **Error Handling**: Comprehensive error handling for both storage and retrieval operations:
+
+```typescript
+try {
+  // Storage or retrieval operations
+} catch (error) {
+  edgeLogger.error('Error details', {
+    url: validUrl,
+    error: error instanceof Error ? error.message : String(error),
+    // Additional diagnostic information
+  });
+}
+```
+
+5. **Detailed Logging**: Enhanced logging includes metrics on content size, JSON string length, and cache operations:
+
+```typescript
+edgeLogger.info('Stored scraped content in Redis cache', { 
+  url: validUrl,
+  contentLength: result.content.length,
+  jsonStringLength: jsonString.length,
+  ttl: CACHE_CONFIG.ttl
+});
+```
+
+### Implementation Notes
+
+- **Cache Keys**: Web scraper cache keys follow the format `scrape:{validUrl}` for direct lookups
+- **TTL Setting**: Cached web content expires after 6 hours (21,600 seconds)
+- **Validation Strategy**: We validate both the structure and individual field types to prevent "[object Object]" errors
+- **Fallback Handling**: If cache retrieval fails, we gracefully fall back to scraping the URL
+
+These improvements ensure greater reliability and consistency in the caching mechanism for scraped web content, applying the same patterns used in the RAG caching system.
+
 ## Recent Fixes and Improvements
 
 We recently fixed several critical issues with the Redis cache implementation:

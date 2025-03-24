@@ -574,6 +574,132 @@ try {
 }
 ```
 
+## Redis Caching Fixes
+
+Recent updates have resolved issues with Redis caching for the web scraper, addressing JSON serialization problems and preventing the common "[object Object]" validation errors.
+
+### JSON Serialization Improvements
+
+The most critical fix addresses improper object serialization, which previously could cause cache validation failures:
+
+```typescript
+// BEFORE: Potentially problematic - direct storage of result object
+await redis.set(cacheKey, result, { ex: 60 * 60 * 6 });
+// or
+await redis.set(cacheKey, JSON.stringify(result), { ex: 60 * 60 * 6 });
+
+// AFTER: Improved approach - consistent object structure and explicit serialization
+const cacheableResult = {
+  url: result.url,
+  title: result.title,
+  description: result.description || '',
+  content: result.content,
+  timestamp: Date.now()
+};
+
+const jsonString = JSON.stringify(cacheableResult);
+await redis.set(cacheKey, jsonString, { ex: 60 * 60 * 6 });
+```
+
+### Type-Aware Serialization
+
+We now handle different response types properly:
+
+```typescript
+// Type-aware handling of different response formats
+if (typeof scraperResult === 'string') {
+  // If it's a JSON string, parse it
+  result = JSON.parse(scraperResult);
+  edgeLogger.info('Parsed string result from scraper', {
+    resultType: 'json-string',
+    parsed: true
+  });
+} else if (scraperResult && typeof scraperResult === 'object') {
+  // If it's already an object, use it directly
+  result = scraperResult;
+  edgeLogger.info('Using object result from scraper', {
+    resultType: 'object'
+  });
+}
+```
+
+### Data Validation
+
+Improved validation when retrieving cached content:
+
+```typescript
+// Ensure we're working with a string before parsing
+const parsedContent = typeof cachedContentStr === 'string' 
+  ? JSON.parse(cachedContentStr) 
+  : cachedContentStr; // If it's already an object, use it directly
+
+// Validate the parsed content has the required fields with explicit type checking
+if (parsedContent && 
+    typeof parsedContent === 'object' && 
+    typeof parsedContent.content === 'string' && 
+    typeof parsedContent.title === 'string' && 
+    typeof parsedContent.url === 'string') {
+  // Use the valid cached content
+} else {
+  // Handle invalid cache structure
+}
+```
+
+### Enhanced Error Reporting
+
+We've added detailed error logging to pinpoint issues:
+
+```typescript
+// When parsing fails, include helpful diagnostic information
+edgeLogger.error('Error parsing cached content', {
+  url: validUrl,
+  error: parseError instanceof Error ? parseError.message : String(parseError),
+  cachedContentSample: typeof cachedContentStr === 'string' 
+    ? cachedContentStr.substring(0, 100) + '...' 
+    : `type: ${typeof cachedContentStr}`
+});
+```
+
+### Cache Key Strategy
+
+A simple cache key format ensures consistent storage and retrieval:
+
+```typescript
+const cacheKey = `scrape:${validUrl}`;
+```
+
+### Cache Diagnostics
+
+New logging patterns help identify cache hits and misses:
+
+```typescript
+// Cache hit logging
+edgeLogger.info('Redis cache hit for URL', {
+  url: validUrl,
+  cacheHit: true,
+  contentLength: result.content.length,
+  cacheSource: 'redis'
+});
+
+// Cache miss logging
+edgeLogger.info('No Redis cache hit - calling puppeteer scraper', { 
+  url: validUrl 
+});
+```
+
+### Storage and Retrieval Process
+
+The complete flow for storing and retrieving scraped content:
+
+1. **Check Cache**: First try to retrieve content using the URL as a key
+2. **Validate Response**: Ensure cached content has the required structure
+3. **Scrape If Needed**: If cache miss or validation fails, perform scraping
+4. **Format Result**: Ensure the result has a consistent structure
+5. **Store in Cache**: Serialize and store with appropriate TTL
+6. **Format Content**: Format the final content for AI consumption
+
+This improved caching system ensures scraped content is properly stored and retrieved, eliminating the "[object Object]" validation errors that previously occurred.
+
 ## Future Enhancements
 
 1. **Multi-URL Processing**

@@ -391,25 +391,47 @@ export const urlScrapingMiddleware: LanguageModelV1Middleware = {
           
           if (cachedContentStr) {
             try {
-              // Parse cached content from JSON string
-              const cachedContent = JSON.parse(cachedContentStr as string) as ScrapedContent;
+              // Ensure we're working with a string before parsing
+              const parsedContent = typeof cachedContentStr === 'string' 
+                ? JSON.parse(cachedContentStr) 
+                : cachedContentStr; // If it's already an object, use it directly
               
-              edgeLogger.info('Cache hit for URL in middleware', {
-                url: validUrl,
-                cacheHit: true,
-                contentLength: cachedContent.content.length,
-                durationMs: Date.now() - startTime
-              });
-              
-              scrapedContents.push(formatScrapedContent({
-                ...cachedContent,
-                url: validUrl
-              }));
-              continue;
-            } catch (error) {
-              edgeLogger.error('Error parsing cached content', {
-                url: validUrl,
-                error: error instanceof Error ? error.message : String(error)
+              // Validate the parsed content has the required fields
+              if (parsedContent && 
+                  typeof parsedContent === 'object' && 
+                  typeof parsedContent.content === 'string' && 
+                  typeof parsedContent.title === 'string' && 
+                  typeof parsedContent.url === 'string') {
+                
+                edgeLogger.info('URL scraping middleware: Redis cache hit', { 
+                  url, 
+                  contentLength: parsedContent.content.length,
+                  cacheSource: 'redis'
+                });
+                
+                // Add the formatted content to our scrapedContents array
+                scrapedContents.push(formatScrapedContent(parsedContent));
+                
+                edgeLogger.debug('URL scraping middleware: Added cached content to results', {
+                  url,
+                  contentLength: parsedContent.content.length,
+                  fromCache: true
+                });
+                
+                continue; // Skip to next URL since we got content from cache
+              } else {
+                edgeLogger.warn('URL scraping middleware: Invalid cached content structure', {
+                  url,
+                  fields: parsedContent ? Object.keys(parsedContent) : 'none'
+                });
+              }
+            } catch (parseError) {
+              edgeLogger.error('URL scraping middleware: Error parsing cached content', {
+                url,
+                error: parseError instanceof Error ? parseError.message : String(parseError),
+                cachedContentSample: typeof cachedContentStr === 'string' 
+                  ? cachedContentStr.substring(0, 100) + '...' 
+                  : `type: ${typeof cachedContentStr}`
               });
               // Continue with scraping since parsing failed
             }
@@ -437,8 +459,32 @@ export const urlScrapingMiddleware: LanguageModelV1Middleware = {
           });
           
           // Store in Redis cache with explicit JSON stringification
-          await redis.set(cacheKey, JSON.stringify(result), { ex: CACHE_CONFIG.ttl });
-          edgeLogger.info('Stored scraped content in cache', { url: validUrl });
+          try {
+            // Create a cache-friendly structure that matches what we always expect
+            const cacheableResult = {
+              url: result.url,
+              title: result.title,
+              description: result.description || '',
+              content: result.content,
+              timestamp: Date.now()
+            };
+            
+            // Store in Redis cache with explicit JSON stringification
+            const jsonString = JSON.stringify(cacheableResult);
+            await redis.set(cacheKey, jsonString, { ex: CACHE_CONFIG.ttl });
+            
+            edgeLogger.info('URL scraping middleware: Stored scraped content in Redis cache', { 
+              url: validUrl,
+              contentLength: result.content.length,
+              jsonStringLength: jsonString.length,
+              ttl: CACHE_CONFIG.ttl
+            });
+          } catch (storageError) {
+            edgeLogger.error('URL scraping middleware: Error storing in Redis cache', {
+              url: validUrl,
+              error: storageError instanceof Error ? storageError.message : String(storageError)
+            });
+          }
           
           edgeLogger.info('Scraped URL in middleware', {
             url: validUrl,

@@ -750,11 +750,16 @@ SOURCE: ${url}
               if (cachedContentStr) {
                 // Parse cached content with error handling
                 try {
-                  const parsedContent = JSON.parse(cachedContentStr as string);
+                  // Ensure we're working with a string before parsing
+                  const parsedContent = typeof cachedContentStr === 'string' 
+                    ? JSON.parse(cachedContentStr) 
+                    : cachedContentStr; // If it's already an object, use it directly
                   
                   // Validate the parsed content has the required fields
                   if (parsedContent && typeof parsedContent === 'object' && 
-                      parsedContent.content && parsedContent.title && parsedContent.url) {
+                      typeof parsedContent.content === 'string' && 
+                      typeof parsedContent.title === 'string' && 
+                      typeof parsedContent.url === 'string') {
                     result = parsedContent;
                     edgeLogger.info('Redis cache hit for URL', {
                       url: validUrl,
@@ -821,12 +826,23 @@ SOURCE: ${url}
                   throw new Error('Missing required fields in scraper result');
                 }
                 
+                // Create a cache-friendly structure that matches what we always expect
+                const cacheableResult = {
+                  url: result.url,
+                  title: result.title,
+                  description: result.description || '',
+                  content: result.content,
+                  timestamp: Date.now()
+                };
+                
                 // Store in Redis cache with explicit JSON stringification
                 try {
-                  await redis.set(cacheKey, JSON.stringify(result), { ex: 60 * 60 * 6 }); // 6 hours TTL
+                  const jsonString = JSON.stringify(cacheableResult);
+                  await redis.set(cacheKey, jsonString, { ex: 60 * 60 * 6 }); // 6 hours TTL
                   edgeLogger.info('Stored scraped content in Redis cache', { 
                     url: validUrl,
                     contentLength: result.content.length,
+                    jsonStringLength: jsonString.length,
                     storedAt: new Date().toISOString()
                   });
                 } catch (storageError) {
