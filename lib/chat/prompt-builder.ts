@@ -207,7 +207,7 @@ export function optimizeToolResults(
 }
 
 /**
- * Builds a system prompt with tool results, user profile data, chat history and reporting instructions
+ * Builds an enhanced system prompt with tool results
  */
 export async function buildEnhancedSystemPrompt(
   basePrompt: string,
@@ -216,24 +216,27 @@ export async function buildEnhancedSystemPrompt(
   userId?: string,
   userQuery?: string
 ): Promise<string> {
-  // Optimize tool results to reduce token usage - now with query context for better relevance
-  const optimizedResults = optimizeToolResults(toolResults, undefined, userQuery);
+  let enhancedSystemPrompt = basePrompt;
   
-  // Add a summary of tools used at the beginning in priority order
-  let enhancedPrompt = `RESOURCES USED IN THIS RESPONSE:\n${toolsUsed.map(tool => {
-    if (tool === 'Knowledge Base' && optimizedResults.ragContent) {
-      return `- Knowledge Base: ${optimizedResults.ragContent.length} characters`;
-    }
-    if (tool === 'Web Scraper' && optimizedResults.webScraper) {
-      return `- Web Scraper: ${optimizedResults.webScraper.length} characters`;
-    }
-    if (tool === 'Deep Search' && optimizedResults.deepSearch) {
-      return `- Deep Search: ${optimizedResults.deepSearch.length} characters`;
-    }
-    return `- ${tool}: No content`;
-  }).join('\n')}\n\n`;
+  // 1. Add RAG results at the top - highest priority context
+  if (toolResults.ragContent && toolsUsed.includes('Knowledge Base')) {
+    enhancedSystemPrompt += `\n\n### KNOWLEDGE BASE RESULTS ###\nThe following information was retrieved from the knowledge base and is highly relevant to the query:\n\n${toolResults.ragContent}\n\n`;
+  }
   
-  // If we have a userId, fetch and add user profile information
+  // 2. Add web scraper results - medium priority context
+  if (toolResults.webScraper && toolsUsed.includes('Web Scraper')) {
+    enhancedSystemPrompt += `\n\n### WEB CONTENT RESULTS ###\nThe following information was scraped from web pages related to the query:\n\n${toolResults.webScraper}\n\n`;
+  }
+  
+  // 3. Add Deep Search results - useful additional context
+  if (toolResults.deepSearch && toolsUsed.includes('Deep Search')) {
+    enhancedSystemPrompt += `\n\n### DEEP SEARCH RESULTS ###\nThe following information was retrieved through a comprehensive web search using Perplexity:\n\n${toolResults.deepSearch}\n\n`;
+    
+    // Add specific instructions about how to use the DeepSearch information
+    enhancedSystemPrompt += `\nPlease incorporate the Deep Search results appropriately in your response. The information may include current facts, data, or context that can enhance your answer. Use the most relevant parts of these results to support your response when applicable. You may mention that information was retrieved through web search only if it adds value to the response, such as when providing fresh or factual information.\n\n`;
+  }
+
+  // 4. Add user profile information - personalization layer
   if (userId) {
     try {
       const supabase = await createServerClient();
@@ -246,29 +249,29 @@ export async function buildEnhancedSystemPrompt(
         .maybeSingle();
         
       if (!profileError && userProfile) {
-        enhancedPrompt += `### PHOTOGRAPHY BUSINESS CONTEXT ###\nYou are speaking with a photography studio with the following details:\n`;
+        enhancedSystemPrompt += `### PHOTOGRAPHY BUSINESS CONTEXT ###\nYou are speaking with a photography studio with the following details:\n`;
         
         if (userProfile.company_name) {
-          enhancedPrompt += `- Studio Name: ${userProfile.company_name}\n`;
+          enhancedSystemPrompt += `- Studio Name: ${userProfile.company_name}\n`;
         }
         
         if (userProfile.website_url) {
-          enhancedPrompt += `- Website: ${userProfile.website_url}\n`;
+          enhancedSystemPrompt += `- Website: ${userProfile.website_url}\n`;
         }
         
         if (userProfile.location) {
-          enhancedPrompt += `- Location: ${userProfile.location}\n`;
+          enhancedSystemPrompt += `- Location: ${userProfile.location}\n`;
         }
         
         if (userProfile.company_description) {
-          enhancedPrompt += `- Description: ${userProfile.company_description}\n`;
+          enhancedSystemPrompt += `- Description: ${userProfile.company_description}\n`;
         }
         
         if (userProfile.website_summary) {
-          enhancedPrompt += `- ${userProfile.website_summary}\n`;
+          enhancedSystemPrompt += `- ${userProfile.website_summary}\n`;
         }
         
-        enhancedPrompt += `\nPlease tailor your responses to be relevant to their photography business. This is a professional context where they are looking for assistance with their photography studio needs.\n\n`;
+        enhancedSystemPrompt += `\nPlease tailor your responses to be relevant to their photography business. This is a professional context where they are looking for assistance with their photography studio needs.\n\n`;
         
         edgeLogger.info('Added photography business profile to system prompt', { 
           userId,
@@ -309,7 +312,7 @@ export async function buildEnhancedSystemPrompt(
         const recentSessions = Object.keys(sessionGroups).slice(0, 1);
         
         if (recentSessions.length > 0) {
-          enhancedPrompt += `### RECENT CONVERSATION CONTEXT ###\n`;
+          enhancedSystemPrompt += `### RECENT CONVERSATION CONTEXT ###\n`;
           
           recentSessions.forEach(sessionId => {
             // Sort messages by created_at
@@ -329,7 +332,7 @@ export async function buildEnhancedSystemPrompt(
                 }
                 
                 // Add role-specific formatting
-                enhancedPrompt += `${msg.role === 'user' ? 'User' : 'Assistant'}: ${formattedContent}\n`;
+                enhancedSystemPrompt += `${msg.role === 'user' ? 'User' : 'Assistant'}: ${formattedContent}\n`;
                 
                 // For assistant messages, include the tools used if available
                 if (msg.role === 'assistant' && msg.tools_used && msg.tools_used.length > 0) {
@@ -339,13 +342,13 @@ export async function buildEnhancedSystemPrompt(
                       ? Object.keys(msg.tools_used).join(', ')
                       : String(msg.tools_used);
                       
-                  enhancedPrompt += `(Used: ${toolsStr})\n`;
+                  enhancedSystemPrompt += `(Used: ${toolsStr})\n`;
                 }
               });
             }
           });
           
-          enhancedPrompt += `\n`;
+          enhancedSystemPrompt += `\n`;
           
           edgeLogger.info('Added conversation context to system prompt', { 
             userId,
@@ -360,49 +363,19 @@ export async function buildEnhancedSystemPrompt(
     }
   }
   
-  // Add the base prompt (System Message is the highest priority)
-  enhancedPrompt += basePrompt;
-  
-  // Enhance with tool results in priority order (manually instead of using enhancePromptWithToolResults)
-  // This ensures we follow priority: 1. System Message 2. RAG 3. Web Scraper 4. Deep Search
-  
-  // Add Knowledge Base (RAG) results - highest priority after system message
-  if (optimizedResults.ragContent && toolsUsed.includes('Knowledge Base')) {
-    enhancedPrompt += `\n\n### KNOWLEDGE BASE RESULTS ###\n${optimizedResults.ragContent}`;
-    edgeLogger.info('Added Knowledge Base results to prompt', {
-      contentLength: optimizedResults.ragContent.length
-    });
-  }
-  
-  // Add Web Scraper results - second priority
-  if (optimizedResults.webScraper && toolsUsed.includes('Web Scraper')) {
-    enhancedPrompt += `\n\n### WEB CONTENT ###\n${optimizedResults.webScraper}`;
-    edgeLogger.info('Added Web Scraper results to prompt', {
-      contentLength: optimizedResults.webScraper.length
-    });
-  }
-  
-  // Add Deep Search results - lowest priority
-  if (optimizedResults.deepSearch && toolsUsed.includes('Deep Search')) {
-    enhancedPrompt += `\n\n### DEEP SEARCH RESULTS ###\n${optimizedResults.deepSearch}`;
-    edgeLogger.info('Added Deep Search results to prompt', {
-      contentLength: optimizedResults.deepSearch.length
-    });
-  }
-  
   // Add detailed instructions for reporting tools used
-  enhancedPrompt += `\n\nIMPORTANT: At the end of your response, you MUST include a section titled "--- Tools and Resources Used ---" that lists all the resources used to generate your response. Format it exactly like this:
+  enhancedSystemPrompt += `\n\nIMPORTANT: At the end of your response, you MUST include a section titled "--- Tools and Resources Used ---" that lists all the resources used to generate your response. Format it exactly like this:
 
 --- Tools and Resources Used ---
 ${toolsUsed.map(tool => {
-  if (tool === 'Knowledge Base' && optimizedResults.ragContent) {
-    return `- Knowledge Base: Retrieved ${optimizedResults.ragContent.length} characters of relevant information`;
+  if (tool === 'Knowledge Base' && toolResults.ragContent) {
+    return `- Knowledge Base: Retrieved ${toolResults.ragContent.length} characters of relevant information`;
   }
-  if (tool === 'Web Scraper' && optimizedResults.webScraper) {
-    return `- Web Scraper: Analyzed content with ${optimizedResults.webScraper.length} characters`;
+  if (tool === 'Web Scraper' && toolResults.webScraper) {
+    return `- Web Scraper: Analyzed content with ${toolResults.webScraper.length} characters`;
   }
-  if (tool === 'Deep Search' && optimizedResults.deepSearch) {
-    return `- Deep Search: Retrieved ${optimizedResults.deepSearch.length} characters of additional context through web search`;
+  if (tool === 'Deep Search' && toolResults.deepSearch) {
+    return `- Deep Search: Retrieved ${toolResults.deepSearch.length} characters of additional context through web search`;
   }
   return `- ${tool}: No content retrieved`;
 }).join('\n')}
@@ -410,14 +383,14 @@ ${toolsUsed.map(tool => {
 This section is REQUIRED and must be included at the end of EVERY response.`;
   
   edgeLogger.info('Built enhanced system prompt', {
-    promptLength: enhancedPrompt.length,
+    promptLength: enhancedSystemPrompt.length,
     toolsUsed,
     includesUserProfile: !!userId,
     includesTools: toolsUsed.length > 0,
     toolPriorities: 'System > RAG > Web Scraper > Deep Search'
   });
   
-  return enhancedPrompt;
+  return enhancedSystemPrompt;
 }
 
 /**

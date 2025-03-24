@@ -1,1 +1,1 @@
-export { deepSearchTool, streamingDeepSearch } from './deep-search-tool'; 
+export { callPerplexityAPI, streamPerplexityAPI } from './api'; 

@@ -1,139 +1,216 @@
-// Remove static import 
-// import { OpenAI } from 'openai';
+import { z } from "zod";
+import { AgentTool } from "../../core/agent-types";
+import { createAgentLogger } from "../../core/agent-logger";
 
-// Simple console logger for testing
-const logger = {
-  debug: (message: string, context = {}) => console.debug(`[agent:tools:perplexity:api] ${message}`, context),
-  info: (message: string, context = {}) => console.info(`[agent:tools:perplexity:api] ${message}`, context),
-  warn: (message: string, context = {}) => console.warn(`[agent:tools:perplexity:api] ${message}`, context),
-  error: (message: string | Error, context = {}) => console.error(`[agent:tools:perplexity:api] ${message}`, context)
-};
+const API_URL = "https://api.perplexity.ai/chat/completions";
 
-// Constants
-const BASE_URL = 'https://api.perplexity.ai';
-const DEFAULT_MODEL = 'sonar-pro';
-const SYSTEM_PROMPT = 'You are a deep research agent for an agent team. Please bring back the most comprehensive and relevant context in your searches. Focus on factual information, include specific details, statistics, and cite sources when possible. Format your response in a structured way that will be easy for other agents to parse and utilize.';
+// Create a tool-specific logger based on the agent logger
+function createToolLogger(toolId: string) {
+  return createAgentLogger(`tool:${toolId}` as any, {});
+}
 
-// Use a reference type for the client to properly handle dynamic imports
-type PerplexityClient = any;
-let perplexityClient: PerplexityClient | null = null;
+const logger = createToolLogger("perplexity");
+
+// Runtime detection for better error handling
+const isEdgeRuntime = typeof (globalThis as any).EdgeRuntime === 'string';
+const runtime = isEdgeRuntime ? 'edge' : 'node';
+
+// Safeguard initialization
+let isInitialized = false;
 
 /**
- * Get or create the Perplexity API client
+ * Get the status of the Perplexity API client
  */
-async function getClient() {
-  if (!perplexityClient) {
+export function getClient() {
+  if (!isInitialized) {
     if (!process.env.PERPLEXITY_API_KEY) {
-      throw new Error('PERPLEXITY_API_KEY environment variable is required');
+      logger.warn("PERPLEXITY_API_KEY is not set in environment variables", {
+        operation: "perplexity_init_failed",
+        important: true
+      });
+      throw new Error("PERPLEXITY_API_KEY is not set");
     }
-    
-    // Dynamically import OpenAI only when needed
-    const { OpenAI } = await import('openai');
-    
-    perplexityClient = new OpenAI({
-      apiKey: process.env.PERPLEXITY_API_KEY,
-      baseURL: BASE_URL,
+
+    isInitialized = true;
+    logger.info("Perplexity API client initialized", {
+      operation: "perplexity_init_success",
+      runtime
     });
   }
-  
-  return perplexityClient;
+  return { isReady: true };
 }
 
 /**
- * Call Perplexity API to get research results
+ * Call the Perplexity API to get enhanced search results
+ * This implementation uses the serverless endpoint to avoid VPN detection issues
  */
-export async function callPerplexityAPI(query: string) {
-  const startTime = performance.now();
+export async function callPerplexityAPI(query: string): Promise<{
+  content: string;
+  model: string;
+  timing: { total: number };
+}> {
+  const startTime = Date.now();
+  const operationId = `perplexity-${Date.now().toString(36)}`;
   
   try {
-    const client = await getClient();
+    // Runtime environment detection for debugging
+    const runtimeInfo = {
+      type: runtime,
+      environment: process.env.NODE_ENV || 'development',
+      vercelEnv: process.env.VERCEL_ENV || 'unknown'
+    };
     
-    logger.debug('Calling Perplexity API', { 
-      query,
-      model: DEFAULT_MODEL
+    logger.info("Calling Perplexity API via serverless function", {
+      operation: "perplexity_call_started",
+      operationId,
+      queryLength: query.length,
+      queryPreview: query.substring(0, 100) + (query.length > 100 ? "..." : ""),
+      runtime: runtimeInfo,
+      important: true
+    });
+
+    // Get base URL for API endpoint
+    const protocol = process.env.NODE_ENV === 'development' ? 'http' : 'https';
+    const host = process.env.VERCEL_URL || 'localhost:3000';
+    const apiUrl = `${protocol}://${host}/api/perplexity`;
+
+    logger.info("Perplexity serverless API request", {
+      operation: "perplexity_serverless_request",
+      operationId,
+      url: apiUrl,
+      runtime: runtimeInfo.type
     });
     
-    const response = await client.chat.completions.create({
-      model: DEFAULT_MODEL,
-      messages: [
-        {
-          role: 'system',
-          content: SYSTEM_PROMPT
-        },
-        {
-          role: 'user',
-          content: query
-        }
-      ]
+    // Call our serverless API endpoint
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ query })
     });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      
+      logger.error("Perplexity serverless API error response", {
+        operation: "perplexity_serverless_error",
+        operationId,
+        statusCode: response.status,
+        statusText: response.statusText,
+        errorText: errorText.substring(0, 500),
+        runtime: runtimeInfo.type,
+        important: true
+      });
+      
+      throw new Error(`Perplexity API error: ${response.status} ${response.statusText} - ${errorText}`);
+    }
     
-    const content = response.choices[0]?.message?.content || '';
-    const endTime = performance.now();
+    const result = await response.json();
     
-    logger.info('Perplexity API call successful', {
-      responseTime: Math.round(endTime - startTime),
-      contentLength: content.length
+    if (!result.success) {
+      throw new Error(`Serverless API error: ${result.error}`);
+    }
+    
+    // Extract data from the serverless API response
+    const data = result.data;
+    const content = data.choices[0].message.content;
+    
+    const duration = Date.now() - startTime;
+    
+    logger.info("Perplexity API call successful via serverless", {
+      operation: "perplexity_call_success",
+      operationId,
+      responseLength: content.length,
+      model: data.model,
+      durationMs: duration,
+      runtime: runtimeInfo.type,
+      important: true
     });
-    
+
     return {
       content,
-      model: response.model,
-      usage: response.usage,
-      timing: {
-        total: Math.round(endTime - startTime)
-      }
+      model: data.model,
+      timing: { total: duration }
     };
   } catch (error) {
-    const endTime = performance.now();
-    logger.error('Perplexity API call failed', {
-      error: error instanceof Error ? error.message : String(error),
-      responseTime: Math.round(endTime - startTime)
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const duration = Date.now() - startTime;
+    
+    logger.error("Error calling Perplexity API", {
+      operation: "perplexity_call_error",
+      operationId,
+      error: error instanceof Error ? {
+        name: error.name,
+        message: error.message,
+        stack: error.stack
+      } : String(error),
+      runtime,
+      durationMs: duration,
+      important: true
     });
     
-    throw error;
+    // Provide a fallback mechanism for errors
+    return {
+      content: `DeepSearch was unable to complete due to a technical issue: ${errorMessage}. Continuing with available knowledge.`,
+      model: "error",
+      timing: { total: duration }
+    };
   }
 }
 
 /**
  * Stream results from Perplexity API
+ * Note: Streaming is not supported through the serverless function currently
  */
-export async function streamPerplexityAPI(query: string, onChunk: (chunk: string) => void) {
+export async function streamPerplexityAPI(
+  query: string,
+  callbacks: {
+    onStart?: () => void;
+    onToken?: (token: string) => void;
+    onComplete?: (fullResponse: string) => void;
+    onError?: (error: Error) => void;
+  }
+) {
+  const startTime = Date.now();
+  const operationId = `perplexity-stream-${Date.now().toString(36)}`;
+  let fullResponse = "";
+  
   try {
-    logger.debug('Starting streaming Perplexity API call', { query });
-    
-    const client = await getClient();
-    
-    const stream = await client.chat.completions.create({
-      model: DEFAULT_MODEL,
-      messages: [
-        {
-          role: 'system',
-          content: SYSTEM_PROMPT
-        },
-        {
-          role: 'user',
-          content: query
-        }
-      ],
-      stream: true,
+    // Log stream start with runtime info for debugging
+    logger.info("Perplexity streaming not supported with serverless function", {
+      operation: "perplexity_stream_fallback",
+      operationId,
+      important: true
     });
+
+    // Call non-streaming API instead
+    callbacks.onStart?.();
     
-    // Process the stream
-    for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content || '';
-      if (content) {
-        onChunk(content);
-      }
+    // Get the non-streaming response
+    const result = await callPerplexityAPI(query);
+    fullResponse = result.content;
+    
+    // Simulate streaming by breaking the response into tokens
+    const tokens = fullResponse.split(/(\s+)/);
+    for (const token of tokens) {
+      callbacks.onToken?.(token);
+      // Add a small delay to simulate streaming
+      await new Promise(resolve => setTimeout(resolve, 10));
     }
     
-    logger.info('Streaming Perplexity API call completed', { query });
+    callbacks.onComplete?.(fullResponse);
     
+    return fullResponse;
   } catch (error) {
-    logger.error('Error in streaming Perplexity API call', {
-      query,
-      error
+    logger.error("Perplexity streaming fallback failed", {
+      operation: "perplexity_stream_error",
+      operationId,
+      error: error instanceof Error ? error.message : String(error),
+      important: true
     });
     
-    throw error;
+    callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+    return "";
   }
 } 

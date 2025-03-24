@@ -17,6 +17,15 @@ const nextConfig = {
     parallelServerBuildTraces: true,
     parallelServerCompiles: true,
   },
+  // Add environment variables that can be used in Edge Runtime
+  env: {
+    PERPLEXITY_API_KEY: process.env.PERPLEXITY_API_KEY,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY, 
+    SUPABASE_URL: process.env.SUPABASE_URL, 
+    SUPABASE_KEY: process.env.SUPABASE_KEY,
+    NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  },
   // Add security headers config
   async headers() {
     return [

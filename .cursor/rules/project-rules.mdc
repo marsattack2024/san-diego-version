@@ -3,6 +3,8 @@ description: Core Project Rules
 globs: 
 alwaysApply: true
 ---
+Here's the improved version with Vercel AI SDK focus instead of OpenAI:
+
 # Next.js AI Application Development & Interaction Rules (ESM Edition)
 
 ## Core Engineering Principles
@@ -10,14 +12,14 @@ alwaysApply: true
 - Provide actual TypeScript/React code snippets using ESM syntax when asked for fixes
 - Use import/export statements instead of require/module.exports in all code examples
 - Keep communication direct and concise, respecting your expertise with Next.js and React
-- Suggest optimizations for OpenAI API usage and Vercel AI SDK implementations you might not have considered
-- Treat you as a new developer explaining most steps.
+- Suggest optimizations for Vercel AI SDK implementations you might not have considered
+- Treat you as a new developer explaining most steps
 - Present solutions immediately, followed by rationale only when necessary
 - When ambiguous, restate requirements to confirm understanding before implementing
 - Prioritize practical solutions over theoretical best practices; what works is more important than adhering to specific patterns
 - Consider experimental React/Next.js features and alternative approaches to conventional patterns
 - Clearly mark speculative performance optimizations or experimental API techniques
-- Discuss security only when it directly impacts OpenAI API usage or user data
+- Discuss security only when it directly impacts AI usage or user data
 - When content policy affects AI feature implementation, provide alternative approaches
 - Include relevant docs and GitHub issues at the end of responses
 - Respect prettier/ESLint configuration in all code examples
@@ -62,7 +64,7 @@ alwaysApply: true
 
 ## TypeScript & Error Handling
 
-- Apply precise TypeScript types for OpenAI and Vercel AI SDK interfaces
+- Apply precise TypeScript types for Vercel AI SDK interfaces
 - Use ESM-compatible TypeScript imports and exports
 - Handle API errors gracefully without breaking UI rendering
 - Provide clear error boundaries and fallback components
@@ -71,7 +73,7 @@ alwaysApply: true
 - Make logging part of your plan when fixing or building new features
 - Use ESM syntax for importing types:
   ```typescript
-  import type { OpenAIStream } from 'ai';
+  import type { Message, StreamingTextResponse } from 'ai';
   ```
 
 ## AI Feature Implementation
@@ -81,9 +83,10 @@ alwaysApply: true
 - Break down complex AI interactions into manageable steps with clear data flow
 - Stay focused on the current AI feature without scope creep
 - Provide clear success criteria for AI feature implementations
-- Use ESM imports for all AI SDK components:
+- Always use Vercel AI SDK for AI features, never import any LLM provider directly:
   ```javascript
-  import { OpenAIStream, StreamingTextResponse } from 'ai';
+  import { useChat, useCompletion } from 'ai/react';
+  import { StreamingTextResponse, Message } from 'ai';
   ```
 
 ## Application Context Awareness
@@ -98,7 +101,7 @@ alwaysApply: true
 
 - Provide flexible implementations that allow for experimentation with AI parameters
 - Present multiple approaches to AI feature implementation when relevant
-- Explain tradeoffs between different OpenAI models and Vercel AI SDK features
+- Explain tradeoffs between different models accessible through Vercel AI SDK
 - Support clear debugging and testing strategies for AI components
 - Take advantage of ESM-specific features like top-level await and dynamic imports
 
@@ -114,24 +117,32 @@ alwaysApply: true
 ### TypeScript Best Practices with ESM
 - Create proper interfaces for all AI-related data structures
 - Use discriminated unions for different AI response types
-- Implement proper error typing for OpenAI API responses
+- Implement proper error typing for AI SDK responses
 - Utilize generics for reusable AI utility functions
 - Follow ESM import/export patterns in TypeScript files:
   ```typescript
   // Export types and interfaces
-  export interface UserData {
+  export interface ChatSession {
     id: string;
-    name: string;
+    messages: Message[];
   }
   
   // Import types
-  import type { UserData } from './types.js';
+  import type { ChatSession } from './types.js';
   ```
 
-### Shadcn/UI Integration
-- Use appropriate Shadcn components for AI interaction UIs
-- Implement proper loading states and skeleton components
-- Import Shadcn components using ESM syntax:
+### Vercel AI SDK Integration
+- Use appropriate hooks from Vercel AI SDK (useChat, useCompletion)
+- Implement proper streaming with the StreamingTextResponse helper
+- Use tools and functions framework for advanced AI capabilities
+- Implement effective retry and error handling for AI requests
+- Use AI SDK's built-in support for different model providers:
   ```javascript
   import { Button } from '@/components/ui/button.mjs';
+  import { useChat } from 'ai/react';
+  
+  export default function ChatUI() {
+    const { messages, input, handleInputChange, handleSubmit } = useChat();
+    // Rest of component...
+  }
   ```

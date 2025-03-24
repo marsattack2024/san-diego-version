@@ -19,32 +19,48 @@ export async function GET(request: NextRequest) {
         { status: 400 }
       );
     }
-
-    // Create Supabase client for auth
-    const cookieStore = await cookies();
-    const supabase = createSupabaseServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
-              );
-            } catch {
-              // This can be ignored if you have middleware refreshing users
-            }
-          },
-        },
-      }
-    );
     
-    // Get the current user
-    const { data: { user } } = await supabase.auth.getUser();
+    // Check for development mode fast path
+    const DEV_MODE_ENABLED = process.env.NODE_ENV === 'development' && 
+                           process.env.NEXT_PUBLIC_SKIP_AUTH_CHECKS === 'true';
+    
+    // Get authenticated user
+    let user;
+    
+    if (DEV_MODE_ENABLED) {
+      // Use mock user in development mode
+      user = {
+        id: '00000000-0000-4000-a000-000000000000',
+        email: 'dev@example.com'
+      };
+    } else {
+      // Create Supabase client for auth
+      const cookieStore = await cookies();
+      const supabase = createSupabaseServerClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+          cookies: {
+            getAll() {
+              return cookieStore.getAll();
+            },
+            setAll(cookiesToSet) {
+              try {
+                cookiesToSet.forEach(({ name, value, options }) =>
+                  cookieStore.set(name, value, options)
+                );
+              } catch {
+                // This can be ignored if you have middleware refreshing users
+              }
+            },
+          },
+        }
+      );
+      
+      // Get the current user
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      user = authUser;
+    }
     
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -52,6 +68,11 @@ export async function GET(request: NextRequest) {
     
     // Create Supabase client for database operations
     const serverClient = await createServerClient();
+    
+    // In development mode with SKIP_AUTH_CHECKS, we can skip DB checks
+    if (DEV_MODE_ENABLED) {
+      return NextResponse.json([]); // Return empty votes for development
+    }
     
     // Verify user has access to this chat session
     const { data: session_data, error: sessionError } = await serverClient
@@ -118,34 +139,56 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Create Supabase client for auth
-    const cookieStore = await cookies();
-    const supabase = createSupabaseServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll();
-          },
-          setAll(cookiesToSet) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
-              );
-            } catch {
-              // This can be ignored if you have middleware refreshing users
-            }
-          },
-        },
-      }
-    );
+    // Check for development mode fast path
+    const DEV_MODE_ENABLED = process.env.NODE_ENV === 'development' && 
+                           process.env.NEXT_PUBLIC_SKIP_AUTH_CHECKS === 'true';
     
-    // Get the current user's session
-    const { data: { user } } = await supabase.auth.getUser();
+    // Get authenticated user
+    let user;
+    
+    if (DEV_MODE_ENABLED) {
+      // Use mock user in development mode
+      user = {
+        id: '00000000-0000-4000-a000-000000000000',
+        email: 'dev@example.com'
+      };
+    } else {
+      // Create Supabase client for auth
+      const cookieStore = await cookies();
+      const supabase = createSupabaseServerClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+          cookies: {
+            getAll() {
+              return cookieStore.getAll();
+            },
+            setAll(cookiesToSet) {
+              try {
+                cookiesToSet.forEach(({ name, value, options }) =>
+                  cookieStore.set(name, value, options)
+                );
+              } catch {
+                // This can be ignored if you have middleware refreshing users
+              }
+            },
+          },
+        }
+      );
+      
+      // Get the current user's session
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      user = authUser;
+    }
     
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    
+    // In development mode, just return success without doing DB operations
+    if (DEV_MODE_ENABLED) {
+      edgeLogger.info('Development mode - skipping vote operation', { messageId, vote });
+      return NextResponse.json({ success: true });
     }
     
     // Create Supabase client for database operations

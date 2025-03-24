@@ -22,8 +22,14 @@ const authPaths = ['/login'];
 // Profile path that needs special handling
 const PROFILE_PATH = '/profile';
 
-// Cache duration in milliseconds (30 minutes)
-const CACHE_DURATION = 30 * 60 * 1000;
+// Cache duration in milliseconds (longer in development)
+const CACHE_DURATION = process.env.NODE_ENV === 'development'
+  ? 60 * 60 * 1000  // 60 minutes in development
+  : 30 * 60 * 1000; // 30 minutes in production
+
+// Development mode auth check shortcut
+const DEV_MODE_RELAXED_AUTH = process.env.NODE_ENV === 'development' && 
+                              process.env.NEXT_PUBLIC_SKIP_AUTH_CHECKS === 'true';
 
 export async function middleware(request: NextRequest) {
   // Generate a unique request ID for tracing
@@ -92,6 +98,27 @@ export async function middleware(request: NextRequest) {
     const { pathname } = request.nextUrl;
     const isProtectedPath = protectedPaths.some(path => pathname.startsWith(path));
     const isAuthPath = authPaths.some(path => pathname === path);
+    
+    // DEVELOPMENT SHORTCUT: In dev mode with NEXT_PUBLIC_SKIP_AUTH_CHECKS=true,
+    // we can bypass most auth checks to improve performance
+    if (DEV_MODE_RELAXED_AUTH) {
+      // For login page in dev mode, just redirect to chat
+      if (isAuthPath) {
+        return NextResponse.redirect(new URL('/chat', request.url));
+      }
+      
+      // For protected paths in dev mode, just add fake auth headers and continue
+      if (isProtectedPath) {
+        // Add dev-mode auth headers
+        supabaseResponse.headers.set('x-auth-valid', 'true');
+        supabaseResponse.headers.set('x-auth-time', Date.now().toString());
+        supabaseResponse.headers.set('x-supabase-auth', '00000000-0000-4000-a000-000000000000');
+        supabaseResponse.headers.set('x-has-profile', 'true');
+      }
+      
+      // Skip all other auth checks in dev mode
+      return addTimingHeaders(supabaseResponse, startTime, requestId);
+    }
     
     // Skip auth check for non-protected paths to reduce auth requests
     if (!isProtectedPath && !isAuthPath) {

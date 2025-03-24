@@ -1,23 +1,13 @@
-import axios from 'axios';
-import * as cheerio from 'cheerio';
+import { tool } from 'ai';
 import { z } from 'zod';
-import { createBasicTool } from '../core/agent-tools';
-import { clientLogger } from '../../logger/client-logger';
-import { extractUrls as extractUrlsFromUtils, ensureProtocol } from '../../chat/url-utils';
+import { ensureProtocol, extractUrls } from '../../chat/url-utils';
+import { edgeLogger } from '../../logger/edge-logger';
+import { LRUCache } from 'lru-cache';
 
-// URL detection regex pattern
-const URL_REGEX = /https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9][-a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-a-zA-Z0-9]{0,62})+\.?/gi;
-
-// Create a component-specific logger wrapper
-const logger = {
-  debug: (message: string, context = {}) => clientLogger.debug(`[agent:tools:web-scraper] ${message}`, context),
-  info: (message: string, context = {}) => clientLogger.info(`[agent:tools:web-scraper] ${message}`, context),
-  warn: (message: string, context = {}) => clientLogger.warn(`[agent:tools:web-scraper] ${message}`, context),
-  error: (message: string | Error, context = {}) => clientLogger.error(`[agent:tools:web-scraper] ${message}`, context)
-};
-
-// Define the ScrapedContent interface
-export interface ScrapedContent {
+/**
+ * Interface for scraped content response
+ */
+interface ScrapedContent {
   title: string;
   description: string;
   content: string;
@@ -25,450 +15,566 @@ export interface ScrapedContent {
 }
 
 /**
- * Scrapes content from a URL
+ * Stats interface for scraper metrics
  */
-async function scrapeUrl(url: string, depth: number = 0, maxDepth: number = 1): Promise<{
+interface ScraperStats {
+  headers: number;
+  paragraphs: number;
+  lists: number;
+  other: number;
+  characterCount?: number;
+  wordCount?: number;
+}
+
+/**
+ * Response interface for the puppeteer function
+ */
+interface PuppeteerResponseData {
+  url: string;
   title: string;
   description: string;
   content: string;
-  url: string;
-  linkedContents?: Array<{url: string, title: string, content: string}>;
-}> {
+  headers?: string[];
+  paragraphs?: string[];
+  metadata?: Record<string, any>;
+  [key: string]: any;  // Allow for additional fields in the response
+}
+
+/**
+ * Rate limiter for scraping requests
+ */
+const rateLimiter = {
+  lastRequestTime: 0,
+  minInterval: 1000, // Minimum 1 second between requests
+
+  canMakeRequest(): boolean {
+    const now = Date.now();
+    return now - this.lastRequestTime >= this.minInterval;
+  },
+
+  recordRequest() {
+    this.lastRequestTime = Date.now();
+  }
+};
+
+// Add cache for scraped content
+const scraperCache = new LRUCache<string, PuppeteerResponseData>({
+  max: 50, // Store up to 50 URLs
+  ttl: 1000 * 60 * 30, // Cache for 30 minutes
+});
+
+// Add cache for formatted content
+const formattedContentCache = new LRUCache<string, string>({
+  max: 50,
+  ttl: 1000 * 60 * 30,
+});
+
+/**
+ * Call the Google Cloud Puppeteer function to scrape a URL
+ */
+async function callPuppeteerScraper(url: string): Promise<PuppeteerResponseData> {
   const startTime = performance.now();
   const fullUrl = ensureProtocol(url);
   
-  try {
-    logger.debug('Scraping URL', { url: fullUrl, depth });
-    
-    const response = await axios.get(fullUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
-      },
-      timeout: 30000, // 30 second timeout (increased from 20s)
-      maxContentLength: 10 * 1024 * 1024, // 10MB max content size
-    });
-    
-    const html = response.data;
-    const $ = cheerio.load(html);
-    
-    // Remove script, style, and hidden elements that don't contribute to visible content
-    $('script, style, [style*="display:none"], [style*="display: none"], [hidden], .hidden, meta, link, noscript').remove();
-    
-    // Extract title
-    const title = $('title').text().trim() || $('h1').first().text().trim() || 'No title found';
-    
-    // Extract description
-    const description = $('meta[name="description"]').attr('content') || 
-                        $('meta[property="og:description"]').attr('content') || 
-                        $('p').first().text().trim().substring(0, 300) || 
-                        'No description found';
-    
-    // Extract main content
-    // First try to find main content containers
-    let contentSelectors = [
-      'article', 'main', '.content', '#content', '.post', '.article', 
-      // Additional selectors for better content extraction
-      '.entry-content', '.post-content', '.page-content', '.article-content',
-      '.blog-post', '.story', '#main-content', '.main-content',
-      '[role="main"]', '.body', '.entry', '.text', '.document',
-      // Add more specific selectors for common website layouts
-      '#primary', '.primary', '.container', '.wrapper', '.site-content',
-      '.page', '.single', '.post-body', '.entry-body', '.article-body'
-    ];
-    let content = '';
-    
-    for (const selector of contentSelectors) {
-      const element = $(selector);
-      if (element.length > 0) {
-        content = element.text().trim();
-        break;
-      }
-    }
-    
-    // If no content found, extract from paragraphs and headings
-    if (!content || content.length < 500) {
-      content = $('h1, h2, h3, h4, h5, h6, p, li, td, th, blockquote, pre, code')
-        .map((_, el) => {
-          const text = $(el).text().trim();
-          // Add formatting based on element type
-          if (el.name.startsWith('h')) {
-            return `## ${text}\n\n`;
-          }
-          return `${text}\n\n`;
-        })
-        .get()
-        .join('')
-        .trim();
-    }
-    
-    // If still no content, get body text
-    if (!content || content.length < 200) {
-      content = $('body').text().trim();
-    }
-    
-    // Clean up content
-    content = content
-      .replace(/\s+/g, ' ')
-      .replace(/\n\s*\n/g, '\n\n') // Normalize multiple newlines
-      .trim()
-      .substring(0, 50000); // Increased character limit to 50k
-    
-    // Recursively scrape linked pages if depth < maxDepth
-    let linkedContents: Array<{url: string, title: string, content: string}> | undefined = undefined;
-    if (depth < maxDepth) {
-      // Extract internal links from the same domain
-      const currentDomain = new URL(fullUrl).hostname;
-      const internalLinks = new Set<string>();
-      
-      $('a[href]').each((_, el) => {
-        try {
-          const href = $(el).attr('href');
-          if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
-          
-          const absoluteUrl = href.startsWith('http') ? href : new URL(href, fullUrl).toString();
-          const linkDomain = new URL(absoluteUrl).hostname;
-          
-          // Only include links from the same domain and limit to 3 links
-          if (linkDomain === currentDomain && internalLinks.size < 3) {
-            internalLinks.add(absoluteUrl);
-          }
-        } catch (e) {
-          // Ignore invalid URLs
-        }
-      });
-      
-      if (internalLinks.size > 0) {
-        logger.info(`Found ${internalLinks.size} internal links to scrape`, { 
-          parentUrl: fullUrl, 
-          links: Array.from(internalLinks) 
-        });
-        
-        // Scrape linked pages in parallel
-        const linkedScrapingPromises = Array.from(internalLinks).map(link => 
-          scrapeUrl(link, depth + 1, maxDepth)
-            .then(result => ({
-              url: result.url,
-              title: result.title,
-              content: result.content
-            }))
-            .catch(error => ({
-              url: link,
-              title: 'Error scraping linked page',
-              content: `Failed to scrape: ${error instanceof Error ? error.message : String(error)}`
-            }))
-        );
-        
-        linkedContents = await Promise.all(linkedScrapingPromises);
-      }
-    }
-    
-    const endTime = performance.now();
-    logger.info('URL scraped successfully', {
-      url: fullUrl,
-      executionTimeMs: Math.round(endTime - startTime),
-      contentLength: content.length,
-      depth,
-      linkedPagesCount: linkedContents?.length || 0
-    });
-    
-    return {
-      title,
-      description,
-      content,
-      url: fullUrl,
-      ...(linkedContents && linkedContents.length > 0 ? { linkedContents } : {})
-    };
-  } catch (error) {
-    const endTime = performance.now();
-    logger.error('Error scraping URL', {
-      url: fullUrl,
-      error,
-      executionTimeMs: Math.round(endTime - startTime),
-      depth
-    });
-    
-    return {
-      title: 'Error',
-      description: 'Failed to scrape URL',
-      content: `Failed to scrape URL: ${error instanceof Error ? error.message : String(error)}`,
-      url: fullUrl
-    };
-  }
-}
-
-/**
- * Scrapes all visible text from a page in a structured format
- */
-async function scrapeAllText(url: string): Promise<{
-  url: string;
-  title: string;
-  description: string;
-  textContent: {
-    headers: string[];
-    paragraphs: string[];
-    lists: { items: string[]; type: 'ordered' | 'unordered' }[];
-    footer: string;
-    other: string[];
-  };
-}> {
-  const fullUrl = ensureProtocol(url);
-  const startTime = performance.now();
-
-  try {
-    logger.debug('Scraping all text from page', { url: fullUrl });
-
-    const response = await axios.get(fullUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
-      },
-      timeout: 30000,
-      maxContentLength: 10 * 1024 * 1024, // 10MB max content size
-    });
-
-    const html = response.data;
-    const $ = cheerio.load(html);
-
-    // Extract metadata
-    const title = $('title').text().trim() || $('h1').first().text().trim() || 'No title found';
-    const description = $('meta[name="description"]').attr('content') || 
-                        $('meta[property="og:description"]').attr('content') || 
-                        $('p').first().text().trim().substring(0, 300) || 
-                        'No description found';
-
-    // Initialize text content structure
-    const textContent = {
-      headers: [] as string[],
-      paragraphs: [] as string[],
-      lists: [] as { items: string[]; type: 'ordered' | 'unordered' }[],
-      footer: '',
-      other: [] as string[],
-    };
-
-    // Remove non-visible elements
-    $('script, style, noscript, iframe, [hidden], [style*="display: none"], meta, link').remove();
-
-    // Extract headers (h1-h6)
-    $('h1, h2, h3, h4, h5, h6').each((_, el) => {
-      const text = $(el).text().trim();
-      if (text) textContent.headers.push(`${el.name.toUpperCase()}: ${text}`);
-    });
-
-    // Extract paragraphs
-    $('p').each((_, el) => {
-      const text = $(el).text().trim();
-      if (text) textContent.paragraphs.push(text);
-    });
-
-    // Extract lists (ul, ol)
-    $('ul, ol').each((_, el) => {
-      const items = $(el)
-        .find('li')
-        .map((_, li) => $(li).text().trim())
-        .get()
-        .filter(text => text);
-      
-      if (items.length) {
-        textContent.lists.push({
-          items,
-          type: $(el).is('ol') ? 'ordered' : 'unordered',
-        });
-      }
-    });
-
-    // Extract footer
-    const footer = $('footer, .footer, [role="contentinfo"]').first();
-    textContent.footer = footer.length ? footer.text().trim().replace(/\s+/g, ' ') : '';
-
-    // Extract other visible text (e.g., divs, spans not already captured)
-    $('body div, body span, body section, body article, body aside, body main, body nav')
-      .each((_, el) => {
-        // Skip elements that are children of already processed elements
-        if ($(el).parents('h1, h2, h3, h4, h5, h6, p, ul, ol, li, footer, .footer, [role="contentinfo"]').length === 0) {
-          const text = $(el).clone().children().remove().end().text().trim();
-          if (text && text.length > 5) { // Only include text with meaningful length
-            textContent.other.push(text);
-          }
-        }
-      });
-
-    // Clean up: remove duplicates and empty strings
-    textContent.headers = [...new Set(textContent.headers.filter(Boolean))];
-    textContent.paragraphs = [...new Set(textContent.paragraphs.filter(Boolean))];
-    textContent.other = [...new Set(textContent.other.filter(Boolean))];
-
-    const endTime = performance.now();
-    logger.info('Page text scraped successfully', {
-      url: fullUrl,
-      executionTimeMs: Math.round(endTime - startTime),
-      headerCount: textContent.headers.length,
-      paragraphCount: textContent.paragraphs.length,
-      listCount: textContent.lists.length,
-      otherCount: textContent.other.length,
-    });
-
-    return {
-      url: fullUrl,
-      title,
-      description,
-      textContent,
-    };
-  } catch (error) {
-    const endTime = performance.now();
-    logger.error('Error scraping page text', { 
+  // Check cache first
+  const cachedResult = scraperCache.get(fullUrl);
+  if (cachedResult) {
+    edgeLogger.info('[PUPPETEER SCRAPER] Cache hit', { 
       url: fullUrl, 
-      error,
-      executionTimeMs: Math.round(endTime - startTime)
+      cacheHit: true
     });
-    
-    return {
-      url: fullUrl,
-      title: 'Error',
-      description: 'Failed to scrape',
-      textContent: {
-        headers: [],
-        paragraphs: [],
-        lists: [],
-        footer: '',
-        other: [`Error: ${error instanceof Error ? error.message : String(error)}`],
-      },
-    };
+    return cachedResult;
   }
-}
-
-/**
- * Web scraper tool for agents
- * Extracts content from a URL
- */
-export const webScraperTool = createBasicTool(
-  'webScraper',
-  'Scrapes content from a URL. Extracts the title, description, and main content. Can optionally scrape linked pages.',
-  z.object({
-    url: z.string().describe('The URL to scrape. Will be automatically detected if not provided.'),
-    recursive: z.boolean().optional().describe('Whether to recursively scrape linked pages from the same domain. Default is false.'),
-  }),
-  async ({ url, recursive = false }) => {
-    return await scrapeUrl(url, 0, recursive ? 1 : 0);
-  }
-);
-
-/**
- * URL detection tool for agents
- * Automatically detects URLs in text and scrapes their content. Can optionally scrape linked pages recursively.
- */
-export const urlDetectionTool = createBasicTool(
-  'detectAndScrapeUrls',
-  'Automatically detects URLs in text and scrapes their content. Can optionally scrape linked pages recursively.',
-  z.object({
-    text: z.string().describe('The text that may contain URLs'),
-    recursive: z.boolean().optional().describe('Whether to recursively scrape linked pages from the same domain. Default is false.'),
-  }),
-  async ({ text, recursive = false }) => {
-    const urls = extractUrlsFromUtils(text);
+  
+  try {
+    edgeLogger.info('[PUPPETEER SCRAPER] Starting to scrape URL', { url: fullUrl });
     
-    if (urls.length === 0) {
-      return {
-        detected: false,
-        message: 'No URLs detected in the text',
-        urls: []
-      };
+    // Check rate limiting
+    if (!rateLimiter.canMakeRequest()) {
+      edgeLogger.warn('[PUPPETEER SCRAPER] Rate limited, waiting', { url: fullUrl });
+      await new Promise(resolve => setTimeout(resolve, rateLimiter.minInterval));
     }
     
-    logger.info(`Detected ${urls.length} URLs in text`, { urls });
+    // Record this request for rate limiting
+    rateLimiter.recordRequest();
     
-    // Process up to 3 URLs instead of just the first one
-    const urlsToProcess = urls.slice(0, 3);
-    logger.info(`Processing ${urlsToProcess.length} URLs`, { urlsToProcess, recursive });
+    // Timeout handling
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000); // 25 second timeout
     
     try {
-      // Process URLs in parallel
-      const scrapingPromises = urlsToProcess.map(url => scrapeUrl(url, 0, recursive ? 1 : 0));
-      const scrapedContents = await Promise.allSettled(scrapingPromises);
+      // Get configured endpoint or use default
+      const scraperEndpoint = process.env.SCRAPER_ENDPOINT || 'https://us-central1-puppeteer-n8n.cloudfunctions.net/puppeteerFunction';
       
-      // Extract successful results
-      const successfulResults = scrapedContents
-        .filter((result): result is PromiseFulfilledResult<any> => result.status === 'fulfilled')
-        .map(result => result.value);
+      edgeLogger.info('[PUPPETEER SCRAPER] Using endpoint', { endpoint: scraperEndpoint });
       
-      // Extract failed results
-      const failedUrls = scrapedContents
-        .map((result, index) => result.status === 'rejected' ? urlsToProcess[index] : null)
-        .filter(Boolean);
+      const response = await fetch(scraperEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (compatible; SanDiegoApp/1.0; +https://app.example.com)',
+        },
+        body: JSON.stringify({
+          url: fullUrl,
+          format: 'json'
+        }),
+        signal: controller.signal
+      });
       
-      if (successfulResults.length === 0) {
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! Status: ${response.status}`);
+      }
+      
+      // Get raw text response first to help with debugging
+      const rawResponseText = await response.text();
+      edgeLogger.debug('[PUPPETEER SCRAPER] Raw response received', {
+        responseLength: rawResponseText.length,
+        responsePreview: rawResponseText.substring(0, 100)
+      });
+      
+      // Parse the JSON response with error handling
+      let rawResponse;
+      try {
+        rawResponse = JSON.parse(rawResponseText);
+      } catch (error) {
+        edgeLogger.error('[PUPPETEER SCRAPER] Failed to parse JSON response', { 
+          error: error instanceof Error ? error.message : String(error),
+          responsePreview: rawResponseText.substring(0, 100)
+        });
+        throw new Error('Invalid JSON response from scraper');
+      }
+      
+      // Log the structure of the raw response
+      edgeLogger.info('[PUPPETEER SCRAPER] Response structure', {
+        isArray: Array.isArray(rawResponse),
+        responseType: typeof rawResponse,
+        hasFirstItem: Array.isArray(rawResponse) && rawResponse.length > 0,
+        firstItemKeys: Array.isArray(rawResponse) && rawResponse.length > 0 
+          ? Object.keys(rawResponse[0]) 
+          : 'no-first-item',
+        hasData: Array.isArray(rawResponse) && rawResponse.length > 0 && 'data' in rawResponse[0]
+      });
+      
+      // HANDLE THE SPECIFIC FORMAT FROM THE USER'S EXAMPLE
+      let responseData: any = null;
+      
+      // Format 1: Array with objects that have a 'data' property
+      // [{ data: { url, title, description, content } }]
+      if (Array.isArray(rawResponse) && 
+          rawResponse.length > 0 && 
+          rawResponse[0] && 
+          typeof rawResponse[0] === 'object' && 
+          'data' in rawResponse[0]) {
+        
+        responseData = rawResponse[0].data;
+        edgeLogger.info('[PUPPETEER SCRAPER] Found format: Array with data property', {
+          dataKeys: Object.keys(responseData)
+        });
+      }
+      // Format 2: Direct array item with properties
+      // [{ url, title, description, content }]
+      else if (Array.isArray(rawResponse) && 
+               rawResponse.length > 0 && 
+               rawResponse[0] && 
+               typeof rawResponse[0] === 'object') {
+        
+        responseData = rawResponse[0];
+        edgeLogger.info('[PUPPETEER SCRAPER] Found format: Direct array item', {
+          dataKeys: Object.keys(responseData)
+        });
+      }
+      // Format 3: Direct object 
+      // { url, title, description, content }
+      else if (!Array.isArray(rawResponse) && 
+               rawResponse && 
+               typeof rawResponse === 'object') {
+        
+        responseData = rawResponse;
+        edgeLogger.info('[PUPPETEER SCRAPER] Found format: Direct object', {
+          dataKeys: Object.keys(responseData)
+        });
+      }
+      else {
+        edgeLogger.warn('[PUPPETEER SCRAPER] Unrecognized response format', {
+          responseType: typeof rawResponse,
+          isArray: Array.isArray(rawResponse),
+          preview: JSON.stringify(rawResponse).substring(0, 100)
+        });
+        throw new Error('Unrecognized response format from scraper');
+      }
+      
+      // Validate the required fields
+      if (!responseData || typeof responseData !== 'object') {
+        throw new Error('Invalid response data structure');
+      }
+      
+      // Create a clean result with fallbacks for missing fields
+      const MAX_CONTENT_LENGTH = 50000;
+      
+      const result: PuppeteerResponseData = {
+        url: typeof responseData.url === 'string' ? responseData.url : fullUrl,
+        title: typeof responseData.title === 'string' ? responseData.title : 'No title found',
+        description: typeof responseData.description === 'string' ? responseData.description : 'No description found',
+        content: typeof responseData.content === 'string' 
+          ? (responseData.content.length > MAX_CONTENT_LENGTH 
+             ? responseData.content.substring(0, MAX_CONTENT_LENGTH) + '... [content truncated]' 
+             : responseData.content)
+          : 'No content found',
+      };
+      
+      const executionTimeMs = Math.round(performance.now() - startTime);
+      
+      edgeLogger.info('[PUPPETEER SCRAPER] URL scraped successfully', { 
+        url: fullUrl,
+        executionTimeMs,
+        contentLength: result.content?.length || 0
+      });
+      
+      // Store in cache
+      scraperCache.set(fullUrl, result);
+      
+      return result;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  } catch (error) {
+    const executionTimeMs = Math.round(performance.now() - startTime);
+    
+    edgeLogger.error('[PUPPETEER SCRAPER] Failed to scrape URL', { 
+      url: fullUrl,
+      executionTimeMs,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    
+    // Return a minimal error response
+    return {
+      url: fullUrl,
+      title: 'Error',
+      description: 'Failed to scrape content',
+      content: `Failed to scrape content from ${fullUrl}. Error: ${error instanceof Error ? error.message : String(error)}`
+    };
+  }
+}
+
+/**
+ * Format the puppeteer response for better readability
+ */
+function formatPuppeteerResponse(data: PuppeteerResponseData): string {
+  // Check cache first
+  const cacheKey = `${data.url}:${data.content?.length || 0}`;
+  const cachedFormatted = formattedContentCache.get(cacheKey);
+  if (cachedFormatted) {
+    edgeLogger.debug('[PUPPETEER FORMATTER] Using cached formatted content', { url: data.url });
+    return cachedFormatted;
+  }
+  
+  // Create a markdown-formatted string with the content
+  let formattedContent = `# ${data.title}\n\n`;
+  
+  if (data.description) {
+    formattedContent += `${data.description}\n\n`;
+  }
+  
+  // Safety check - limit content length
+  const MAX_CONTENT_LENGTH = 40000;
+  const content = typeof data.content === 'string' 
+    ? (data.content.length > MAX_CONTENT_LENGTH 
+       ? data.content.substring(0, MAX_CONTENT_LENGTH) + '... [content truncated]'
+       : data.content)
+    : '';
+
+  // Add structured content sections
+  if (data.headers && data.headers.length > 0) {
+    formattedContent += '## Main Sections\n\n';
+    data.headers.slice(0, 10).forEach(h => {
+      formattedContent += `- ${h}\n`;
+    });
+    formattedContent += '\n';
+  }
+  
+  // Add paragraphs directly if available
+  if (data.paragraphs && data.paragraphs.length > 0) {
+    formattedContent += '## Content\n\n';
+    // Take only first 20 paragraphs to keep size reasonable
+    data.paragraphs.slice(0, 20).forEach(p => {
+      formattedContent += `${p.trim()}\n\n`;
+    });
+  }
+  // Otherwise use the content directly, with basic paragraph splitting
+  else if (content) {
+    formattedContent += '## Content\n\n';
+    
+    const paragraphs = content
+      .split(/\n{2,}/)
+      .map(p => p.trim())
+      .filter(p => p.length > 20) // Skip very short bits that might be nav/menu items
+      .slice(0, 20); // Limit to 20 paragraphs
+    
+    paragraphs.forEach(p => {
+      formattedContent += `${p}\n\n`;
+    });
+  }
+  
+  // Simple checks for contact information (avoid extensive regex)
+  if (content.includes('@') || content.includes('phone') || content.includes('contact')) {
+    formattedContent += '## Contact Information\n\n';
+    
+    // Simple email extraction
+    const emailMatches = content.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) || [];
+    if (emailMatches.length > 0) {
+      formattedContent += 'Email: ' + emailMatches.slice(0, 3).join(', ') + '\n\n';
+    }
+    
+    // Simple phone extraction - don't do complex regex
+    const phoneSection = content.indexOf('phone') > -1 
+      ? content.substring(content.indexOf('phone') - 30, content.indexOf('phone') + 30) 
+      : '';
+    
+    if (phoneSection) {
+      formattedContent += `Possible phone information: ${phoneSection}\n\n`;
+    }
+  }
+  
+  // Store in cache
+  formattedContentCache.set(cacheKey, formattedContent);
+  
+  return formattedContent;
+}
+
+/**
+ * Calculate stats about the scraped content
+ */
+function calculateStats(data: PuppeteerResponseData): ScraperStats {
+  try {
+    const headers = Array.isArray(data.headers) ? data.headers.length : 0;
+    const paragraphs = Array.isArray(data.paragraphs) ? data.paragraphs.length : 0;
+    
+    // Count basic statistics from the content if we don't have structured data
+    const content = typeof data.content === 'string' ? data.content : '';
+    const characterCount = content.length;
+    const wordCount = content.split(/\s+/).filter(word => word.length > 0).length;
+    
+    // Count list items as a rough estimate - limit regex to avoid catastrophic backtracking
+    const contentSample = content.substring(0, 20000); // Only check first 20k chars
+    const listItems = (contentSample.match(/^[-*•]\s+/gm) || []).length;
+    
+    return {
+      headers,
+      paragraphs,
+      lists: Math.min(50, Math.ceil(listItems / 3)), // Rough estimate, max 50
+      other: 1, // Always at least the title and description
+      characterCount,
+      wordCount: Math.min(wordCount, 100000) // Cap at 100k to prevent integer overflow
+    };
+  } catch (error) {
+    edgeLogger.error('[PUPPETEER STATS] Error calculating stats', { error });
+    // Return empty stats on error
+    return {
+      headers: 0,
+      paragraphs: 0,
+      lists: 0,
+      other: 0,
+      characterCount: data.content?.length || 0,
+      wordCount: 0
+    };
+  }
+}
+
+/**
+ * The web scraper tool definition
+ */
+export const webScraperTool = tool({
+  description: 'Extract content from a webpage using a powerful Puppeteer-based scraper that can handle JavaScript-rendered content',
+  parameters: z.object({
+    url: z.string().describe('The URL to scrape')
+  }),
+  execute: async ({ url }): Promise<{
+    title: string;
+    description: string;
+    url: string;
+    message: string;
+    content: string;
+    stats: ScraperStats
+  }> => {
+    const startTime = performance.now();
+    const fullUrl = ensureProtocol(url);
+    
+    // Set a timeout for the entire operation
+    let timeoutHandler: NodeJS.Timeout | null = null;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandler = setTimeout(() => {
+        reject(new Error('Web scraper operation timed out after 30 seconds'));
+      }, 30000);
+    });
+    
+    try {
+      // Race against timeout
+      const scrapedData = await Promise.race([
+        callPuppeteerScraper(fullUrl),
+        timeoutPromise
+      ]);
+      
+      // Format the content (with caching)
+      const formattedContent = formatPuppeteerResponse(scrapedData);
+      
+      // Calculate stats - only log at debug level
+      edgeLogger.debug('[WEB SCRAPER TOOL] Calculating stats', { url: fullUrl });
+      const stats = calculateStats(scrapedData);
+      
+      const executionTimeMs = Math.round(performance.now() - startTime);
+      
+      edgeLogger.info('[WEB SCRAPER TOOL] URL processed successfully', { 
+        url: fullUrl, 
+        executionTimeMs
+      });
+      
+      // Return the scraped content
+      return {
+        title: scrapedData.title,
+        description: scrapedData.description,
+        url: fullUrl,
+        message: `Scraped content from ${fullUrl} using Puppeteer`,
+        content: formattedContent,
+        stats
+      };
+    } catch (error) {
+      const executionTimeMs = Math.round(performance.now() - startTime);
+      
+      edgeLogger.error('[WEB SCRAPER TOOL] Failed to process URL', { 
+        url: fullUrl, 
+        executionTimeMs,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      
+      // Return error information
+      return {
+        title: 'Error',
+        description: 'Failed to scrape content',
+        url: fullUrl,
+        message: `Failed to scrape content from ${fullUrl}: ${error instanceof Error ? error.message : String(error)}`,
+        content: `# Error\n\nFailed to scrape content from ${fullUrl}.\n\nError: ${error instanceof Error ? error.message : String(error)}`,
+        stats: {
+          headers: 0,
+          paragraphs: 0,
+          lists: 0,
+          other: 0,
+          characterCount: 0,
+          wordCount: 0
+        }
+      };
+    } finally {
+      // Clean up timeout
+      if (timeoutHandler) {
+        clearTimeout(timeoutHandler);
+      }
+    }
+  }
+});
+
+/**
+ * URL detection and scraping tool
+ */
+export const detectAndScrapeUrlsTool = tool({
+  description: 'Automatically detects URLs in text and scrapes their content using Puppeteer. Only use when text contains valid URLs.',
+  parameters: z.object({
+    text: z.string().describe('The text that might contain URLs')
+  }),
+  execute: async ({ text }): Promise<{ 
+    message: string; 
+    urls: Array<{ url: string; title: string; content: string }> 
+  }> => {
+    try {
+      // Extract URLs from text
+      const rawUrls = extractUrls(text);
+      
+      // If no URLs are detected, return early
+      if (rawUrls.length === 0) {
+        edgeLogger.info('[URL DETECTION] No URLs found in text', { 
+          textPreview: text.substring(0, 100) + (text.length > 100 ? '...' : '')
+        });
+        
         return {
-          detected: true,
-          message: `Detected ${urls.length} URLs but failed to scrape any of them.`,
-          urls,
-          scrapedContents: []
+          message: 'No URLs detected in the text.',
+          urls: []
         };
       }
       
-      return {
-        detected: true,
-        message: `Detected ${urls.length} URLs. Successfully scraped ${successfulResults.length} URLs.${failedUrls.length > 0 ? ` Failed to scrape ${failedUrls.length} URLs.` : ''}`,
-        urls,
-        scrapedContents: successfulResults
-      };
+      // Add https:// protocol to all URLs if missing
+      const urls = rawUrls.map(url => ensureProtocol(url));
+      
+      // Log detected URLs
+      edgeLogger.info('[URL DETECTION] Found URLs in text', { 
+        urlCount: urls.length,
+        originalUrls: rawUrls.slice(0, 5), // Log original URLs
+        processedUrls: urls.slice(0, 5)    // Log processed URLs with protocol
+      });
+      
+      // Only scrape the first URL to avoid overwhelming the system
+      const firstUrl = urls[0];
+      
+      try {
+        // Use the Puppeteer scraper for content extraction
+        const scrapedContent = await webScraperTool.execute({ url: firstUrl }, { 
+          toolCallId: 'internal-url-scraper-call',
+          messages: []
+        });
+        
+        return {
+          message: `Detected ${urls.length} URL(s). Scraped content from ${firstUrl} using Puppeteer`,
+          urls: [
+            {
+              url: firstUrl,
+              title: scrapedContent.title,
+              content: scrapedContent.content
+            }
+          ]
+        };
+      } catch (scrapingError) {
+        // Log the error but continue with the query
+        edgeLogger.error('[URL DETECTION] Failed to scrape URL', { 
+          url: firstUrl,
+          error: scrapingError instanceof Error ? {
+            name: scrapingError.name,
+            message: scrapingError.message,
+            stack: scrapingError.stack
+          } : String(scrapingError)
+        });
+        
+        // Return partial information even if scraping failed
+        return {
+          message: `Detected ${urls.length} URL(s). Failed to scrape content from ${firstUrl}. Error: ${scrapingError instanceof Error ? scrapingError.message : String(scrapingError)}`,
+          urls: [
+            {
+              url: firstUrl,
+              title: 'Error: Failed to scrape content',
+              content: `Unable to retrieve content from ${firstUrl}. This could be due to site restrictions, invalid URL format, or connection issues.`
+            }
+          ]
+        };
+      }
     } catch (error) {
-      logger.error('Error processing URLs', { error, urls: urlsToProcess });
+      edgeLogger.error('[URL DETECTION] Failed', { 
+        error: error instanceof Error ? {
+          name: error.name,
+          message: error.message,
+          stack: error.stack
+        } : String(error)
+      });
       
       return {
-        detected: true,
-        message: `Detected ${urls.length} URLs but encountered an error during scraping: ${error instanceof Error ? error.message : String(error)}`,
-        urls,
-        scrapedContents: []
+        message: `Error detecting or scraping URLs: ${error instanceof Error ? error.message : String(error)}`,
+        urls: []
       };
     }
   }
-);
+});
 
 /**
- * Comprehensive text scraper tool for agents
- * Extracts all visible text from a page in a structured format
+ * Export both tools together
  */
-export const allTextScraperTool = createBasicTool(
-  'allTextScraper',
-  'Scrapes all visible text from a page, categorized into headers, paragraphs, lists, footer, and other content.',
-  z.object({
-    url: z.string().describe('The URL to scrape'),
-  }),
-  async ({ url }) => {
-    logger.info('Starting full text scrape', { url });
-    const result = await scrapeAllText(url);
-    logger.info('Full text scrape completed', { url });
-    return result;
-  }
-);
-
-/**
- * Extract URLs from a text string
- * Only detects properly formatted URLs (http/https or www.)
- * Avoids common false positives like 'e.g.' or other abbreviations
- */
-export function extractUrls(text: string): string[] {
-  // More precise regex that requires proper URL format
-  // Matches http/https URLs or URLs starting with www.
-  // Requires domain to have at least one dot and valid TLD characters
-  const urlRegex = /(https?:\/\/(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*))|(?:www\.[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*))/g;
-  
-  // Extract all potential URLs
-  const matches = text.match(urlRegex) || [];
-  
-  // Filter out common false positives
-  return matches.filter(url => {
-    // Skip URLs that are likely abbreviations or examples
-    if (/\be\.g\.\b/.test(url)) return false;
-    if (/\bi\.e\.\b/.test(url)) return false;
-    
-    // Ensure URL has a valid domain structure
-    return url.includes('.') && url.length > 4;
-  });
-} 
+export const webScrapeTools = {
+  webScraper: webScraperTool,
+  detectAndScrapeUrls: detectAndScrapeUrlsTool
+}; 

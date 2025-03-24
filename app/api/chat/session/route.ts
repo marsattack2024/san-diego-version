@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createServerClient } from '@/lib/supabase/server';
 import { getAuthenticatedUser } from '@/lib/supabase/auth-utils';
+import { authCache } from '@/lib/auth/auth-cache';
 
 // Allow dynamic behavior
 export const dynamic = 'force-dynamic';
@@ -27,6 +28,21 @@ export async function POST(request: NextRequest) {
       edgeLogger.warn('Missing session ID in request');
       return new Response(JSON.stringify({ error: 'Missing session ID' }), { 
         status: 400,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    // Fast path: Check if session is already validated in cache
+    if (authCache.isSessionValid(id)) {
+      edgeLogger.debug('Session validation cache hit', { sessionId: id });
+      
+      return new Response(JSON.stringify({ 
+        id, 
+        exists: true,
+        cached: true,
+        message: 'Session validated from cache' 
+      }), { 
+        status: 200,
         headers: { 'Content-Type': 'application/json' }
       });
     }
@@ -75,6 +91,9 @@ export async function POST(request: NextRequest) {
     }
     
     if (existingSession) {
+      // Mark session as valid in cache
+      authCache.markSessionValid(id);
+      
       edgeLogger.info('Chat session already exists', { 
         sessionId: id,
         existingTitle: existingSession.title || 'None'
@@ -122,6 +141,9 @@ export async function POST(request: NextRequest) {
         headers: { 'Content-Type': 'application/json' }
       });
     }
+    
+    // Mark session as valid in cache after successful creation
+    authCache.markSessionValid(id);
     
     edgeLogger.info('Chat session created successfully', {
       sessionId: id,

@@ -1,27 +1,23 @@
+// Re-export all tools
 import { echoTool, dateTimeTool } from '../core/agent-tools.js';
-import { webScraperTool, urlDetectionTool } from './web-scraper-tool.js';
-import { deepSearchTool, streamingDeepSearch } from './perplexity/index.js';
+import { webScraperTool, detectAndScrapeUrlsTool } from './web-scraper-tool.js';
+// Import Perplexity API functions directly from the API implementation
 import { vectorSearchTool, extractRelevantContext, createContextEnhancedPrompt } from './vector-search-tool.js';
 
+// Export these tools as AgentTool types
 export {
-  // Basic tools
   echoTool,
   dateTimeTool,
-  
-  // Web scraping tools
   webScraperTool,
-  urlDetectionTool,
-  
-  // Web search tools
-  deepSearchTool,
-  streamingDeepSearch,
-  
-  // Vector search tools
-  vectorSearchTool,
-  extractRelevantContext,
-  createContextEnhancedPrompt,
+  detectAndScrapeUrlsTool,
+  vectorSearchTool
 };
 
-// Export utility functions from web-scraper-tool
-// Note: Make sure extractUrls is exported from web-scraper-tool.ts
-export { extractUrls } from './web-scraper-tool.js'; 
+// Export utility functions
+export { extractRelevantContext, createContextEnhancedPrompt };
+
+// Import extractUrls directly from url-utils instead of from web-scraper-tool
+export { extractUrls } from '../../chat/url-utils';
+
+// Export utility functions for calling the Perplexity API
+export { callPerplexityAPI, streamPerplexityAPI } from './perplexity/api'; 

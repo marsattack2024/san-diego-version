@@ -50,11 +50,11 @@ async function testChatCompletion(): Promise<void> {
     // Prepare messages for the API call
     const messages = [
       {
-        role: 'system',
+        role: 'system' as const,
         content: SYSTEM_PROMPT
       },
       {
-        role: 'user',
+        role: 'user' as const,
         content: TEST_QUERY
       }
     ];
@@ -62,7 +62,7 @@ async function testChatCompletion(): Promise<void> {
     // Make the API call
     console.log('Sending request to Perplexity API...');
     const response = await client.chat.completions.create({
-      model: 'sonar-pro',
+      model: 'sonar',
       messages,
     });
     
@@ -103,11 +103,11 @@ async function testChatCompletionStream(): Promise<void> {
     // Prepare messages for the API call
     const messages = [
       {
-        role: 'system',
+        role: 'system' as const,
         content: SYSTEM_PROMPT
       },
       {
-        role: 'user',
+        role: 'user' as const,
         content: TEST_QUERY
       }
     ];
@@ -115,7 +115,7 @@ async function testChatCompletionStream(): Promise<void> {
     // Make the streaming API call
     console.log('Sending streaming request to Perplexity API...');
     const stream = await client.chat.completions.create({
-      model: 'sonar-pro',
+      model: 'sonar',
       messages,
       stream: true,
     });

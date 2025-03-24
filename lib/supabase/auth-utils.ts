@@ -4,12 +4,51 @@ import { createServerClient as createSupabaseServerClient } from '@supabase/ssr'
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createServerClient } from '@/lib/supabase/server';
 import { authCache } from '@/lib/auth/auth-cache';
+import { LRUCache } from 'lru-cache';
+
+// Request-specific auth cache (short TTL)
+const requestCache = new LRUCache<string, any>({
+  max: 100,
+  ttl: process.env.NODE_ENV === 'development' 
+    ? 1000 * 60 * 5   // 5 minutes in development
+    : 1000 * 10       // 10 seconds in production
+});
 
 /**
  * Get the currently authenticated user with caching
  * @param ttlMs Cache TTL in milliseconds (defaults to 60 seconds)
  */
 export async function getCachedUser(ttlMs: number = 60000) {
+  // Development fast path, only do this check once per minute
+  const DEV_FAST_PATH_ENABLED = process.env.NODE_ENV === 'development' && 
+                              process.env.NEXT_PUBLIC_SKIP_AUTH_CHECKS === 'true';
+  
+  if (DEV_FAST_PATH_ENABLED) {
+    // For development fast path, we can use a static mock user
+    // Check if we have it in local cache first
+    const devUser = authCache.get(ttlMs);
+    if (devUser) {
+      return devUser;
+    }
+    
+    // Create a mock user for development with a valid UUID format
+    const mockUser = {
+      id: '00000000-0000-4000-a000-000000000000', // Valid UUID format for dev mode
+      email: 'dev@example.com',
+      user_metadata: {
+        has_profile: true
+      },
+      app_metadata: {
+        provider: 'dev'
+      }
+    };
+    
+    // Cache the mock user
+    authCache.set(mockUser);
+    
+    return mockUser;
+  }
+  
   // Check if we have a valid cached user
   const cachedUser = authCache.get(ttlMs);
   if (cachedUser) {
@@ -45,30 +84,78 @@ export async function getCachedUser(ttlMs: number = 60000) {
  * @returns Object containing user, supabase client, and error response if auth failed
  */
 export async function getAuthenticatedUser(request: NextRequest) {
+  const requestPath = request.nextUrl.pathname;
+  const requestMethod = request.method;
+  const cacheKey = `${requestPath}:${requestMethod}`;
+  
+  // Development fast path
+  const DEV_FAST_PATH_ENABLED = process.env.NODE_ENV === 'development' && 
+                              process.env.NEXT_PUBLIC_SKIP_AUTH_CHECKS === 'true';
+  
+  if (DEV_FAST_PATH_ENABLED) {
+    // Check if we have a dev auth result cached
+    const cachedDevResult = requestCache.get('dev-auth-result');
+    if (cachedDevResult) {
+      return cachedDevResult;
+    }
+    
+    // Create a mock auth result for development
+    const serverClient = await createServerClient();
+    const mockUser = {
+      id: '00000000-0000-4000-a000-000000000000', // Valid UUID format for dev mode
+      email: 'dev@example.com',
+      user_metadata: {
+        has_profile: true
+      },
+      app_metadata: {
+        provider: 'dev'
+      }
+    };
+    
+    const mockResult = {
+      user: mockUser,
+      serverClient,
+      errorResponse: null
+    };
+    
+    // Cache the mock auth result
+    requestCache.set('dev-auth-result', mockResult);
+    requestCache.set(cacheKey, mockResult);
+    
+    return mockResult;
+  }
+  
+  // Check request-level cache first
+  const cachedResult = requestCache.get(cacheKey);
+  if (cachedResult) {
+    edgeLogger.debug('Using cached auth result', { path: requestPath, cacheHit: true });
+    return cachedResult;
+  }
+  
+  // Start measuring execution time
+  const startTime = performance.now();
+  
   try {
     // Initialize server client using cookies from request
     const cookieStore = await cookies();
     
-    // Enhanced logging for cookie debugging
+    // Simplified cookie check - just check for auth cookie presence
     const allCookies = cookieStore.getAll();
-    const hasCookies = allCookies.length > 0;
-    const hasAuthCookie = allCookies.some(c => c.name.includes('auth-token'));
+    const authCookie = allCookies.find(c => c.name.includes('auth-token'));
     
-    edgeLogger.debug('Cookie information in getAuthenticatedUser', {
-      cookieCount: allCookies.length,
-      hasCookies,
-      hasAuthCookie,
-      path: request.nextUrl.pathname,
-      method: request.method
-    });
-    
-    if (!hasCookies || !hasAuthCookie) {
-      edgeLogger.warn('Missing authentication cookies', {
-        path: request.nextUrl.pathname,
-        method: request.method
+    // Only log cookie debug info in development
+    if (process.env.NODE_ENV === 'development') {
+      edgeLogger.debug('Cookie information in getAuthenticatedUser', {
+        cookieCount: allCookies.length,
+        hasCookies: allCookies.length > 0,
+        hasAuthCookie: !!authCookie,
+        path: requestPath,
+        method: requestMethod
       });
-      
-      return {
+    }
+    
+    if (!authCookie) {
+      const errorResult = {
         user: null,
         serverClient: null,
         errorResponse: new Response(
@@ -82,6 +169,10 @@ export async function getAuthenticatedUser(request: NextRequest) {
           }
         ),
       };
+      
+      // Cache the error result briefly
+      requestCache.set(cacheKey, errorResult);
+      return errorResult;
     }
     
     const supabase = createSupabaseServerClient(
@@ -98,11 +189,13 @@ export async function getAuthenticatedUser(request: NextRequest) {
                 cookieStore.set(name, value, options)
               );
             } catch (e) {
-              // Log error for better debugging
-              edgeLogger.error('Error setting cookies in getAuthenticatedUser', {
-                error: e,
-                path: request.nextUrl.pathname
-              });
+              // Only log errors in development
+              if (process.env.NODE_ENV === 'development') {
+                edgeLogger.error('Error setting cookies in getAuthenticatedUser', {
+                  error: e,
+                  path: requestPath
+                });
+              }
             }
           },
         },
@@ -115,22 +208,15 @@ export async function getAuthenticatedUser(request: NextRequest) {
       error: userError,
     } = await supabase.auth.getUser();
     
-    // Log access attempts for debugging
     if (userError) {
       edgeLogger.warn('Auth error while getting user', { 
         errorMessage: userError.message,
-        path: request.nextUrl.pathname
+        path: requestPath
       });
     }
     
     if (!user) {
-      edgeLogger.warn('No authenticated user found for API request', { 
-        path: request.nextUrl.pathname,
-        method: request.method
-      });
-      
-      // Return unauthorized response
-      return {
+      const errorResult = {
         user: null,
         serverClient: null,
         errorResponse: new Response(
@@ -144,28 +230,51 @@ export async function getAuthenticatedUser(request: NextRequest) {
           }
         ),
       };
+      
+      // Cache the error result briefly
+      requestCache.set(cacheKey, errorResult);
+      return errorResult;
     }
+    
+    // Add the user to the global auth cache
+    authCache.set(user);
     
     // Create authenticated server client
     const serverClient = await createServerClient();
     
-    // Return user and client
-    return {
+    // Create success result
+    const result = {
       user,
       serverClient,
       errorResponse: null,
     };
+    
+    // Log authentication performance in development
+    if (process.env.NODE_ENV === 'development') {
+      const executionTime = Math.round(performance.now() - startTime);
+      if (executionTime > 300) { // Only log slow auth operations
+        edgeLogger.info('Auth performance', { 
+          path: requestPath, 
+          executionTimeMs: executionTime,
+          wasSlow: true
+        });
+      }
+    }
+    
+    // Cache successful result
+    requestCache.set(cacheKey, result);
+    
+    return result;
   } catch (error) {
     // Handle unexpected errors
     edgeLogger.error('Unexpected authentication error', { 
       error,
-      path: request.nextUrl.pathname,
-      method: request.method,
+      path: requestPath,
+      method: requestMethod,
       errorMessage: typeof error === 'object' ? (error as any).message : String(error)
     });
     
-    // Return server error response
-    return {
+    const errorResult = {
       user: null,
       serverClient: null,
       errorResponse: new Response(
@@ -179,5 +288,8 @@ export async function getAuthenticatedUser(request: NextRequest) {
         }
       ),
     };
+    
+    // Don't cache error results from unexpected errors
+    return errorResult;
   }
 }

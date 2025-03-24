@@ -1,11 +1,10 @@
 import { BaseAgent } from '../core/agent-base';
-import { AgentType, AgentContext } from '../core/agent-types';
+import { AgentType, AgentContext, AgentTool } from '../core/agent-types';
 import { BASE_PROMPT } from '../prompts/base-prompt';
 import { echoTool, dateTimeTool } from '../core/agent-tools';
 import { 
   webScraperTool, 
   urlDetectionTool, 
-  deepSearchTool, 
   vectorSearchTool
 } from '../tools';
 import { createAgentLogger } from '../core/agent-logger';
@@ -22,22 +21,23 @@ export class DefaultAgent extends BaseAgent {
     'Provide information on various topics',
     'Assist with basic tasks',
     'Scrape and analyze web content when URLs are provided',
-    'Conduct deep research on complex topics using Perplexity AI',
+    'Access deep research on complex topics when DeepSearch is enabled',
     'Search internal knowledge base for relevant information',
     'Recommend other specialized agents when appropriate'
   ];
   icon = 'bot';
   systemPrompt = BASE_PROMPT;
-  tools = [
+  
+  // Explicitly type the tools array as AgentTool[]
+  tools: AgentTool[] = [
     echoTool, 
     dateTimeTool, 
     webScraperTool, 
     urlDetectionTool,
-    deepSearchTool,
     vectorSearchTool
-  ];
+  ] as AgentTool[];
   
-  private logger = createAgentLogger(this.id);
+  private logger = createAgentLogger(this.id, {});
   
   constructor() {
     super();
@@ -61,7 +61,7 @@ If you think another specialized agent would be better suited to help with this 
 
 Please format content and responses properly with line breaks and headings. Lists should never be output as paragraphs.
 
-I can help you analyze web content and perform searches. If you provide a URL, I'll automatically scrape it. If you need up-to-date information, I can perform web searches or conduct deep research on complex topics. I can also search our internal knowledge base for relevant information when appropriate.`;
+I can help you analyze web content and perform searches. If you provide a URL, I'll automatically scrape it. If you need up-to-date information, I can search our internal knowledge base for relevant information when appropriate. For complex topics requiring deep research, enable the DeepSearch toggle in the UI.`;
     
     return enhancedPrompt;
   }

@@ -39,6 +39,7 @@ export interface ToolResults {
   ragContent?: string;    // Knowledge base results
   webScraper?: string;    // Web scraping results
   deepSearch?: string;    // Deep search results
+  miscResults?: Record<string, string>; // Other custom tool results
 }
 
 /**

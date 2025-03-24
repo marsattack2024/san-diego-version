@@ -4,6 +4,7 @@ import { createServerClient } from '@/lib/supabase/server';
 import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import { PostgrestResponse, PostgrestError, PostgrestSingleResponse } from '@supabase/supabase-js';
+import { authCache } from '@/lib/auth/auth-cache';
 
 // Add after any runtime configuration, or at the top of the file
 export const dynamic = 'force-dynamic';
@@ -308,77 +309,83 @@ export async function POST(
       return errorResponse;
     }
     
-    // Log the user ID for debugging
-    edgeLogger.info('Authenticated user details', {
-      userId: user.id,
-      sessionId: id,
-      messageRole: message.role
-    });
-    
-    // CRITICAL FIX: Explicitly check if session exists before proceeding
-    edgeLogger.info('Checking if session exists before saving message', {
-      sessionId: id,
-      userId: user.id
-    });
-    
-    const { data: sessionData, error: sessionError } = await serverClient
-      .from('sd_chat_sessions')
-      .select('id')
-      .eq('id', id)
-      .eq('user_id', user.id)
-      .maybeSingle();
+    // Fast path: Check if session is already validated in cache
+    if (authCache.isSessionValid(id)) {
+      edgeLogger.debug('Session validation cache hit in message endpoint', { 
+        sessionId: id,
+        messageRole: message.role
+      });
       
-    if (sessionError) {
-      edgeLogger.error('Error checking session existence', {
-        error: sessionError,
+      // Skip the session existence check, proceed directly to message saving
+    } else {
+      // CRITICAL FIX: Explicitly check if session exists before proceeding
+      edgeLogger.info('Checking if session exists before saving message', {
         sessionId: id,
         userId: user.id
       });
       
-      return NextResponse.json({
-        error: 'Failed to check session existence',
-        details: sessionError.message
-      }, { status: 500 });
-    }
-    
-    // If session doesn't exist, explicitly create it
-    if (!sessionData) {
-      edgeLogger.info('Session does not exist, creating it now', {
-        sessionId: id,
-        userId: user.id
-      });
-      
-      // Use first 50 chars of message as title for new sessions
-      const sessionTitle = message.role === 'user' 
-        ? (message.content.length > 50 ? message.content.substring(0, 50) + '...' : message.content)
-        : 'New Conversation';
-        
-      const { error: createError } = await serverClient
+      const { data: sessionData, error: sessionError } = await serverClient
         .from('sd_chat_sessions')
-        .insert({
-          id,
-          user_id: user.id,
-          title: sessionTitle
-        });
+        .select('id')
+        .eq('id', id)
+        .eq('user_id', user.id)
+        .maybeSingle();
         
-      if (createError) {
-        edgeLogger.error('Failed to create session before saving message', {
-          error: createError,
+      if (sessionError) {
+        edgeLogger.error('Error checking session existence', {
+          error: sessionError,
           sessionId: id,
           userId: user.id
         });
         
         return NextResponse.json({
-          error: 'Failed to create chat session',
-          details: createError.message
+          error: 'Failed to check session existence',
+          details: sessionError.message
         }, { status: 500 });
       }
       
-      edgeLogger.info('Successfully created session before saving message', {
-        sessionId: id,
-        userId: user.id,
-        title: sessionTitle
-      });
+      // If session doesn't exist, explicitly create it
+      if (!sessionData) {
+        edgeLogger.info('Session does not exist, creating it now', {
+          sessionId: id,
+          userId: user.id
+        });
+        
+        // Use first 50 chars of message as title for new sessions
+        const sessionTitle = message.role === 'user' 
+          ? (message.content.length > 50 ? message.content.substring(0, 50) + '...' : message.content)
+          : 'New Conversation';
+          
+        const { error: createError } = await serverClient
+          .from('sd_chat_sessions')
+          .insert({
+            id,
+            user_id: user.id,
+            title: sessionTitle
+          });
+          
+        if (createError) {
+          edgeLogger.error('Failed to create session before saving message', {
+            error: createError,
+            sessionId: id,
+            userId: user.id
+          });
+          
+          return NextResponse.json({
+            error: 'Failed to create chat session',
+            details: createError.message
+          }, { status: 500 });
+        }
+        
+        edgeLogger.info('Successfully created session before saving message', {
+          sessionId: id,
+          userId: user.id,
+          title: sessionTitle
+        });
+      }
+      
+      // Mark the session as valid in cache for future requests
+      authCache.markSessionValid(id);
     }
     
     // Log the message information more comprehensively

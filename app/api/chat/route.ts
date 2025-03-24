@@ -7,7 +7,9 @@ import { z } from 'zod';
 
 // Import only validation & utility modules at the top level
 import { extractUrls, ensureProtocol } from '@/lib/chat/url-utils';
-import { toolManager } from '@/lib/chat/tool-manager';
+import { ToolManager } from '@/lib/chat/tool-manager';
+import { buildAIMessages } from '@/lib/chat/prompt-builder';
+import { createResponseValidator } from '@/lib/chat/response-validator';
 
 // Allow streaming responses up to 120 seconds instead of 60
 export const maxDuration = 120;
@@ -36,6 +38,21 @@ export async function POST(req: Request) {
     const startTime = Date.now(); // Add timestamp for performance tracking
     const timeoutThreshold = 110000; // 110 seconds (just under our maxDuration)
     let operationTimeoutId: NodeJS.Timeout | undefined = undefined;
+    
+    // Debug logging for environment variables
+    edgeLogger.info('Environment variables check', {
+      operation: 'env_check',
+      important: true,
+      hasPerplexityKey: !!process.env.PERPLEXITY_API_KEY,
+      keyLength: process.env.PERPLEXITY_API_KEY?.length,
+      keyPrefix: process.env.PERPLEXITY_API_KEY?.substring(0, 5),
+      keySuffix: process.env.PERPLEXITY_API_KEY?.substring((process.env.PERPLEXITY_API_KEY?.length || 0) - 5),
+      allEnvKeys: Object.keys(process.env).filter(key => 
+        !key.includes('SECRET') && 
+        !key.includes('TOKEN') && 
+        !key.includes('PASSWORD')
+      ),
+    });
     
     // Set up a timeout for the entire operation
     const operationPromise = new Promise<Response>(async (resolve, reject) => {
@@ -95,8 +112,8 @@ export async function POST(req: Request) {
       // Extract URLs from the user message
       const urls = extractUrls(lastUserMessage.content);
       
-      // Clear any previous tool results
-      toolManager.clear();
+      // Initialize the tool manager for this request
+      const toolManager = new ToolManager();
       
       // Dynamically import dependencies only when needed
       const [
@@ -311,71 +328,223 @@ export async function POST(req: Request) {
         
         if (hasExtensiveRAG && hasExtensiveWebContent) {
           edgeLogger.info('Skipping Deep Search due to sufficient existing context', {
+            operation: 'deep_search_skipped',
+            important: true,
             ragContentLength,
-            webContentLength
+            webContentLength,
+            reason: 'sufficient_context'
           });
         } else {
           const deepSearchStartTime = Date.now();
-          edgeLogger.info('Running Deep Search for query (UI toggle enabled)', { 
-            query: lastUserMessage.content.substring(0, 100) + '...'
+          
+          // Create a meaningful operation ID for tracing
+          const operationId = `deepsearch-${Date.now().toString(36)}`;
+          
+          edgeLogger.info('Running Deep Search for query', { 
+            operation: 'deep_search_start',
+            operationId,
+            query: lastUserMessage.content.substring(0, 100) + '...',
+            queryLength: lastUserMessage.content.length
           });
           
+          let eventHandler;
+          
           try {
+            // Import dependencies once
+            const eventsModule = await import('@/app/api/events/route');
+            eventHandler = eventsModule.sendEventToClients;
+            
+            // Send event to client that DeepSearch has started
+            eventHandler({
+              type: 'deepSearch',
+              status: 'started',
+              details: `Query length: ${lastUserMessage.content.length} characters`
+            });
+            
             // Dynamically import Perplexity API
             const { callPerplexityAPI } = await import('@/lib/agents/tools/perplexity/api');
             
-            // Set a 20-second timeout for Deep Search operations
-            const deepSearchPromise = callPerplexityAPI(lastUserMessage.content);
-            const deepSearchResponse = await Promise.race([
-              deepSearchPromise,
-              new Promise<{
-                content: string;
-                model: string;
-                timing: { total: number };
-              }>((resolve) => {
-                setTimeout(() => {
-                  edgeLogger.warn('Deep Search operation timed out', {
-                    durationMs: Date.now() - deepSearchStartTime,
-                    threshold: 20000
-                  });
-                  resolve({ 
-                    content: "Deep Search timed out. Continuing without these results.",
-                    model: "timeout",
-                    timing: { total: Date.now() - deepSearchStartTime }
-                  });
-                }, 20000);
-              })
-            ]);
+            edgeLogger.info('Starting Perplexity DeepSearch call', {
+              operation: 'deep_search_api_call',
+              operationId,
+              queryLength: lastUserMessage.content.length
+            });
             
-            // Extract the content from the response object
-            const deepSearchContent = deepSearchResponse.content;
-            
-            if (deepSearchContent && 
-                deepSearchContent.length > 0 && 
-                !deepSearchContent.includes("timed out")) {
+            // Check for Perplexity API key before proceeding
+            if (!process.env.PERPLEXITY_API_KEY) {
+              edgeLogger.error('PERPLEXITY_API_KEY not found in environment', {
+                operation: 'deep_search_error',
+                operationId,
+                important: true,
+                reason: 'missing_api_key'
+              });
+              
+              // Skip DeepSearch and log a clear message
+              toolManager.registerToolUsage('Deep Search');
+              toolManager.registerToolResult('deepSearch', 'DeepSearch is unavailable due to missing API key configuration.');
+              
+              // Send event to client that DeepSearch failed
+              eventHandler({
+                type: 'deepSearch',
+                status: 'failed',
+                details: 'DeepSearch unavailable - missing API key configuration'
+              });
+              
+              // Create a fallback response
+              const deepSearchResponse = { 
+                content: "DeepSearch is unavailable due to missing API key configuration. Processing with internal knowledge only.",
+                model: "unavailable",
+                timing: { total: 0 }
+              };
+              
+              // Extract the content from the response object
+              const deepSearchContent = deepSearchResponse.content;
+              
+              // Register the unavailability message as a result
               toolManager.registerToolResult('Deep Search', deepSearchContent);
-              edgeLogger.info('Deep Search results found', { 
+              
+              // Log that we're skipping DeepSearch with fallback content
+              edgeLogger.info('Using fallback DeepSearch content due to missing API key', {
+                operation: 'deep_search_fallback',
+                operationId,
                 contentLength: deepSearchContent.length,
-                firstChars: deepSearchContent.substring(0, 100) + '...',
-                model: deepSearchResponse.model,
-                responseTime: deepSearchResponse.timing.total,
                 durationMs: Date.now() - deepSearchStartTime
               });
+              
+              // Skip the rest of the DeepSearch implementation
             } else {
-              edgeLogger.info('No Deep Search results found or timed out', {
-                reason: deepSearchContent.includes("timed out") ? 'timeout' : 'no results',
-                durationMs: Date.now() - deepSearchStartTime
+              // Set up environment variables for Perplexity
+              // This helps ensure we're using web search on DeepSearch calls
+              if (!process.env.PERPLEXITY_MODEL) {
+                process.env.PERPLEXITY_MODEL = 'sonar';
+              }
+              
+              // Note: Direct API testing has been removed as we now use the serverless endpoint
+              
+              // Set a 20-second timeout for Deep Search operations
+              const deepSearchPromise = callPerplexityAPI(lastUserMessage.content);
+              const deepSearchResponse = await Promise.race([
+                deepSearchPromise,
+                new Promise<{
+                  content: string;
+                  model: string;
+                  timing: { total: number };
+                }>((resolve) => {
+                  setTimeout(() => {
+                    edgeLogger.warn('Deep Search operation timed out', {
+                      operation: 'deep_search_timeout',
+                      operationId,
+                      durationMs: Date.now() - deepSearchStartTime,
+                      threshold: 20000,
+                      important: true
+                    });
+                    resolve({ 
+                      content: "Deep Search timed out after 20 seconds. The AI will continue without these results and use only internal knowledge and any other available sources.",
+                      model: "timeout",
+                      timing: { total: Date.now() - deepSearchStartTime }
+                    });
+                  }, 20000);
+                })
+              ]);
+              
+              // Extract the content from the response object
+              const deepSearchContent = deepSearchResponse.content;
+              
+              edgeLogger.info('DeepSearch response received', {
+                operation: 'deep_search_response',
+                operationId,
+                responseLength: deepSearchContent.length,
+                model: deepSearchResponse.model,
+                timingMs: deepSearchResponse.timing.total,
+                isError: deepSearchResponse.model === 'error'
               });
+              
+              if (deepSearchContent && 
+                  deepSearchContent.length > 0 && 
+                  !deepSearchContent.includes("timed out")) {
+                // Register the result in the tool manager
+                toolManager.registerToolResult('Deep Search', deepSearchContent);
+                
+                edgeLogger.info('Deep Search results found', { 
+                  operation: 'deep_search_success',
+                  operationId,
+                  contentLength: deepSearchContent.length,
+                  firstChars: deepSearchContent.substring(0, 100) + '...',
+                  model: deepSearchResponse.model,
+                  responseTime: deepSearchResponse.timing.total,
+                  durationMs: Date.now() - deepSearchStartTime,
+                  important: true
+                });
+                
+                // Send event to client that DeepSearch has completed
+                eventHandler({
+                  type: 'deepSearch',
+                  status: 'completed',
+                  details: `Retrieved ${deepSearchContent.length} characters of information`
+                });
+              } else {
+                // When no useful results are found or search timed out
+                edgeLogger.info('No Deep Search results found or timed out', {
+                  operation: 'deep_search_empty',
+                  operationId,
+                  reason: deepSearchContent.includes("timed out") ? 'timeout' : 'no_results',
+                  durationMs: Date.now() - deepSearchStartTime
+                });
+                
+                // Send event to client that DeepSearch has failed
+                eventHandler({
+                  type: 'deepSearch',
+                  status: 'failed',
+                  details: deepSearchContent.includes("timed out") 
+                    ? 'Search timed out after 20 seconds' 
+                    : 'No relevant results found'
+                });
+              }
             }
           } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            
             edgeLogger.error('Error running Deep Search', { 
-              error,
-              durationMs: Date.now() - deepSearchStartTime
+              operation: 'deep_search_error',
+              operationId,
+              error: error instanceof Error ? {
+                name: error.name,
+                message: error.message,
+                stack: error.stack
+              } : String(error),
+              durationMs: Date.now() - deepSearchStartTime,
+              important: true
             });
+            
+            // Send event to client that DeepSearch has failed
+            // Import again if it wasn't imported before due to earlier errors
+            if (!eventHandler) {
+              try {
+                const eventsModule = await import('@/app/api/events/route');
+                eventsModule.sendEventToClients({
+                  type: 'deepSearch',
+                  status: 'failed',
+                  details: `Error: ${errorMessage}`
+                });
+              } catch (e) {
+                edgeLogger.error('Failed to send event for DeepSearch error', { 
+                  operation: 'deep_search_event_error',
+                  error: e 
+                });
+              }
+            } else {
+              eventHandler({
+                type: 'deepSearch',
+                status: 'failed',
+                details: `Error: ${errorMessage}`
+              });
+            }
           }
         }
       } else {
-        edgeLogger.info('Deep Search skipped (UI toggle disabled)');
+        edgeLogger.info('Deep Search skipped (UI toggle disabled)', {
+          operation: 'deep_search_disabled'
+        });
       }
       
       // Memory usage checkpoint after Deep Search
@@ -384,9 +553,46 @@ export async function POST(req: Request) {
         tool: 'Deep Search'
       });
       
+      /**
+       * Generate a detailed preprocessing summary of all tools used
+       * This helps with logging and debugging what happened before AI response generation
+       */
+      function generatePreprocessingSummary(toolManager: ToolManager) {
+        const toolResults = toolManager.getToolResults();
+        const toolsUsed = toolManager.getToolsUsed();
+        
+        const summary = {
+          operation: 'preprocessing_summary',
+          important: true,
+          toolsCount: toolsUsed.length,
+          toolsUsed,
+          contentSizes: {
+            ragContent: toolResults.ragContent?.length || 0,
+            webScraper: toolResults.webScraper?.length || 0,
+            deepSearch: toolResults.deepSearch?.length || 0
+          },
+          webSearch: {
+            enabled: deepSearchEnabled,
+            used: toolsUsed.includes('Deep Search'),
+            reason: !deepSearchEnabled ? 'ui_toggle_disabled' : 
+                   (toolsUsed.includes('Deep Search') ? 'search_completed' : 'skipped_sufficient_context')
+          },
+          timings: {
+            preprocessingMs: Date.now() - startTime
+          }
+        };
+        
+        edgeLogger.info('Preprocessing summary before AI response generation', summary);
+        return summary;
+      }
+      
+      // Log the preprocessing summary
+      generatePreprocessingSummary(toolManager);
+      
       // Build AI messages with tool results and user profile data
       const aiMessageStartTime = Date.now();
       edgeLogger.info('Building AI messages', {
+        operation: 'build_ai_messages',
         toolsUsed: toolManager.getToolsUsed().length
       });
       
@@ -399,9 +605,12 @@ export async function POST(req: Request) {
       });
       
       edgeLogger.info('AI messages built', {
+        operation: 'ai_messages_built',
         durationMs: Date.now() - aiMessageStartTime,
         messageCount: aiMessages.length,
-        systemPromptSize: aiMessages[0]?.content?.length || 0
+        systemPromptSize: aiMessages[0]?.content?.length || 0,
+        deepSearchIncluded: toolManager.getToolsUsed().includes('Deep Search'),
+        toolsUsed: toolManager.getToolsUsed()
       });
       
       // Add tools to the AI using the AI SDK
@@ -513,6 +722,39 @@ export async function POST(req: Request) {
                 throw error;
               }
             }
+          }),
+          
+          comprehensiveScraper: tool({
+            description: 'Extract content from a webpage using a powerful Puppeteer-based scraper',
+            parameters: comprehensiveScraperSchema,
+            execute: async ({ url }) => {
+              const startTime = performance.now();
+              
+              try {
+                const result = await chatTools.comprehensiveScraper.execute({ url }, { 
+                  toolCallId: 'ai-initiated-scraper',
+                  messages: []
+                });
+                
+                const duration = Math.round(performance.now() - startTime);
+                edgeLogger.info('Web scraper completed', { 
+                  url,
+                  durationMs: duration,
+                  resultLength: result.content.length
+                });
+                
+                return result;
+              } catch (error) {
+                const duration = Math.round(performance.now() - startTime);
+                edgeLogger.error('Web scraper failed', { 
+                  url,
+                  durationMs: duration,
+                  error
+                });
+                
+                throw error;
+              }
+            }
           })
         };
       } catch (error) {
@@ -535,6 +777,15 @@ export async function POST(req: Request) {
         elapsedTimeMs: Date.now() - startTime
       });
       
+      // Log the final AI configuration with tools
+      edgeLogger.info('AI configuration prepared', {
+        model: modelName,
+        availableTools: Object.keys(aiSdkTools),
+        maxSteps: 5,
+        temperature: 0.4,
+        elapsedTimeMs: Date.now() - startTime
+      });
+      
       try {
         // Dynamically import the OpenAI model directly
         const { openai } = await import('@ai-sdk/openai');
@@ -552,6 +803,7 @@ export async function POST(req: Request) {
           temperature: 0.4,
           maxTokens: 4000, // Increased from default but still reasonable for GPT-4o
           tools: aiSdkTools,
+          maxSteps: 5, // Allow multiple tool calls in sequence
           onFinish: async (completion) => {
             try {
               // Log successful completion

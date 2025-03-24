@@ -154,20 +154,16 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   // State for showing all older chats
   const [showAllOlder, setShowAllOlder] = useState(false);
-  // Add debugging counter
-  const [renderCount, setRenderCount] = useState(0);
   
   // Log render cycle for debugging - FIXED to avoid infinite loop
   useEffect(() => {
-    // Only increment on mount and when key data changes
-    setRenderCount(prev => prev + 1);
-    console.log(`SidebarHistory rendered (count: ${renderCount + 1})`, {
+    console.log(`SidebarHistory rendered`, {
       historyLength: history.length,
       isLoading,
       isRefreshing,
       userId: user?.id?.slice(0, 8)
     });
-    // Removed renderCount from dependencies
+    // Completely removed the renderCount increment to avoid the infinite loop
   }, [history.length, isLoading, isRefreshing, user?.id]);
   
   // Optimized function to fetch chat history using the service
@@ -258,12 +254,13 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     const getDesktopPollInterval = () => 2 * 60 * 1000; // 2 minutes for desktop
     
     // Determine initial poll interval
-    let pollInterval = detectMobile() ? getMobilePollInterval() : getDesktopPollInterval();
+    const initialPollInterval = detectMobile() ? getMobilePollInterval() : getDesktopPollInterval();
+    let pollInterval = initialPollInterval;
     
     console.log(`Setting up history polling with ${pollInterval/1000}s interval (${detectMobile() ? 'mobile' : 'desktop'})`);
     
     // Set up polling to refresh data periodically
-    let interval = setInterval(() => {
+    const interval = setInterval(() => {
       if (!isRefreshing && !isLoading) {
         console.log('Auto-refreshing chat history (background)');
         fetchChatHistory(true, false); // Force refresh but not manual
@@ -278,15 +275,6 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
       if (newPollInterval !== pollInterval) {
         pollInterval = newPollInterval;
         console.log(`Updating history polling interval to ${pollInterval/1000}s (${detectMobile() ? 'mobile' : 'desktop'})`);
-        
-        // Clear and reset interval
-        clearInterval(interval);
-        interval = setInterval(() => {
-          if (!isRefreshing && !isLoading) {
-            console.log('Auto-refreshing chat history (background)');
-            fetchChatHistory(true, false);
-          }
-        }, pollInterval);
       }
     };
     
