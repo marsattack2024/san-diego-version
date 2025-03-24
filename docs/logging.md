@@ -29,19 +29,29 @@ const categories = {
   services=database:configured,ai:configured
 ```
 
-#### Request Metrics
+#### RAG Operation Tracking
 ```typescript
-// API performance tracking
-🔵 POST /api/chat completed
-  duration=850ms
-  status=200
+// Normal RAG operation
+🔵 RAG operation completed
+  ragOperationId=rag-1679665432123-x7y9z
+  durationMs=850
+  results=3
   slow=false
 
-// Slow operation tracking
-🟠 Vector search completed
-  duration=2150ms
+// Slow RAG operation
+🟠 RAG operation completed
+  ragOperationId=rag-1679665432123-x7y9z
+  durationMs=2150
   results=5
   slow=true
+  important=true
+
+// Timed out RAG operation
+🔴 RAG operation timed out
+  ragOperationId=rag-1679665432123-x7y9z
+  durationMs=10023
+  query=How can I reduce my cost per lead...
+  important=true
 ```
 
 #### Error Conditions
@@ -74,57 +84,59 @@ Development mode includes additional context while maintaining clarity:
 
 ## Best Practices
 
-### 1. Essential Logging Only
-- Log startup status and service configuration
-- Track API request performance
-- Record errors with full context
-- Monitor slow operations (>1000ms)
+### 1. RAG Operation Monitoring
+- Track all RAG operations with unique IDs
+- Monitor operation duration and result counts
+- Automatically clean up stale operations
+- Log timeouts with relevant context
 
-### 2. Performance Monitoring
+### 2. Performance Thresholds
 ```typescript
-// Track operation duration
-logger.info('Chat completion', {
-  category: 'chat',
-  duration: 750,
-  tokens: 1250,
-  important: duration > 1000
-});
+// Production thresholds
+const THRESHOLDS = {
+  RAG_TIMEOUT: 10000,      // 10 seconds
+  SLOW_OPERATION: 2000,    // 2 seconds
+  LOG_THRESHOLD: 1000,     // Only log operations > 1s in production
+  IMPORTANT_THRESHOLD: 5000 // Mark as important if > 5s
+};
 ```
 
 ### 3. Error Handling
 ```typescript
 try {
-  await operation();
+  await ragOperation();
 } catch (error) {
-  logger.error('Operation failed', {
-    operation: 'chat_completion',
+  logger.error('RAG operation failed', {
+    operation: 'vector_search',
     error,
-    important: true
+    important: true,
+    ragOperationId: 'rag-123'
   });
 }
 ```
 
 ### 4. Security
-- Never log sensitive environment variables
+- Never log full queries in production
 - Mask user IDs and session IDs
 - Only log service status, not credentials
 
 ## Production Guidelines
 
-1. **Startup Logs**
-   - Single startup log with service status
-   - No environment variable dumps
-   - No development configuration
+1. **RAG Operations**
+   - Track all operations with unique IDs
+   - Monitor for timeouts (>10s)
+   - Clean up stale operations
+   - Sample logs based on duration
 
 2. **Request Logs**
    - Status code and duration
-   - Mark slow operations (>1000ms)
+   - Mark slow operations (>2s)
    - Sample by category to reduce volume
 
 3. **Error Logs**
    - Full error context
-   - Stack traces in development
    - Operation timing and metadata
+   - Always include operation IDs
 
 4. **Performance Logs**
    - Track slow operations
@@ -141,7 +153,7 @@ try {
 ❌ Development tool status
 
 ### Keep
-✅ Service health checks
+✅ RAG operation metrics
 ✅ API performance metrics
 ✅ Error conditions with context
 ✅ Slow operation warnings

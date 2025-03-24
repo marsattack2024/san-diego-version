@@ -336,6 +336,8 @@ interface LogData {
   batchId?: string;
   operations?: LogOperation[];
   slow?: boolean;
+  ragOperationId?: string;
+  parentOperationId?: string;
   [key: string]: any;
 }
 
@@ -452,182 +454,316 @@ class LogBatch {
   }
 }
 
-// Update the edgeLogger export to include batching
-export const edgeLogger = {
+// Update the RAG operation tracking structure
+const activeRagOperations = new Map<string, RagOperation>();
+
+// Define the RAG operation types
+interface RagOperation {
+  startTime: number;
+  query: string;
+  requestId: string;
+  parentId?: string;
+  children: Set<string>;
+  completed: boolean;
+  status: 'error' | 'completed' | 'running';
+}
+
+// RAG operation tracking functions
+function startRagOperation(query: string, requestId: string, parentId?: string): string {
+  const operationId = `rag-${Date.now().toString(36)}`;
+  
+  activeRagOperations.set(operationId, {
+    startTime: performance.now(),
+    query,
+    requestId,
+    parentId,
+    children: new Set(),
+    completed: false,
+    status: 'running'
+  });
+
+  if (parentId) {
+    const parent = activeRagOperations.get(parentId);
+    if (parent) {
+      parent.children.add(operationId);
+    }
+  }
+
+  return operationId;
+}
+
+function endRagOperation(operationId: string, status: 'error' | 'completed'): void {
+  const operation = activeRagOperations.get(operationId);
+  if (!operation) return;
+
+  operation.completed = true;
+  operation.status = status;
+
+  // Only remove the operation if it has no children or all children are completed
+  const allChildrenCompleted = Array.from(operation.children).every(childId => {
+    const child = activeRagOperations.get(childId);
+    return child?.completed;
+  });
+
+  if (allChildrenCompleted) {
+    activeRagOperations.delete(operationId);
+    
+    // If this operation has a parent, check if the parent can be cleaned up
+    if (operation.parentId) {
+      const parent = activeRagOperations.get(operation.parentId);
+      if (parent) {
+        parent.children.delete(operationId);
+        if (parent.children.size === 0 && parent.completed) {
+          activeRagOperations.delete(operation.parentId);
+        }
+      }
+    }
+  }
+}
+
+function checkStaleRagOperations(): void {
+  const now = performance.now();
+  
+  for (const [operationId, operation] of activeRagOperations.entries()) {
+    const duration = now - operation.startTime;
+    
+    // Only log timeouts for root operations or those without living parents
+    const parent = operation.parentId ? activeRagOperations.get(operation.parentId) : null;
+    const isOrphan = operation.parentId && !parent;
+    const isRoot = !operation.parentId;
+    
+    if ((isRoot || isOrphan) && duration > 10000 && operation.status === 'running') {
+      edgeLogger.warn('RAG operation timeout', {
+        operationId,
+        durationMs: Math.round(duration),
+        query: operation.query.slice(0, 100),
+        requestId: operation.requestId,
+        parentId: operation.parentId,
+        childCount: operation.children.size,
+        important: true
+      });
+      
+      endRagOperation(operationId, 'error');
+    }
+  }
+}
+
+// Run cleanup every 5 seconds in production
+if (process.env.NODE_ENV === 'production') {
+  setInterval(checkStaleRagOperations, 5000);
+}
+
+// Define the EdgeLogger interface
+interface EdgeLogger {
+  startTimer: typeof startTimer;
+  endTimer: typeof endTimer;
+  generateRequestId: typeof generateRequestId;
+  startGroup: (groupId: string) => void;
+  addToGroup: (groupId: string, operation: string, data?: any) => void;
+  endGroup: (groupId: string, message: string) => void;
+  trackOperation: <T>(name: string, operation: () => Promise<T>, data?: LogData) => Promise<T>;
+  startBatch: (batchId: string) => LogBatch;
+  debug: (message: string, data?: LogData) => void;
+  info: (message: string, data?: LogData) => void;
+  warn: (message: string, data?: LogData) => void;
+  error: (message: string, data?: LogData) => void;
+}
+
+// Implement the logger functions
+const startGroup = (groupId: string): void => {
+  logGroups.set(groupId, {
+    operations: {},
+    startTime: performance.now()
+  });
+};
+
+const addToGroup = (groupId: string, operation: string, data: any = {}): void => {
+  const group = logGroups.get(groupId);
+  if (!group) return;
+  
+  group.operations[operation] = {
+    ...data,
+    durationMs: Math.round(performance.now() - group.startTime)
+  };
+};
+
+const endGroup = (groupId: string, message: string): void => {
+  const group = logGroups.get(groupId);
+  if (!group) return;
+  
+  const totalTime = Math.round(performance.now() - group.startTime);
+  if (Object.keys(group.operations).length > 0) {
+    const operations: LogOperation[] = Object.entries(group.operations).map(([name, data]) => ({
+      name,
+      timeMs: data.durationMs,
+      ...data
+    }));
+    
+    edgeLogger.info(message, {
+      operations,
+      totalTimeMs: totalTime,
+      important: totalTime > 1000
+    });
+  }
+  
+  logGroups.delete(groupId);
+};
+
+const trackOperation = async <T>(
+  name: string, 
+  operation: () => Promise<T>, 
+  data?: LogData
+): Promise<T> => {
+  const operationId = `${name}-${Date.now().toString(36)}`;
+  const isRagOperation = name.toLowerCase().includes('rag');
+  
+  if (isRagOperation && data?.query) {
+    const ragOpId = startRagOperation(
+      data.query, 
+      data?.requestId || 'unknown',
+      data?.parentOperationId
+    );
+    data.ragOperationId = ragOpId;
+  }
+  
+  edgeLogger.startTimer(operationId);
+  
+  try {
+    const result = await operation();
+    const duration = edgeLogger.endTimer(operationId);
+    
+    if (isRagOperation && data?.ragOperationId) {
+      endRagOperation(data.ragOperationId, 'completed');
+      
+      // Only log completion for root operations or slow operations
+      const op = activeRagOperations.get(data.ragOperationId);
+      const isRoot = !op?.parentId;
+      
+      if (isRoot || duration > 1000) {
+        edgeLogger.info(`Operation completed: ${name}`, {
+          operation: name,
+          durationMs: duration,
+          slow: duration > 2000,
+          ...data,
+          important: duration > 5000
+        });
+      }
+    }
+    
+    return result;
+  } catch (error) {
+    const duration = edgeLogger.endTimer(operationId);
+    
+    if (isRagOperation && data?.ragOperationId) {
+      endRagOperation(data.ragOperationId, 'error');
+    }
+    
+    edgeLogger.error(`Operation failed: ${name}`, {
+      operation: name,
+      durationMs: duration,
+      error: formatError(error),
+      ...data,
+      important: true
+    });
+    throw error;
+  }
+};
+
+const startBatch = (batchId: string): LogBatch => {
+  return new LogBatch(batchId);
+};
+
+const debug = (message: string, data?: LogData): void => {
+  if (process.env.NODE_ENV === 'production') return;
+
+  const { shouldLog, count } = shouldLogMessage('debug', message, data);
+  if (!shouldLog) return;
+
+  let logMessage = message;
+  if (count > 1 && DEDUP_SETTINGS.showCounts) {
+    logMessage = `${message} (repeated ${count} times)`;
+  }
+
+  if (process.env.NODE_ENV === 'development') {
+    console.log(formatDevLog('debug', logMessage, cleanupLogData(maskSensitiveData(data))));
+  } else {
+    console.log(formatForConsole('debug', logMessage, cleanupLogData(maskSensitiveData(data))));
+  }
+};
+
+const info = (message: string, data?: LogData): void => {
+  if (message === 'Application started' && !hasLoggedStartup) {
+    hasLoggedStartup = true;
+    console.log(formatForConsole('info', 'Application started', {
+      important: true,
+      environment: process.env.NODE_ENV,
+      region: process.env.VERCEL_REGION,
+      version: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'dev'
+    }));
+    return;
+  }
+
+  const { shouldLog, count } = shouldLogMessage('info', message, data);
+  if (!shouldLog) return;
+
+  let logMessage = message;
+  if (count > 1 && DEDUP_SETTINGS.showCounts) {
+    logMessage = `${message} (repeated ${count} times)`;
+  }
+
+  if (process.env.NODE_ENV === 'development') {
+    console.log(formatDevLog('info', logMessage, cleanupLogData(maskSensitiveData(data))));
+  } else {
+    console.log(formatForConsole('info', logMessage, cleanupLogData(maskSensitiveData(data))));
+  }
+};
+
+const warn = (message: string, data?: LogData): void => {
+  const { shouldLog, count } = shouldLogMessage('warn', message, data);
+  if (!shouldLog) return;
+
+  let logMessage = message;
+  if (count > 1 && DEDUP_SETTINGS.showCounts) {
+    logMessage = `${message} (repeated ${count} times)`;
+  }
+
+  if (process.env.NODE_ENV === 'development') {
+    console.warn(formatDevLog('warn', logMessage, cleanupLogData(maskSensitiveData(data))));
+  } else {
+    console.warn(formatForConsole('warn', logMessage, cleanupLogData(maskSensitiveData(data))));
+  }
+};
+
+const error = (message: string, data?: LogData): void => {
+  const { count } = shouldLogMessage('error', message, data);
+
+  let logMessage = message;
+  if (count > 1 && DEDUP_SETTINGS.showCounts) {
+    logMessage = `${message} (repeated ${count} times)`;
+  }
+
+  if (process.env.NODE_ENV === 'development') {
+    console.error(formatDevLog('error', logMessage, cleanupLogData(maskSensitiveData(data))));
+  } else {
+    console.error(formatForConsole('error', logMessage, cleanupLogData(maskSensitiveData(data))));
+  }
+};
+
+// Export the edgeLogger implementation
+export const edgeLogger: EdgeLogger = {
   startTimer,
   endTimer,
   generateRequestId,
-
-  startGroup(groupId: string): void {
-    logGroups.set(groupId, {
-      operations: {},
-      startTime: performance.now()
-    });
-  },
-
-  addToGroup(groupId: string, operation: string, data: any = {}): void {
-    const group = logGroups.get(groupId);
-    if (!group) return;
-    
-    group.operations[operation] = {
-      ...data,
-      durationMs: Math.round(performance.now() - group.startTime)
-    };
-  },
-
-  endGroup(groupId: string, message: string): void {
-    const group = logGroups.get(groupId);
-    if (!group) return;
-    
-    const totalTime = Math.round(performance.now() - group.startTime);
-    if (Object.keys(group.operations).length > 0) {
-      const operations: LogOperation[] = Object.entries(group.operations).map(([name, data]) => ({
-        name,
-        timeMs: data.durationMs,
-        ...data
-      }));
-      
-      this.info(message, {
-        operations,
-        totalTimeMs: totalTime,
-        important: totalTime > 1000
-      });
-    }
-    
-    logGroups.delete(groupId);
-  },
-
-  async trackOperation<T>(
-    name: string, 
-    operation: () => Promise<T>, 
-    data?: LogData
-  ): Promise<T> {
-    const operationId = `${name}-${Date.now().toString(36)}`;
-    this.startTimer(operationId);
-    
-    try {
-      const result = await operation();
-      const duration = this.endTimer(operationId);
-      
-      if (duration > 500) {
-        this.info(`Operation completed: ${name}`, {
-          operation: name,
-          durationMs: duration,
-          slow: duration > 1000,
-          ...data
-        });
-      }
-      
-      return result;
-    } catch (error) {
-      const duration = this.endTimer(operationId);
-      this.error(`Operation failed: ${name}`, {
-        operation: name,
-        durationMs: duration,
-        error: formatError(error),
-        ...data
-      });
-      throw error;
-    }
-  },
-
-  startBatch(batchId: string): LogBatch {
-    return new LogBatch(batchId);
-  },
-
-  // Update the debug method to use the new formatting in development
-  debug(message: string, data?: LogData) {
-    if (process.env.NODE_ENV === 'production') return;
-
-    const { shouldLog, count } = shouldLogMessage('debug', message, data);
-    if (!shouldLog) return;
-
-    let logMessage = message;
-    if (count > 1 && DEDUP_SETTINGS.showCounts) {
-      logMessage = `${message} (repeated ${count} times)`;
-    }
-
-    if (process.env.NODE_ENV === 'development') {
-      console.log(formatDevLog('debug', logMessage, cleanupLogData(maskSensitiveData(data))));
-    } else {
-      console.log(formatForConsole('debug', logMessage, cleanupLogData(maskSensitiveData(data))));
-    }
-  },
-
-  info(message: string, data?: LogData) {
-    if (message === 'Application started' && !hasLoggedStartup) {
-      hasLoggedStartup = true;
-      console.log(formatForConsole('info', 'Application started', {
-        important: true,
-        environment: process.env.NODE_ENV,
-        region: process.env.VERCEL_REGION,
-        version: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'dev'
-      }));
-      return;
-    }
-
-    if (process.env.NODE_ENV === 'production' && !(data?.important === true)) {
-      if (
-        message.includes('Application started') ||
-        message.includes('fetching chat history') ||
-        message.includes('User authenticated') ||
-        message.includes('Middleware request') ||
-        message.includes('New event stream connection') ||
-        message.includes('Chat history fetch results') ||
-        message.includes('Chat session not found') ||
-        (message.includes('GET') && !message.includes('error'))
-      ) {
-        return;
-      }
-    }
-
-    const { shouldLog, count } = shouldLogMessage('info', message, data);
-    if (!shouldLog) return;
-
-    let logMessage = message;
-    if (count > 1 && DEDUP_SETTINGS.showCounts) {
-      logMessage = `${message} (repeated ${count} times)`;
-    }
-
-    if (process.env.NODE_ENV === 'development') {
-      console.log(formatDevLog('info', logMessage, cleanupLogData(maskSensitiveData(data))));
-    } else {
-      console.log(formatForConsole('info', logMessage, cleanupLogData(maskSensitiveData(data))));
-    }
-  },
-
-  warn(message: string, data?: LogData) {
-    const { shouldLog, count } = shouldLogMessage('warn', message, data);
-    if (!shouldLog) return;
-
-    let logMessage = message;
-    if (count > 1 && DEDUP_SETTINGS.showCounts) {
-      logMessage = `${message} (repeated ${count} times)`;
-    }
-
-    if (process.env.NODE_ENV === 'development') {
-      console.warn(formatDevLog('warn', logMessage, cleanupLogData(maskSensitiveData(data))));
-    } else {
-      console.warn(formatForConsole('warn', logMessage, cleanupLogData(maskSensitiveData(data))));
-    }
-  },
-
-  error(message: string, data?: LogData) {
-    // Always log errors, but still track counts
-    const { count } = shouldLogMessage('error', message, data);
-
-    let logMessage = message;
-    if (count > 1 && DEDUP_SETTINGS.showCounts) {
-      logMessage = `${message} (repeated ${count} times)`;
-    }
-
-    if (process.env.NODE_ENV === 'development') {
-      console.error(formatDevLog('error', logMessage, cleanupLogData(maskSensitiveData(data))));
-    } else {
-      console.error(formatForConsole('error', logMessage, cleanupLogData(maskSensitiveData(data))));
-    }
-  }
-};
+  startGroup,
+  addToGroup,
+  endGroup,
+  trackOperation,
+  startBatch,
+  debug,
+  info,
+  warn,
+  error
+} as const;
 
 // Middleware helper for request tracking
 export function withRequestTracking(handler: any) {

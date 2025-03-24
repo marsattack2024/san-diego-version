@@ -1,264 +1,284 @@
 ---
-description: Enhanced Logging System for Next.js with Vector Search - Best Practices
-globs: ["**/*.ts", "**/*.tsx"]
+description: Logging rules for app. Read this anytime working on logging
+globs: 
 alwaysApply: false
 ---
+# Logging Rules for Cursor
 
-# Enhanced Logging System - Best Practices
+## Overview
+
+These logging rules are designed for a lightweight, efficient logging system tailored to a small team (~250 users). The system focuses on critical operational data, reduces noise, and adapts to development and production needs.
 
 ## Core Principles
 
-1. **Environment-Aware**: Different formats for development vs. production
-2. **Structured Data**: JSON format with consistent fields
-3. **Special Formatting**: Enhanced readability for complex data like document results
-4. **Performance Tracking**: Automatic monitoring of slow operations
-5. **Correlation**: Request/session IDs for cross-service tracing
+1. **Minimalist Design**: Log only essential metrics and events.
+2. **Category-Based Sampling**: Use defined categories with specific sampling rates.
+3. **Performance Focus**: Track operation durations and flag slow/timeout cases.
+4. **Security**: Avoid logging sensitive data (e.g., full queries, credentials).
+5. **Environment-Specific**: Adjust detail level for development vs. production.
 
-## Base Logger Usage
-
-```typescript
-import { logger } from '@/lib/logger';
-
-// Debug (only in development)
-logger.debug('Detailed information', { context: 'value' });
-
-// Info (filtered in production unless marked important)
-logger.info('Normal event occurred', { userId: '123' });
-logger.info('Critical event occurred', { orderId: 'abc', important: true });
-
-// Warning (always shown)
-logger.warn('Potential issue detected', { resourceId: '123', usage: 95 });
-
-// Error (always shown with stack trace)
-logger.error('Operation failed', { error: new Error('Database error') });
-
-// Structured log format
-logger.info('Operation completed', logger.formatLogStructure({
-  operation: 'document_creation',
-  documentId: '123',
-  duration: 150
-}));
-```
-
-## Vector Search Logging
+## Log Categories and Sampling
 
 ```typescript
-import { logger, tracedVectorOperation } from '@/lib/logger/vector-logger';
-
-// Log embedding creation
-logger.logEmbeddingCreation('doc-123', { 
-  contentType: 'article',
-  dimensions: 1536
-});
-
-// Log vector search results
-logger.logVectorResults(
-  'user query text',
-  documentResults, // array of retrieved documents
-  {
-    averageSimilarity: 0.68,
-    highestSimilarity: 0.72,
-    lowestSimilarity: 0.63,
-    retrievalTimeMs: 150
-  },
-  'session-123'
-);
-
-// Performance tracking wrapper
-const results = await tracedVectorOperation(
-  'document_search',
-  () => performSearchOperation(query),
-  {
-    query,
-    sessionId: 'session-123',
-    params: { threshold: 0.65 }
-  }
-);
+const categories = {
+  AUTH: 'auth',     // 20% sampling in production
+  CHAT: 'chat',     // 10% sampling in production
+  TOOLS: 'tools',   // 10% sampling in production
+  LLM: 'llm',       // 10% sampling in production
+  SYSTEM: 'system'  // 100% sampling in all environments
+};
 ```
 
-## Development vs. Production Logs
+## Logging Formats
 
-### Development Format (Human-Readable)
+### 1. Production Logging
 
-```
-[INFO] 2025-03-08T12:34:56.789Z Vector search completed
-
-  {
-    "queryLength": 42,
-    "resultCount": 3,
-    "durationMs": 150
-  }
-
-  Documents:
-    [1] Marketing Guide (73%)
-        The essential guide to Facebook marketing starts with understanding your audience...
-    [2] Ad Strategies (68%)
-        When creating Google Ads campaigns, focus on these key performance indicators...
+#### Startup Information
+- Single log with essential service status.
+```typescript
+🔵 Application started
+  environment=production
+  region=iad1
+  version=a1b2c3d
+  services=database:configured,ai:configured
 ```
 
-### Production Format (Machine-Parseable)
+#### RAG Operations
+- Track all RAG operations with unique IDs and performance metrics.
+```typescript
+// Normal operation
+🔵 RAG operation completed
+  ragOperationId=rag-1679665432123-x7y9z
+  durationMs=850
+  results=3
+  slow=false
 
-```json
-{"level":"info","message":"Vector search completed","operation":"vector_results","queryLength":42,"resultCount":3,"averageSimilarity":0.68,"durationMs":150,"important":true,"timestamp":"2025-03-08T12:34:56.789Z"}
+// Slow operation (>2s)
+🟠 RAG operation completed
+  ragOperationId=rag-1679665432123-x7y9z
+  durationMs=2150
+  results=5
+  slow=true
+  important=true
+
+// Timeout (>10s)
+🔴 RAG operation timed out
+  ragOperationId=rag-1679665432123-x7y9z
+  durationMs=10023
+  query=How can I reduce my cost per lead... // Truncated for security
+  important=true
 ```
 
-## Common Logging Patterns
+#### Errors
+- Include full context for debugging.
+```typescript
+🔴 Database query failed
+  operation=user_preferences
+  error=Connection timeout
+  durationMs=5000
+  important=true
+```
+
+#### API Requests
+- Log status and performance, sample slow operations.
+```typescript
+🔵 API request completed
+  path=/api/chat
+  method=POST
+  requestId=req-123
+  durationMs=150
+  status=200
+```
+
+### 2. Development Logging
+
+#### Startup Information
+- Include additional context.
+```typescript
+🔵 Application started
+  environment=development
+  services=database:configured,ai:configured
+  development.port=3000
+  development.logLevel=debug
+```
+
+#### Chat/LLM Operations
+- Detailed metrics for debugging.
+```typescript
+🔵 Chat completion
+  durationMs=750
+  model=gpt-4o
+  tokens=1250
+  chatId=3027b6e7-dc03-465d-9d1c-bff0aa21297b
+```
+
+#### RAG Operations
+- Include query and result details.
+```typescript
+🔵 RAG operation completed
+  ragOperationId=rag-1679665432123-x7y9z
+  durationMs=850
+  results=3
+  query=How can I reduce my cost per lead...
+```
+
+## Best Practices
+
+### 1. RAG Operation Monitoring
+- Assign unique `ragOperationId` to all RAG operations.
+- Log `durationMs`, `results`, and `slow` status.
+- Flag operations as `important=true` if `durationMs > 5000`.
+- Log timeouts (`durationMs > 10000`) with truncated query context.
+
+### 2. Performance Thresholds
+```typescript
+const THRESHOLDS = {
+  RAG_TIMEOUT: 10000,      // 10 seconds
+  SLOW_OPERATION: 2000,    // 2 seconds
+  LOG_THRESHOLD: 1000,     // Log operations > 1s in production
+  IMPORTANT_THRESHOLD: 5000 // Mark important if > 5s
+};
+```
+
+### 3. Error Handling
+- Log full error details with operation context.
+```typescript
+try {
+  await ragOperation();
+} catch (error) {
+  logger.error('RAG operation failed', {
+    category: 'tools',
+    operation: 'vector_search',
+    error,
+    important: true,
+    ragOperationId: 'rag-123'
+  });
+}
+```
+
+### 4. Security
+- Never log full user queries in production (truncate to first 50 chars).
+- Mask user IDs (e.g., `5c80...20e9`) and session IDs.
+- Exclude credentials and API keys from logs.
+
+### 5. Sampling
+- In production, sample logs by category (e.g., 10% for CHAT, 100% for SYSTEM).
+- Always log operations exceeding `LOG_THRESHOLD` (1000ms).
+
+## Implementation Patterns
 
 ### 1. API Endpoint Logging
-
 ```typescript
-// Route handler with logging
 export async function POST(req: Request) {
+  const requestId = crypto.randomUUID();
   const startTime = performance.now();
-  const requestId = req.headers.get('x-request-id') || crypto.randomUUID();
-  
+
+  logger.info('API request received', {
+    category: 'chat',
+    path: '/api/chat',
+    method: 'POST',
+    requestId
+  });
+
   try {
-    logger.info('API request received', {
-      path: '/api/chat',
-      method: 'POST',
-      requestId
-    });
-    
-    // Process request...
     const result = await processRequest(req);
-    
-    // Log completion
-    const duration = Math.round(performance.now() - startTime);
+    const durationMs = Math.round(performance.now() - startTime);
+
     logger.info('API request completed', {
+      category: 'chat',
       path: '/api/chat',
       method: 'POST',
       requestId,
-      durationMs: duration,
-      important: duration > 1000 // Mark slow responses as important
+      durationMs,
+      status: 200,
+      important: durationMs > THRESHOLDS.IMPORTANT_THRESHOLD
     });
-    
+
     return Response.json(result);
   } catch (error) {
+    const durationMs = Math.round(performance.now() - startTime);
     logger.error('API request failed', {
+      category: 'chat',
       path: '/api/chat',
       method: 'POST',
       requestId,
       error,
-      durationMs: Math.round(performance.now() - startTime)
+      durationMs,
+      important: true
     });
-    
     return Response.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 ```
 
-### 2. Document Result Formatting
-
+### 2. RAG Operation Logging
 ```typescript
-// Format document results for logging
-const formattedDocs = documents.map(doc => ({
-  id: doc.id,
-  title: doc.metadata?.title || `Doc ${doc.id}`,
-  preview: doc.content.substring(0, 100) + '...',
-  similarity: Math.round(doc.similarity * 100)
-}));
+async function performRAG(query: string, ragOperationId: string) {
+  const startTime = performance.now();
+  try {
+    const results = await vectorSearch(query);
+    const durationMs = Math.round(performance.now() - startTime);
 
-logger.info('Documents retrieved', {
-  queryId: '123',
-  count: formattedDocs.length,
-  documents: formattedDocs
-});
-```
+    logger.info('RAG operation completed', {
+      category: 'tools',
+      ragOperationId,
+      durationMs,
+      results: results.length,
+      slow: durationMs > THRESHOLDS.SLOW_OPERATION,
+      important: durationMs > THRESHOLDS.IMPORTANT_THRESHOLD
+    });
 
-### 3. Error Handling
-
-```typescript
-try {
-  // Risky operation
-  await riskyOperation();
-} catch (error) {
-  logger.error('Failed to perform operation', {
-    operationType: 'database_query',
-    error, // Pass the full error object, not just the message
-    correlationId: 'req-123',
-    important: true
-  });
-  
-  // Re-throw or handle as needed
-}
-```
-
-## Best Practices
-
-1. **Mark Important Logs**: Use `important: true` to ensure critical logs appear in production
-2. **Use Structured Context**: Always include relevant context as structured data
-3. **Full Error Objects**: Pass error objects, not just messages, for better stack traces
-4. **Correlation IDs**: Include request/session IDs in all logs
-5. **Session Context**: Include user ID and session information when available
-6. **Performance Flags**: Automatically mark slow operations as important
-7. **Security**: Never log sensitive information (passwords, tokens, etc.)
-8. **Document Formatting**: Use specialized formatters for complex data like document results
-9. **Filter Development Logs**: Use debug level for verbose development-only logs
-10. **Standardize Log Structure**: Follow consistent patterns across different components
-
-## Monitoring and Troubleshooting
-
-1. **Filter by Operation**: Use `operation: 'operation_name'` for grouping related logs
-2. **Correlation Tracing**: Track request flow using the `requestId` or `sessionId` fields
-3. **Performance Analysis**: Use `durationMs` fields to identify slow operations
-4. **Error Rates**: Monitor error logs to identify problematic components
-5. **User Impact**: Filter logs by `userId` to troubleshoot user-specific issues
-
----
-
-### Recommended VS Code Logger Snippets
-
-```json
-{
-  "Logger Debug": {
-    "prefix": "logd",
-    "body": ["logger.debug('$1', { $2 });"],
-    "description": "Add debug log statement"
-  },
-  "Logger Info": {
-    "prefix": "logi",
-    "body": ["logger.info('$1', { $2 });"],
-    "description": "Add info log statement"
-  },
-  "Logger Warning": {
-    "prefix": "logw",
-    "body": ["logger.warn('$1', { $2 });"],
-    "description": "Add warning log statement"
-  },
-  "Logger Error": {
-    "prefix": "loge",
-    "body": ["logger.error('$1', { error, $2 });"],
-    "description": "Add error log statement"
-  },
-  "Logger Important Info": {
-    "prefix": "logii",
-    "body": ["logger.info('$1', { important: true, $2 });"],
-    "description": "Add important info log statement"
-  },
-  "Trace Operation": {
-    "prefix": "logtrace",
-    "body": [
-      "const startTime = performance.now();",
-      "try {",
-      "  // Perform operation",
-      "  $1",
-      "  ",
-      "  const duration = Math.round(performance.now() - startTime);",
-      "  logger.info('$2 completed', { ",
-      "    durationMs: duration,",
-      "    $3",
-      "    important: duration > $4",
-      "  });",
-      "} catch (error) {",
-      "  logger.error('$2 failed', {",
-      "    error,",
-      "    durationMs: Math.round(performance.now() - startTime),",
-      "    $3",
-      "  });",
-      "  throw error;",
-      "}"
-    ],
-    "description": "Add trace operation pattern"
+    return results;
+  } catch (error) {
+    const durationMs = Math.round(performance.now() - startTime);
+    if (durationMs > THRESHOLDS.RAG_TIMEOUT) {
+      logger.error('RAG operation timed out', {
+        category: 'tools',
+        ragOperationId,
+        durationMs,
+        query: query.substring(0, 50) + '...',
+        important: true
+      });
+    } else {
+      logger.error('RAG operation failed', {
+        category: 'tools',
+        ragOperationId,
+        error,
+        durationMs,
+        important: true
+      });
+    }
+    throw error;
   }
 }
 ```
+
+## Migration from Old Rules
+
+### Remove
+- ❌ Full environment variable dumps (e.g., `allEnvKeys`).
+- ❌ Node.js/npm configuration details.
+- ❌ Development tool status (e.g., VSCode injection).
+- ❌ Verbose human-readable document previews in production.
+
+### Keep
+- ✅ RAG operation metrics (`durationMs`, `results`).
+- ✅ API performance metrics (`status`, `durationMs`).
+- ✅ Error conditions with context.
+- ✅ Slow operation warnings (`slow=true`).
+
+### Add
+- ✅ Category-based sampling (e.g., `category: 'chat'`).
+- ✅ Unique operation IDs (e.g., `ragOperationId`).
+- ✅ Timeout tracking with thresholds.
+
+## Monitoring Guidelines
+
+1. **Performance**: Filter by `durationMs` to identify slow operations.
+2. **Errors**: Track `error` logs by category for issue detection.
+3. **RAG Health**: Monitor `ragOperationId` for timeouts and result counts.
+4. **API Usage**: Analyze `requestId` logs for request patterns.
+
+---
+
+These rules streamline your logging approach, aligning with the README's focus on efficiency, essential metrics, and small-team management. Let me know if you'd like to refine any part further!
