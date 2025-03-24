@@ -1,8 +1,6 @@
-import { type Message } from 'ai';
+import { type Message , type ToolSet } from 'ai';
 import { buildSystemPrompt, type ToolResults, type AgentType, AGENT_PROMPTS } from './prompts';
-import { type ToolSet } from 'ai';
-import { edgeLogger } from '@/lib/logger/edge-logger';
-import { logger } from '../logger/edge-logger';
+import { edgeLogger , logger } from '@/lib/logger/edge-logger';
 
 // Keywords that trigger specific agents
 const AGENT_KEYWORDS: Record<AgentType, string[]> = {

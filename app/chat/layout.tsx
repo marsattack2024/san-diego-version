@@ -1,8 +1,7 @@
 import { AppSidebar } from '@/components/app-sidebar';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { createServerClient } from '@/lib/supabase/server';
-import { cookies } from 'next/headers';
-import { headers } from 'next/headers';
+import { cookies , headers } from 'next/headers';
 
 export default async function ChatLayout({
   children,

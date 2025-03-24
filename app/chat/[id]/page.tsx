@@ -1,12 +1,11 @@
 'use client';
 
-export const dynamic = 'force-dynamic';
-
 import { Chat } from '@/components/chat';
 import { ChatClient } from './chat-client';
-import { useEffect } from 'react';
+import { useEffect , use } from 'react';
 import { clientLogger } from '@/lib/logger/client-logger';
-import { use } from 'react';
+
+export const dynamic = 'force-dynamic';
 
 const log = clientLogger;
 

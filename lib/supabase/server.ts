@@ -87,7 +87,7 @@ export const createAdminClient = () => {
     }
     
     // Validate URL format
-    let validSupabaseUrl = supabaseUrl;
+    const validSupabaseUrl = supabaseUrl;
     try {
       if (supabaseUrl) {
         new URL(supabaseUrl);

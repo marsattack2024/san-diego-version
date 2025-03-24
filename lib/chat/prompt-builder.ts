@@ -79,7 +79,7 @@ export function extractRelevantContent(content: string, maxLength: number, query
   const sections = preprocessedContent.split(/\n(?=#{1,6}\s|<h[1-6]>)/);
   
   // If we have a query, score sections by relevance
-  let scoredSections = sections.map((section, index) => {
+  const scoredSections = sections.map((section, index) => {
     // Calculate a basic relevance score based on keyword matching
     let score = 0;
     
@@ -225,7 +225,7 @@ export async function buildEnhancedSystemPrompt(
   
   // 2. Add web scraper results - medium priority context
   if (toolResults.webScraper && toolsUsed.includes('Web Scraper')) {
-    enhancedSystemPrompt += `\n\n### WEB CONTENT RESULTS ###\nThe following information was scraped from web pages related to the query:\n\n${toolResults.webScraper}\n\n`;
+    enhancedSystemPrompt += `\n\n### WEB CONTENT RESULTS ###\nI have scraped the following content directly from the requested web pages. This is authoritative content from the source and should be used as the primary basis for your response when answering questions about these pages:\n\n${toolResults.webScraper}\n\nIMPORTANT: When discussing content from these web pages, use the actual information provided above rather than making assumptions or using general knowledge. If the content contains specific details, numbers, quotes, or facts, include those in your response.\n\n`;
   }
   
   // 3. Add Deep Search results - useful additional context

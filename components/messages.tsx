@@ -6,9 +6,8 @@ import { memo } from 'react';
 import { Vote } from '@/lib/db/schema';
 import equal from 'fast-deep-equal';
 import { useChatStore } from '@/stores/chat-store';
-import { MagnifyingGlassIcon } from './icons';
+import { MagnifyingGlassIcon , SparklesIcon } from './icons';
 import { cx } from 'class-variance-authority';
-import { SparklesIcon } from './icons';
 
 interface MessagesProps {
   chatId: string;

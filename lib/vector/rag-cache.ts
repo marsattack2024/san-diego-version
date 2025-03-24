@@ -1,6 +1,7 @@
 import { Redis } from '@upstash/redis';
 import { edgeLogger } from '../logger/edge-logger';
 import { LOG_CATEGORIES } from '../logger/constants';
+import type { RetrievedDocument } from './types.js';
 
 // Cache configuration
 const CACHE_CONFIG = {
@@ -108,7 +109,6 @@ function isValidJsonString(str: string): boolean {
   }
 }
 
-// Redis client wrapper with JSON handling
 export const redisCache = {
   /**
    * Set a value in Redis cache
@@ -147,7 +147,7 @@ export const redisCache = {
       });
     }
   },
-
+  
   /**
    * Get a value from Redis cache
    * The Upstash SDK doesn't automatically parse JSON strings,
@@ -157,27 +157,6 @@ export const redisCache = {
     try {
       const redis = await redisClientPromise;
       const value = await redis.get(key);
-      
-      // Update stats
-      if (value !== null && value !== undefined) {
-        cacheStats.hits++;
-      } else {
-        cacheStats.misses++;
-      }
-      
-      // Log periodically
-      const totalOps = cacheStats.hits + cacheStats.misses;
-      const timeSinceLastLog = Date.now() - cacheStats.lastLoggedAt;
-      if (totalOps % CACHE_CONFIG.statsLogThreshold === 0 || timeSinceLastLog > 60000) {
-        edgeLogger.info('Cache stats', { 
-          category: LOG_CATEGORIES.SYSTEM, 
-          hits: cacheStats.hits,
-          misses: cacheStats.misses,
-          hitRate: totalOps > 0 ? cacheStats.hits / totalOps : 0,
-          timeSinceLastLogMs: timeSinceLastLog
-        });
-        cacheStats.lastLoggedAt = Date.now();
-      }
       
       edgeLogger.debug('Cache get', { 
         category: LOG_CATEGORIES.SYSTEM, 
@@ -221,58 +200,8 @@ export const redisCache = {
     }
   },
 
-  /**
-   * Get all keys matching a pattern
-   */
-  async keys(pattern: string): Promise<string[]> {
-    try {
-      const redis = await redisClientPromise;
-      const keys = await redis.keys(pattern);
-      return keys as string[];
-    } catch (error) {
-      edgeLogger.error('Redis cache keys error', { 
-        error: error instanceof Error ? error : new Error(String(error))
-      });
-      return [];
-    }
-  },
-  
-  /**
-   * Record cache statistics
-   */
-  recordStats(type: 'hit' | 'miss' | 'semantic_hit'): void {
-    switch (type) {
-      case 'hit':
-        cacheStats.hits++;
-        break;
-      case 'miss':
-        cacheStats.misses++;
-        break;
-      case 'semantic_hit':
-        cacheStats.semanticHits++;
-        break;
-    }
-    
-    const totalOps = cacheStats.hits + cacheStats.misses + cacheStats.semanticHits;
-    const timeSinceLastLog = Date.now() - cacheStats.lastLoggedAt;
-    
-    // Log stats more frequently during debugging
-    if (totalOps % CACHE_CONFIG.statsLogThreshold === 0 || timeSinceLastLog > 60000) {
-      edgeLogger.info('Redis cache statistics', {
-        category: LOG_CATEGORIES.SYSTEM,
-        operation: 'redis_cache_stats',
-        ...cacheStats,
-        totalOperations: totalOps,
-        hitRate: totalOps > 0 ? cacheStats.hits / totalOps : 0,
-        semanticHitRate: totalOps > 0 ? cacheStats.semanticHits / totalOps : 0,
-        timeSinceLastLogMs: timeSinceLastLog
-      });
-      cacheStats.lastLoggedAt = Date.now();
-    }
-  },
-
   // Specialized methods with tenant support
-  async getRAG(tenantId: string, query: string): Promise<any> {
+  async getRAG(tenantId: string, query: string): Promise<string | null> {
     const key = `${tenantId}:rag:${await hashKey(query)}`;
     return this.get(key);
   },
@@ -281,34 +210,24 @@ export const redisCache = {
     const key = `${tenantId}:rag:${await hashKey(query)}`;
     await this.set(key, result);
   },
-  
-  async getScrape(tenantId: string, url: string): Promise<any> {
+
+  async getScrape(tenantId: string, url: string): Promise<string | null> {
     const key = `${tenantId}:scrape:${await hashKey(url)}`;
     return this.get(key);
   },
   
-  async setScrape(tenantId: string, url: string, content: any): Promise<void> {
+  async setScrape(tenantId: string, url: string, content: string): Promise<void> {
     const key = `${tenantId}:scrape:${await hashKey(url)}`;
     await this.set(key, content);
   },
-  
-  async getDeepSearch(tenantId: string, query: string): Promise<any> {
+
+  async getDeepSearch(tenantId: string, query: string): Promise<string | null> {
     const key = `${tenantId}:deepsearch:${await hashKey(query)}`;
     return this.get(key);
   },
   
-  async setDeepSearch(tenantId: string, query: string, result: any): Promise<void> {
+  async setDeepSearch(tenantId: string, query: string, result: string): Promise<void> {
     const key = `${tenantId}:deepsearch:${await hashKey(query)}`;
     await this.set(key, result, CACHE_CONFIG.shortTtl);
-  },
-  
-  async getLLM(tenantId: string, prompt: string): Promise<any> {
-    const key = `${tenantId}:llm:${await hashKey(prompt)}`;
-    return this.get(key);
-  },
-  
-  async setLLM(tenantId: string, prompt: string, response: any): Promise<void> {
-    const key = `${tenantId}:llm:${await hashKey(prompt)}`;
-    await this.set(key, response, CACHE_CONFIG.shortTtl);
   }
 }; 

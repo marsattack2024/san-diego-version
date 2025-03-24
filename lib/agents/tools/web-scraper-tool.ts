@@ -156,7 +156,12 @@ async function callPuppeteerScraper(url: string): Promise<PuppeteerResponseData>
   cacheStats.misses++;
   
   try {
-    edgeLogger.info('[PUPPETEER SCRAPER] Starting to scrape URL', { url: fullUrl });
+    edgeLogger.info('[PUPPETEER SCRAPER] Starting to scrape URL', { 
+      url: fullUrl,
+      originalUrl: url,
+      hasPath: fullUrl.split('/').length > 3,  // Check if URL has path components
+      pathComponents: fullUrl.split('/').slice(3)  // Log path components after domain
+    });
     
     // Check rate limiting
     if (!rateLimiter.canMakeRequest()) {
@@ -181,11 +186,12 @@ async function callPuppeteerScraper(url: string): Promise<PuppeteerResponseData>
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'Mozilla/5.0 (compatible; SanDiegoApp/1.0; +https://app.example.com)',
+          'User-Agent': process.env.SCRAPER_USER_AGENT || 'Marlan-Bot/1.0 (Photography Marketing Assistant; secure-client)',
         },
         body: JSON.stringify({
-          url: fullUrl,
-          format: 'json'
+          url: validateAndSanitizeUrl(fullUrl),  // Validate URL before sending
+          format: 'json',
+          preservePath: true  // Add flag to preserve full path
         }),
         signal: controller.signal
       });
@@ -283,7 +289,9 @@ async function callPuppeteerScraper(url: string): Promise<PuppeteerResponseData>
       const MAX_CONTENT_LENGTH = 50000;
       
       const result: PuppeteerResponseData = {
-        url: typeof responseData.url === 'string' ? responseData.url : fullUrl,
+        url: typeof responseData.url === 'string' && responseData.url.includes('/') 
+          ? responseData.url   // Use the full URL if it has a path
+          : fullUrl,          // Otherwise use our original full URL
         title: typeof responseData.title === 'string' ? responseData.title : 'No title found',
         description: typeof responseData.description === 'string' ? responseData.description : 'No description found',
         content: typeof responseData.content === 'string' 
@@ -454,6 +462,66 @@ function calculateStats(data: PuppeteerResponseData): ScraperStats {
 }
 
 /**
+ * Validate and sanitize URL for security
+ * This helps prevent SSRF attacks and other URL-based vulnerabilities
+ */
+function validateAndSanitizeUrl(url: string): string {
+  try {
+    // Parse the URL to validate structure
+    const parsedUrl = new URL(url);
+    
+    // Block internal/private IP addresses and localhost
+    const hostname = parsedUrl.hostname.toLowerCase();
+    
+    // Block localhost and common internal hostnames
+    if (hostname === 'localhost' || 
+        hostname === '127.0.0.1' || 
+        hostname === '0.0.0.0' ||
+        hostname.endsWith('.local') ||
+        hostname.endsWith('.internal')) {
+      throw new Error('Access to internal hostnames is not allowed');
+    }
+    
+    // Block private IP ranges
+    if (/^(10\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|192\.168\.)/.test(hostname)) {
+      throw new Error('Access to private IP addresses is not allowed');
+    }
+    
+    // Disallow file:// protocol
+    if (parsedUrl.protocol === 'file:') {
+      throw new Error('File protocol is not allowed');
+    }
+    
+    // Disallow non-HTTP protocols (only allow http: and https:)
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+      throw new Error('Only HTTP and HTTPS protocols are allowed');
+    }
+    
+    // Optional: Add a whitelist of allowed domains
+    const allowedDomains = (process.env.ALLOWED_SCRAPER_DOMAINS || '')
+      .split(',')
+      .map(d => d.trim().toLowerCase())
+      .filter(Boolean);
+    
+    if (allowedDomains.length > 0 && !allowedDomains.some(d => hostname.endsWith(d))) {
+      throw new Error('Domain not in allowed list');
+    }
+    
+    // Return the sanitized URL
+    return parsedUrl.toString();
+  } catch (error) {
+    // If URL parsing fails, or other validation errors occur
+    edgeLogger.error('[URL VALIDATION] Failed to validate URL', {
+      originalUrl: url,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    
+    // Either throw the error or return a safe default
+    throw new Error(`Invalid or unsafe URL: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
  * The web scraper tool definition
  */
 export const webScraperTool = tool({
@@ -470,58 +538,67 @@ export const webScraperTool = tool({
     stats: ScraperStats
   }> => {
     const startTime = performance.now();
-    const fullUrl = ensureProtocol(url);
-    
-    // Set a timeout for the entire operation
-    let timeoutHandler: NodeJS.Timeout | null = null;
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutHandler = setTimeout(() => {
-        reject(new Error('Web scraper operation timed out after 30 seconds'));
-      }, 30000);
-    });
+    let fullUrl: string = '';
     
     try {
-      // Race against timeout
-      const scrapedData = await Promise.race([
-        callPuppeteerScraper(fullUrl),
-        timeoutPromise
-      ]);
+      // Sanitize and validate the URL for security
+      fullUrl = validateAndSanitizeUrl(ensureProtocol(url));
       
-      // Format the content (with caching)
-      const formattedContent = formatPuppeteerResponse(scrapedData);
-      
-      // Calculate stats - only log at debug level
-      edgeLogger.debug('[WEB SCRAPER TOOL] Calculating stats', { url: fullUrl });
-      const stats = calculateStats(scrapedData);
-      
-      const executionTimeMs = Math.round(performance.now() - startTime);
-      
-      edgeLogger.info('[WEB SCRAPER TOOL] URL processed successfully', { 
-        url: fullUrl, 
-        executionTimeMs
-      });
-      
-      // Return the scraped content
-      return {
-        title: scrapedData.title,
-        description: scrapedData.description,
-        url: fullUrl,
-        message: `Scraped content from ${fullUrl} using Puppeteer`,
-        content: formattedContent,
-        stats
-      };
+      // Create an AbortController for timeout handling
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort('Web scraper operation timed out after 15 seconds');
+      }, 15000);
+
+      try {
+        const result = await callPuppeteerScraper(fullUrl);
+        
+        // Clear timeout immediately after successful scrape
+        clearTimeout(timeoutId);
+
+        // Format the content
+        const formattedContent = formatPuppeteerResponse(result);
+        
+        // Calculate stats
+        const stats = calculateStats(result);
+        
+        const executionTimeMs = Math.round(performance.now() - startTime);
+        
+        edgeLogger.info('[WEB SCRAPER TOOL] URL processed successfully', { 
+          url: fullUrl, 
+          executionTimeMs,
+          contentLength: formattedContent.length
+        });
+        
+        return {
+          title: result.title,
+          description: result.description,
+          url: fullUrl,
+          message: `Successfully scraped content from ${fullUrl}`,
+          content: formattedContent,
+          stats
+        };
+      } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') {
+          throw new Error('Web scraper operation timed out after 15 seconds');
+        }
+        throw error;
+      } finally {
+        clearTimeout(timeoutId);
+      }
     } catch (error) {
       const executionTimeMs = Math.round(performance.now() - startTime);
+      const isTimeout = error instanceof Error && error.message.includes('timed out');
       
       edgeLogger.error('[WEB SCRAPER TOOL] Failed to process URL', { 
         url: fullUrl, 
         executionTimeMs,
-        error: error instanceof Error ? error : new Error(String(error))
+        error: error instanceof Error ? error.message : String(error),
+        isTimeout
       });
       
-      // Return error information
       return {
-        title: 'Error',
+        title: isTimeout ? 'Timeout Error' : 'Error',
         description: 'Failed to scrape content',
         url: fullUrl,
         message: `Failed to scrape content from ${fullUrl}: ${error instanceof Error ? error.message : String(error)}`,
@@ -535,12 +612,14 @@ export const webScraperTool = tool({
           wordCount: 0
         }
       };
-    } finally {
-      // Clean up timeout
-      if (timeoutHandler) {
-        clearTimeout(timeoutHandler);
-      }
     }
+  },
+  // Add experimental_toToolResultContent for proper tool result formatting
+  experimental_toToolResultContent: (result) => {
+    return [{
+      type: 'text',
+      text: `Web Content from ${result.url}:\n\n${result.content}`
+    }];
   }
 });
 
@@ -572,18 +651,39 @@ export const detectAndScrapeUrlsTool = tool({
         };
       }
       
-      // Add https:// protocol to all URLs if missing
-      const urls = rawUrls.map(url => ensureProtocol(url));
+      // Filter and sanitize URLs to ensure they're secure
+      const validUrls = [];
+      for (const url of rawUrls.map(url => ensureProtocol(url))) {
+        try {
+          // Validate each URL
+          const sanitizedUrl = validateAndSanitizeUrl(url);
+          validUrls.push(sanitizedUrl);
+        } catch (error) {
+          edgeLogger.warn('[URL DETECTION] Skipping invalid URL', {
+            url,
+            error: error instanceof Error ? error.message : String(error)
+          });
+          // Skip invalid URLs
+        }
+      }
+      
+      // If all URLs were filtered out as invalid
+      if (validUrls.length === 0) {
+        return {
+          message: 'No valid and secure URLs were found in the text.',
+          urls: []
+        };
+      }
       
       // Log detected URLs
-      edgeLogger.info('[URL DETECTION] Found URLs in text', { 
-        urlCount: urls.length,
-        originalUrls: rawUrls.slice(0, 5), // Log original URLs
-        processedUrls: urls.slice(0, 5)    // Log processed URLs with protocol
+      edgeLogger.info('[URL DETECTION] Found valid URLs in text', { 
+        validUrlCount: validUrls.length,
+        originalUrlCount: rawUrls.length,
+        processedUrls: validUrls.slice(0, 5)  // Log processed URLs with protocol
       });
       
       // Only scrape the first URL to avoid overwhelming the system
-      const firstUrl = urls[0];
+      const firstUrl = validUrls[0];
       
       try {
         // Use the Puppeteer scraper for content extraction
@@ -593,14 +693,12 @@ export const detectAndScrapeUrlsTool = tool({
         });
         
         return {
-          message: `Detected ${urls.length} URL(s). Scraped content from ${firstUrl} using Puppeteer`,
-          urls: [
-            {
-              url: firstUrl,
-              title: scrapedContent.title,
-              content: scrapedContent.content
-            }
-          ]
+          message: `Detected ${validUrls.length} URL(s). Scraped content from ${firstUrl} using Puppeteer`,
+          urls: validUrls.map(url => ({
+            url,
+            title: scrapedContent.title,
+            content: scrapedContent.content
+          }))
         };
       } catch (scrapingError) {
         // Log the error but continue with the query
@@ -615,14 +713,12 @@ export const detectAndScrapeUrlsTool = tool({
         
         // Return partial information even if scraping failed
         return {
-          message: `Detected ${urls.length} URL(s). Failed to scrape content from ${firstUrl}. Error: ${scrapingError instanceof Error ? scrapingError.message : String(scrapingError)}`,
-          urls: [
-            {
-              url: firstUrl,
-              title: 'Error: Failed to scrape content',
-              content: `Unable to retrieve content from ${firstUrl}. This could be due to site restrictions, invalid URL format, or connection issues.`
-            }
-          ]
+          message: `Detected ${validUrls.length} URL(s). Failed to scrape content from ${firstUrl}. Error: ${scrapingError instanceof Error ? scrapingError.message : String(scrapingError)}`,
+          urls: validUrls.map(url => ({
+            url,
+            title: 'Error: Failed to scrape content',
+            content: `Unable to retrieve content from ${url}. This could be due to site restrictions, invalid URL format, or connection issues.`
+          }))
         };
       }
     } catch (error) {

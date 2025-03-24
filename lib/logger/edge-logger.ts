@@ -311,7 +311,7 @@ function cleanupLogData(data?: any): Record<string, any> {
     if (typeof value === 'object') {
       try {
         cleanData[key] = cleanupLogData(value);
-      } catch (e) {
+    } catch (e) {
         cleanData[key] = '[Complex Object]';
       }
     }
@@ -454,9 +454,6 @@ class LogBatch {
   }
 }
 
-// Update the RAG operation tracking structure
-const activeRagOperations = new Map<string, RagOperation>();
-
 // Define the RAG operation types
 interface RagOperation {
   startTime: number;
@@ -468,13 +465,23 @@ interface RagOperation {
   status: 'error' | 'completed' | 'running';
 }
 
-// RAG operation tracking functions
+// Production thresholds
+const THRESHOLDS = {
+  RAG_TIMEOUT: 10000,      // 10 seconds
+  SLOW_OPERATION: 2000,    // 2 seconds
+  LOG_THRESHOLD: 1000,     // Only log operations > 1s in production
+  IMPORTANT_THRESHOLD: 5000 // Mark as important if > 5s
+};
+
+// RAG operation tracking
+const activeRagOperations = new Map<string, RagOperation>();
+
 function startRagOperation(query: string, requestId: string, parentId?: string): string {
   const operationId = `rag-${Date.now().toString(36)}`;
   
   activeRagOperations.set(operationId, {
     startTime: performance.now(),
-    query,
+    query: query.slice(0, 100), // Truncate query for security
     requestId,
     parentId,
     children: new Set(),
@@ -496,8 +503,20 @@ function endRagOperation(operationId: string, status: 'error' | 'completed'): vo
   const operation = activeRagOperations.get(operationId);
   if (!operation) return;
 
+  const duration = performance.now() - operation.startTime;
   operation.completed = true;
   operation.status = status;
+
+  // Log completion for root operations or slow operations
+  if (!operation.parentId || duration > THRESHOLDS.LOG_THRESHOLD) {
+    edgeLogger.info('RAG operation completed', {
+      operationId,
+      durationMs: Math.round(duration),
+      status,
+      slow: duration > THRESHOLDS.SLOW_OPERATION,
+      important: duration > THRESHOLDS.IMPORTANT_THRESHOLD
+    });
+  }
 
   // Only remove the operation if it has no children or all children are completed
   const allChildrenCompleted = Array.from(operation.children).every(childId => {
@@ -532,11 +551,11 @@ function checkStaleRagOperations(): void {
     const isOrphan = operation.parentId && !parent;
     const isRoot = !operation.parentId;
     
-    if ((isRoot || isOrphan) && duration > 10000 && operation.status === 'running') {
+    if ((isRoot || isOrphan) && duration > THRESHOLDS.RAG_TIMEOUT && operation.status === 'running') {
       edgeLogger.warn('RAG operation timeout', {
         operationId,
         durationMs: Math.round(duration),
-        query: operation.query.slice(0, 100),
+        query: operation.query,
         requestId: operation.requestId,
         parentId: operation.parentId,
         childCount: operation.children.size,
@@ -674,16 +693,16 @@ const startBatch = (batchId: string): LogBatch => {
 };
 
 const debug = (message: string, data?: LogData): void => {
-  if (process.env.NODE_ENV === 'production') return;
-
-  const { shouldLog, count } = shouldLogMessage('debug', message, data);
-  if (!shouldLog) return;
-
-  let logMessage = message;
-  if (count > 1 && DEDUP_SETTINGS.showCounts) {
-    logMessage = `${message} (repeated ${count} times)`;
-  }
-
+    if (process.env.NODE_ENV === 'production') return;
+    
+    const { shouldLog, count } = shouldLogMessage('debug', message, data);
+    if (!shouldLog) return;
+    
+    let logMessage = message;
+    if (count > 1 && DEDUP_SETTINGS.showCounts) {
+      logMessage = `${message} (repeated ${count} times)`;
+    }
+    
   if (process.env.NODE_ENV === 'development') {
     console.log(formatDevLog('debug', logMessage, cleanupLogData(maskSensitiveData(data))));
   } else {
@@ -703,14 +722,14 @@ const info = (message: string, data?: LogData): void => {
     return;
   }
 
-  const { shouldLog, count } = shouldLogMessage('info', message, data);
-  if (!shouldLog) return;
-
-  let logMessage = message;
-  if (count > 1 && DEDUP_SETTINGS.showCounts) {
-    logMessage = `${message} (repeated ${count} times)`;
-  }
-
+    const { shouldLog, count } = shouldLogMessage('info', message, data);
+    if (!shouldLog) return;
+    
+    let logMessage = message;
+    if (count > 1 && DEDUP_SETTINGS.showCounts) {
+      logMessage = `${message} (repeated ${count} times)`;
+    }
+    
   if (process.env.NODE_ENV === 'development') {
     console.log(formatDevLog('info', logMessage, cleanupLogData(maskSensitiveData(data))));
   } else {
@@ -719,9 +738,9 @@ const info = (message: string, data?: LogData): void => {
 };
 
 const warn = (message: string, data?: LogData): void => {
-  const { shouldLog, count } = shouldLogMessage('warn', message, data);
-  if (!shouldLog) return;
-
+    const { shouldLog, count } = shouldLogMessage('warn', message, data);
+    if (!shouldLog) return;
+    
   let logMessage = message;
   if (count > 1 && DEDUP_SETTINGS.showCounts) {
     logMessage = `${message} (repeated ${count} times)`;
@@ -737,11 +756,11 @@ const warn = (message: string, data?: LogData): void => {
 const error = (message: string, data?: LogData): void => {
   const { count } = shouldLogMessage('error', message, data);
 
-  let logMessage = message;
-  if (count > 1 && DEDUP_SETTINGS.showCounts) {
-    logMessage = `${message} (repeated ${count} times)`;
-  }
-
+    let logMessage = message;
+    if (count > 1 && DEDUP_SETTINGS.showCounts) {
+      logMessage = `${message} (repeated ${count} times)`;
+    }
+    
   if (process.env.NODE_ENV === 'development') {
     console.error(formatDevLog('error', logMessage, cleanupLogData(maskSensitiveData(data))));
   } else {
@@ -783,7 +802,7 @@ export function withRequestTracking(handler: any) {
   };
 }
 
-// Add after the cleanupLogData function
+// Environment variable handling
 function checkEnvironment(): { valid: boolean; summary: string } {
   const requiredVars = [
     'NEXT_PUBLIC_SUPABASE_URL',
@@ -793,17 +812,26 @@ function checkEnvironment(): { valid: boolean; summary: string } {
   ];
   
   const missing = requiredVars.filter(v => !process.env[v]);
-  
-  // Only check for critical service configurations
-  const serviceConfig = {
+  const services = {
     database: process.env.NEXT_PUBLIC_SUPABASE_URL ? 'configured' : 'missing',
     ai: process.env.OPENAI_API_KEY && process.env.PERPLEXITY_API_KEY ? 'configured' : 'missing'
   };
   
   return {
     valid: missing.length === 0,
-    summary: `services=${Object.entries(serviceConfig).map(([k, v]) => `${k}:${v}`).join(',')}`
+    summary: `services=${Object.entries(services).map(([k, v]) => `${k}:${v}`).join(',')}`
   };
+}
+
+function logEnvironmentCheck() {
+  const envCheck = checkEnvironment();
+  
+  edgeLogger.info('Environment check', {
+    category: LOG_CATEGORIES.SYSTEM,
+    valid: envCheck.valid,
+    summary: envCheck.summary,
+    important: !envCheck.valid
+  });
 }
 
 // Update the startup logging

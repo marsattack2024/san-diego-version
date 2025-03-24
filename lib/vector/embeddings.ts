@@ -119,7 +119,7 @@ export async function findRelevantContent(
     logger.error(
       'Error finding relevant content',
       { 
-        error,
+        error: error instanceof Error ? error.message : String(error),
         query_length: userQuery.length,
         duration_ms: Date.now() - startTime
       }

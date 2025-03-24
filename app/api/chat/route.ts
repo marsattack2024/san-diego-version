@@ -1,5 +1,6 @@
 import { validateChatRequest } from '@/lib/chat/validator';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '../../../lib/logger/constants';
 import { type AgentType } from '@/lib/agents/prompts';
 import { createServerClient } from '@/lib/supabase/server';
 import { cookies } from 'next/headers';
@@ -10,6 +11,9 @@ import { extractUrls, ensureProtocol } from '@/lib/chat/url-utils';
 import { ToolManager } from '@/lib/chat/tool-manager';
 import { buildAIMessages } from '@/lib/chat/prompt-builder';
 import { createResponseValidator } from '@/lib/chat/response-validator';
+
+// Import the caching middleware
+import { cacheMiddleware } from '@/lib/cache/ai-middleware';
 
 // Allow streaming responses up to 120 seconds instead of 60
 export const maxDuration = 120;
@@ -39,25 +43,33 @@ function formatError(error: unknown): Error {
   return new Error(typeof error === 'string' ? error : JSON.stringify(error));
 }
 
+function checkEnvironment() {
+  const servicesConfig = {
+    database: process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? 'configured' : 'missing',
+    ai: process.env.OPENAI_API_KEY && process.env.PERPLEXITY_API_KEY ? 'configured' : 'missing'
+  };
+  
+  const valid = servicesConfig.database === 'configured' && servicesConfig.ai === 'configured';
+  
+  return {
+    valid,
+    summary: `services=${Object.entries(servicesConfig).map(([k, v]) => `${k}:${v}`).join(',')}`
+  };
+}
+
 export async function POST(req: Request) {
   try {
     const startTime = Date.now(); // Add timestamp for performance tracking
     const timeoutThreshold = 110000; // 110 seconds (just under our maxDuration)
     let operationTimeoutId: NodeJS.Timeout | undefined = undefined;
     
-    // Debug logging for environment variables
-    edgeLogger.info('Environment variables check', {
-      operation: 'env_check',
-      important: true,
-      hasPerplexityKey: !!process.env.PERPLEXITY_API_KEY,
-      keyLength: process.env.PERPLEXITY_API_KEY?.length,
-      keyPrefix: process.env.PERPLEXITY_API_KEY?.substring(0, 5),
-      keySuffix: process.env.PERPLEXITY_API_KEY?.substring((process.env.PERPLEXITY_API_KEY?.length || 0) - 5),
-      allEnvKeys: Object.keys(process.env).filter(key => 
-        !key.includes('SECRET') && 
-        !key.includes('TOKEN') && 
-        !key.includes('PASSWORD')
-      ),
+    // Simplified environment check
+    const envCheck = checkEnvironment();
+    edgeLogger.info('Environment check', {
+      category: LOG_CATEGORIES.SYSTEM,
+      valid: envCheck.valid,
+      summary: envCheck.summary,
+      important: true
     });
     
     // Set up a timeout for the entire operation
@@ -182,30 +194,25 @@ export async function POST(req: Request) {
         });
         
         try {
-          // Execute the RAG tool with timeout guard
-          const ragPromise = chatTools.getInformation.execute(
-            { query: lastUserMessage.content },
-            { toolCallId: 'rag-search', messages: [] }
+          // Execute the RAG tool with proper operation tracking
+          const ragResult = await edgeLogger.trackOperation(
+            'rag_search',
+            async () => {
+              return await chatTools.getInformation.execute(
+                { query: lastUserMessage.content },
+                { toolCallId: 'rag-search', messages: [] }
+              );
+            },
+            {
+              category: LOG_CATEGORIES.TOOLS,
+              query: lastUserMessage.content.substring(0, 100),
+              important: true
+            }
           );
-          
-          // Set a 10-second timeout for RAG operations
-          const ragResult = await Promise.race([
-            ragPromise,
-            new Promise<string>((resolve) => {
-              setTimeout(() => {
-                edgeLogger.warn('RAG operation timed out', {
-                  durationMs: Date.now() - ragStartTime,
-                  threshold: 10000
-                });
-                resolve("RAG operation timed out. Continuing without these results.");
-              }, 10000);
-            })
-          ]);
           
           // Check if we got valid results
           if (typeof ragResult === 'string') {
-            if (!ragResult.includes("No relevant information found") && 
-                !ragResult.includes("timed out")) {
+            if (!ragResult.includes("No relevant information found")) {
               toolManager.registerToolResult('Knowledge Base', ragResult);
               edgeLogger.info('RAG results found', { 
                 contentLength: ragResult.length,
@@ -215,7 +222,7 @@ export async function POST(req: Request) {
             } else {
               edgeLogger.info('No RAG results found', {
                 durationMs: Date.now() - ragStartTime,
-                reason: ragResult.includes("timed out") ? 'timeout' : 'no matches'
+                reason: 'no matches'
               });
             }
           } else {
@@ -251,67 +258,63 @@ export async function POST(req: Request) {
           // Only use the first URL to limit token usage and reduce processing time
           const firstUrl = urls[0];
           
-          // Execute the comprehensive scraper with timeout guard
-          const scraperPromise = chatTools.comprehensiveScraper.execute!(
-            { url: firstUrl },
-            { toolCallId: 'web-scraper', messages: [] }
-          );
+          // Create a timeout promise
+          let timeoutTriggered = false;
+          const timeoutPromise = new Promise<{ content: string }>((resolve) => {
+            setTimeout(() => {
+              timeoutTriggered = true;
+              edgeLogger.warn('Web scraper operation timed out', {
+                durationMs: Date.now() - scraperStartTime,
+                threshold: 15000,
+                url: firstUrl
+              });
+              resolve({ content: `Web scraping timed out for URL: ${firstUrl}` });
+            }, 15000);
+          });
           
-          // Set a 15-second timeout for scraper operations
+          // Execute the comprehensive scraper with timeout race
           const scraperResult = await Promise.race([
-            scraperPromise,
-            new Promise<{ content?: string }>((resolve) => {
-              setTimeout(() => {
-                edgeLogger.warn('Web scraper operation timed out', {
-                  durationMs: Date.now() - scraperStartTime,
-                  threshold: 15000,
-                  url: firstUrl
-                });
-                resolve({ content: `Web scraping timed out for URL: ${firstUrl}` });
-              }, 15000);
-            })
+            chatTools.comprehensiveScraper.execute!(
+              { url: firstUrl },
+              { toolCallId: 'web-scraper', messages: [] }
+            ),
+            timeoutPromise
           ]);
           
-          // Check if we got valid results
-          if (scraperResult && scraperResult.content) {
-            // Only use web content if it's not a timeout message
-            if (!scraperResult.content.includes("timed out")) {
-              // Check content size and truncate if necessary to avoid memory issues
-              const contentSize = scraperResult.content.length;
-              const MAX_CONTENT_SIZE = 80000;
-              
-              let contentToUse = scraperResult.content;
-              if (contentSize > MAX_CONTENT_SIZE) {
-                contentToUse = scraperResult.content.substring(0, MAX_CONTENT_SIZE) + 
-                  `\n\n[Content truncated due to size limit. Original size: ${contentSize} characters]`;
-                edgeLogger.warn('Web content truncated due to size', {
-                  originalSize: contentSize,
-                  truncatedSize: MAX_CONTENT_SIZE,
-                  url: firstUrl
-                });
-              }
-              
-              toolManager.registerToolResult('Web Content', contentToUse);
-              edgeLogger.info('Scraper results found', { 
-                url: firstUrl,
-                contentLength: contentToUse.length,
-                firstChars: contentToUse.substring(0, 100) + '...',
-                durationMs: Date.now() - scraperStartTime
-              });
-            } else {
-              edgeLogger.info('Web scraper timed out', {
-                url: firstUrl,
-                durationMs: Date.now() - scraperStartTime
+          // Check if we got valid results and didn't timeout
+          if (scraperResult && scraperResult.content && !timeoutTriggered) {
+            // Check content size and truncate if necessary to avoid memory issues
+            const contentSize = scraperResult.content.length;
+            const MAX_CONTENT_SIZE = 80000;
+            
+            let contentToUse = scraperResult.content;
+            if (contentSize > MAX_CONTENT_SIZE) {
+              contentToUse = scraperResult.content.substring(0, MAX_CONTENT_SIZE) + 
+                `\n\n[Content truncated due to size limit. Original size: ${contentSize} characters]`;
+              edgeLogger.warn('Web content truncated due to size', {
+                originalSize: contentSize,
+                truncatedSize: MAX_CONTENT_SIZE,
+                url: firstUrl
               });
             }
-          } else {
-            edgeLogger.info('No valid scraper results found', {
+            
+            toolManager.registerToolResult('Web Content', contentToUse);
+            edgeLogger.info('Scraper results found', { 
+              url: firstUrl,
+              contentLength: contentToUse.length,
+              firstChars: contentToUse.substring(0, 100) + '...',
+              durationMs: Date.now() - scraperStartTime
+            });
+          } else if (timeoutTriggered) {
+            edgeLogger.warn('Using fallback due to timeout', {
+              url: firstUrl,
               durationMs: Date.now() - scraperStartTime
             });
           }
         } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
           edgeLogger.error('Error running web scraper', { 
-            error: formatError(error),
+            error: errorMessage,
             durationMs: Date.now() - scraperStartTime
           });
         }
@@ -798,14 +801,14 @@ export async function POST(req: Request) {
           systemPromptSize: aiMessages[0]?.content?.length || 0
         });
         
-        // Use the Vercel AI SDK's streamText function
+        // Use the Vercel AI SDK's streamText function with caching middleware
         const result = await streamText({
-          model: openai(modelName), // Directly use the OpenAI model
+          model: openai('gpt-4-turbo-preview'), // Use the correct model ID
           messages: aiMessages,
           temperature: 0.4,
-          maxTokens: 4000, // Increased from default but still reasonable for GPT-4o
+          maxTokens: 4000,
           tools: aiSdkTools,
-          maxSteps: 5, // Allow multiple tool calls in sequence
+          maxSteps: 5,
           onFinish: async (completion) => {
             try {
               // Log successful completion

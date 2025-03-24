@@ -3,7 +3,7 @@ import { Chat } from '@/lib/db/schema';
 import { randomUUID } from 'crypto';
 
 // Keep track of pending requests to deduplicate
-let pendingRequests: Record<string, Promise<Chat[]> | null> = {};
+const pendingRequests: Record<string, Promise<Chat[]> | null> = {};
 
 // Track last refresh time
 let lastRefreshTime = 0;

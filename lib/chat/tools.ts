@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { findSimilarDocumentsOptimized } from '../vector/documentRetrieval';
 import { createResource } from '../actions/resources';
 import { edgeLogger } from '../logger/edge-logger';
-import type { RetrievedDocument } from '../../types/vector/vector';
+import type { RetrievedDocument } from '../vector/types';
 import { callPerplexityAPI } from '../agents/tools/perplexity/api';
 import { webScraperTool, detectAndScrapeUrlsTool } from '../agents/tools/web-scraper-tool';
 
@@ -47,8 +47,9 @@ export const chatTools = {
         const topDocuments = documents.slice(0, 3);
         
         // Format the results with more detail including IDs and similarity scores
-        const formattedResults = topDocuments.map((doc: RetrievedDocument, index: number) => {
-          const similarityPercent = Math.round(doc.similarity * 100);
+        const formattedResults = topDocuments.map((doc, index) => {
+          // Use doc.score instead of doc.similarity since we're using the lib/vector/types version
+          const similarityPercent = Math.round((doc.score || 0) * 100);
           // Safely handle ID - ensure it's a string
           const idString = typeof doc.id === 'string' ? doc.id : String(doc.id);
           const idPreview = idString.length > 8 ? idString.substring(0, 8) : idString;
@@ -67,14 +68,14 @@ export const chatTools = {
 
         // Add aggregate metrics
         const avgSimilarity = Math.round(
-          topDocuments.reduce((sum, doc) => sum + doc.similarity, 0) / topDocuments.length * 100
+          topDocuments.reduce((sum, doc) => sum + (doc.score || 0), 0) / topDocuments.length * 100
         );
 
         return `Found ${topDocuments.length} most relevant documents (out of ${documents.length} retrieved, average similarity of top 3: ${avgSimilarity}%):\n\n${formattedResults}`;
       } catch (error) {
         edgeLogger.error('Knowledge base search failed', {
           query,
-          error
+          error: error instanceof Error ? error.message : String(error)
         });
         
         return `Knowledge base search failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -95,8 +96,10 @@ export const chatTools = {
           message: 'Information stored successfully'
         };
       } catch (error) {
-        edgeLogger.error('Failed to store information', { error });
-        throw new Error('Failed to store information');
+        edgeLogger.error('Failed to store information', { 
+          error: error instanceof Error ? error.message : String(error) 
+        });
+        throw new Error(`Failed to store information: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }),

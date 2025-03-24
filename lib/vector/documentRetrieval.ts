@@ -1,112 +1,22 @@
 import { logger } from '../logger';
-import type { RetrievedDocument } from '../../types/vector/vector.js';
+import type { RetrievedDocument } from './types';
 import { supabase } from '../db';
 import { createEmbedding } from './embeddings';
+import { redisCache } from './rag-cache';
 
-// Cache configuration
-const CACHE_CONFIG = {
-  maxSize: 100,          // Maximum number of entries in cache
-  ttl: 15 * 60 * 1000,  // Time-to-live: 15 minutes (increased from 5)
-  similarityThreshold: 0.92, // Threshold for semantic deduplication
-  warmupInterval: 5 * 60 * 1000 // Warm up cache every 5 minutes
-};
-
-// Cache structure: Map<queryHash, {documents, timestamp, metrics}>
-interface CacheEntry {
-  documents: RetrievedDocument[];
-  metrics: DocumentSearchMetrics;
-  timestamp: number;
-  embedding?: number[]; // Store query embedding for similarity checks
-  accessCount: number;
-}
-
-const vectorSearchCache = new Map<string, CacheEntry>();
-
-// Cache statistics
+// Cache statistics for monitoring
 const cacheStats = {
   hits: 0,
   misses: 0,
-  semanticHits: 0,
-  warmups: 0,
-  lastWarmup: 0
+  semanticHits: 0
 };
 
-// Find semantically similar cached query
-async function findSimilarCachedQuery(queryEmbedding: number[]): Promise<CacheEntry | null> {
-  for (const entry of vectorSearchCache.values()) {
-    if (!entry.embedding) continue;
-    
-    const similarity = cosineSimilarity(queryEmbedding, entry.embedding);
-    if (similarity >= CACHE_CONFIG.similarityThreshold) {
-      return entry;
-    }
-  }
-  return null;
-}
-
-// Cosine similarity calculation
-function cosineSimilarity(a: number[], b: number[]): number {
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-  
-  for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  
-  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-}
-
-// Cache warming function
-async function warmCache() {
-  const now = Date.now();
-  if (now - cacheStats.lastWarmup < CACHE_CONFIG.warmupInterval) {
-    return; // Skip if last warmup was too recent
-  }
-  
-  try {
-    // Get most frequently accessed entries
-    const entries = Array.from(vectorSearchCache.entries())
-      .sort((a, b) => b[1].accessCount - a[1].accessCount)
-      .slice(0, 5); // Warm up top 5 most accessed queries
-    
-    for (const [hash, entry] of entries) {
-      if (vectorSearchCache.has(hash)) {
-        // Only warm up if close to expiration
-        const timeLeft = now - entry.timestamp;
-        if (timeLeft > CACHE_CONFIG.ttl / 2) {
-          const query = hash.split(':')[0]; // Extract original query from hash
-          await findSimilarDocumentsOptimized(query, { skipCache: true });
-          cacheStats.warmups++;
-        }
-      }
-    }
-    
-    cacheStats.lastWarmup = now;
-    
-    // Log cache statistics
-    logger.info('Vector cache statistics', {
-      ...cacheStats,
-      cacheSize: vectorSearchCache.size
-    });
-  } catch (error) {
-    logger.error('Vector cache warmup failed', { error });
-  }
-}
-
-// Set up periodic cache warming
-if (typeof setInterval !== 'undefined') {
-  setInterval(warmCache, CACHE_CONFIG.warmupInterval);
-}
-
-// Simple hash function for query + options
-function hashQueryOptions(query: string, options: DocumentSearchOptions): string {
-  const { limit = 5, similarityThreshold, metadataFilter, sessionId } = options;
-  const filterStr = metadataFilter ? JSON.stringify(metadataFilter) : '';
-  return `${query}:${limit}:${similarityThreshold}:${filterStr}:${sessionId || ''}`;
-}
+// Log cache statistics periodically
+setInterval(() => {
+  logger.info('Vector cache statistics', {
+    ...cacheStats
+  });
+}, 5 * 60 * 1000); // Log every 5 minutes
 
 interface DocumentSearchOptions {
   limit?: number;
@@ -125,7 +35,8 @@ export interface DocumentSearchMetrics {
   isSlowQuery: boolean;
   usedFallbackThreshold?: boolean;
   fromCache?: boolean;
-  semanticMatch?: boolean; // Add support for semantic match indicator
+  semanticMatch?: boolean;
+  error?: string;
 }
 
 interface SupabaseDocument {
@@ -184,7 +95,7 @@ export async function findSimilarDocumentsWithPerformance(
     let lowestSimilarity = 1;
 
     if (count > 0) {
-      const similarities = documents.map(doc => doc.similarity);
+      const similarities = documents.map(doc => doc.score ?? 0);
       averageSimilarity = similarities.reduce((sum, val) => sum + val, 0) / count;
       highestSimilarity = Math.max(...similarities);
       lowestSimilarity = Math.min(...similarities);
@@ -229,130 +140,139 @@ function logQueryPerformance(queryText: string, retrievalTimeMs: number, count: 
   });
 }
 
-/**
- * Optimized version of findSimilarDocuments that implements:
- * 1. Query preprocessing to improve match quality
- * 2. Performance monitoring
- * 3. Automatic retry with adjusted parameters for failed searches
- * 4. In-memory caching for recent queries
- */
+function calculateAverageSimilarity(documents: RetrievedDocument[]): number {
+  if (!documents.length) return 0;
+  const validScores = documents.filter(doc => typeof doc.score === 'number').map(doc => doc.score as number);
+  if (!validScores.length) return 0;
+  return validScores.reduce((sum, score) => sum + score, 0) / validScores.length;
+}
 
+function calculateSearchMetrics(documents: RetrievedDocument[]): DocumentSearchMetrics {
+  const startTime = Date.now();
+  const validScores = documents
+    .filter(doc => typeof doc.score === 'number')
+    .map(doc => doc.score as number);
+  
+  return {
+    count: documents.length,
+    averageSimilarity: calculateAverageSimilarity(documents),
+    highestSimilarity: validScores.length ? Math.max(...validScores) : 0,
+    lowestSimilarity: validScores.length ? Math.min(...validScores) : 0,
+    retrievalTimeMs: Date.now() - startTime,
+    isSlowQuery: (Date.now() - startTime) > 1000
+  };
+}
+
+// Replace the generateConsistentCacheKey function with Web Crypto API version
+async function generateConsistentCacheKey(queryText: string, options: DocumentSearchOptions = {}): Promise<string> {
+  // Create a stable representation of the query and relevant options
+  const keyContent = {
+    query: queryText.toLowerCase().trim(),
+    filter: options.metadataFilter || {},
+    limit: options.limit || 10
+  };
+  
+  // Use Web Crypto API for hashing to ensure consistency
+  const msgUint8 = new TextEncoder().encode(JSON.stringify(keyContent));
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  
+  // Return just the first 16 characters of the hash for a shorter key
+  return hashHex.slice(0, 16);
+}
+
+// Update findSimilarDocumentsOptimized to be async
 export async function findSimilarDocumentsOptimized(
   queryText: string,
   options: DocumentSearchOptions = {}
 ): Promise<{ documents: RetrievedDocument[], metrics: DocumentSearchMetrics }> {
-  const sessionId = options.sessionId || Math.random().toString(36).substring(2, 15);
-  const startTime = performance.now();
+  // Use consistent cache key with await
+  const cacheKey = await generateConsistentCacheKey(queryText, options);
   
-  const processedQuery = preprocessQuery(queryText);
-  
-  // Check cache first (unless skipCache is true)
-  if (!options.skipCache) {
-    const cacheKey = hashQueryOptions(processedQuery, options);
-    const cachedResult = vectorSearchCache.get(cacheKey);
-    
-    if (cachedResult) {
-      const timeLeft = Date.now() - cachedResult.timestamp;
-      if (timeLeft < CACHE_CONFIG.ttl) {
-        // Update access count
-        cachedResult.accessCount++;
-        vectorSearchCache.set(cacheKey, cachedResult);
+  try {
+    const cachedResults = await redisCache.getRAG('global', cacheKey);
+    if (cachedResults) {
+      try {
+        // Since our get method now handles JSON parsing, this should either be 
+        // an already parsed object or a string
+        const parsedResults = typeof cachedResults === 'string' 
+          ? JSON.parse(cachedResults) 
+          : cachedResults;
         
-        cacheStats.hits++;
-        return {
-          documents: cachedResult.documents,
-          metrics: {
-            ...cachedResult.metrics,
-            fromCache: true,
-            retrievalTimeMs: Math.round(performance.now() - startTime)
-          }
-        };
+        // Validate the structure matches our interface
+        if (parsedResults && 
+            typeof parsedResults === 'object' &&
+            Array.isArray(parsedResults.documents) && 
+            parsedResults.documents.every((doc: any) => 
+              doc.id && 
+              doc.content && 
+              (typeof doc.score === 'number' || typeof doc.similarity === 'number')
+            ) &&
+            parsedResults.metrics &&
+            parsedResults.timestamp &&
+            typeof parsedResults.timestamp === 'number'
+        ) {
+          logger.info('Cache hit', {
+            operation: 'cache_hit',
+            queryLength: queryText.length,
+            resultCount: parsedResults.documents.length,
+            age: Date.now() - parsedResults.timestamp
+          });
+          
+          return {
+            documents: parsedResults.documents,
+            metrics: parsedResults.metrics
+          };
+        } else {
+          logger.warn('Invalid cache structure', {
+            operation: 'cache_invalid',
+            structure: Object.keys(parsedResults)
+          });
+        }
+      } catch (error) {
+        logger.warn('Cache parse error, falling back to search', {
+          error: error instanceof Error ? error.message : String(error)
+        });
       }
     }
-    
-    // Try to find semantically similar cached query
-    const queryEmbedding = await createEmbedding(processedQuery);
-    const similarEntry = await findSimilarCachedQuery(queryEmbedding);
-    
-    if (similarEntry) {
-      cacheStats.semanticHits++;
-      return {
-        documents: similarEntry.documents,
-        metrics: {
-          ...similarEntry.metrics,
-          fromCache: true,
-          semanticMatch: true,
-          retrievalTimeMs: Math.round(performance.now() - startTime)
-        }
-      };
-    }
-  }
-  
-  cacheStats.misses++;
-  
-  // Perform the search
-  const result = await findSimilarDocumentsWithPerformance(processedQuery, {
-    ...options,
-    limit: options.limit || 5,
-    sessionId,
-  });
-  
-  // Store in cache (unless skipCache is true)
-  if (!options.skipCache) {
-    const cacheKey = hashQueryOptions(processedQuery, options);
-    const queryEmbedding = await createEmbedding(processedQuery);
-    
-    vectorSearchCache.set(cacheKey, {
-      documents: result.documents,
-      metrics: result.metrics,
-      timestamp: Date.now(),
-      embedding: queryEmbedding,
-      accessCount: 1
+  } catch (error) {
+    logger.warn('Cache retrieval error, falling back to search', { 
+      error: error instanceof Error ? error.message : String(error) 
     });
   }
   
-  return result;
-}
-
-/**
- * Preprocess a query to improve match quality
- * - Removes filler words
- * - Normalizes whitespace
- * - Extracts key terms
- */
-function preprocessQuery(query: string): string {
-  let processed = query.toLowerCase();
+  // Perform vector search
+  const documents = await findSimilarDocuments(queryText, options);
   
-  const fillerWords = [
-    'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were',
-    'have', 'has', 'had', 'do', 'does', 'did', 'can', 'could', 'will',
-    'would', 'should', 'may', 'might', 'must', 'about', 'for', 'with',
-    'in', 'on', 'at', 'by', 'to', 'from', 'of', 'as', 'i', 'you', 'he',
-    'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them'
-  ];
+  // Calculate metrics
+  const metrics = calculateSearchMetrics(documents);
   
-  if (processed.split(' ').length > 5) {
-    const words = processed.split(' ');
-    const filteredWords = words.filter(word => !fillerWords.includes(word));
+  // Cache results
+  try {
+    const cacheableResults = {
+      documents,
+      metrics,
+      timestamp: Date.now()
+    };
     
-    if (filteredWords.length >= words.length * 0.6) {
-      processed = filteredWords.join(' ');
-    }
+    // Serialize to JSON string before caching
+    const serializedResults = JSON.stringify(cacheableResults);
+    await redisCache.setRAG('global', cacheKey, serializedResults);
+    
+    logger.info('Cached search results', {
+      operation: 'cache_set',
+      queryLength: queryText.length,
+      resultCount: documents.length
+    });
+  } catch (error) {
+    logger.error('Failed to cache search results', {
+      error: error instanceof Error ? error.message : String(error)
+    });
   }
   
-  processed = processed.replace(/\s+/g, ' ').trim();
-  
-  return processed;
+  return { documents, metrics };
 }
-
-// Update vector logging calls to use the unified logger
-const logVectorOperation = async (operation: string, data: any) => {
-  logger.info(`Vector ${operation}`, {
-    operation: `vector_${operation}`,
-    ...data,
-    important: true
-  });
-};
 
 export async function retrieveDocuments(
   query: string,
@@ -362,42 +282,12 @@ export async function retrieveDocuments(
     metadata?: Record<string, any>;
   } = {}
 ): Promise<RetrievedDocument[]> {
-  const startTime = performance.now();
-  
-  try {
-    const embedding = await createEmbedding(query);
-    const { limit = 5, threshold = 0.7, metadata = {} } = options;
+  const searchOptions: DocumentSearchOptions = {
+    limit: options.limit,
+    similarityThreshold: options.threshold,
+    metadataFilter: options.metadata
+  };
 
-    const { data: documents, error } = await supabase.rpc('match_documents', {
-      query_embedding: embedding,
-      match_threshold: threshold,
-      match_count: limit
-    });
-
-    if (error) {
-      logger.error('Vector search failed', { error, query, options });
-      throw error;
-    }
-
-    const duration = Math.round(performance.now() - startTime);
-    
-    // Log vector search results
-    await logVectorOperation('search', {
-      query,
-      documentCount: documents.length,
-      threshold,
-      durationMs: duration,
-      metadata
-    });
-
-    return documents;
-  } catch (error) {
-    logger.error('Document retrieval failed', {
-      error,
-      query,
-      options,
-      durationMs: Math.round(performance.now() - startTime)
-    });
-    throw error;
-  }
+  const { documents } = await findSimilarDocumentsOptimized(query, searchOptions);
+  return documents;
 } 

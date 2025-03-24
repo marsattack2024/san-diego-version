@@ -6,10 +6,10 @@ import { cookies } from 'next/headers';
 import { PostgrestResponse, PostgrestError, PostgrestSingleResponse } from '@supabase/supabase-js';
 import { authCache } from '@/lib/auth/auth-cache';
 
+import { getAuthenticatedUser } from '@/lib/supabase/auth-utils';
+
 // Add after any runtime configuration, or at the top of the file
 export const dynamic = 'force-dynamic';
-
-import { getAuthenticatedUser } from '@/lib/supabase/auth-utils';
 
 // API route to fetch chat messages and handle chat-specific operations
 export async function GET(

@@ -6,8 +6,8 @@ import { ToolResults } from '@/lib/agents/prompts';
  * Manages tool results and state during a chat processing session
  */
 export class ToolManager {
-  private toolResults: ToolResults = {};
-  private toolsUsed: string[] = [];
+  private toolResults: Record<string, string> = {};
+  private toolsUsed: Set<string> = new Set();
   private toolCallIds: Record<string, boolean> = {};
   
   /**
@@ -23,56 +23,24 @@ export class ToolManager {
    * Register a tool being used by ID
    */
   registerToolUsage(toolName: string): void {
-    if (!this.toolsUsed.includes(toolName)) {
-      this.toolsUsed.push(toolName);
-      edgeLogger.debug(`Tool registered: ${toolName}`, {
-        operation: 'tool_register',
-        toolName,
-        toolsUsed: this.toolsUsed.length
-      });
-    }
+    this.toolsUsed.add(toolName);
+    edgeLogger.debug(`Tool registered: ${toolName}`, {
+      operation: 'tool_register',
+      toolName,
+      toolsUsed: this.toolsUsed.size
+    });
   }
   
   /**
    * Register a result from a tool
    */
-  registerToolResult(toolName: string, content: string): void {
-    // Skip if content is empty
-    if (!content || content.trim() === '') {
-      edgeLogger.debug(`Empty content for tool ${toolName}, skipping registration`, {
-        operation: 'tool_result_empty',
-        toolName
-      });
-      return;
-    }
+  registerToolResult(toolName: string, content: string | { content: string }): void {
+    // Handle both string and object with content property
+    const finalContent = typeof content === 'object' && content.content ? content.content : content;
     
-    edgeLogger.info(`Registering result for tool: ${toolName}`, {
-      operation: 'tool_result_register',
-      toolName,
-      contentLength: content.length,
-      contentPreview: content.substring(0, 50) + (content.length > 50 ? '...' : '')
-    });
-    
-    // Record the tool as used
-    this.registerToolUsage(toolName);
-    
-    // Register the result based on the tool type
-    switch (toolName) {
-      case 'Knowledge Base':
-        this.toolResults.ragContent = content;
-        break;
-      case 'Web Scraper':
-        this.toolResults.webScraper = content;
-        break;
-      case 'Deep Search':
-        this.toolResults.deepSearch = content;
-        break;
-      default:
-        // For generic tools, store in miscResults
-        if (!this.toolResults.miscResults) {
-          this.toolResults.miscResults = {};
-        }
-        this.toolResults.miscResults[toolName] = content;
+    if (typeof finalContent === 'string' && finalContent.trim()) {
+      this.toolResults[toolName] = finalContent;
+      this.toolsUsed.add(toolName);
     }
   }
   
@@ -80,38 +48,32 @@ export class ToolManager {
    * Check if a specific tool has been used
    */
   hasToolBeenUsed(toolName: string): boolean {
-    return this.toolsUsed.includes(toolName);
+    return this.toolsUsed.has(toolName);
   }
   
   /**
    * Get all tools that have been used
    */
   getToolsUsed(): string[] {
-    return [...this.toolsUsed];
+    return Array.from(this.toolsUsed);
   }
   
   /**
    * Get the results from all tools
    */
   getToolResults(): ToolResults {
-    return { ...this.toolResults };
+    return {
+      ragContent: this.toolResults['Knowledge Base'],
+      webScraper: this.toolResults['Web Content'],
+      deepSearch: this.toolResults['Deep Search']
+    };
   }
   
   /**
    * Get a specific tool result by name
    */
   getToolResult(toolName: string): string | null {
-    switch (toolName) {
-      case 'Knowledge Base':
-        return this.toolResults.ragContent || null;
-      case 'Web Scraper':
-        return this.toolResults.webScraper || null;
-      case 'Deep Search':
-        return this.toolResults.deepSearch || null;
-      default:
-        // For generic tools, check miscResults
-        return this.toolResults.miscResults?.[toolName] || null;
-    }
+    return this.toolResults[toolName] || null;
   }
 
   /**
@@ -132,7 +94,7 @@ export class ToolManager {
    * Summarize the current tools and their results
    */
   summarizeTools(): string {
-    const summary = this.toolsUsed.map(toolName => {
+    const summary = Array.from(this.toolsUsed).map(toolName => {
       const result = this.getToolResult(toolName);
       return `${toolName}: ${result ? `${result.length} chars` : 'No content'}`;
     }).join(', ');

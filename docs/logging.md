@@ -143,6 +143,53 @@ try {
    - Monitor service health
    - Record resource usage samples
 
+5. **Cache Operations**
+   ```typescript
+   // Redis cache hit
+   🔵 Redis cache hit
+     category=CACHE
+     operation=rag_search
+     key=rag:a1b2c3
+     durationMs=45
+     size=2.5KB
+
+   // Redis cache miss with fallback
+   🟡 Redis cache miss
+     category=CACHE
+     operation=web_scrape
+     key=scrape:x7y9z
+     fallback=true
+     fallbackType=lru
+
+   // Cache error
+   🔴 Redis cache error
+     category=CACHE
+     operation=deepsearch
+     error=ConnectionTimeout
+     important=true
+     fallback=false
+   ```
+
+### Cache Logging Best Practices
+
+1. **Redis Cache Events**
+   - Log all cache misses in production
+   - Sample cache hits (10% in production)
+   - Always log errors and fallbacks
+   - Track hit rates by category
+
+2. **LRU Cache Events**
+   - Log only in development
+   - Track eviction rates
+   - Monitor memory usage
+   - Log cache pressure events
+
+3. **Cache Performance**
+   - Track Redis operation latency
+   - Monitor cache size growth
+   - Log cache cleanup events
+   - Record hit/miss ratios
+
 ## Migration Guide
 
 ### Remove

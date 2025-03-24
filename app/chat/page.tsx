@@ -1,13 +1,13 @@
 'use client';
 
-export const dynamic = 'force-dynamic';
-
 import { Chat } from '@/components/chat';
 import { useChatStore } from '@/stores/chat-store';
 import { useEffect, useState, useCallback } from 'react';
 import { clientLogger } from '@/lib/logger/client-logger';
 import { useRouter } from 'next/navigation';
 import { historyService } from '@/lib/api/history-service';
+
+export const dynamic = 'force-dynamic';
 
 const log = clientLogger;
 
