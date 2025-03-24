@@ -4,9 +4,9 @@ import {
   type LanguageModelV1Middleware,
   type LanguageModelV1StreamPart,
   simulateReadableStream,
+  type LanguageModelV1CallOptions
 } from 'ai';
 import { edgeLogger } from '../logger/edge-logger';
-import { LOG_CATEGORIES } from '../logger/constants';
 
 // Initialize Redis client using environment variables
 const redis = Redis.fromEnv();
@@ -19,24 +19,31 @@ const CACHE_CONFIG = {
   maxKeySize: 1024 * 5 // 5KB max for cache keys
 };
 
-/**
- * Creates a cache key from params, handling large inputs
- */
+// Create a simple hash function that works in Edge Runtime
+function simpleHash(str: string): string {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  // Convert to positive hex string
+  return Math.abs(hash).toString(16);
+}
+
+// Replace Node.js crypto with a simple hashing function for Edge compatibility
 function createCacheKey(params: Record<string, any>): string {
   const key = JSON.stringify(params);
   
   // If key is too large, hash it
   if (key.length > CACHE_CONFIG.maxKeySize) {
     edgeLogger.warn('Cache key too large, using hash instead', {
-      category: LOG_CATEGORIES.CACHE,
       originalSize: key.length,
       maxSize: CACHE_CONFIG.maxKeySize
     });
     
-    return require('crypto')
-      .createHash('sha256')
-      .update(key)
-      .digest('hex');
+    // Use our simple hash function instead of Node's crypto
+    return `cache:${simpleHash(key)}`;
   }
   
   return key;
@@ -55,7 +62,6 @@ export const cacheMiddleware: LanguageModelV1Middleware = {
 
       if (cached !== null) {
         edgeLogger.info('Cache hit for AI generation', {
-          category: LOG_CATEGORIES.CACHE,
           operation: 'ai_generate_cache_hit',
           durationMs: Date.now() - startTime
         });
@@ -79,7 +85,6 @@ export const cacheMiddleware: LanguageModelV1Middleware = {
       await redis.set(cacheKey, result, { ex: CACHE_CONFIG.ttl });
       
       edgeLogger.info('Cache miss for AI generation', {
-        category: LOG_CATEGORIES.CACHE,
         operation: 'ai_generate_cache_miss',
         durationMs: Date.now() - startTime
       });
@@ -87,7 +92,6 @@ export const cacheMiddleware: LanguageModelV1Middleware = {
       return result;
     } catch (error) {
       edgeLogger.error('AI cache error in generate', {
-        category: LOG_CATEGORIES.CACHE,
         error: error instanceof Error ? error.message : String(error),
         durationMs: Date.now() - startTime
       });
@@ -107,7 +111,6 @@ export const cacheMiddleware: LanguageModelV1Middleware = {
 
       if (cached !== null) {
         edgeLogger.info('Cache hit for AI stream', {
-          category: LOG_CATEGORIES.CACHE,
           operation: 'ai_stream_cache_hit',
           durationMs: Date.now() - startTime
         });
@@ -149,7 +152,6 @@ export const cacheMiddleware: LanguageModelV1Middleware = {
           await redis.set(cacheKey, fullResponse, { ex: CACHE_CONFIG.ttl });
           
           edgeLogger.info('Cached AI stream response', {
-            category: LOG_CATEGORIES.CACHE,
             operation: 'ai_stream_cache_store',
             chunks: fullResponse.length,
             durationMs: Date.now() - startTime
@@ -158,7 +160,6 @@ export const cacheMiddleware: LanguageModelV1Middleware = {
       });
 
       edgeLogger.info('Cache miss for AI stream', {
-        category: LOG_CATEGORIES.CACHE,
         operation: 'ai_stream_cache_miss',
         durationMs: Date.now() - startTime
       });
@@ -169,7 +170,6 @@ export const cacheMiddleware: LanguageModelV1Middleware = {
       };
     } catch (error) {
       edgeLogger.error('AI cache error in stream', {
-        category: LOG_CATEGORIES.CACHE,
         error: error instanceof Error ? error.message : String(error),
         durationMs: Date.now() - startTime
       });

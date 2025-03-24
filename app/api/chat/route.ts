@@ -7,13 +7,17 @@ import { cookies } from 'next/headers';
 import { z } from 'zod';
 
 // Import only validation & utility modules at the top level
-import { extractUrls, ensureProtocol } from '@/lib/chat/url-utils';
+import { extractUrls } from '@/lib/chat/url-utils';
 import { ToolManager } from '@/lib/chat/tool-manager';
 import { buildAIMessages } from '@/lib/chat/prompt-builder';
 import { createResponseValidator } from '@/lib/chat/response-validator';
 
-// Import the caching middleware
+// Import the caching and scraping middleware
 import { cacheMiddleware } from '@/lib/cache/ai-middleware';
+import { urlScrapingMiddleware } from '@/lib/middleware/url-scraping-middleware';
+
+// Import the wrapLanguageModel function
+import { wrapLanguageModel } from 'ai';
 
 // Allow streaming responses up to 120 seconds instead of 60
 export const maxDuration = 120;
@@ -33,9 +37,7 @@ const detectAndScrapeUrlsSchema = z.object({
   text: z.string().describe('The text to extract URLs from')
 });
 
-const comprehensiveScraperSchema = z.object({
-  url: z.string().url().describe('The URL to extract content from. Use this for any URLs mentioned in the user query to provide accurate information from web pages.')
-});
+// Removed comprehensiveScraperSchema since we're not using it anymore with the middleware approach
 
 // Add at the top of the file after imports
 function formatError(error: unknown): Error {
@@ -246,32 +248,23 @@ export async function POST(req: Request) {
         tool: 'RAG'
       });
       
-      // 3. Web Scraper - Remove automatic preprocessing
+      // 3. Web Scraper - Remove automatic preprocessing and URL instructions
+      // We now use the urlScrapingMiddleware instead of this section
       if (urls.length > 0) {
-        // Instead of automatically scraping URLs, just log they were detected
-        // but let the AI tool system handle them through proper tool calls
+        // Just log they were detected, middleware will handle the scraping
         edgeLogger.info('URLs detected in user message', { 
           urlCount: urls.length,
           firstUrl: urls[0],
-          message: "These will be processed via AI tool calls rather than preprocessing"
+          message: "These will be processed via middleware auto-scraping rather than explicit AI tool calls"
         });
-        
-        // Modify the system prompt to include URL guidance rather than adding a new message
-        systemPrompt += `\n\nIMPORTANT: The user's message contains ${urls.length} URL(s): ${urls.join(', ')}. You MUST:
-1. Use the webScraper tool to extract content from these URLs
-2. Carefully read and analyze the content returned by the tool
-3. Generate your OWN detailed analysis of the content in relation to the user's question
-4. Include specific points from the webpage content in your response
-5. NEVER return an empty response or just raw tool results
-6. Always provide value by synthesizing information from the tools into a coherent answer`;
       }
       
       // Memory usage checkpoint after Web Scraper
-      edgeLogger.debug('Memory checkpoint after Web Scraper', {
+      edgeLogger.debug('Memory checkpoint after URL detection', {
         elapsedMs: Date.now() - startTime,
-        tool: 'Web Scraper',
-        automaticProcessing: false,
-        message: "URLs will be processed via explicit AI tool calls"
+        tool: 'URL detection',
+        automaticProcessing: true,
+        message: "URLs will be processed via scraping middleware"
       });
       
       // 4. Deep Search - LOWEST PRIORITY (if enabled)
@@ -675,64 +668,6 @@ export async function POST(req: Request) {
                 throw error;
               }
             }
-          }),
-          
-          webScraper: tool({
-            description: 'Extract content from webpages for accurate information. IMPORTANT: After using this tool, you MUST analyze the returned content and generate a detailed response that discusses the relevant points from the webpage in relation to the user\'s question. DO NOT return raw tool results.',
-            parameters: comprehensiveScraperSchema,
-            execute: async ({ url }) => {
-              const startTime = performance.now();
-              
-              try {
-                // Log when the tool is explicitly called by the AI
-                edgeLogger.info('AI explicitly called web scraper tool', { 
-                  url,
-                  timestamp: new Date().toISOString(),
-                  isExplicitToolCall: true
-                });
-                
-                const result = await chatTools.webScraper.execute({ url }, { 
-                  toolCallId: 'ai-initiated-scraper',
-                  messages: []
-                });
-                
-                const duration = Math.round(performance.now() - startTime);
-                edgeLogger.info('Web scraper completed', { 
-                  url,
-                  durationMs: duration,
-                  resultLength: result.content.length,
-                  toolCallType: 'explicit_ai_call'
-                });
-                
-                // Add additional logging for tool result registration
-                toolManager.registerToolResult('Web Scraper', result, { fromExplicitToolCall: true });
-                edgeLogger.info('Tool result registered by AI tool call', {
-                  toolName: 'Web Scraper',
-                  contentLength: result.content.length,
-                  explicit: true
-                });
-                
-                // Format the result to provide clear structure for the AI
-                const formattedResult = {
-                  title: result.title,
-                  url: result.url,
-                  content: result.content,
-                  summary: "This webpage contains information that should be analyzed to answer the user's question. You must read this content and provide a thoughtful analysis in your response, not just repeat it.",
-                  _instruction: "DO NOT simply return this content to the user. Instead, analyze it and provide insights based on the user's original query."
-                };
-                
-                return formattedResult;
-              } catch (error) {
-                const duration = Math.round(performance.now() - startTime);
-                edgeLogger.error('Web scraper failed', { 
-                  url,
-                  durationMs: duration,
-                  error: formatError(error)
-                });
-                
-                throw error;
-              }
-            }
           })
         };
       } catch (error) {
@@ -774,16 +709,59 @@ export async function POST(req: Request) {
           systemPromptSize: aiMessages[0]?.content?.length || 0
         });
         
-        // Use the Vercel AI SDK's streamText function with caching middleware
+        // Create a wrapped model with our middlewares - ⚠️ Note: Order matters here!
+        // URL scraping should happen before caching since it modifies the prompt
+        const wrappedModel = wrapLanguageModel({
+          model: openai('gpt-4o'),
+          middleware: [
+            // First, process URLs and enhance the prompt
+            urlScrapingMiddleware,
+            // Then, cache the result based on the enhanced prompt
+            cacheMiddleware
+          ]
+        });
+        
+        // Log that we're using middleware-based URL scraping
+        edgeLogger.info('Using middleware for URL scraping', {
+          middlewareOrder: ['urlScrapingMiddleware', 'cacheMiddleware'],
+          messageCount: aiMessages.length,
+          systemMessageSize: aiMessages[0]?.content?.length || 0,
+          containsUrls: urls.length > 0,
+          urlCount: urls.length
+        });
+
+        // Diagnostic log for URL detection
+        if (urls.length > 0) {
+          edgeLogger.info('URLs detected that should be processed by middleware', {
+            urlsToScrape: urls.slice(0, 3), // Log up to 3 URLs
+            lastUserMessage: lastUserMessage.content.substring(0, 100) + (lastUserMessage.content.length > 100 ? '...' : '')
+          });
+          
+          // Add a special marker in the system message to help middleware find URLs
+          // This is a workaround for the tokenized prompt issue
+          if (aiMessages.length > 0 && aiMessages[0].role === 'system' && typeof aiMessages[0].content === 'string') {
+            // Include URLs in system message for middleware to find
+            aiMessages[0].content += `\n\n<!-- URL_SCRAPING_MIDDLEWARE_MARKER: ${JSON.stringify({
+              urls: urls.slice(0, 3),
+              userMessage: lastUserMessage.content
+            })} -->\n\n`;
+            
+            edgeLogger.info('Added URL marker to system message for middleware', {
+              urlCount: urls.length
+            });
+          }
+        }
+        
+        // Use the Vercel AI SDK's streamText function with wrapped model
         const result = await streamText({
-          model: openai('gpt-4-turbo-preview'), // Use the correct model ID
+          model: wrappedModel,
           messages: aiMessages,
           temperature: 0.4,
           maxTokens: 4000,
           tools: aiSdkTools,
           maxSteps: 10,
-          // Encourage the model to use tools when URLs are present
-          toolChoice: urls.length > 0 ? 'required' : 'auto',
+          // We don't need to force tool choice anymore since middleware handles URL scraping
+          toolChoice: 'auto',
           onFinish: async (completion) => {
             try {
               // Log successful completion

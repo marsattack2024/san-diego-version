@@ -133,7 +133,7 @@ if (typeof setInterval !== 'undefined') {
 /**
  * Call the Google Cloud Puppeteer function to scrape a URL
  */
-async function callPuppeteerScraper(url: string): Promise<PuppeteerResponseData> {
+export async function callPuppeteerScraper(url: string): Promise<PuppeteerResponseData> {
   const startTime = performance.now();
   const fullUrl = ensureProtocol(url);
   
@@ -465,7 +465,7 @@ function calculateStats(data: PuppeteerResponseData): ScraperStats {
  * Validate and sanitize URL for security
  * This helps prevent SSRF attacks and other URL-based vulnerabilities
  */
-function validateAndSanitizeUrl(url: string): string {
+export function validateAndSanitizeUrl(url: string): string {
   try {
     // Parse the URL to validate structure
     const parsedUrl = new URL(url);
