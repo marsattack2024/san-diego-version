@@ -6,6 +6,17 @@
  * - No dependencies on Node.js specific features
  */
 
+// Log categories for grouping and sampling
+const LOG_CATEGORIES = {
+  AUTH: 'auth',
+  CHAT: 'chat',
+  TOOLS: 'tools',
+  LLM: 'llm',
+  SYSTEM: 'system'
+} as const;
+
+type LogCategory = typeof LOG_CATEGORIES[keyof typeof LOG_CATEGORIES];
+
 // Add a log deduplication mechanism to reduce repeated logs
 // At the top of the file, after imports but before any exported code
 
@@ -28,65 +39,73 @@ const DEDUP_SETTINGS = {
   expiryTime: 60000, // Clear duplicates after 1 minute
   showCounts: true, // Show counts of suppressed logs
   windowMs: 60000, // 1 minute window for deduplication
-  maxPerWindow: 5  // Maximum occurrences to log per window
-};
-
-// Helper function to format logs for console output
-function formatForConsole(level: string, message: string, data: any = {}): string {
-  // Skip JSON formatting in development for better readability
-  if (process.env.NODE_ENV === 'development') {
-    const timestamp = new Date().toISOString().split('T')[1].split('.')[0]; // Just time HH:MM:SS
-    let prefix = '';
-    
-    switch (level) {
-      case 'error': prefix = '🔴'; break;
-      case 'warn': prefix = '🟠'; break;
-      case 'info': prefix = '🔵'; break;
-      case 'debug': prefix = '⚪'; break;
-    }
-    
-    // Format important contextual data
-    const context = [];
-    if (data.durationMs) context.push(`${data.durationMs}ms`);
-    if (data.operation) context.push(data.operation);
-    if (data.sessionId) context.push(`session:${data.sessionId}`);
-    
-    return `${prefix} ${timestamp} ${message} ${context.length ? `(${context.join(', ')})` : ''}`;
+  maxPerWindow: 5,  // Maximum occurrences to log per window
+  // Add sampling rates per category
+  samplingRates: {
+    [LOG_CATEGORIES.AUTH]: 0.2,    // 20% of auth logs
+    [LOG_CATEGORIES.CHAT]: 0.1,    // 10% of chat logs
+    [LOG_CATEGORIES.TOOLS]: 0.1,   // 10% of tool logs
+    [LOG_CATEGORIES.LLM]: 0.1,     // 10% of LLM logs
+    [LOG_CATEGORIES.SYSTEM]: 1.0    // 100% of system logs
   }
-  
-  // Use JSON in production for structured logging
-  return JSON.stringify({ level, message, ...data, timestamp: new Date().toISOString() });
-}
+};
 
 // Add after the existing formatForConsole function
 function formatDevLog(level: string, message: string, data: any = {}): string {
   const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
-  const emoji = level === 'error' ? '🔴' : level === 'warn' ? '🟠' : level === 'info' ? '🔵' : '⚪';
+  // Simplify to three levels
+  const emoji = level === 'error' ? '🔴' : level === 'warn' ? '🟠' : '🔵';
   
   // Extract important fields for the primary display
-  const { durationMs, operation, sessionId, requestId, ...restData } = data;
+  const { durationMs, operation, sessionId, requestId, category, error, ...restData } = data;
   const primaryContext = [];
   
+  if (category) primaryContext.push(category);
   if (durationMs) primaryContext.push(`${durationMs}ms`);
   if (operation) primaryContext.push(operation);
-  if (sessionId) primaryContext.push(`session:${sessionId}`);
-  if (requestId) primaryContext.push(`req:${requestId}`);
   
-  // Format remaining data if any
+  // Format error information if present
+  const errorInfo = error ? `\n  error: ${error.message || error}` : '';
+  
+  // Format remaining data more concisely
   const secondaryContext = Object.entries(restData)
     .filter(([k, v]) => k !== 'timestamp' && v !== undefined)
-    .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`)
-    .join(' ');
+    .map(([k, v]) => {
+      // Format arrays inline
+      if (Array.isArray(v)) {
+        return `  ${k}=[${v.join(', ')}]`;
+      }
+      // Format objects more concisely
+      if (typeof v === 'object' && v !== null) {
+        return `  ${k}=${JSON.stringify(v).replace(/\s+/g, ' ')}`;
+      }
+      return `  ${k}=${v}`;
+    })
+    .join('\n');
   
   return [
     `${emoji} ${timestamp} ${message}`,
     primaryContext.length ? ` (${primaryContext.join(', ')})` : '',
-    secondaryContext ? `\n  ${secondaryContext}` : ''
+    errorInfo,
+    secondaryContext ? `\n${secondaryContext}` : ''
   ].join('');
 }
 
 // Helper function to handle log deduplication
 function shouldLogMessage(level: string, message: string, data?: LogData): { shouldLog: boolean, count: number } {
+  // Always log errors and important messages
+  if (level === 'error' || data?.important) {
+    return { shouldLog: true, count: 1 };
+  }
+  
+  // Apply category-based sampling in production
+  if (process.env.NODE_ENV === 'production' && data?.category) {
+    const samplingRate = DEDUP_SETTINGS.samplingRates[data.category] || 0.1;
+    if (Math.random() > samplingRate) {
+      return { shouldLog: false, count: 0 };
+    }
+  }
+  
   // Skip deduplication in production or for error logs
   if (process.env.NODE_ENV === 'production' || level === 'error') {
     return { shouldLog: true, count: 1 };
@@ -229,7 +248,9 @@ if (typeof window === 'undefined') {
   logger.info('Application started', { 
     important: true,
     environment: process.env.NODE_ENV,
-    region: process.env.VERCEL_REGION
+    region: process.env.VERCEL_REGION,
+    env: maskEnvironmentVariables(process.env),
+    version: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'dev'
   });
 }
 
@@ -237,16 +258,15 @@ if (typeof window === 'undefined') {
  * Cleanup log data to ensure it's serializable and remove sensitive information
  */
 function cleanupLogData(data?: any): Record<string, any> {
-  if (!data) return {};
+  if (!data || typeof data !== 'object') return {};
   
   const cleanData: Record<string, any> = {};
   
-  // Copy safe properties
   Object.entries(data).forEach(([key, value]) => {
-    // Skip functions and complex objects
+    // Skip functions
     if (typeof value === 'function') return;
     
-    // Handle errors specially
+    // Handle special cases
     if (key === 'error' && value instanceof Error) {
       cleanData[key] = {
         name: value.name,
@@ -256,35 +276,74 @@ function cleanupLogData(data?: any): Record<string, any> {
       return;
     }
     
-    // Copy simple values directly
+    // Handle environment variables
+    if (key === 'env' && value && typeof value === 'object') {
+      cleanData[key] = maskEnvironmentVariables(value as Record<string, any>);
+      return;
+    }
+    
+    // Handle RPC parameters
+    if (key === 'params' && value && typeof value === 'object') {
+      cleanData[key] = maskRpcParams(value as Record<string, any>);
+      return;
+    }
+    
+    // Handle regular values
     if (
       value === null || 
       typeof value === 'string' || 
       typeof value === 'number' || 
-      typeof value === 'boolean' ||
-      Array.isArray(value)
+      typeof value === 'boolean'
     ) {
       cleanData[key] = value;
       return;
     }
     
-    // For objects, stringify to avoid circular references
-    try {
-      cleanData[key] = JSON.parse(JSON.stringify(value));
-    } catch (e) {
-      cleanData[key] = `[Unstringifiable ${typeof value}]`;
+    // For arrays, clean each element
+    if (Array.isArray(value)) {
+      cleanData[key] = value.map(item => 
+        item && typeof item === 'object' ? cleanupLogData(item) : item
+      );
+      return;
+    }
+    
+    // For objects, clean recursively
+    if (typeof value === 'object') {
+      try {
+        cleanData[key] = cleanupLogData(value);
+      } catch (e) {
+        cleanData[key] = '[Complex Object]';
+      }
     }
   });
   
   return cleanData;
 }
 
+// Update the LogData interface to use LogOperation type
 interface LogData {
   important?: boolean;
   error?: Error | string;
   userId?: string;
   sessionId?: string;
+  category?: LogCategory;
+  durationMs?: number;
+  operation?: string;
+  requestId?: string;
+  timestamp?: string;
+  path?: string;
+  url?: string;
+  batchId?: string;
+  operations?: LogOperation[];
+  slow?: boolean;
   [key: string]: any;
+}
+
+// Helper function to format logs for console output
+function formatForConsole(level: string, message: string, data: any = {}): string {
+  return process.env.NODE_ENV === 'development' 
+    ? formatDevLog(level, message, data)
+    : JSON.stringify({ level, message, ...data, timestamp: new Date().toISOString() });
 }
 
 // Add user ID masking function
@@ -305,15 +364,6 @@ function maskSensitiveData(data: LogData | undefined): LogData {
   
   return masked;
 }
-
-// Update sampling rates for production
-const SAMPLING_RATES = {
-  trace: 0.01,   // 1% of trace logs
-  debug: 0.01,   // 1% of debug logs (reduced from 5%)
-  info: 0.1,     // 10% of info logs (reduced from 20%)
-  warn: 1.0,     // 100% of warnings
-  error: 1.0     // 100% of errors
-};
 
 // Module-level flags and counters
 let hasLoggedStartup = false;
@@ -430,11 +480,19 @@ export const edgeLogger = {
     if (!group) return;
     
     const totalTime = Math.round(performance.now() - group.startTime);
-    this.info(message, {
-      operations: group.operations,
-      totalTimeMs: totalTime,
-      important: totalTime > 1000
-    });
+    if (Object.keys(group.operations).length > 0) {
+      const operations: LogOperation[] = Object.entries(group.operations).map(([name, data]) => ({
+        name,
+        timeMs: data.durationMs,
+        ...data
+      }));
+      
+      this.info(message, {
+        operations,
+        totalTimeMs: totalTime,
+        important: totalTime > 1000
+      });
+    }
     
     logGroups.delete(groupId);
   },
@@ -587,4 +645,150 @@ export function withRequestTracking(handler: any) {
       }
     );
   };
+}
+
+// Add after the cleanupLogData function
+function checkEnvironment(): { valid: boolean; summary: string } {
+  const requiredVars = [
+    'NEXT_PUBLIC_SUPABASE_URL',
+    'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+    'OPENAI_API_KEY',
+    'PERPLEXITY_API_KEY'
+  ];
+  
+  const missing = requiredVars.filter(v => !process.env[v]);
+  
+  // Only check for critical service configurations
+  const serviceConfig = {
+    database: process.env.NEXT_PUBLIC_SUPABASE_URL ? 'configured' : 'missing',
+    ai: process.env.OPENAI_API_KEY && process.env.PERPLEXITY_API_KEY ? 'configured' : 'missing'
+  };
+  
+  return {
+    valid: missing.length === 0,
+    summary: `services=${Object.entries(serviceConfig).map(([k, v]) => `${k}:${v}`).join(',')}`
+  };
+}
+
+// Update the startup logging
+if (typeof window === 'undefined' && !hasLoggedStartup) {
+  hasLoggedStartup = true;
+  const envCheck = checkEnvironment();
+  logger.info('Application started', { 
+    category: LOG_CATEGORIES.SYSTEM,
+    environment: process.env.NODE_ENV,
+    region: process.env.VERCEL_REGION || 'local',
+    version: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'dev',
+    ...envCheck,
+    important: true
+  });
+}
+
+function maskEnvironmentVariables(env: Record<string, any>): Record<string, any> {
+  // In production, only return service status
+  if (process.env.NODE_ENV === 'production') {
+    return {
+      services: {
+        database: env.NEXT_PUBLIC_SUPABASE_URL ? 'configured' : 'missing',
+        ai: env.OPENAI_API_KEY && env.PERPLEXITY_API_KEY ? 'configured' : 'missing'
+      }
+    };
+  }
+  
+  // In development, show minimal useful information
+  return {
+    services: {
+      database: env.NEXT_PUBLIC_SUPABASE_URL ? 'configured' : 'missing',
+      ai: env.OPENAI_API_KEY && env.PERPLEXITY_API_KEY ? 'configured' : 'missing'
+    },
+    development: {
+      port: env.PORT,
+      logLevel: env.LOG_LEVEL,
+      nodeEnv: env.NODE_ENV
+    }
+  };
+}
+
+// Add RPC parameter masking to cleanupLogData
+function maskRpcParams(params: Record<string, any>): Record<string, any> {
+  const masked = { ...params };
+  
+  // Mask user IDs in RPC parameters
+  if (masked.user_id) {
+    masked.user_id = `${masked.user_id.substring(0, 4)}...${masked.user_id.slice(-4)}`;
+  }
+  
+  // Mask session IDs
+  if (masked.session_id) {
+    masked.session_id = `${masked.session_id.substring(0, 4)}...${masked.session_id.slice(-4)}`;
+  }
+  
+  return masked;
+}
+
+// Define operation types
+type BatchOperation = {
+  message: string;
+  timestamp: number;
+  data?: Record<string, any>;
+};
+
+type LogOperation = {
+  name: string;
+  timeMs?: number;
+  duration?: number;
+  data?: any;
+  [key: string]: any;
+};
+
+// Update the batch operations type
+const categoryBatches = new Map<LogCategory, {
+  operations: BatchOperation[];
+  startTime: number;
+}>();
+
+// Add category batching methods
+function startCategoryBatch(category: LogCategory) {
+  if (!categoryBatches.has(category)) {
+    categoryBatches.set(category, {
+      operations: [],
+      startTime: performance.now()
+    });
+  }
+}
+
+function addToCategoryBatch(category: LogCategory, message: string, data?: any) {
+  const batch = categoryBatches.get(category);
+  if (batch) {
+    batch.operations.push({
+      message,
+      timestamp: performance.now(),
+      data
+    });
+  }
+}
+
+function flushCategoryBatch(category: LogCategory) {
+  const batch = categoryBatches.get(category);
+  if (!batch) return;
+  
+  const totalTime = Math.round(performance.now() - batch.startTime);
+  if (batch.operations.length > 0) {
+    const operations: LogOperation[] = batch.operations.map(op => ({
+      name: op.message,
+      timeMs: Math.round(op.timestamp - batch.startTime),
+      duration: op.data?.duration,
+      data: op.data,
+      ...op.data
+    }));
+    
+    logger.info(`${category} operations summary`, {
+      category,
+      operationCount: batch.operations.length,
+      totalTimeMs: totalTime,
+      operations
+    });
+  }
+  
+  categoryBatches.delete(category);
 } 

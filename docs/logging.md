@@ -2,194 +2,147 @@
 
 ## Overview
 
-The San Diego Version application uses a streamlined logging system optimized for a small team (1-5 developers) and moderate user base (~250 users). The system provides rich development-time logging while maintaining efficient production logging through Vercel.
+The application uses a minimal, focused logging system optimized for a small team managing ~250 users. The system prioritizes essential operational metrics while reducing noise.
 
-## Core Components
+## Core Features
 
-### 1. Unified Logger Interface (`lib/logger/index.ts`)
+### 1. Essential Log Categories
+```typescript
+const categories = {
+  AUTH: 'auth',     // Authentication events (20% sampling)
+  CHAT: 'chat',     // Chat interactions (10% sampling)
+  TOOLS: 'tools',   // Tool operations (10% sampling)
+  LLM: 'llm',       // Language model interactions (10% sampling)
+  SYSTEM: 'system'  // Critical system events (100% sampling)
+};
+```
+
+### 2. Production Logging
+
+#### Startup Information
+```typescript
+// Single startup log with essential service status
+🔵 Application started
+  environment=production
+  region=iad1
+  version=a1b2c3d
+  services=database:configured,ai:configured
+```
+
+#### Request Metrics
+```typescript
+// API performance tracking
+🔵 POST /api/chat completed
+  duration=850ms
+  status=200
+  slow=false
+
+// Slow operation tracking
+🟠 Vector search completed
+  duration=2150ms
+  results=5
+  slow=true
+```
+
+#### Error Conditions
+```typescript
+// Full error details
+🔴 Database query failed
+  operation=user_preferences
+  error=Connection timeout
+  duration=5000ms
+```
+
+### 3. Development Features
+
+Development mode includes additional context while maintaining clarity:
 
 ```typescript
-import { logger } from '@/lib/logger';
+// Service status on startup
+🔵 Application started
+  environment=development
+  services=database:configured,ai:configured
+  development.port=3000
+  development.logLevel=debug
 
-// Automatic environment detection
-logger.info('Message');  // Uses edge-logger on server, client-logger in browser
-
-// Explicit logger selection
-logger.server.info('Server-only message');
-logger.client.info('Client-only message');
-```
-
-### 2. Context Management (`lib/logger/context.ts`)
-
-```typescript
-import { withContext, getContext } from '@/lib/logger';
-
-await withContext({ requestId: 'req123' }, async () => {
-  logger.info('Operation'); // Automatically includes requestId
-});
-```
-
-### 3. Log Batching for API Routes
-
-```typescript
-export default withRequestTracking(async function handler(req, res) {
-  const batch = logger.startBatch(req.requestId);
-  
-  try {
-    await doSomething();
-    batch.addOperation('step1');
-    batch.complete('Success');
-  } catch (error) {
-    batch.error('Failed', error);
-  }
-});
-```
-
-## Development Features
-
-### Visual Formatting
-- Emoji indicators for log levels:
-  - 🔴 Error
-  - 🟠 Warning
-  - 🔵 Info
-  - ⚪ Debug
-- Simplified timestamps
-- Grouped context data
-- Pretty-printed objects
-
-Example:
-```
-🔵 14:23:45 User authenticated (duration: 123ms, session: abc123)
-  metadata={role: "user", provider: "github"}
-```
-
-### Development-Only Features
-- Full debug logging
-- No sampling
-- Detailed operation timing
-- Rich error stacks
-- Request/response logging
-
-## Production Features
-
-### Log Sampling
-- Errors: 100%
-- Warnings: 100%
-- Info: 10%
-- Debug: 1%
-
-### Automatic Features
-- Log deduplication
-- Performance monitoring
-- Resource usage tracking
-- Error aggregation
-
-### Security
-- Sensitive data masking
-- Environment variable protection
-- Request ID tracking
-- User ID hashing
-
-## Context & Timing
-
-### Available Context Fields
-```typescript
-interface LogContext {
-  requestId?: string;
-  userId?: string;
-  operation?: string;
-  sessionId?: string;
-  path?: string;
-  startTime?: number;
-  metadata?: Record<string, any>;
-}
-```
-
-### Timing Helpers
-```typescript
-const context = createTimedContext({ operation: 'task' });
-// ... do work ...
-const elapsed = getElapsedTime(); // Returns ms since context creation
+// Operation timing
+🔵 Chat completion
+  duration=750ms
+  model=gpt-4
+  tokens=1250
 ```
 
 ## Best Practices
 
-### 1. Production Logging
-- Mark important logs:
-  ```typescript
-  logger.info('Critical operation', { important: true });
-  ```
-- Include operation context:
-  ```typescript
-  logger.info('User action', { operation: 'profile_update' });
-  ```
-- Use batching for API routes:
-  ```typescript
-  const batch = logger.startBatch(requestId);
-  ```
+### 1. Essential Logging Only
+- Log startup status and service configuration
+- Track API request performance
+- Record errors with full context
+- Monitor slow operations (>1000ms)
 
-### 2. Error Handling
-- Include error context:
-  ```typescript
-  try {
-    await operation();
-  } catch (error) {
-    logger.error('Operation failed', { error, context: data });
-  }
-  ```
-- Use error tracking in client:
-  ```typescript
-  logger.client.error('Client error', { error, url: window.location.href });
-  ```
-
-### 3. Performance Monitoring
-- Track slow operations:
-  ```typescript
-  await logger.trackOperation('task', async () => {
-    // Automatically logs if duration > 500ms
-  });
-  ```
-
-### 4. Security
-- Never log sensitive data:
-  ```typescript
-  // ❌ BAD
-  logger.info('Login', { password, token });
-  
-  // ✅ GOOD
-  logger.info('Login', { userId: hashedId });
-  ```
-
-## Environment Validation
-
-The system includes secure environment validation:
-
+### 2. Performance Monitoring
 ```typescript
-import { validateEnvironment } from '@/lib/env-validator';
+// Track operation duration
+logger.info('Chat completion', {
+  category: 'chat',
+  duration: 750,
+  tokens: 1250,
+  important: duration > 1000
+});
+```
 
-if (!validateEnvironment()) {
-  process.exit(1);
+### 3. Error Handling
+```typescript
+try {
+  await operation();
+} catch (error) {
+  logger.error('Operation failed', {
+    operation: 'chat_completion',
+    error,
+    important: true
+  });
 }
 ```
 
-Required variables are checked without exposing values in logs.
+### 4. Security
+- Never log sensitive environment variables
+- Mask user IDs and session IDs
+- Only log service status, not credentials
 
-## Migration from Legacy Loggers
+## Production Guidelines
 
-The following loggers have been deprecated and consolidated:
-- ❌ `chat-logger.ts` → Use `logger.info()`
-- ❌ `base-logger.ts` → Use `logger.server`
-- ❌ `api-logger.ts` → Use `logger.trackOperation()`
-- ❌ `vector-logger.ts` → Use `logger.server`
-- ❌ `ai-logger.ts` → Use `logger.server`
+1. **Startup Logs**
+   - Single startup log with service status
+   - No environment variable dumps
+   - No development configuration
 
-Update existing imports to use the unified logger:
-```typescript
-// ❌ OLD
-import { chatLogger } from '@/lib/logger/chat-logger';
-chatLogger.info('Message');
+2. **Request Logs**
+   - Status code and duration
+   - Mark slow operations (>1000ms)
+   - Sample by category to reduce volume
 
-// ✅ NEW
-import { logger } from '@/lib/logger';
-logger.info('Message');
-```
+3. **Error Logs**
+   - Full error context
+   - Stack traces in development
+   - Operation timing and metadata
+
+4. **Performance Logs**
+   - Track slow operations
+   - Monitor service health
+   - Record resource usage samples
+
+## Migration Guide
+
+### Remove
+❌ Git/VSCode configuration logs
+❌ Full environment variable dumps
+❌ Node.js/npm configuration
+❌ Framework internal logs
+❌ Development tool status
+
+### Keep
+✅ Service health checks
+✅ API performance metrics
+✅ Error conditions with context
+✅ Slow operation warnings
+✅ Security-related events
