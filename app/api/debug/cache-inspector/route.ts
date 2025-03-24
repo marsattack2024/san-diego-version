@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { redisClientPromise } from '../../../../lib/vector/rag-cache';
 import { edgeLogger } from '../../../../lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '../../../../lib/logger/constants';
+import { Redis } from '@upstash/redis';
 
 /**
  * A comprehensive cache debugging endpoint that shows the raw cached value,
@@ -24,7 +25,30 @@ export async function GET(request: NextRequest) {
       }, { status: 400 });
     }
 
-    const redis = await redisClientPromise;
+    // Use Redis.fromEnv() for consistent initialization
+    const redis = Redis.fromEnv();
+    
+    // Perform a connection test first
+    try {
+      await redis.set('connection-test', 'ok', { ex: 60 });
+      const testResult = await redis.get('connection-test');
+      
+      if (testResult !== 'ok') {
+        throw new Error('Connection test failed');
+      }
+      
+      // Log successful connection
+      edgeLogger.info('Redis connection test successful for cache inspector', {
+        category: LOG_CATEGORIES.SYSTEM
+      });
+    } catch (connError) {
+      // Log connection error but continue trying to get the key
+      edgeLogger.error('Redis connection test failed for cache inspector', {
+        category: LOG_CATEGORIES.SYSTEM,
+        error: connError instanceof Error ? connError.message : String(connError)
+      });
+    }
+    
     const rawValue = await redis.get<string>(key);
 
     if (!rawValue) {
