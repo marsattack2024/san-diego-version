@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { createServerClient } from '@/lib/supabase/server';
+import { createClient as createServerClient } from '@/utils/supabase/server';
 import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 

@@ -47,6 +47,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { createClient } from '@/utils/supabase/client';
+import { cn } from '@/lib/utils';
 
 // Consistent type definition for grouped chats
 type GroupedChats = {
@@ -139,6 +140,13 @@ const PureChatItem = ({
   );
 };
 
+// Add className to the props interface
+// interface PureSidebarHistoryProps {
+//  onChatSelected: (chatId: string) => void;
+//  selectedChatId?: string;
+//  className?: string;
+// }
+
 const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   const { setOpenMobile } = useSidebar();
   const params = useParams();
@@ -158,6 +166,8 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   const [showAllOlder, setShowAllOlder] = useState(false);
   // Mobile detection
   const [isMobile, setIsMobile] = useState(false);
+  const [isEmpty, setIsEmpty] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   
   // Helper functions for polling
   const detectMobile = () => {
@@ -214,78 +224,46 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   const getSupabase = () => createClient();
   
   // Optimized function to fetch chat history using the service
-  const fetchChatHistory = useCallback(async (force = false): Promise<void> => {
-    if (isLoading && !force) return; // Don't load if already loading unless forced
+  const fetchChatHistory = useCallback(async (forceRefresh = false) => {
+    if (isRefreshing) return;
+    
+    setIsRefreshing(true);
+    setErrorMessage('');
     
     try {
-      setIsLoading(true);
-      setError(null);
+      // Check if user is authenticated before fetching
+      const hasCookies = historyService.checkForAuthCookies();
       
-      // Check auth status first
-      const supabase = getSupabase();
-      const { data: { user: authUser } } = await supabase.auth.getUser();
-      
-      if (!authUser) {
-        console.log('Not authenticated when fetching history');
-        setChatWarning("Please sign in to view your chat history");
-        setHistory([]);
+      if (!hasCookies) {
+        console.warn('No auth cookies found, cannot fetch history');
+        setErrorMessage('Please log in to view your chat history');
         setIsLoading(false);
+        setIsRefreshing(false);
         return;
       }
       
-      // Add cache-busting timestamp for forced refreshes
-      const params = force ? `?t=${Date.now()}` : '';
-      const response = await fetch(`/api/history${params}`, {
-        method: 'GET',
-        headers: {
-          'Cache-Control': force ? 'no-cache' : 'default',
-        },
-        credentials: 'same-origin', // Important for cookies
-      });
+      const historyData = await historyService.fetchHistory(forceRefresh);
       
-      if (response.status === 401) {
-        // Authentication error - user not logged in or token expired
-        console.log('401 unauthorized when fetching history');
-        setChatWarning("Please sign in to view your chat history");
-        setHistory([]);
-        setIsLoading(false);
-        
-        // Try to refresh the session
-        await supabase.auth.refreshSession();
-        return;
-      }
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch history: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      // Data is now directly an array of formatted chat objects
-      if (Array.isArray(data)) {
-        setHistory(data);
-        setLastRefresh(Date.now());
-        // Clear any warnings if successful
-        setChatWarning(null);
+      // Handle empty array as a valid response (not an error)
+      if (Array.isArray(historyData)) {
+        setHistory(historyData);
+        // Only show no history message when we've confirmed array is empty and loading is done
+        setIsEmpty(historyData.length === 0);
       } else {
-        // No sessions found or invalid format
-        console.warn('Invalid history data format received', { 
-          dataType: typeof data,
-          hasData: !!data
-        });
-        setChatWarning("No conversations found. Start a new chat to begin.");
-        setHistory([]);
+        console.error('History data is not an array:', historyData);
+        setErrorMessage('Unable to load chat history');
+        setIsEmpty(true);
       }
-    } catch (err) {
-      console.error('Error fetching chat history:', err);
-      setError(err instanceof Error ? err : new Error('Failed to load chat history'));
-      
-      // Implement exponential backoff
-      setIsRefreshing(true);
+    } catch (error) {
+      console.error('Error fetching chat history:', error);
+      setErrorMessage(error instanceof Error ? error.message : 'Failed to load chat history');
+      // Set empty state to show appropriate UI
+      setIsEmpty(true);
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
-  }, [isLoading, setIsRefreshing]);
+  }, [isRefreshing]);
   
   // Update the initial fetch effect with a delay to allow auth to settle
   useEffect(() => {
@@ -481,7 +459,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
               Today
             </div>
             {groupedChats.today.map((chat) => (
-              <ChatItem
+              <PureChatItem
                 key={chat.id}
                 chat={chat}
                 isActive={chat.id === id}
@@ -500,7 +478,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
               Past 7 days
             </div>
             {groupedChats.pastWeek.map((chat) => (
-              <ChatItem
+              <PureChatItem
                 key={chat.id}
                 chat={chat}
                 isActive={chat.id === id}
@@ -522,7 +500,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
             {groupedChats.older.length > 10 ? (
               <>
                 {(showAllOlder ? groupedChats.older : groupedChats.older.slice(0, 10)).map((chat) => (
-                  <ChatItem
+                  <PureChatItem
                     key={chat.id}
                     chat={chat}
                     isActive={chat.id === id}
@@ -541,7 +519,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
             ) : (
               // Just show all if there are 10 or fewer
               groupedChats.older.map((chat) => (
-                <ChatItem
+                <PureChatItem
                   key={chat.id}
                   chat={chat}
                   isActive={chat.id === id}
@@ -559,43 +537,44 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
 
   // Main component render
   return (
-    <>
+    <div className="sidebar-history relative">
       <SidebarGroup className="flex-shrink-0">
         <SidebarGroupLabel>
-          {chatWarning ? (
-            <div className="flex items-center justify-between px-2 py-2 bg-orange-100 dark:bg-orange-950/30 text-orange-800 dark:text-orange-300 text-xs rounded mb-2">
-              <div className="flex items-center">
-                <AlertCircle className="h-3 w-3 mr-1.5" />
-                <span className="truncate">{chatWarning}</span>
-              </div>
+          <div className="flex items-center justify-between">
+            <span>Chat History</span>
+            <div className="flex items-center gap-1">
+              {error || chatWarning ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <div className="p-1">
+                      <AlertCircle className="h-4 w-4 text-amber-500" />
+                    </div>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p className="max-w-60 text-sm">
+                      {error?.message || chatWarning || "Warning"}
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              ) : null}
+              
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-5 w-5 text-orange-800 dark:text-orange-300 hover:text-orange-600 dark:hover:text-orange-100 hover:bg-orange-200 dark:hover:bg-orange-900/50"
-                onClick={refreshHistory}
-                disabled={isRefreshing}
-              >
-                <RefreshCcw className="h-3 w-3" />
-              </Button>
-            </div>
-          ) : null}
-          <div className="flex items-center justify-between px-2 py-2">
-            <span className="text-xs font-medium text-sidebar-foreground/70">
-              Chat History
-            </span>
-            <div className="flex space-x-1">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 text-sidebar-foreground/50 hover:text-sidebar-foreground"
-                onClick={refreshHistory}
+                className="h-7 w-7 rounded-md hover:bg-muted"
+                onClick={() => {
+                  setError(null);
+                  setIsRefreshing(true);
+                  setIsLoading(true);
+                  fetchChatHistory(true);
+                }}
+                title="Refresh history"
                 disabled={isRefreshing}
               >
                 <RefreshCcw
-                  className={`h-3.5 w-3.5 ${
-                    isRefreshing ? 'animate-spin' : ''
-                  }`}
+                  className={cn("h-4 w-4", isRefreshing && "animate-spin")}
                 />
+                <span className="sr-only">Refresh</span>
               </Button>
             </div>
           </div>
@@ -605,6 +584,26 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
             {isLoading ? (
               <div className="flex justify-center py-8">
                 <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+              </div>
+            ) : isEmpty ? (
+              <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground px-4">
+                <p>No chat history found</p>
+                <p className="text-sm mt-1">Start a new conversation to get started</p>
+              </div>
+            ) : errorMessage ? (
+              <div className="flex flex-col items-center justify-center py-8 text-center text-destructive px-4">
+                <p>{errorMessage}</p>
+                <button 
+                  className="text-sm mt-2 px-3 py-1 bg-muted rounded-md hover:bg-muted/80 transition-colors"
+                  onClick={() => fetchChatHistory(true)}
+                >
+                  Try Again
+                </button>
+              </div>
+            ) : history.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground px-4">
+                <p>No chat history found</p>
+                <p className="text-sm mt-1">Start a new conversation to get started</p>
               </div>
             ) : (
               renderChats(history)
@@ -634,7 +633,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </>
+    </div>
   );
 };
 

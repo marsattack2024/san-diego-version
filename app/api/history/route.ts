@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { Chat } from '@/lib/db/schema';
 import { User } from '@supabase/supabase-js';
-import { headers } from 'next/headers';
 import { createClient } from '@/utils/supabase/server';
 
 // LRU Cache for server-side history caching across requests
@@ -92,6 +91,17 @@ export async function GET(request: NextRequest) {
       edgeLogger.debug('Timestamp param received', { timestamp: timestampParam });
     }
     
+    // Check cache first for faster response
+    const cachedResult = getCachedHistory(user.id);
+    if (cachedResult && !timestampParam) {
+      edgeLogger.debug('Returning cached history data', { 
+        userId: user.id,
+        operationId
+      });
+      
+      return NextResponse.json(cachedResult);
+    }
+    
     // Fetch user's chat sessions with Supabase query
     const { data: sessions, error } = await supabase
       .from('sd_chat_sessions')
@@ -122,6 +132,9 @@ export async function GET(request: NextRequest) {
       userId: user.id,
       agentId: session.agent_id
     }));
+    
+    // Cache the results for future requests
+    setCachedHistory(user.id, chats);
     
     edgeLogger.info('Successfully fetched chat history', {
       count: chats.length,

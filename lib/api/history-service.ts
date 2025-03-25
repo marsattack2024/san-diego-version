@@ -9,6 +9,7 @@ const pendingRequests: Record<string, Promise<Chat[]> | null> = {};
 let lastRefreshTime = 0;
 const REFRESH_INTERVAL = 15 * 60 * 1000; // 15 minutes
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutes cache TTL
+const CACHE_TTL_ERROR = 10 * 60 * 1000; // 10 minutes cache TTL for error state
 
 // Auth failure tracking constants
 const AUTH_FAILURE_KEY = 'global_auth_failure';
@@ -447,13 +448,35 @@ export const historyService = {
       // Parse response
       const data = await response.json();
       
+      // If we get an object with an error property, handle it gracefully
+      if (data && typeof data === 'object' && 'error' in data) {
+        console.error('API returned an error response', { 
+          error: data.error,
+          operationId 
+        });
+        
+        // If it's an authentication error, trigger the circuit breaker
+        if (data.error === 'Unauthorized') {
+          setAuthFailureState(true);
+        }
+        
+        // Return empty array for consistent behavior
+        return [];
+      }
+      
       // Validate response format - expect an array of chat objects
       if (!Array.isArray(data)) {
         console.error('Invalid history API response format', { 
           data,
-          type: typeof data 
+          type: typeof data,
+          operationId
         });
-        throw new Error('Invalid history API response format ' + JSON.stringify(data));
+        
+        // Set empty array in cache to prevent continuous spinning
+        clientCache.set('chat_history', [], CACHE_TTL_ERROR);
+        
+        // Return empty array instead of throwing, to avoid spinning UI
+        return [];
       }
       
       // Cache the fetched data
@@ -471,8 +494,11 @@ export const historyService = {
       // Clean up pending request
       delete pendingRequests[cacheKey];
       
-      // Throw a cleaner error
-      throw new Error(error instanceof Error ? error.message : 'Unknown error');
+      // Cache empty array temporarily to prevent continuous spinning
+      clientCache.set('chat_history', [], CACHE_TTL_ERROR);
+      
+      // Return empty array instead of throwing
+      return [];
     }
   },
 
