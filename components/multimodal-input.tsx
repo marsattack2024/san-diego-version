@@ -390,15 +390,35 @@ function PureSendButton({
   input: string;
   uploadQueue: Array<string>;
 }) {
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  const handleSubmit = (event: React.MouseEvent) => {
+    event.preventDefault();
+    
+    // Prevent double submission
+    if (isSubmitting) return;
+    
+    // Set submitting state immediately for UI feedback
+    setIsSubmitting(true);
+    
+    // Call the submit function
+    submitForm();
+    
+    // Reset after a short delay
+    setTimeout(() => {
+      setIsSubmitting(false);
+    }, 1000);
+  };
+
   return (
     <Button
       data-testid="send-button"
-      className="rounded-full p-1.5 h-fit border dark:border-zinc-600"
-      onClick={(event) => {
-        event.preventDefault();
-        submitForm();
-      }}
-      disabled={input.length === 0 || uploadQueue.length > 0}
+      className={cx(
+        "rounded-full p-1.5 h-fit border dark:border-zinc-600",
+        isSubmitting && "opacity-70"
+      )}
+      onClick={handleSubmit}
+      disabled={input.length === 0 || uploadQueue.length > 0 || isSubmitting}
     >
       <ArrowUpIcon size={14} />
     </Button>

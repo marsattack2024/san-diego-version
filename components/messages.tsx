@@ -2,7 +2,7 @@ import { ChatRequestOptions, Message } from 'ai';
 import { PreviewMessage, ThinkingMessage } from './message';
 import { useScrollToBottom } from './use-scroll-to-bottom';
 import { Overview } from './overview';
-import { memo } from 'react';
+import { memo, useState, useEffect } from 'react';
 import { Vote } from '@/lib/db/schema';
 import equal from 'fast-deep-equal';
 import { useChatStore } from '@/stores/chat-store';
@@ -21,6 +21,7 @@ interface MessagesProps {
     chatRequestOptions?: ChatRequestOptions,
   ) => Promise<string | null | undefined>;
   isReadonly: boolean;
+  isArtifactVisible?: boolean;
 }
 
 function PureMessages({
@@ -31,11 +32,30 @@ function PureMessages({
   setMessages,
   reload,
   isReadonly,
+  isArtifactVisible,
 }: MessagesProps) {
   const [messagesContainerRef, messagesEndRef] =
     useScrollToBottom<HTMLDivElement>();
   const deepSearchEnabled = useChatStore(state => state.getDeepSearchEnabled());
   const isDeepSearchInProgress = useChatStore(state => state.isDeepSearchInProgress);
+  
+  // State to show thinking indicator immediately, even before server responds
+  const [localThinking, setLocalThinking] = useState(false);
+  
+  // Update local thinking state when isLoading changes
+  useEffect(() => {
+    if (isLoading) {
+      setLocalThinking(true);
+    } else {
+      // Add a slight delay before hiding the indicator to prevent flickering
+      const timer = setTimeout(() => setLocalThinking(false), 300);
+      return () => clearTimeout(timer);
+    }
+  }, [isLoading]);
+
+  // Show thinking indicator for user messages or when explicitly loading
+  const shouldShowThinking = (localThinking || isLoading || isDeepSearchInProgress) && 
+    (messages.length === 0 || messages[messages.length - 1]?.role === 'user');
 
   return (
     <div
@@ -58,8 +78,8 @@ function PureMessages({
         />
       ))}
 
-      {/* Show thinking indicator when either normal loading or deep search is in progress */}
-      {(isLoading || isDeepSearchInProgress) && messages[messages.length - 1]?.role === 'user' && (
+      {/* Show thinking indicator immediately on local state or server state */}
+      {shouldShowThinking && (
         <div className="flex flex-col gap-2 px-4 md:px-6 w-full max-w-3xl mx-auto">
           <div className="flex justify-end">
             <div className="flex items-center gap-2 bg-background rounded-xl p-3 shadow-sm">

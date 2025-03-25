@@ -163,332 +163,343 @@ export function Chat({
       event.preventDefault();
     }
     
-    // Only proceed if there's input to send
-    if (!input.trim()) {
-      return handleSubmit(event, chatRequestOptions);
+    // Only proceed if there's input to send and not already loading
+    if (!input.trim() || isLoading) {
+      return;
     }
     
     try {
       console.log(`Creating chat session for ID: ${id}`);
       
-      // Add timeout and retry logic for session creation
-      let sessionResponse = null;
-      let retryCount = 0;
-      const maxRetries = 3;
+      // Start AI processing immediately with the current input
+      const currentInput = input; // Capture current input value
       
-      while (retryCount < maxRetries) {
-        try {
-          // Call the session endpoint to make sure the session exists FIRST
-          // with a timeout to prevent hanging
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 5000);
-          
-          sessionResponse = await fetch(`/api/chat/session`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              id,
-              agentId: selectedAgentId,
-              deepSearchEnabled
-            }),
-            signal: controller.signal
-          });
-          
-          clearTimeout(timeoutId);
-          
-          if (sessionResponse.ok) {
-            break; // Success, exit retry loop
-          } else {
-            console.warn(`Session creation attempt ${retryCount + 1} failed with status: ${sessionResponse.status}`);
+      // Call the AI endpoint immediately to reduce perceived latency
+      // This will trigger the "thinking" indicator
+      try {
+        // Submit to AI immediately to show thinking indicator
+        handleSubmit(undefined, chatRequestOptions);
+      } catch (aiError) {
+        console.error('Error in AI processing:', aiError);
+        toast.error('An error occurred while processing your message.');
+      }
+      
+      // Run session creation and message saving in parallel (non-blocking)
+      const saveOperationsPromise: Promise<void> = (async () => {
+        // Add timeout and retry logic for session creation
+        let sessionResponse = null;
+        let retryCount = 0;
+        const maxRetries = 3;
+        
+        while (retryCount < maxRetries) {
+          try {
+            // Call the session endpoint to make sure the session exists FIRST
+            // with a timeout to prevent hanging
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            
+            sessionResponse = await fetch(`/api/chat/session`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                id,
+                agentId: selectedAgentId,
+                deepSearchEnabled
+              }),
+              signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (sessionResponse.ok) {
+              break; // Success, exit retry loop
+            } else {
+              console.warn(`Session creation attempt ${retryCount + 1} failed with status: ${sessionResponse.status}`);
+              retryCount++;
+              
+              if (retryCount < maxRetries) {
+                // Wait before retrying (exponential backoff)
+                await new Promise(r => setTimeout(r, 500 * Math.pow(2, retryCount)));
+              }
+            }
+          } catch (fetchError) {
+            console.error(`Session creation fetch error (attempt ${retryCount + 1}):`, fetchError);
             retryCount++;
             
             if (retryCount < maxRetries) {
-              // Wait before retrying (exponential backoff)
+              // Wait before retrying
               await new Promise(r => setTimeout(r, 500 * Math.pow(2, retryCount)));
             }
           }
-        } catch (fetchError) {
-          console.error(`Session creation fetch error (attempt ${retryCount + 1}):`, fetchError);
-          retryCount++;
-          
-          if (retryCount < maxRetries) {
-            // Wait before retrying
-            await new Promise(r => setTimeout(r, 500 * Math.pow(2, retryCount)));
-          }
         }
-      }
-      
-      // Check if we eventually succeeded
-      if (!sessionResponse || !sessionResponse.ok) {
-        const errorText = sessionResponse ? await sessionResponse.text() : 'Network error';
-        console.error('Error ensuring chat session exists after retries:', errorText);
-        toast.error('Failed to create chat session. Please try again.');
-        return;
-      }
-      
-      const sessionData = await sessionResponse.json();
-      console.log('Session creation response:', sessionData);
-      
-      // Check if this is the first message in the conversation to update title
-      const isFirstMessage = messages.filter(m => m.role === 'user').length === 0;
+        
+        // Check if we eventually succeeded
+        if (!sessionResponse || !sessionResponse.ok) {
+          const errorText = sessionResponse ? await sessionResponse.text() : 'Network error';
+          console.error('Error ensuring chat session exists after retries:', errorText);
+          toast.error('Failed to create chat session. Please try again.');
+          return;
+        }
+        
+        const sessionData = await sessionResponse.json();
+        console.log('Session creation response:', sessionData);
+        
+        // Check if this is the first message in the conversation to update title
+        const isFirstMessage = messages.filter(m => m.role === 'user').length === 0;
 
-      console.log('Is first message:', isFirstMessage, 'User message count:', messages.filter(m => m.role === 'user').length);
-      
-      // Generate a consistent message ID for tracking
-      const messageId = crypto.randomUUID();
-      console.log(`Creating message with ID: ${messageId}`);
-      
-      // Add retry logic for saving the user message
-      let messageResponse = null;
-      retryCount = 0;
-      
-      while (retryCount < maxRetries) {
-        try {
-          // Save the user message to Supabase BEFORE sending to AI
-          const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 5000);
-          
-          console.log('Sending user message save request', {
-            endpoint: `/api/chat/${id}`,
-            method: 'POST',
-            messageRole: 'user',
-            contentLength: input.length,
-            messageId,
-            timestamp: new Date().toISOString()
-          });
-
-          messageResponse = await fetch(`/api/chat/${id}`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              message: {
-                role: 'user',
-                content: input,
-              },
-              messageId, // Use consistent parameter naming (was chatId in some places)
-              updateTimestamp: true, // Signal to update the session timestamp
-            }),
-            signal: controller.signal
-          });
-          
-          clearTimeout(timeoutId);
-          
-          if (messageResponse.ok) {
-            // Get a copy of the response text but don't consume the original response
-            const responseText = await messageResponse.clone().text();
-            console.log(`Message save request succeeded with status: ${messageResponse.status}`, {
-              responseText,
+        console.log('Is first message:', isFirstMessage, 'User message count:', messages.filter(m => m.role === 'user').length);
+        
+        // Generate a consistent message ID for tracking
+        const messageId = crypto.randomUUID();
+        console.log(`Creating message with ID: ${messageId}`);
+        
+        // Add retry logic for saving the user message
+        let messageResponse = null;
+        retryCount = 0;
+        
+        while (retryCount < maxRetries) {
+          try {
+            // Save the user message to Supabase BEFORE sending to AI
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+            
+            console.log('Sending user message save request', {
+              endpoint: `/api/chat/${id}`,
+              method: 'POST',
+              messageRole: 'user',
+              contentLength: currentInput.length,
+              messageId,
               timestamp: new Date().toISOString()
             });
 
-            // Attempt to parse the response as JSON for more detailed logging
-            try {
-              const jsonResponse = JSON.parse(responseText);
-              console.log('Parsed message save response:', {
-                success: jsonResponse.success,
-                messageId: jsonResponse.messageId,
-                responseDetails: jsonResponse,
-                timestamp: new Date().toISOString()
-              });
-            } catch (parseError) {
-              console.warn('Could not parse response as JSON:', parseError);
-            }
-            
-            break; // Success, exit retry loop
-          } else {
-            console.warn(`Message save attempt ${retryCount + 1} failed with status: ${messageResponse.status}`, {
-              statusText: messageResponse.statusText,
-              timestamp: new Date().toISOString()
-            });
-            
-            // Try to get the response text for better debugging
-            try {
-              const errorText = await messageResponse.clone().text();
-              console.error('Error response text:', errorText);
-              
-              // Attempt to parse error as JSON for more details
-              try {
-                const jsonError = JSON.parse(errorText);
-                console.error('Parsed error details:', {
-                  error: jsonError.error,
-                  details: jsonError.details,
-                  code: jsonError.code,
-                  fullError: jsonError
-                });
-              } catch (jsonError) {
-                // Not JSON, continue with text
-              }
-            } catch (e) {
-              console.error('Could not read error response text:', e);
-            }
-            
-            retryCount++;
-            
-            if (retryCount < maxRetries) {
-              // Wait before retrying (exponential backoff)
-              const delay = 500 * Math.pow(2, retryCount);
-              console.log(`Retrying in ${delay}ms...`);
-              await new Promise(r => setTimeout(r, delay));
-            }
-          }
-        } catch (fetchError) {
-          console.error(`Message save fetch error (attempt ${retryCount + 1}):`, fetchError);
-          retryCount++;
-          
-          if (retryCount < maxRetries) {
-            // Wait before retrying
-            await new Promise(r => setTimeout(r, 500 * Math.pow(2, retryCount)));
-          }
-        }
-      }
-      
-      // Check if we eventually succeeded
-      if (!messageResponse) {
-        console.error('Failed to save user message: Network error');
-        toast.error('Failed to save your message. Please try again.');
-        return;
-      }
-      
-      // Get full response to debug
-      let messageData: any;
-      let responseText: string;
-      
-      try {
-        responseText = await messageResponse.text();
-        console.log('Raw message save response:', responseText);
-        
-        try {
-          messageData = JSON.parse(responseText);
-        } catch (e) {
-          console.error('Failed to parse message response as JSON:', e);
-          messageData = { error: 'Failed to parse response' };
-        }
-      } catch (e) {
-        console.error('Failed to read message response text:', e);
-        responseText = 'Failed to read response text';
-      }
-      
-      if (!messageResponse.ok) {
-        console.error('Failed to save user message:', {
-          statusCode: messageResponse.status,
-          statusText: messageResponse.statusText,
-          responseData: messageData,
-          responseText
-        });
-        
-        toast.error('Failed to save your message. Please try again.');
-        return;
-      }
-      
-      // Log success with detailed information
-      console.log('Message save successful:', {
-        response: messageData,
-        statusCode: messageResponse.status,
-        messageId: messageData?.messageId || messageId
-      });
-      
-      // Store the message ID for the next user message that will be appended to state
-      const actualMessageId = messageData?.messageId || messageId;
-      
-      // Try to find if the message is already in state (optimistic update)
-      const userMessage = messages.find(m => m.role === 'user' && m.content === input);
-      if (userMessage) {
-        // If found, update the mapping for the existing message
-        console.log('Found existing user message in state, updating mapping:', userMessage.id, '->', actualMessageId);
-        
-        setMessageIdMap(prev => ({
-          ...prev,
-          [userMessage.id]: actualMessageId
-        }));
-      } else {
-        console.log('No matching user message found in state yet, will update when added');
-        
-        // Create a function to update the mapping when the message is added
-        const handleNewMessage = () => {
-          // Find the newly added user message by checking what messages don't have an ID mapping
-          const newMessages = messages.filter(m => 
-            m.role === 'user' && 
-            m.content === input && 
-            !messageIdMap[m.id]
-          );
-          
-          if (newMessages.length > 0) {
-            console.log('Found new user messages, updating mapping:', newMessages.map(m => m.id));
-            
-            // Update the message ID map for all matching messages
-            const updates = newMessages.reduce((acc, msg) => ({
-              ...acc,
-              [msg.id]: actualMessageId
-            }), {});
-            
-            setMessageIdMap(prev => ({
-              ...prev,
-              ...updates
-            }));
-          }
-        };
-        
-        // Call immediately and set a fallback timeout
-        handleNewMessage();
-        setTimeout(handleNewMessage, 500);
-      }
-      
-      // Update the title if this is the first message
-      if (isFirstMessage) {
-        try {
-          // Get truncated title from first message
-          const title = input.length > 30 
-            ? `${input.substring(0, 30)}...` 
-            : input;
-            
-            console.log(`Updating chat title to: "${title}"`);
-            
-            // Update the chat title
-            const titleResponse = await fetch(`/api/chat/${id}`, {
-              method: 'PATCH',
+            messageResponse = await fetch(`/api/chat/${id}`, {
+              method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
               },
-              body: JSON.stringify({ title }),
+              body: JSON.stringify({
+                message: {
+                  role: 'user',
+                  content: currentInput,
+                },
+                messageId, // Use consistent parameter naming (was chatId in some places)
+                updateTimestamp: true, // Signal to update the session timestamp
+              }),
+              signal: controller.signal
             });
             
-            // Get the full response text for debugging
-            const titleResponseText = await titleResponse.text();
-            console.log('Title update raw response:', titleResponseText);
+            clearTimeout(timeoutId);
             
-            // Parse the response text as JSON
-            let titleData;
-            try {
-              titleData = JSON.parse(titleResponseText);
-              console.log('Parsed title response:', titleData);
-            } catch (parseError) {
-              console.error('Failed to parse title response as JSON:', parseError);
+            if (messageResponse.ok) {
+              // Get a copy of the response text but don't consume the original response
+              const responseText = await messageResponse.clone().text();
+              console.log(`Message save request succeeded with status: ${messageResponse.status}`, {
+                responseText,
+                timestamp: new Date().toISOString()
+              });
+
+              // Attempt to parse the response as JSON for more detailed logging
+              try {
+                const jsonResponse = JSON.parse(responseText);
+                console.log('Parsed message save response:', {
+                  success: jsonResponse.success,
+                  messageId: jsonResponse.messageId,
+                  responseDetails: jsonResponse,
+                  timestamp: new Date().toISOString()
+                });
+              } catch (parseError) {
+                console.warn('Could not parse response as JSON:', parseError);
+              }
+              
+              break; // Success, exit retry loop
+            } else {
+              console.warn(`Message save attempt ${retryCount + 1} failed with status: ${messageResponse.status}`, {
+                statusText: messageResponse.statusText,
+                timestamp: new Date().toISOString()
+              });
+              
+              // Try to get the response text for better debugging
+              try {
+                const errorText = await messageResponse.clone().text();
+                console.error('Error response text:', errorText);
+                
+                // Attempt to parse error as JSON for more details
+                try {
+                  const jsonError = JSON.parse(errorText);
+                  console.error('Parsed error details:', {
+                    error: jsonError.error,
+                    details: jsonError.details,
+                    code: jsonError.code,
+                    fullError: jsonError
+                  });
+                } catch (jsonError) {
+                  // Not JSON, continue with text
+                }
+              } catch (e) {
+                console.error('Could not read error response text:', e);
+              }
+              
+              retryCount++;
+              
+              if (retryCount < maxRetries) {
+                // Wait before retrying (exponential backoff)
+                const delay = 500 * Math.pow(2, retryCount);
+                console.log(`Retrying in ${delay}ms...`);
+                await new Promise(r => setTimeout(r, delay));
+              }
             }
+          } catch (fetchError) {
+            console.error(`Message save fetch error (attempt ${retryCount + 1}):`, fetchError);
+            retryCount++;
             
-            if (!titleResponse.ok) {
-              throw new Error(`Failed to update title: ${titleResponse.status} - ${titleResponseText}`);
+            if (retryCount < maxRetries) {
+              // Wait before retrying
+              await new Promise(r => setTimeout(r, 500 * Math.pow(2, retryCount)));
             }
-            
-            console.log('Successfully updated chat title');
-            
-            // Update local state as well
-            updateConversationMetadata(id, { title });
-            
-            // Force refresh the chat history to show updated title
-            historyService.invalidateCache();
-        } catch (titleError) {
-          console.error('Error updating chat title:', titleError);
-          // Still invalidate the cache to refresh the history
-          historyService.invalidateCache();
+          }
         }
-      }
+        
+        // Get full response to debug
+        let messageData: any;
+        let responseText: string;
+        
+        try {
+          responseText = await messageResponse?.text() || 'No response';
+          console.log('Raw message save response:', responseText);
+          
+          try {
+            messageData = JSON.parse(responseText);
+          } catch (e) {
+            console.error('Failed to parse message response as JSON:', e);
+            messageData = { error: 'Failed to parse response' };
+          }
+        } catch (e) {
+          console.error('Failed to read message response text:', e);
+          responseText = 'Failed to read response text';
+        }
+        
+        if (!messageResponse?.ok) {
+          console.error('Failed to save user message:', {
+            statusCode: messageResponse?.status,
+            statusText: messageResponse?.statusText,
+            responseData: messageData,
+            responseText
+          });
+          
+          // Continue anyway - don't block the AI response
+          return;
+        }
+        
+        // Log success with detailed information
+        console.log('Message save successful:', {
+          response: messageData,
+          statusCode: messageResponse.status,
+          messageId: messageData?.messageId || messageId
+        });
+        
+        // Store the message ID for the next user message that will be appended to state
+        const actualMessageId = messageData?.messageId || messageId;
+        
+        // Try to find if the message is already in state (optimistic update)
+        const userMessage = messages.find(m => m.role === 'user' && m.content === currentInput);
+        if (userMessage) {
+          // If found, update the mapping for the existing message
+          console.log('Found existing user message in state, updating mapping:', userMessage.id, '->', actualMessageId);
+          
+          setMessageIdMap(prev => ({
+            ...prev,
+            [userMessage.id]: actualMessageId
+          }));
+        } else {
+          console.log('No matching user message found in state yet, will update when added');
+          
+          // Create a function to update the mapping when the message is added
+          const handleNewMessage = () => {
+            // Find the newly added user message by checking what messages don't have an ID mapping
+            const newMessages = messages.filter(m => 
+              m.role === 'user' && 
+              m.content === currentInput && 
+              !messageIdMap[m.id]
+            );
+            
+            if (newMessages.length > 0) {
+              console.log('Found new user messages, updating mapping:', newMessages.map(m => m.id));
+              
+              // Update the message ID map for all matching messages
+              const updates = newMessages.reduce((acc, msg) => ({
+                ...acc,
+                [msg.id]: actualMessageId
+              }), {});
+              
+              setMessageIdMap(prev => ({
+                ...prev,
+                ...updates
+              }));
+            }
+          };
+          
+          // Call immediately and set a fallback timeout
+          handleNewMessage();
+          setTimeout(handleNewMessage, 500);
+        }
+        
+        // Update the title if this is the first message
+        if (isFirstMessage) {
+          try {
+            // Get truncated title from first message
+            const title = currentInput.length > 30 
+              ? `${currentInput.substring(0, 30)}...` 
+              : currentInput;
+              
+              console.log(`Updating chat title to: "${title}"`);
+              
+              // Update the chat title
+              const titleResponse = await fetch(`/api/chat/${id}`, {
+                method: 'PATCH',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ title }),
+              });
+              
+              // Get the full response text for debugging
+              const titleResponseText = await titleResponse.text();
+              console.log('Title update raw response:', titleResponseText);
+              
+              // Parse the response text as JSON
+              let titleData;
+              try {
+                titleData = JSON.parse(titleResponseText);
+                console.log('Parsed title response:', titleData);
+              } catch (parseError) {
+                console.error('Failed to parse title response as JSON:', parseError);
+              }
+              
+              if (!titleResponse.ok) {
+                throw new Error(`Failed to update title: ${titleResponse.status} - ${titleResponseText}`);
+              }
+              
+              console.log('Successfully updated chat title');
+              
+              // Update local state as well
+              updateConversationMetadata(id, { title });
+              
+              // Force refresh the chat history to show updated title
+              historyService.invalidateCache();
+          } catch (titleError) {
+            console.error('Error updating chat title:', titleError);
+            // Still invalidate the cache to refresh the history
+            historyService.invalidateCache();
+          }
+        }
+      })();
       
-      console.log('Proceeding to AI API call with handleSubmit');
-      
-      // Submit to the AI after saving to database
-      return handleSubmit(event, chatRequestOptions);
+      // Log any errors in the background save operations but don't block UI
+      saveOperationsPromise.catch((error: Error) => {
+        console.error('Error in background save operations:', error);
+      });
+
+      return;
     } catch (error) {
       console.error('Error in handleSubmitWithSave:', error);
       toast.error('An error occurred. Please try again.');
