@@ -33,45 +33,28 @@ export function PureMessageActions({
   // Memoize the vote handlers to prevent infinite render loops
   const handleUpvote = useCallback(async () => {
     try {
-      // Create a stable key for the vote API
-      const voteApiKey = `/api/vote?chatId=${chatId}`;
+      // Create a stable key for the chat API
+      const chatApiKey = `/api/chat/${chatId}`;
 
       // Update the UI optimistically before the API call
       mutate(
-        voteApiKey,
-        (currentVotes: Array<Vote> | undefined) => {
-          if (!currentVotes) return [];
+        chatApiKey,
+        (currentChat: any) => {
+          if (!currentChat || !currentChat.messages) return currentChat;
 
-          const votesWithoutCurrent = currentVotes.filter(
-            (vote) => vote.messageId !== message.id,
-          );
+          // Find the message to update
+          const updatedMessages = currentChat.messages.map((msg: any) => {
+            if (msg.id === message.id) {
+              return { ...msg, vote: 'up' };
+            }
+            return msg;
+          });
 
-          return [
-            ...votesWithoutCurrent,
-            {
-              chatId,
-              messageId: message.id,
-              isUpvoted: true,
-            },
-          ];
+          return { ...currentChat, messages: updatedMessages };
         },
         {
           revalidate: false,
           populateCache: true,
-          optimisticData: (currentVotes: Array<Vote> | undefined) => {
-            if (!currentVotes) return [];
-            const votesWithoutCurrent = currentVotes.filter(
-              (vote) => vote.messageId !== message.id,
-            );
-            return [
-              ...votesWithoutCurrent,
-              {
-                chatId,
-                messageId: message.id,
-                isUpvoted: true,
-              },
-            ];
-          },
         }
       );
       
@@ -94,12 +77,6 @@ export function PureMessageActions({
       // Handle API error silently without disturbing user
       if (!response.ok) {
         console.warn('Vote API error:', await response.text());
-      } else {
-        // Also update chat data to refresh UI on success
-        // Use a separate mutate call to avoid synchronization issues
-        setTimeout(() => {
-          mutate(`/api/chat/${chatId}`);
-        }, 100);
       }
     } catch (error) {
       console.error('Error upvoting:', error);
@@ -109,45 +86,28 @@ export function PureMessageActions({
 
   const handleDownvote = useCallback(async () => {
     try {
-      // Create a stable key for the vote API
-      const voteApiKey = `/api/vote?chatId=${chatId}`;
+      // Create a stable key for the chat API
+      const chatApiKey = `/api/chat/${chatId}`;
 
       // Update the UI optimistically before the API call
       mutate(
-        voteApiKey,
-        (currentVotes: Array<Vote> | undefined) => {
-          if (!currentVotes) return [];
+        chatApiKey,
+        (currentChat: any) => {
+          if (!currentChat || !currentChat.messages) return currentChat;
 
-          const votesWithoutCurrent = currentVotes.filter(
-            (vote) => vote.messageId !== message.id,
-          );
+          // Find the message to update
+          const updatedMessages = currentChat.messages.map((msg: any) => {
+            if (msg.id === message.id) {
+              return { ...msg, vote: 'down' };
+            }
+            return msg;
+          });
 
-          return [
-            ...votesWithoutCurrent,
-            {
-              chatId,
-              messageId: message.id,
-              isUpvoted: false,
-            },
-          ];
+          return { ...currentChat, messages: updatedMessages };
         },
         {
           revalidate: false,
           populateCache: true,
-          optimisticData: (currentVotes: Array<Vote> | undefined) => {
-            if (!currentVotes) return [];
-            const votesWithoutCurrent = currentVotes.filter(
-              (vote) => vote.messageId !== message.id,
-            );
-            return [
-              ...votesWithoutCurrent,
-              {
-                chatId,
-                messageId: message.id,
-                isUpvoted: false,
-              },
-            ];
-          },
         }
       );
       
@@ -170,12 +130,6 @@ export function PureMessageActions({
       // Handle API error silently without disturbing user
       if (!response.ok) {
         console.warn('Vote API error:', await response.text());
-      } else {
-        // Also update chat data to refresh UI on success
-        // Use a separate mutate call to avoid synchronization issues
-        setTimeout(() => {
-          mutate(`/api/chat/${chatId}`);
-        }, 100);
       }
     } catch (error) {
       console.error('Error downvoting:', error);

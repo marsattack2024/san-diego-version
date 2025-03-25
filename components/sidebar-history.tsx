@@ -93,11 +93,12 @@ const PureChatItem = ({
 }) => {
   return (
     <SidebarMenuItem>
-      <Link href={`/chat/${chat.id}`} onClick={() => setOpenMobile(false)} legacyBehavior>
+      <Link href={`/chat/${chat.id}`}>
         <SidebarMenuButton
           asChild={false}
           isActive={isActive}
           className="flex items-center group"
+          onClick={() => setOpenMobile(false)}
         >
           <div className="flex items-center gap-2 flex-1 min-w-0">
             <MessageSquare size={16} />

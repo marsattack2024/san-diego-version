@@ -14,9 +14,13 @@ import { AgentSelector } from './agent-selector';
 export function PureChatHeader({
   chatId,
   isReadonly,
+  title,
+  isLoading,
 }: {
   chatId: string;
   isReadonly: boolean;
+  title?: string;
+  isLoading?: boolean;
 }) {
   const router = useRouter();
   const { width } = useWindowSize();

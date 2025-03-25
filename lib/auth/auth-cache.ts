@@ -2,8 +2,10 @@
  * In-memory authentication cache to reduce redundant auth checks
  */
 
-// Use a more robust LRU cache
+'use client';
+
 import { LRUCache } from 'lru-cache';
+import { User } from '@supabase/supabase-js';
 
 // Calculate TTL based on environment - longer for development
 const isDevelopment = process.env.NODE_ENV === 'development';
@@ -12,8 +14,8 @@ const isDevelopment = process.env.NODE_ENV === 'development';
 const USER_CACHE_OPTIONS = {
   max: 50, // Maximum number of users to cache
   ttl: isDevelopment 
-    ? 1000 * 60 * 15  // 15 minutes in development
-    : 1000 * 60 * 5,  // 5 minutes in production
+    ? 1000 * 60 * 30  // 30 minutes in development (increased from 15 minutes)
+    : 1000 * 60 * 15,  // 15 minutes in production (increased from 5 minutes)
 };
 
 // Cache for user objects
@@ -23,11 +25,52 @@ const userCache = new LRUCache(USER_CACHE_OPTIONS);
 const sessionValidCache = new LRUCache({
   max: 100, // Cache more session validations
   ttl: isDevelopment
-    ? 1000 * 60 * 10  // 10 minutes for development 
-    : 1000 * 30,      // 30 seconds for production
+    ? 1000 * 60 * 15  // 15 minutes for development (increased from 10 minutes)
+    : 1000 * 60 * 5,  // 5 minutes for production (increased from 30 seconds)
 });
 
+// User cache settings
+const DEFAULT_TTL = 15 * 60 * 1000; // 15 minutes
+let cachedUser: User | null = null;
+let cacheTimestamp = 0;
+
+/**
+ * Simple auth cache to reduce the number of Supabase auth calls
+ * during page navigation and component mounts
+ */
 export const authCache = {
+  /**
+   * Get a user from cache if available and not expired
+   * @param ttlMs Cache TTL in milliseconds
+   */
+  get(ttlMs: number = DEFAULT_TTL): User | null {
+    if (!cachedUser) return null;
+    
+    const age = Date.now() - cacheTimestamp;
+    if (age > ttlMs) {
+      return null;
+    }
+    
+    return cachedUser;
+  },
+  
+  /**
+   * Store a user in the cache
+   * @param user User object to cache
+   */
+  set(user: User | null): void {
+    cachedUser = user;
+    cacheTimestamp = Date.now();
+  },
+  
+  /**
+   * Clear the auth cache
+   */
+  clear(): void {
+    cachedUser = null;
+    cacheTimestamp = 0;
+  },
+
   /**
    * Check if cached user is still valid (within TTL)
    */
@@ -38,7 +81,7 @@ export const authCache = {
   /**
    * Store user in cache
    */
-  set(user: any): void {
+  setUser(user: any): void {
     if (user?.id) {
       userCache.set(user.id, user);
     }
@@ -47,7 +90,7 @@ export const authCache = {
   /**
    * Get cached user if valid, otherwise null
    */
-  get(ttlMs?: number): any {
+  getUser(ttlMs?: number): any {
     // This function kept for backward compatibility
     // Ideally you should use getById instead
     const userId = userCache.keys().next().value;
@@ -57,7 +100,7 @@ export const authCache = {
   /**
    * Get user by ID
    */
-  getById(userId: string): any {
+  getUserById(userId: string): any {
     return userCache.get(userId);
   },
 
@@ -85,7 +128,7 @@ export const authCache = {
   /**
    * Clear all caches
    */
-  clear(): void {
+  clearAll(): void {
     userCache.clear();
     sessionValidCache.clear();
   }

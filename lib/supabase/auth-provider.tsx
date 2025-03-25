@@ -42,12 +42,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Only set up interval if the user is authenticated
     if (!isAuthenticated) return;
 
-    // Check auth every 30 minutes for long-lived sessions
+    // Check auth every 60 minutes for long-lived sessions
     const intervalId = setInterval(() => {
       if (shouldRefreshAuth()) {
         checkAuth();
       }
-    }, 30 * 60 * 1000);
+    }, 60 * 60 * 1000);
 
     return () => clearInterval(intervalId);
   }, [isAuthenticated, checkAuth, shouldRefreshAuth]);

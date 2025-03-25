@@ -2,7 +2,7 @@
 
 import type { Attachment, Message } from 'ai';
 import { useChat } from '@ai-sdk/react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { ChatHeader } from '@/components/chat-header';
 import type { Vote } from '@/lib/db/schema';
@@ -506,7 +506,8 @@ export function Chat({
     }
   };
 
-  // Use SWR to fetch votes with error handling and retry configuration
+  // Remove separate votes SWR request as we'll now get vote data directly from chat messages
+  /* 
   const { data: votes, error: voteError } = useSWR<Array<Vote>>(
     id ? `/api/vote?chatId=${id}` : null, // Only fetch if we have an ID
     fetcher,
@@ -529,53 +530,69 @@ export function Chat({
       console.warn('Vote loading error:', voteError);
     }
   }, [voteError]);
+  */
 
+  // Process votes from message data instead of separate API calls
+  const processedVotes = useMemo(() => {
+    if (!messages) return [];
+    
+    // Extract votes from message data
+    return messages
+      .filter(msg => 'vote' in msg) // Only include messages that have votes
+      .map(msg => ({
+        chatId: id,
+        messageId: msg.id || '',
+        isUpvoted: (msg as any).vote === 'up'
+      }));
+  }, [messages, id]);
+
+  // Display the messages with the correct layout
   return (
-    <TooltipProvider>
-      <>
-        <div className="flex flex-col h-dvh bg-background">
+    <TooltipProvider delayDuration={0}>
+      <div className="flex flex-col bg-primary-foreground h-full overflow-hidden">
+        {!isReadonly && (
           <ChatHeader
             chatId={id}
             isReadonly={isReadonly}
+            title={'New chat'}
+            isLoading={isLoading}
           />
-
-          <div className="flex-1 overflow-hidden relative">
-            <Messages 
-              chatId={id}
-              isLoading={isLoading}
-              votes={votes}
-              messages={messages}
-              setMessages={setMessages}
-              reload={reload}
-              isReadonly={isReadonly}
-              isArtifactVisible={false}
-            />
-          </div>
-
-          <div className="sticky inset-x-0 bottom-0 z-10 w-full bg-gradient-to-t from-background from-0% to-transparent to-60% duration-300 ease-in-out animate-in dark:from-background/90 md:px-8 lg:px-0">
-            <form
-              onSubmit={handleSubmitWithSave}
-              className="mx-auto flex max-w-3xl flex-col gap-3 rounded-t-2xl bg-background py-2 sm:pb-4 sm:pt-2"
-            >
-              {!isReadonly && (
-                <MultimodalInput
-                  chatId={id}
-                  input={input}
-                  setInput={setInput}
-                  handleSubmit={handleSubmitWithSave}
-                  isLoading={isLoading}
-                  stop={stop}
-                  attachments={attachments}
-                  setAttachments={setAttachments}
-                  messages={messages}
-                  setMessages={setMessages}
-                  append={append}
-                />
-              )}
-            </form>
-          </div>
+        )}
+        <div className="flex-1 overflow-y-auto pb-96">
+          <Messages
+            chatId={id}
+            isLoading={isLoading}
+            messages={messages}
+            setMessages={setMessages}
+            reload={reload}
+            isReadonly={isReadonly}
+            votes={processedVotes}
+            isArtifactVisible={!!attachments.length}
+          />
         </div>
-      </>
+        <div className="sticky inset-x-0 bottom-0 z-10 w-full bg-gradient-to-t from-background from-0% to-transparent to-60% duration-300 ease-in-out animate-in dark:from-background/90 md:px-8 lg:px-0">
+          <form
+            onSubmit={handleSubmitWithSave}
+            className="mx-auto flex max-w-3xl flex-col gap-3 rounded-t-2xl bg-background py-2 sm:pb-4 sm:pt-2"
+          >
+            {!isReadonly && (
+              <MultimodalInput
+                chatId={id}
+                input={input}
+                setInput={setInput}
+                handleSubmit={handleSubmitWithSave}
+                isLoading={isLoading}
+                stop={stop}
+                attachments={attachments}
+                setAttachments={setAttachments}
+                messages={messages}
+                setMessages={setMessages}
+                append={append}
+              />
+            )}
+          </form>
+        </div>
+      </div>
     </TooltipProvider>
   );
 }

@@ -7,8 +7,8 @@ const pendingRequests: Record<string, Promise<Chat[]> | null> = {};
 
 // Track last refresh time
 let lastRefreshTime = 0;
-const REFRESH_INTERVAL = 60 * 1000; // 60 seconds (increased from 30)
-const CACHE_TTL = 120 * 1000; // 2 minutes cache TTL
+const REFRESH_INTERVAL = 15 * 60 * 1000; // 15 minutes (increased from 60 seconds)
+const CACHE_TTL = 30 * 60 * 1000; // 30 minutes cache TTL (increased from 2 minutes)
 
 /**
  * History service provides methods for fetching and managing chat history
@@ -43,6 +43,17 @@ export const historyService = {
         }
       }
       
+      // Check if we're in an auth failure cooldown period
+      try {
+        const isAuthFailed = clientCache.get(`${cacheKey}_auth_failed`);
+        if (isAuthFailed && !forceRefresh) {
+          console.log(`[History:${operationId}] In auth failure cooldown, returning empty history`);
+          return [];
+        }
+      } catch (e) {
+        // Ignore cache errors
+      }
+      
       // Log fetching attempt
       console.log(`[History:${operationId}] Fetching chat history`, {
         forceRefresh,
@@ -55,7 +66,7 @@ export const historyService = {
       if (!forceRefresh) {
         try {
           // Use the TTL parameter of the client cache (2 minutes)
-          const cachedData = clientCache.get(cacheKey, CACHE_TTL) as Chat[] | undefined;
+          const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
           if (cachedData && cachedData.length > 0) {
             console.log(`[History:${operationId}] Using cached data with ${cachedData.length} items`);
             
@@ -142,6 +153,26 @@ export const historyService = {
           errorText
         };
         
+        // Special handling for authentication errors (401)
+        if (response.status === 401) {
+          console.warn(`[History:${operationId}] Authentication error: Not logged in or session expired`);
+          
+          // Cache an empty array for a longer period to prevent constant retries
+          // This creates a "cooling off" period for auth-failed requests
+          const FAILED_AUTH_CACHE_TTL = 30000; // 30 seconds (much longer than regular retries)
+          try {
+            // Cache empty array but with a special flag to indicate auth failure
+            clientCache.set(cacheKey, [], FAILED_AUTH_CACHE_TTL);
+            clientCache.set(`${cacheKey}_auth_failed`, true, FAILED_AUTH_CACHE_TTL);
+            console.log(`[History:${operationId}] Cached auth failure state for ${FAILED_AUTH_CACHE_TTL/1000}s to prevent constant retries`);
+          } catch (cacheError) {
+            console.warn(`[History:${operationId}] Failed to cache auth failure state:`, cacheError);
+          }
+          
+          // Return empty array - app should handle gracefully
+          return [];
+        }
+        
         console.error(`[History:${operationId}] API returned error status ${response.status}`, errorDetails);
         throw new Error(`API returned status ${response.status}: ${errorText}`);
       }
@@ -156,6 +187,13 @@ export const historyService = {
         firstChatId: data.length > 0 ? data[0].id.slice(0, 8) : null,
         chatIds: data.length > 0 ? data.slice(0, 3).map((c: Chat) => c.id.slice(0, 8)) : []
       });
+      
+      // Clear any previous auth failure flag
+      try {
+        clientCache.set(`${cacheKey}_auth_failed`, false);
+      } catch (e) {
+        // Ignore
+      }
       
       // Cache the result for future use
       try {

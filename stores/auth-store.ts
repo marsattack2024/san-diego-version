@@ -56,7 +56,7 @@ export const useAuthStore = create<AuthState>()(
       isAdmin: false,
       hasProfile: false,
       lastChecked: null,
-      authCheckInterval: 5 * 60 * 1000, // 5 minutes
+      authCheckInterval: 15 * 60 * 1000, // 15 minutes
       
       login: async (email, password) => {
         try {

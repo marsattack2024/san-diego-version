@@ -155,6 +155,26 @@ After deploying to Vercel, you need to update your Supabase authentication setti
 - [Tailwind CSS](https://tailwindcss.com/) - Styling
 - [TypeScript](https://www.typescriptlang.org/) - Type safety
 
+## Known Issues
+
+### Authentication Issues
+
+- **401 Errors with `/api/history` Endpoint**: The application may experience occasional 401 (Unauthorized) errors when accessing the chat history. This is typically due to auth token refresh issues with Supabase. The current implementation includes:
+  - Error handling with automatic retry logic
+  - Auth failure cooldown to prevent constant retries
+  - Background refresh mechanism for the chat history
+
+### Performance Optimizations
+
+- **Vote API Consolidation**: We've eliminated redundant API calls to `/api/vote` by extracting vote data directly from chat messages. This reduces network requests, improves performance, and minimizes 401 errors. See `docs/performance-optimizations.md` for details.
+
+### UI/Accessibility Issues
+
+- **Fixed: Dialog Accessibility Warning**: `Missing Description or aria-describedby for DialogContent` - This has been fixed by adding a `SheetTitle` with an sr-only class to the mobile sidebar's `SheetContent` component.
+- **Fixed: Next.js Link Warning**: "onClick was passed to Link with href but legacyBehavior was set" - This has been fixed by moving the onClick handler from the Link component to its child component and removing the legacyBehavior prop.
+
+If you encounter other issues, please submit them through the issue tracker.
+
 ## License
 
 MIT 
