@@ -7,10 +7,8 @@ import useSWR, { useSWRConfig } from 'swr';
 import { ChatHeader } from '@/components/chat-header';
 import type { Vote } from '@/lib/db/schema';
 import { fetcher, generateUUID } from '@/lib/utils';
-import { Artifact } from './artifact';
 import { MultimodalInput } from './multimodal-input';
 import { Messages } from './messages';
-import { useArtifactSelector } from '@/hooks/use-artifact';
 import { toast } from 'sonner';
 import { useChatStore } from '@/stores/chat-store';
 import { TooltipProvider } from './ui/tooltip';
@@ -182,6 +180,9 @@ export function Chat({
 
   // Add a state to track message chat IDs
   const [messageIdMap, setMessageIdMap] = useState<Record<string, string>>({});
+  
+  // Add state for attachments
+  const [attachments, setAttachments] = useState<Array<Attachment>>([]);
   
   // Add debug state to track message recording
   const [debugInfo, setDebugInfo] = useState<{
@@ -719,9 +720,6 @@ export function Chat({
     }
   }, [voteError]);
 
-  const [attachments, setAttachments] = useState<Array<Attachment>>([]);
-  const isArtifactVisible = useArtifactSelector((state) => state.isVisible);
-
   return (
     <TooltipProvider>
       <>
@@ -731,16 +729,18 @@ export function Chat({
             isReadonly={isReadonly}
           />
 
-          <Messages
-            chatId={id}
-            isLoading={isLoading}
-            votes={votes}
-            messages={messages}
-            setMessages={setMessages}
-            reload={reload}
-            isReadonly={isReadonly}
-            isArtifactVisible={isArtifactVisible}
-          />
+          <div className="overflow-hidden pb-[120px] pt-4 md:pb-[140px]">
+            <Messages 
+              chatId={id}
+              isLoading={isLoading}
+              votes={votes}
+              messages={messages}
+              setMessages={setMessages}
+              reload={reload}
+              isReadonly={isReadonly}
+              isArtifactVisible={false}
+            />
+          </div>
 
           {process.env.NODE_ENV === 'development' && (
             <div className="px-4 max-w-3xl mx-auto w-full">
@@ -752,41 +752,29 @@ export function Chat({
             </div>
           )}
 
-          <form className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full md:max-w-3xl">
-            {!isReadonly && (
-              <MultimodalInput
-                chatId={id}
-                input={input}
-                setInput={setInput}
-                handleSubmit={handleSubmitWithSave}
-                isLoading={isLoading}
-                stop={stop}
-                attachments={attachments}
-                setAttachments={setAttachments}
-                messages={messages}
-                setMessages={setMessages}
-                append={append}
-              />
-            )}
-          </form>
+          <div className="fixed inset-x-0 bottom-0 w-full bg-gradient-to-t from-muted/30 from-0% to-transparent to-60% duration-300 ease-in-out animate-in dark:from-background/30 md:px-8 lg:px-0">
+            <form
+              onSubmit={handleSubmitWithSave}
+              className="mx-auto flex max-w-3xl flex-col gap-3 rounded-t-2xl bg-background py-2 sm:pb-4 sm:pt-2"
+            >
+              {!isReadonly && (
+                <MultimodalInput
+                  chatId={id}
+                  input={input}
+                  setInput={setInput}
+                  handleSubmit={handleSubmitWithSave}
+                  isLoading={isLoading}
+                  stop={stop}
+                  attachments={attachments}
+                  setAttachments={setAttachments}
+                  messages={messages}
+                  setMessages={setMessages}
+                  append={append}
+                />
+              )}
+            </form>
+          </div>
         </div>
-
-        <Artifact
-          chatId={id}
-          input={input}
-          setInput={setInput}
-          handleSubmit={handleSubmitWithSave}
-          isLoading={isLoading}
-          stop={stop}
-          attachments={attachments}
-          setAttachments={setAttachments}
-          append={append}
-          messages={messages}
-          setMessages={setMessages}
-          reload={reload}
-          votes={votes}
-          isReadonly={isReadonly}
-        />
       </>
     </TooltipProvider>
   );

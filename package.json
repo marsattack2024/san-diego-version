@@ -8,21 +8,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "fix-imports": "node scripts/fix-imports.js",
-    "fix-all-imports": "node scripts/fix-all-imports.js",
-    "esm-migration": "node scripts/esm-migration.js",
     "update-imports": "node scripts/update-imports.js",
-    "esm-fix": "node scripts/esm-fix.js",
-    "fix-alias-imports": "node scripts/fix-alias-imports.js",
     "supabase": "npx supabase",
     "setup-supabase": "node scripts/setup-supabase.js",
     "deploy": "node scripts/deploy-vercel.js",
     "test:perplexity": "tsx scripts/tests/perplexity.test.ts",
-    "test:website-summarizer": "tsx scripts/tests/website-summarizer.test.ts",
-    "test:profile-summary": "tsx scripts/tests/test-profile-summary.ts",
-    "setup:first-admin": "node scripts/setup/setup-first-admin.js",
-    "test:fix-summary": "tsx scripts/tests/fix-summary.ts",
-    "test:direct-summary": "tsx scripts/tests/test-direct-summary.ts"
+    "setup:first-admin": "node scripts/setup/setup-first-admin.js"
   },
   "dependencies": {
     "@ai-sdk/fireworks": "^0.1.12",

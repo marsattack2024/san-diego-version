@@ -1,4 +1,4 @@
-import { RetrievedDocument } from '@/types/vector/vector';
+import { RetrievedDocument } from './types';
 
 /**
  * Formats retrieved documents for LLM context

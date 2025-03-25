@@ -11,7 +11,7 @@ import { tool } from 'ai';
 import { findSimilarDocumentsOptimized } from '@/lib/vector/documentRetrieval';
 import { formatDocumentsForLLM, formatDocumentsForDisplay } from '@/lib/vector/formatters';
 import { logger } from '@/lib/logger';
-import type { RetrievedDocument } from '@/types/vector/vector.js';
+import type { RetrievedDocument } from '@/lib/vector/types';
 
 // Type for the vector search tool input
 type VectorSearchInput = {

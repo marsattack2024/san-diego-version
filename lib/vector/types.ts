@@ -11,4 +11,5 @@ export interface RetrievedDocument {
     [key: string]: any;
   };
   score?: number;
+  similarity?: number;
 } 
