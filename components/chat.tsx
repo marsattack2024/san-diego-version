@@ -185,7 +185,7 @@ export function Chat({
       }
       
       // Update chat history
-      mutate('/api/history');
+      historyService.invalidateCache();
     },
     onError: (error) => {
       // Only show toast for non-vote related errors

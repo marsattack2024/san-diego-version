@@ -1,9 +1,22 @@
+/**
+ * IMPORTANT: This file has been updated to fix authentication middleware issues
+ * with history API requests, including:
+ * 1. Enhanced circuit breaker to detect unauthorized request bursts
+ * 2. New status code 409 support for auth-in-progress state
+ * 3. Special handling for requests without timestamps
+ * 4. Global request throttling to reduce API load
+ */
+
 import { clientCache } from '@/lib/cache/client-cache';
 import { Chat } from '@/lib/db/schema';
 import { randomUUID } from 'crypto';
 
 // Keep track of pending requests to deduplicate
 const pendingRequests: Record<string, Promise<Chat[]> | null> = {};
+
+// Global request throttling
+let lastHistoryRequestTime = 0;
+const MIN_REQUEST_INTERVAL = 2000; // 2 seconds minimum between ANY history requests
 
 // Track last refresh time
 let lastRefreshTime = 0;
@@ -36,6 +49,11 @@ let isInAuthFailureCooldown = false;
 let authFailureCount = 0;
 let authBackoffDuration = MIN_AUTH_COOLDOWN;
 let authFailureTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Track unauthorized requests to apply immediate circuit breaking
+let recentUnauthorizedRequests: number[] = [];
+const UNAUTHORIZED_THRESHOLD = 3; // Activate circuit breaker after 3 unauthorized responses in 5 seconds
+const UNAUTHORIZED_WINDOW = 5000; // 5 second window for tracking unauthorized responses
 
 /**
  * Calculate exponential backoff duration
@@ -168,7 +186,18 @@ export const historyService = {
    * @returns True if in auth failure cooldown
    */
   isInAuthFailure(): boolean {
-    // CRITICAL FIX: Always check persistent storage first, as it is the source of truth
+    // Check for recent unauthorized responses first (fastest check)
+    // This provides immediate circuit breaking when flood is detected
+    if (recentUnauthorizedRequests.length >= UNAUTHORIZED_THRESHOLD) {
+      // Activate the circuit breaker if we hit the threshold
+      if (!isInAuthFailureCooldown) {
+        console.warn(`Circuit breaker activating from isInAuthFailure check - ${recentUnauthorizedRequests.length} recent 401s`);
+        setAuthFailureState(true);
+      }
+      return true;
+    }
+    
+    // CRITICAL FIX: Always check persistent storage next, as it is the source of truth
     try {
       const persistentState = !!clientCache.get(AUTH_FAILURE_KEY, Infinity, true);
       
@@ -228,6 +257,28 @@ export const historyService = {
    * @returns Array of chat objects
    */
   async fetchHistory(forceRefresh = false): Promise<Chat[]> {
+    // ------------------ GLOBAL REQUEST THROTTLING ------------------
+    // Check if we've made a request very recently (from ANY component)
+    const now = Date.now();
+    const timeSinceLastRequest = now - lastHistoryRequestTime;
+    
+    if (!forceRefresh && timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
+      // If any history request was made in the last 2 seconds, use cached data
+      console.log(`Global history request throttling: ${(MIN_REQUEST_INTERVAL - timeSinceLastRequest)/1000}s throttle`);
+      
+      try {
+        const cachedData = clientCache.get('chat_history') as Chat[] | undefined;
+        if (cachedData && Array.isArray(cachedData) && cachedData.length > 0) {
+          return cachedData;
+        }
+      } catch (e) {
+        // Ignore cache errors
+      }
+    }
+    
+    // Update the last request time (even if we're going to fail-fast due to circuit breaker)
+    lastHistoryRequestTime = now;
+    
     // -------------------- ENHANCED CIRCUIT BREAKER PATTERN --------------------
     // Before doing ANYTHING AT ALL, check for auth failure state - not even creating IDs or timestamps
     if (this.isInAuthFailure()) {
@@ -255,7 +306,7 @@ export const historyService = {
     }
     
     // Rate limit check - use adaptive refresh interval
-    const now = Date.now();
+    // Note: we reuse the 'now' value set above to ensure consistency
     const timeSinceLastFetch = now - lastSuccessfulFetch;
     
     // Only allow forced refreshes more often than the minimum interval
@@ -434,6 +485,57 @@ export const historyService = {
       return false;
     }
   },
+  
+  /**
+   * Check if auth is completely ready by probing the auth status endpoint
+   * This should be used before making any API calls that require authentication
+   * @returns Promise resolving to true if auth is ready, false otherwise
+   */
+  async isAuthReady(): Promise<boolean> {
+    // Cache key for storing auth ready state
+    const AUTH_READY_KEY = 'auth_ready_state';
+    const AUTH_READY_TIMESTAMP_KEY = 'auth_ready_timestamp';
+    const AUTH_READY_TTL = 30000; // 30 seconds
+    
+    try {
+      // Check if we have a cached auth ready state that's still valid
+      const cachedState = clientCache.get(AUTH_READY_KEY) as boolean | undefined;
+      const cachedTimestamp = clientCache.get(AUTH_READY_TIMESTAMP_KEY) as number | undefined;
+      
+      if (cachedState === true && cachedTimestamp && Date.now() - cachedTimestamp < AUTH_READY_TTL) {
+        return true;
+      }
+      
+      // No valid cached state, make a lightweight request to check auth status
+      const probe = await fetch('/api/chat/test-permissions', {
+        method: 'GET',
+        credentials: 'include',
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+          'x-operation-id': `auth_probe_${Math.random().toString(36).substring(2, 8)}`
+        }
+      });
+      
+      // Check if we got the auth-ready header
+      const authReady = probe.headers.get('x-auth-ready') === 'true';
+      const authState = probe.headers.get('x-auth-state');
+      
+      // Store the auth ready state
+      clientCache.set(AUTH_READY_KEY, authReady, AUTH_READY_TTL);
+      clientCache.set(AUTH_READY_TIMESTAMP_KEY, Date.now(), AUTH_READY_TTL);
+      
+      // Log auth state at a reduced rate
+      if (Math.random() < 0.05) {
+        console.log(`Auth readiness check: ${authReady ? 'Ready' : 'Not ready'}, State: ${authState || 'unknown'}`);
+      }
+      
+      return authReady;
+    } catch (e) {
+      console.warn('Error checking auth readiness:', e);
+      return false;
+    }
+  },
 
   /**
    * Fetch history data directly from API
@@ -443,11 +545,20 @@ export const historyService = {
    */
   async fetchHistoryFromAPI(cacheKey: string, operationId: string): Promise<Chat[]> {
     try {
-      // CRITICAL FIX: Check for cookies before making the request
+      // CRITICAL FIX #1: Check for cookies before making the request
       const hasCookies = this.checkForAuthCookies();
       if (!hasCookies) {
         console.warn(`No auth cookies found, skipping history fetch to avoid 401`, { operationId });
         setAuthFailureState(true);
+        return [];
+      }
+      
+      // CRITICAL FIX #2: Check if auth is ready before making the request
+      // This prevents the 401 errors that happen when the auth token is present but not yet valid
+      const authReady = await this.isAuthReady();
+      if (!authReady) {
+        console.warn(`Auth not ready yet, skipping history fetch to avoid 401`, { operationId });
+        // Don't set failure state here, this is a normal condition during app initialization
         return [];
       }
       
@@ -460,31 +571,133 @@ export const historyService = {
       headers.append('Cache-Control', 'no-cache');
       headers.append('x-operation-id', operationId);
       
-      // Add anti-cache parameter with reduced frequency (once per minute max)
-      const cacheBuster = Math.floor(Date.now() / 60000);
-      const url = `/api/history?t=${cacheBuster}`;
+      // IMPROVED: Always use timestamp for consistent request pattern
+      // Using precise timestamp instead of minute-based cachebusting for better uniqueness
+      const timestamp = Date.now();
       
-      // Log request to help debug auth issues
-      console.log(`Fetching history with cookies: ${hasCookies ? 'Yes' : 'No'}`, { operationId });
+      // Track unauthorized request count to help with flood detection
+      let urlParams = `t=${timestamp}`;
       
-      // Make the API request
+      // If we've had recent unauthorized requests, include the count in the next request
+      // This helps the server track bursts of unauthorized requests
+      if (recentUnauthorizedRequests.length > 0) {
+        urlParams += `&unauth_count=${recentUnauthorizedRequests.length}`;
+      }
+      
+      // Include auth ready marker in the URL to help with debugging
+      urlParams += `&auth_ready=true`;
+      
+      const url = `/api/history?${urlParams}`;
+      
+      // Log request at low frequency to help debug auth issues
+      if (Math.random() < 0.05) {
+        console.log(`Fetching history with cookies and timestamp: ${hasCookies ? 'Yes' : 'No'}`, { 
+          operationId,
+          timestamp,
+          authReady,
+          withTimestamp: true
+        });
+      }
+      
+      // Make the API request with consistent auth approach
       const response = await fetch(url, {
         method: 'GET',
         headers,
-        credentials: 'include', // Include cookies for auth
-        signal: abortController.signal
+        credentials: 'include', // Include cookies for auth - critical for consistency
+        cache: 'no-store', // Ensure fresh data
+        signal: abortController.signal,
+        mode: 'same-origin' // Explicit same-origin policy to ensure cookies are sent
       });
       
       // Clear abort timeout
       clearTimeout(abortTimeout);
       
-      // Check for auth issues - 401 Unauthorized or 403 Forbidden
-      if (response.status === 401 || response.status === 403) {
-        // Handle auth failure with enhanced circuit breaker pattern
-        setAuthFailureState(true);
+      // Check for authentication issues - 401 Unauthorized, 403 Forbidden, or 409 Conflict (auth pending)
+      if (response.status === 401 || response.status === 403 || response.status === 409) {
+        // Special handling for 409 Conflict - authentication pending
+        if (response.status === 409) {
+          // This is a special case where auth cookies are present but auth is still pending
+          // We'll retry after a short delay instead of triggering circuit breaker
+          console.log(`Authentication pending for history API (409). Will retry shortly.`, {
+            operationId,
+            retryAfter: response.headers.get('Retry-After') || '1'
+          });
+          
+          // Don't count this toward unauthorized requests since it's just a timing issue
+          // Instead, we'll use cached data and retry
+          
+          // Remove pending request
+          delete pendingRequests[cacheKey];
+          
+          // Return cached data if available
+          try {
+            const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
+            return (cachedData && Array.isArray(cachedData) && cachedData.length > 0) ? cachedData : [];
+          } catch (e) {
+            return [];
+          }
+        }
+          
+        // Standard 401/403 handling
+        // Get unauthorized count from response headers if available
+        // This helps coordinate between multiple clients/components
+        let unauthorizedCount = recentUnauthorizedRequests.length;
+        const headerCount = parseInt(response.headers.get('x-unauthorized-count') || '0');
         
-        // More specific logging with error status
-        console.warn(`Authentication failed (${response.status}) when fetching history. Circuit breaker activated for ${Math.round(authBackoffDuration/1000)}s.`, { operationId });
+        if (headerCount > 0) {
+          // Use the higher count between local tracking and server header
+          unauthorizedCount = Math.max(unauthorizedCount, headerCount);
+          
+          // If server reports high count, ensure we're tracking enough locally
+          if (headerCount > unauthorizedCount) {
+            // Add timestamps to match the server count
+            const diff = headerCount - unauthorizedCount;
+            const now = Date.now();
+            for (let i = 0; i < diff; i++) {
+              // Spread them out slightly in the window
+              recentUnauthorizedRequests.push(now - (i * 100));
+            }
+          }
+        }
+        
+        // Check if cookies were present but auth failed
+        const hasAuthCookies = response.headers.get('x-has-auth-cookies') === 'true';
+        
+        // Track recent unauthorized responses to detect floods
+        const now = Date.now();
+        recentUnauthorizedRequests.push(now);
+        
+        // Remove unauthorized responses older than our tracking window
+        recentUnauthorizedRequests = recentUnauthorizedRequests.filter(
+          time => now - time < UNAUTHORIZED_WINDOW
+        );
+        
+        // Recalculate after filtering
+        unauthorizedCount = recentUnauthorizedRequests.length;
+        
+        // Immediate circuit breaker activation if threshold exceeded
+        if (unauthorizedCount >= UNAUTHORIZED_THRESHOLD) {
+          // Handle auth failure with enhanced circuit breaker pattern
+          setAuthFailureState(true);
+          
+          // Don't clear tracking array - we'll use it for duration of the cooldown
+          // to catch any further requests during the initial delay
+          
+          console.warn(`AUTH FLOOD DETECTED: ${unauthorizedCount} unauthorized responses in the last ${UNAUTHORIZED_WINDOW/1000}s. Circuit breaker activated for ${Math.round(authBackoffDuration/1000)}s.`, { 
+            operationId,
+            url,
+            responseStatus: response.status
+          });
+        } else {
+          // Log at reduced frequency
+          if (unauthorizedCount < 3 || Math.random() < 0.2) {
+            console.warn(`Authentication failed (${response.status}) when fetching history. Monitoring for flood (${unauthorizedCount}/${UNAUTHORIZED_THRESHOLD}).`, { 
+              operationId,
+              url,
+              hasAuthCookies
+            });
+          }
+        }
         
         // Remove pending request
         delete pendingRequests[cacheKey];
@@ -504,7 +717,8 @@ export const historyService = {
       if (data && typeof data === 'object' && 'error' in data) {
         console.error('API returned an error response', { 
           error: data.error,
-          operationId 
+          operationId,
+          url 
         });
         
         // If it's an authentication error, trigger the circuit breaker
@@ -571,28 +785,57 @@ export const historyService = {
     console.log(`[History:${operationId}] Deleting chat`, { chatId: id });
     
     try {
-      const response = await fetch(`/api/history?id=${encodeURIComponent(id)}`, {
+      // Add timestamp for consistency with fetchHistory pattern
+      const timestamp = Date.now();
+      const url = `/api/history?id=${encodeURIComponent(id)}&t=${timestamp}`;
+      
+      // CRITICAL: Use same authentication approach as fetchHistory
+      const response = await fetch(url, {
         method: 'DELETE',
+        credentials: 'include', // Include cookies for auth - critical for consistency
+        cache: 'no-store', // Ensure fresh data
+        mode: 'same-origin', // Explicit same-origin policy to ensure cookies are sent
+        headers: {
+          'x-operation-id': operationId,
+          'Cache-Control': 'no-cache'
+        }
       });
       
       if (!response.ok) {
         const errorData = await response.json().catch(() => null);
         const duration = Math.round(performance.now() - startTime);
         
-        console.error(`[History:${operationId}] Failed to delete chat:`, { 
-          statusCode: response.status,
-          statusText: response.statusText,
-          errorData,
-          duration,
-          chatId: id
-        });
+        // Check for auth issues
+        if (response.status === 401 || response.status === 403) {
+          // Handle auth failure consistently with fetchHistory
+          setAuthFailureState(true);
+          console.warn(`[History:${operationId}] Authentication failed (${response.status}) when deleting chat.`, {
+            chatId: id,
+            url,
+            withTimestamp: true
+          });
+        } else {
+          console.error(`[History:${operationId}] Failed to delete chat:`, { 
+            statusCode: response.status,
+            statusText: response.statusText,
+            errorData,
+            duration,
+            chatId: id,
+            url
+          });
+        }
+        
         return false;
       }
+      
+      // Reset auth failure state on success
+      setAuthFailureState(false);
       
       const duration = Math.round(performance.now() - startTime);
       console.log(`[History:${operationId}] Successfully deleted chat`, {
         chatId: id,
-        duration
+        duration,
+        url
       });
       
       // Invalidate chat history cache immediately after successful deletion
@@ -738,8 +981,13 @@ export const historyService = {
             const response = await fetch('/api/chat/session', {
               method: 'POST',
               headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'Cache-Control': 'no-cache',
+                'x-operation-id': operationId
               },
+              credentials: 'include', // Include cookies for auth
+              cache: 'no-store', // Ensure fresh data
+              mode: 'same-origin', // Explicit same-origin policy
               body: JSON.stringify({
                 id: sessionId,
                 title: 'New Conversation', // Default title
@@ -804,8 +1052,13 @@ export const historyService = {
         const response = await fetch('/api/chat/session', {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-cache',
+            'x-operation-id': operationId
           },
+          credentials: 'include', // Include cookies for auth
+          cache: 'no-store', // Ensure fresh data
+          mode: 'same-origin', // Explicit same-origin policy
           body: JSON.stringify({
             id: sessionId,
             title: 'New Conversation', // Default title

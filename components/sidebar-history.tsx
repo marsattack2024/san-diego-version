@@ -148,6 +148,15 @@ const PureChatItem = ({
 //  className?: string;
 // }
 
+// Module-level request tracking for global deduplication
+const pendingHistoryRequests: {
+  timestamp: number;
+  promise: Promise<Chat[]> | null;
+} = {
+  timestamp: 0,
+  promise: null
+};
+
 const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   const { setOpenMobile } = useSidebar();
   const params = useParams();
@@ -224,85 +233,124 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   // Add this at the right scope level
   const getSupabase = () => createClient();
   
-  // Optimized function to fetch chat history using the service
+  // Optimized function to fetch chat history using the service with global deduplication
   const fetchChatHistory = useCallback(async (forceRefresh = false) => {
+    // Skip if already refreshing
     if (isRefreshing) return;
+    
+    const now = Date.now();
+    const timeSinceLastRequest = now - pendingHistoryRequests.timestamp;
+    
+    // If not forcing and a recent request was made, use existing data
+    if (!forceRefresh && timeSinceLastRequest < 60000 && pendingHistoryRequests.promise) {
+      console.log(`Using existing history data from ${Math.round(timeSinceLastRequest/1000)}s ago`);
+      return pendingHistoryRequests.promise;
+    }
     
     setIsRefreshing(true);
     setErrorMessage('');
     
-    try {
-      // Check if user is authenticated before fetching
-      const hasCookies = historyService.checkForAuthCookies();
-      
-      if (!hasCookies) {
-        console.warn('No auth cookies found, cannot fetch history');
-        setErrorMessage('Please log in to view your chat history');
+    // Create a single promise for all requests in this timeframe
+    pendingHistoryRequests.timestamp = now;
+    pendingHistoryRequests.promise = (async () => {
+      try {
+        // CRITICAL FIX #1: First check if auth cookies exist
+        const hasCookies = historyService.checkForAuthCookies();
+        
+        if (!hasCookies) {
+          console.warn('No auth cookies found, cannot fetch history');
+          setErrorMessage('Please log in to view your chat history');
+          setIsLoading(false);
+          return [];
+        }
+        
+        // CRITICAL FIX #2: Check if auth is fully ready before fetching
+        // This prevents 401 errors from occurring during initial page load
+        const authReady = await historyService.isAuthReady();
+        if (!authReady) {
+          console.log('Auth not ready yet, waiting before fetching history...');
+          
+          // Don't show error message during normal startup
+          if (isLoading) {
+            setErrorMessage('Preparing your history...');
+          }
+          
+          // Set up retry with exponential backoff
+          const retryDelay = Math.min(2000 + Math.random() * 1000, 8000);
+          console.log(`Will retry history fetch in ${Math.round(retryDelay/1000)}s`);
+          
+          // Schedule retry
+          setTimeout(() => {
+            // Only retry if we're still in the loading state or this was a forced refresh
+            if (isLoading || forceRefresh) {
+              console.log('Retrying history fetch after auth delay');
+              fetchChatHistory(forceRefresh);
+            }
+          }, retryDelay);
+          
+          return [];
+        }
+        
+        // Auth is ready, proceed with history fetch
+        console.log('Auth is ready, fetching history...');
+        const historyData = await historyService.fetchHistory(forceRefresh);
+        
+        // Handle empty array as a valid response (not an error)
+        if (Array.isArray(historyData)) {
+          setHistory(historyData);
+          // Only show no history message when we've confirmed array is empty and loading is done
+          setIsEmpty(historyData.length === 0);
+          setError(null);
+          setErrorMessage('');
+        }
+        
         setIsLoading(false);
+        return historyData;
+      } catch (error) {
+        console.error('Error fetching chat history:', error);
+        setErrorMessage('Failed to load chat history');
+        setError(error instanceof Error ? error : new Error('Unknown error'));
+        setIsLoading(false);
+        return [];
+      } finally {
         setIsRefreshing(false);
-        return;
       }
-      
-      const historyData = await historyService.fetchHistory(forceRefresh);
-      
-      // Handle empty array as a valid response (not an error)
-      if (Array.isArray(historyData)) {
-        setHistory(historyData);
-        // Only show no history message when we've confirmed array is empty and loading is done
-        setIsEmpty(historyData.length === 0);
-      } else {
-        console.error('History data is not an array:', historyData);
-        setErrorMessage('Unable to load chat history');
-        setIsEmpty(true);
-      }
-    } catch (error) {
-      console.error('Error fetching chat history:', error);
-      setErrorMessage(error instanceof Error ? error.message : 'Failed to load chat history');
-      // Set empty state to show appropriate UI
-      setIsEmpty(true);
-    } finally {
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
-  }, [isRefreshing]);
+    })();
+    
+    // Return the shared promise
+    return pendingHistoryRequests.promise;
+  }, [setError, setErrorMessage, setHistory, setIsEmpty, setIsLoading, setIsRefreshing, isLoading]);
   
-  // Update the initial fetch effect with a delay to allow auth to settle
-  useEffect(() => {
-    // Skip the fetch if user auth has failed
-    const isLoggedIn = !!user?.id;
-    const hasAuthFailed = historyService.isInAuthFailure();
-    
-    if (!isLoggedIn) {
-      setChatWarning('Please log in to see chat history.');
-      setIsLoading(false);
-      return;
-    }
-    
-    if (hasAuthFailed) {
-      const { remainingTime } = historyService.getAuthFailureInfo();
-      setChatWarning(`Authentication issue. Will retry in ${Math.round(remainingTime/60)}m ${Math.round(remainingTime/1000) % 60}s.`);
-      setIsLoading(false);
-      return;
-    }
-    
-    // CRITICAL FIX: Add a longer delay before initial fetch to allow auth cookies to settle
-    const timer = setTimeout(() => {
-      console.log('Initial history fetch after delay');
-      fetchChatHistory();
-    }, 2500); // 2.5 second delay
-    
-    return () => clearTimeout(timer);
-  }, [fetchChatHistory, user?.id]);
-
   // Add throttled fetch function to reduce API calls
   const throttledFetchChatHistory = useCallback(
     throttle((forceRefresh = false) => {
       if (!isRefreshing && user?.id && isPageVisible()) {
         fetchChatHistory(forceRefresh);
       }
-    }, 10000), // 10 second throttle
-    [user?.id, isRefreshing]
+    }, 30000), // 30 second throttle (increased from 10s)
+    [user?.id, isRefreshing, fetchChatHistory]
   );
+  
+  // Add proper tab visibility tracking
+  useEffect(() => {
+    const visibilityHandler = () => {
+      if (document.visibilityState === 'visible' && user?.id) {
+        console.log('Tab became visible, refreshing history once');
+        fetchChatHistory(false);
+      }
+    };
+    
+    document.addEventListener('visibilitychange', visibilityHandler);
+    return () => document.removeEventListener('visibilitychange', visibilityHandler);
+  }, [fetchChatHistory, user?.id]);
+
+  // Initial fetch on mount
+  useEffect(() => {
+    if (!user?.id) return;
+    
+    console.log('Initial history fetch on component mount');
+    fetchChatHistory(false);
+  }, [fetchChatHistory, user?.id]);
   
   // Setup polling for history updates with adaptive intervals
   useEffect(() => {
@@ -312,34 +360,49 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     // Don't set up polling if we should skip it
     if (!shouldPoll()) return;
     
-    // Determine polling interval based on device type
+    // Determine polling interval based on device type with much longer intervals
+    // IMPORTANT: Increased intervals significantly to reduce API load and improve responsiveness
     const pollingInterval = isMobile ? 
-      getMobilePollInterval() : 
-      getDesktopPollInterval();
+      15 * 60 * 1000 : // 15 minutes for mobile (increased from 10)
+      8 * 60 * 1000;   // 8 minutes for desktop (increased from 5)
     
-    // Add jitter to prevent synchronized requests
-    const jitter = Math.floor(Math.random() * 5000);
+    // Add jitter to prevent synchronized requests from multiple clients/tabs
+    // Using a larger jitter window to better distribute requests
+    const jitter = Math.floor(Math.random() * 45000); // 0-45s jitter (increased from 15s)
     const effectiveInterval = pollingInterval + jitter;
     
     console.log(`Setting up history polling: ${Math.round(effectiveInterval/1000)}s`);
     
+    // Initial delayed fetch after component mount
+    // This helps prevent all components from fetching simultaneously on page load
+    const initialDelay = Math.floor(Math.random() * 5000); // 0-5s initial delay
+    const initialFetchTimeout = setTimeout(() => {
+      if (isPageVisible() && !isRefreshing && !historyService.isInAuthFailure()) {
+        console.log('Running initial delayed history fetch');
+        throttledFetchChatHistory(false);
+      }
+    }, initialDelay);
+    
     // Set up polling interval with adaptive timing
     const intervalId = setInterval(() => {
-      // Only fetch if page is visible and not already refreshing
-      if (isPageVisible() && !isRefreshing) {
+      // Only fetch if page is visible, not already refreshing, and no auth failure
+      if (isPageVisible() && !isRefreshing && !historyService.isInAuthFailure()) {
         console.log('Running scheduled history check');
         throttledFetchChatHistory(false);
       } else {
-        console.log('Skipping history poll: ' + 
-          (!isPageVisible() ? 'page not visible' : 'already refreshing'));
+        if (Math.random() < 0.3) { // Only log 30% of skips to reduce console noise
+          console.log('Skipping history poll: ' + 
+            (!isPageVisible() ? 'page not visible' : isRefreshing ? 'already refreshing' : 'auth failure'));
+        }
       }
     }, effectiveInterval);
     
-    // Clean up interval on unmount
+    // Clean up interval and timeout on unmount
     return () => {
       clearInterval(intervalId);
+      clearTimeout(initialFetchTimeout);
     };
-  }, [throttledFetchChatHistory, isMobile, user?.id]);
+  }, [throttledFetchChatHistory, isMobile, user?.id, isRefreshing]);
   
   // Manual refresh function for the refresh button
   const refreshHistory = useCallback(async () => {

@@ -27,17 +27,34 @@ export async function apiMiddleware(request: NextRequest) {
     
     // Special handling for history endpoint which may be getting spammed
     if (pathname.startsWith('/api/history')) {
-      // Apply strict rate limits for history endpoint - 10 requests per minute
-      const historyLimiter = rateLimit(10, 60 * 1000);
+      // Get auth headers to apply different rate limits based on auth state
+      const userId = request.headers.get('x-supabase-auth');
+      const isAuthValid = request.headers.get('x-auth-valid') === 'true';
+      const isAuthenticated = userId && userId !== 'anonymous' && isAuthValid;
+      
+      // Apply different rate limits based on authentication state
+      // Authenticated users get higher limits (25/min), unauthenticated get lower (5/min)
+      const historyLimiter = rateLimit(
+        isAuthenticated ? 25 : 5,  // Requests per minute based on auth
+        60 * 1000,                 // 1 minute window
+        (req) => {
+          // Include auth state in the rate limit key to separate auth vs unauth limits
+          const baseId = req.headers.get('x-forwarded-for') || 
+                        req.headers.get('x-real-ip') || 
+                        'unknown-ip';
+          return `${baseId}|${isAuthenticated ? 'auth' : 'unauth'}`;
+        }
+      );
+      
       const historyResponse = await historyLimiter(request);
       
       if (historyResponse) {
-        const userId = request.headers.get('x-supabase-auth');
         edgeLogger.warn('History API rate limit exceeded', {
           userId: userId || 'anonymous',
           ipHash: getIpHash(request),
           path: pathname,
-          requestId
+          requestId,
+          isAuthenticated
         });
         
         // Return the rate limit response

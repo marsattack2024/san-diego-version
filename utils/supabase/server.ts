@@ -2,35 +2,32 @@ import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 import { cache } from 'react'
 
-export const createClient = cache(
-  async () => {
-    const cookieStore = await cookies()
-    
-    return createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          async getAll() {
-            return cookieStore.getAll()
-          },
-          async setAll(cookiesToSet) {
-            try {
-              for (const { name, value, options } of cookiesToSet) {
-                cookieStore.set(name, value, options)
-              }
-            } catch (error) {
-              // This will throw in middleware as headers can't be set
-              // after they've been sent to the client. We ignore this
-              // as middleware will get the cookies on the next request
-              console.warn('Warning: Could not set cookies in server action or middleware.', error)
-            }
-          },
+export async function createClient() {
+  const cookieStore = await cookies()
+
+  return createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() {
+          return cookieStore.getAll()
         },
-      }
-    )
-  }
-)
+        setAll(cookiesToSet) {
+          try {
+            cookiesToSet.forEach(({ name, value, options }) =>
+              cookieStore.set(name, value, options)
+            )
+          } catch {
+            // The `setAll` method was called from a Server Component.
+            // This can be ignored if you have middleware refreshing
+            // user sessions.
+          }
+        },
+      },
+    }
+  )
+}
 
 // Admin client for bypassing RLS (server-side only)
 export const createAdminClient = () => {

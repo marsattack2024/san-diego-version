@@ -32,6 +32,7 @@ export const config = {
     '/((?!_next/static|_next/image|favicon.ico|auth/|public/|api/public|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
     // Explicitly include API routes that need auth
     '/api/chat/:path*',
+    '/api/history/:path*',
     // Explicitly excluding Perplexity API from auth middleware
     // '/api/perplexity/:path*',
   ],
