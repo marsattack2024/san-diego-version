@@ -14,149 +14,6 @@ import { useChatStore } from '@/stores/chat-store';
 import { TooltipProvider } from './ui/tooltip';
 import { historyService } from '@/lib/api/history-service';
 
-const MessagesDebug = ({ 
-  messages, 
-  messageIdMap, 
-  debugInfo 
-}: { 
-  messages: any[], 
-  messageIdMap: Record<string, string>,
-  debugInfo?: any
-}) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const [expandedMessages, setExpandedMessages] = useState<Record<string, boolean>>({});
-  
-  // Function to toggle expansion of specific message
-  const toggleMessage = (msgId: string) => {
-    setExpandedMessages(prev => ({
-      ...prev,
-      [msgId]: !prev[msgId]
-    }));
-  };
-  
-  // Log debug data
-  const logDebugData = () => {
-    console.log('Message debug data:', {
-      messages: messages.map(msg => ({
-        id: msg.id,
-        role: msg.role,
-        contentLength: msg.content.length,
-        hasMapping: !!messageIdMap[msg.id],
-        dbId: messageIdMap[msg.id]
-      })),
-      messageIdMap,
-      debugInfo
-    });
-  };
-  
-  // Function to download debug data as JSON
-  const downloadDebugData = () => {
-    const debugData = {
-      timestamp: new Date().toISOString(),
-      messages: messages.map(m => ({
-        id: m.id,
-        role: m.role,
-        contentLength: m.content.length,
-        content: m.content.substring(0, 500) + (m.content.length > 500 ? '...' : ''),
-        hasDatabaseId: !!messageIdMap[m.id],
-        databaseId: messageIdMap[m.id]
-      })),
-      messageIdMap,
-      debugInfo
-    };
-    
-    const dataStr = JSON.stringify(debugData, null, 2);
-    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
-    
-    const linkElement = document.createElement('a');
-    linkElement.setAttribute('href', dataUri);
-    linkElement.setAttribute('download', `chat-debug-${Date.now()}.json`);
-    document.body.appendChild(linkElement);
-    linkElement.click();
-    document.body.removeChild(linkElement);
-  };
-  
-  // Message status component
-  const MessageStatus = ({ messageId }: { messageId: string }) => {
-    // Find if this message has a database ID mapping
-    const savedId = messageIdMap[messageId];
-    
-    return (
-      <div className="flex items-center gap-1">
-        <span className={`w-2 h-2 rounded-full ${savedId ? 'bg-green-500' : 'bg-yellow-500'}`}></span>
-        <span>{savedId ? 'Saved' : 'Pending'}</span>
-        {savedId && <span className="text-xs text-gray-500">{savedId.substring(0, 8)}...</span>}
-      </div>
-    );
-  };
-  
-  return (
-    <div className="text-xs border-t border-gray-200 pt-4 pb-2">
-      <div className="flex justify-between items-center">
-        <button 
-          onClick={() => setIsOpen(!isOpen)} 
-          className="text-gray-500 hover:text-gray-700 underline"
-        >
-          {isOpen ? 'Hide Debug Info' : 'Show Debug Info'}
-        </button>
-        
-        <div className="flex gap-2">
-          <button 
-            onClick={logDebugData} 
-            className="px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-gray-700"
-          >
-            Log Debug Data
-          </button>
-          <button 
-            onClick={downloadDebugData} 
-            className="px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded text-gray-700"
-          >
-            Download Debug Data
-          </button>
-        </div>
-      </div>
-      
-      {isOpen && (
-        <div className="mt-2 border rounded p-2">
-          <h4 className="font-semibold mb-2">Message Status</h4>
-          <div className="max-h-40 overflow-auto space-y-1">
-            {messages.map(msg => (
-              <div key={msg.id} className="flex justify-between border-b pb-1">
-                <div>
-                  <span>{msg.role}</span>
-                  <span className="ml-2 font-mono text-xs">{msg.id.substring(0, 8)}...</span>
-                </div>
-                <MessageStatus messageId={msg.id} />
-              </div>
-            ))}
-          </div>
-          
-          {debugInfo?.lastError && (
-            <div className="mt-2 text-red-500">
-              <div className="font-semibold">Last Error:</div>
-              <div className="whitespace-pre-wrap">{debugInfo.lastError}</div>
-            </div>
-          )}
-          
-          {debugInfo?.lastUserMessageId && (
-            <div className="mt-2">
-              <span className="font-semibold">Last User Message ID:</span>
-              <span className="ml-1 font-mono">{debugInfo.lastUserMessageId}</span>
-            </div>
-          )}
-          
-          {debugInfo?.lastAssistantMessageId && (
-            <div>
-              <span className="font-semibold">Last Assistant Message ID:</span>
-              <span className="ml-1 font-mono">{debugInfo.lastAssistantMessageId}</span>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
-
 export function Chat({
   id,
   initialMessages,
@@ -184,26 +41,6 @@ export function Chat({
   // Add state for attachments
   const [attachments, setAttachments] = useState<Array<Attachment>>([]);
   
-  // Add debug state to track message recording
-  const [debugInfo, setDebugInfo] = useState<{
-    lastUserMessageId: string | null,
-    lastAssistantMessageId: string | null,
-    lastError: string | null
-  }>({
-    lastUserMessageId: null,
-    lastAssistantMessageId: null,
-    lastError: null
-  });
-  
-  useEffect(() => {
-    // Log debug info to console when it changes
-    if (debugInfo.lastError) {
-      console.error('Chat debug info:', debugInfo);
-    } else if (debugInfo.lastUserMessageId || debugInfo.lastAssistantMessageId) {
-      console.log('Chat debug info:', debugInfo);
-    }
-  }, [debugInfo]);
-
   const {
     messages,
     setMessages,
@@ -289,12 +126,6 @@ export function Chat({
             [message.id]: savedMessageId
           }));
           
-          setDebugInfo(prev => ({
-            ...prev,
-            lastAssistantMessageId: savedMessageId,
-            lastError: null
-          }));
-          
           console.log('Successfully saved assistant message:', { 
             messageId: savedMessageId, 
             responseMessageId: message.id
@@ -303,24 +134,12 @@ export function Chat({
           // Get detailed error information from the response
           response.json().then(data => {
             console.error('Failed to save assistant message:', data);
-            setDebugInfo(prev => ({
-              ...prev,
-              lastError: `Failed to save assistant message: ${JSON.stringify(data)}`
-            }));
           }).catch(err => {
             console.error('Failed to save assistant message, could not parse error:', err);
-            setDebugInfo(prev => ({
-              ...prev,
-              lastError: `Failed to parse error: ${err.message || 'Unknown error'}`
-            }));
           });
         }
       } catch (error) {
         console.error('Error saving assistant message:', error);
-        setDebugInfo(prev => ({
-          ...prev,
-          lastError: `Error saving assistant message: ${(error as Error).message || 'Unknown error'}`
-        }));
       }
       
       // Update chat history
@@ -528,10 +347,6 @@ export function Chat({
       // Check if we eventually succeeded
       if (!messageResponse) {
         console.error('Failed to save user message: Network error');
-        setDebugInfo(prev => ({
-          ...prev,
-          lastError: `Failed to save user message: Network error`
-        }));
         toast.error('Failed to save your message. Please try again.');
         return;
       }
@@ -563,11 +378,6 @@ export function Chat({
           responseText
         });
         
-        setDebugInfo(prev => ({
-          ...prev,
-          lastError: `Failed to save user message: Status ${messageResponse.status}, Response: ${responseText}`
-        }));
-        
         toast.error('Failed to save your message. Please try again.');
         return;
       }
@@ -581,13 +391,6 @@ export function Chat({
       
       // Store the message ID for the next user message that will be appended to state
       const actualMessageId = messageData?.messageId || messageId;
-      
-      // Update debug state with latest info
-      setDebugInfo(prev => ({
-        ...prev,
-        lastUserMessageId: actualMessageId,
-        lastError: null
-      }));
       
       // Try to find if the message is already in state (optimistic update)
       const userMessage = messages.find(m => m.role === 'user' && m.content === input);
@@ -640,41 +443,41 @@ export function Chat({
             ? `${input.substring(0, 30)}...` 
             : input;
             
-          console.log(`Updating chat title to: "${title}"`);
+            console.log(`Updating chat title to: "${title}"`);
             
-          // Update the chat title
-          const titleResponse = await fetch(`/api/chat/${id}`, {
-            method: 'PATCH',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ title }),
-          });
+            // Update the chat title
+            const titleResponse = await fetch(`/api/chat/${id}`, {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ title }),
+            });
             
-          // Get the full response text for debugging
-          const titleResponseText = await titleResponse.text();
-          console.log('Title update raw response:', titleResponseText);
+            // Get the full response text for debugging
+            const titleResponseText = await titleResponse.text();
+            console.log('Title update raw response:', titleResponseText);
             
-          // Parse the response text as JSON
-          let titleData;
-          try {
-            titleData = JSON.parse(titleResponseText);
-            console.log('Parsed title response:', titleData);
-          } catch (parseError) {
-            console.error('Failed to parse title response as JSON:', parseError);
-          }
+            // Parse the response text as JSON
+            let titleData;
+            try {
+              titleData = JSON.parse(titleResponseText);
+              console.log('Parsed title response:', titleData);
+            } catch (parseError) {
+              console.error('Failed to parse title response as JSON:', parseError);
+            }
             
-          if (!titleResponse.ok) {
-            throw new Error(`Failed to update title: ${titleResponse.status} - ${titleResponseText}`);
-          }
+            if (!titleResponse.ok) {
+              throw new Error(`Failed to update title: ${titleResponse.status} - ${titleResponseText}`);
+            }
             
-          console.log('Successfully updated chat title');
-          
-          // Update local state as well
-          updateConversationMetadata(id, { title });
+            console.log('Successfully updated chat title');
             
-          // Force refresh the chat history to show updated title
-          historyService.invalidateCache();
+            // Update local state as well
+            updateConversationMetadata(id, { title });
+            
+            // Force refresh the chat history to show updated title
+            historyService.invalidateCache();
         } catch (titleError) {
           console.error('Error updating chat title:', titleError);
           // Still invalidate the cache to refresh the history
@@ -688,10 +491,6 @@ export function Chat({
       return handleSubmit(event, chatRequestOptions);
     } catch (error) {
       console.error('Error in handleSubmitWithSave:', error);
-      setDebugInfo(prev => ({
-        ...prev,
-        lastError: `Error in handleSubmitWithSave: ${(error as Error).message}`
-      }));
       toast.error('An error occurred. Please try again.');
     }
   };
@@ -723,13 +522,13 @@ export function Chat({
   return (
     <TooltipProvider>
       <>
-        <div className="flex flex-col min-w-0 h-dvh bg-background">
+        <div className="flex flex-col h-dvh bg-background">
           <ChatHeader
             chatId={id}
             isReadonly={isReadonly}
           />
 
-          <div className="overflow-hidden pb-[120px] pt-4 md:pb-[140px]">
+          <div className="flex-1 overflow-hidden relative">
             <Messages 
               chatId={id}
               isLoading={isLoading}
@@ -742,17 +541,7 @@ export function Chat({
             />
           </div>
 
-          {process.env.NODE_ENV === 'development' && (
-            <div className="px-4 max-w-3xl mx-auto w-full">
-              <MessagesDebug 
-                messages={messages} 
-                messageIdMap={messageIdMap}
-                debugInfo={debugInfo} 
-              />
-            </div>
-          )}
-
-          <div className="fixed inset-x-0 bottom-0 w-full bg-gradient-to-t from-muted/30 from-0% to-transparent to-60% duration-300 ease-in-out animate-in dark:from-background/30 md:px-8 lg:px-0">
+          <div className="sticky inset-x-0 bottom-0 z-10 w-full bg-gradient-to-t from-background from-0% to-transparent to-60% duration-300 ease-in-out animate-in dark:from-background/90 md:px-8 lg:px-0">
             <form
               onSubmit={handleSubmitWithSave}
               className="mx-auto flex max-w-3xl flex-col gap-3 rounded-t-2xl bg-background py-2 sm:pb-4 sm:pt-2"
