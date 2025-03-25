@@ -19,7 +19,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { 
   AlertCircle, 
-  RefreshCcw, 
   Loader2, 
   MessageSquare,
   PlusCircle
@@ -619,7 +618,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
       <SidebarGroup className="flex-shrink-0">
         <SidebarGroupLabel>
           <div className="flex items-center justify-between">
-            <span>Chat History</span>
+            <div className="flex-1"></div>
             <div className="flex items-center gap-1">
               {error || chatWarning ? (
                 <Tooltip>
@@ -635,25 +634,6 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
                   </TooltipContent>
                 </Tooltip>
               ) : null}
-              
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 rounded-md hover:bg-muted"
-                onClick={() => {
-                  setError(null);
-                  setIsRefreshing(true);
-                  setIsLoading(true);
-                  fetchChatHistory(true);
-                }}
-                title="Refresh history"
-                disabled={isRefreshing}
-              >
-                <RefreshCcw
-                  className={cn("h-4 w-4", isRefreshing && "animate-spin")}
-                />
-                <span className="sr-only">Refresh</span>
-              </Button>
             </div>
           </div>
         </SidebarGroupLabel>
