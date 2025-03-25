@@ -2,7 +2,7 @@
 
 import type { Attachment, Message } from 'ai';
 import { useChat } from '@ai-sdk/react';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
 import { ChatHeader } from '@/components/chat-header';
 import type { Vote } from '@/lib/db/schema';
@@ -27,6 +27,48 @@ export function Chat({
   const deepSearchEnabled = useChatStore(state => state.getDeepSearchEnabled());
   const selectedAgentId = useChatStore(state => state.selectedAgentId);
   const updateConversationMetadata = useChatStore(state => state.updateConversationMetadata);
+
+  // Add ref for scroll container
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const inputContainerRef = useRef<HTMLDivElement>(null);
+
+  // Ensure proper scroll position on page load
+  useEffect(() => {
+    // Function to scroll to bottom with retry
+    const scrollToBottom = () => {
+      if (chatContainerRef.current) {
+        // Force scroll all the way to the bottom
+        chatContainerRef.current.scrollTo({
+          top: chatContainerRef.current.scrollHeight,
+          behavior: 'auto'
+        });
+        
+        // Try to ensure input is visible
+        const inputForm = document.querySelector('form');
+        if (inputForm) {
+          inputForm.scrollIntoView({ behavior: 'auto', block: 'end' });
+        }
+      }
+    };
+    
+    // Try multiple times with increasing delay to ensure scroll works
+    scrollToBottom();
+    setTimeout(scrollToBottom, 50);
+    setTimeout(scrollToBottom, 200);
+    setTimeout(scrollToBottom, 500);
+    
+    // Also handle window load event
+    const handlePageLoad = () => {
+      scrollToBottom();
+      setTimeout(scrollToBottom, 100);
+    };
+    
+    window.addEventListener('load', handlePageLoad);
+    
+    return () => {
+      window.removeEventListener('load', handlePageLoad);
+    };
+  }, []);
 
   // Update conversation metadata when agent changes
   useEffect(() => {
@@ -546,6 +588,24 @@ export function Chat({
       }));
   }, [messages, id]);
 
+  // More reliable scroll handling with useLayoutEffect
+  useLayoutEffect(() => {
+    const ensureProperScroll = () => {
+      if (!chatContainerRef.current || !inputContainerRef.current) return;
+      
+      // Force scroll to bottom
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    };
+
+    // Initial scroll
+    ensureProperScroll();
+    
+    // And after a short delay to catch any post-render changes
+    const timeoutId = setTimeout(ensureProperScroll, 100);
+    
+    return () => clearTimeout(timeoutId);
+  }, [messages.length]); // Depend on message count
+
   // Display the messages with the correct layout
   return (
     <TooltipProvider delayDuration={0}>
@@ -558,7 +618,7 @@ export function Chat({
             isLoading={isLoading}
           />
         )}
-        <div className="flex-1 overflow-y-auto pb-96">
+        <div ref={chatContainerRef} className="flex-1 overflow-y-auto pb-1">
           <Messages
             chatId={id}
             isLoading={isLoading}
@@ -570,10 +630,13 @@ export function Chat({
             isArtifactVisible={!!attachments.length}
           />
         </div>
-        <div className="sticky inset-x-0 bottom-0 z-10 w-full bg-gradient-to-t from-background from-0% to-transparent to-60% duration-300 ease-in-out animate-in dark:from-background/90 md:px-8 lg:px-0">
+        <div 
+          ref={inputContainerRef}
+          className="sticky inset-x-0 bottom-0 z-10 w-full bg-gradient-to-t from-background via-background to-transparent pb-3 pt-1 md:pb-4"
+        >
           <form
             onSubmit={handleSubmitWithSave}
-            className="mx-auto flex max-w-3xl flex-col gap-3 rounded-t-2xl bg-background py-2 sm:pb-4 sm:pt-2"
+            className="mx-auto flex max-w-3xl flex-col gap-2 bg-background pt-0 pb-4 px-2 md:px-0"
           >
             {!isReadonly && (
               <MultimodalInput

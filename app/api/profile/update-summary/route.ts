@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createServerClient } from '@/lib/supabase/server';
+import { createClient } from '@/utils/supabase/server';
 import { logger } from '@/lib/logger';
 import { generateWebsiteSummary } from '@/lib/agents/tools/website-summarizer';
 
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
     });
     
     // Get authenticated Supabase client
-    const supabase = await createServerClient();
+    const supabase = await createClient();
     
     // Verify user exists
     const { data: user, error: userError } = await supabase
@@ -114,7 +114,7 @@ export async function POST(request: Request) {
         });
         
         // Get a fresh Supabase client for the update
-        const updateSupabase = await createServerClient();
+        const updateSupabase = await createClient();
         
         // Update the profile with the generated summary
         const { error } = await updateSupabase

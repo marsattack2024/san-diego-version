@@ -46,6 +46,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { createClient } from '@/utils/supabase/client';
 
 // Consistent type definition for grouped chats
 type GroupedChats = {
@@ -155,6 +156,48 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   // State for showing all older chats
   const [showAllOlder, setShowAllOlder] = useState(false);
+  // Mobile detection
+  const [isMobile, setIsMobile] = useState(false);
+  
+  // Helper functions for polling
+  const detectMobile = () => {
+    return typeof window !== 'undefined' && window.innerWidth < 768;
+  };
+  
+  const getMobilePollInterval = () => 5 * 60 * 1000; // 5 minutes for mobile
+  const getDesktopPollInterval = () => 2 * 60 * 1000; // 2 minutes for desktop
+  
+  // Should polling be enabled
+  const shouldPoll = () => {
+    // Skip polling on low-powered devices or if auth failure
+    return !isMobile || !historyService.isInAuthFailure();
+  };
+  
+  // Check if page is visible
+  const isPageVisible = () => {
+    return typeof document !== 'undefined' && 
+           document.visibilityState === 'visible';
+  };
+  
+  // Update mobile state on resize
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(detectMobile());
+    };
+    
+    if (typeof window !== 'undefined') {
+      // Set initial value
+      setIsMobile(detectMobile());
+      
+      // Add listener
+      window.addEventListener('resize', handleResize);
+      
+      // Cleanup
+      return () => {
+        window.removeEventListener('resize', handleResize);
+      };
+    }
+  }, []);
   
   // Log render cycle for debugging - FIXED to avoid infinite loop
   useEffect(() => {
@@ -167,135 +210,148 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     // Completely removed the renderCount increment to avoid the infinite loop
   }, [history.length, isLoading, isRefreshing, user?.id]);
   
+  // Add this at the right scope level
+  const getSupabase = () => createClient();
+  
   // Optimized function to fetch chat history using the service
-  const fetchChatHistory = useCallback(async (forceRefresh = false, isManual = false) => {
-    // Prevent duplicate requests while another fetch is in progress
-    if ((isLoading && !forceRefresh) || isRefreshing) {
-      console.log('Skipping fetch: already loading or refreshing');
-      return;
-    }
+  const fetchChatHistory = useCallback(async (force = false): Promise<void> => {
+    if (isLoading && !force) return; // Don't load if already loading unless forced
     
     try {
-      // Set appropriate loading state
-      if (history.length === 0) {
-        setIsLoading(true);
-      } else if (forceRefresh) {
-        setIsRefreshing(true);
-      }
-      
+      setIsLoading(true);
       setError(null);
       
-      // Let the historyService handle caching and optimizations
-      const data = await historyService.fetchHistory(forceRefresh);
+      // Check auth status first
+      const supabase = getSupabase();
+      const { data: { user: authUser } } = await supabase.auth.getUser();
       
-      // Only update state if the data has actually changed
-      const currentIds = history.map(chat => chat.id).sort().join(',');
-      const newIds = data.map(chat => chat.id).sort().join(',');
+      if (!authUser) {
+        console.log('Not authenticated when fetching history');
+        setChatWarning("Please sign in to view your chat history");
+        setHistory([]);
+        setIsLoading(false);
+        return;
+      }
       
-      if (currentIds !== newIds || history.length !== data.length) {
-        console.log('History data changed, updating state');
+      // Add cache-busting timestamp for forced refreshes
+      const params = force ? `?t=${Date.now()}` : '';
+      const response = await fetch(`/api/history${params}`, {
+        method: 'GET',
+        headers: {
+          'Cache-Control': force ? 'no-cache' : 'default',
+        },
+        credentials: 'same-origin', // Important for cookies
+      });
+      
+      if (response.status === 401) {
+        // Authentication error - user not logged in or token expired
+        console.log('401 unauthorized when fetching history');
+        setChatWarning("Please sign in to view your chat history");
+        setHistory([]);
+        setIsLoading(false);
+        
+        // Try to refresh the session
+        await supabase.auth.refreshSession();
+        return;
+      }
+      
+      if (!response.ok) {
+        throw new Error(`Failed to fetch history: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      
+      // Data is now directly an array of formatted chat objects
+      if (Array.isArray(data)) {
         setHistory(data);
+        setLastRefresh(Date.now());
+        // Clear any warnings if successful
+        setChatWarning(null);
       } else {
-        console.log('History data unchanged, skipping update');
-      }
-      
-      // Clear any existing warning after successful fetch
-      setChatWarning(null);
-      
-      // Update lastRefresh timestamp
-      setLastRefresh(Date.now());
-      
-      // Show success toast ONLY for manual refreshes
-      if (isManual) {
-        toast.success('Chat history refreshed', {
-          duration: 2000,
-          position: 'bottom-right'
+        // No sessions found or invalid format
+        console.warn('Invalid history data format received', { 
+          dataType: typeof data,
+          hasData: !!data
         });
+        setChatWarning("No conversations found. Start a new chat to begin.");
+        setHistory([]);
       }
-    } catch (error) {
-      console.error('Error fetching history:', error);
-      setError(error as Error);
+    } catch (err) {
+      console.error('Error fetching chat history:', err);
+      setError(err instanceof Error ? err : new Error('Failed to load chat history'));
+      
+      // Implement exponential backoff
+      setIsRefreshing(true);
     } finally {
       setIsLoading(false);
-      setIsRefreshing(false);
     }
-  }, [history, isLoading, isRefreshing]);
+  }, [isLoading, setIsRefreshing]);
   
-  // Initial fetch when component mounts or user changes
+  // Update the initial fetch effect with a delay to allow auth to settle
   useEffect(() => {
-    // Don't fetch if user isn't logged in
-    if (!user) {
-      setHistory([]);
+    // Skip the fetch if user auth has failed
+    const isLoggedIn = !!user?.id;
+    const hasAuthFailed = historyService.isInAuthFailure();
+    
+    if (!isLoggedIn) {
+      setChatWarning('Please log in to see chat history.');
+      setIsLoading(false);
       return;
     }
     
-    // Log initial load attempt
-    console.log('Initial SidebarHistory mount with user - attempting history fetch');
-    
-    // Always force refresh on initial component mount to ensure data is fresh
-    fetchChatHistory(true, false); // Force refresh but not manual
-    
-    // Cleanup
-    return () => {
-      console.log('SidebarHistory unmounted');
-    };
-  }, [user, fetchChatHistory]); // Only depend on user - this effect should run only once when user is available
-
-  // Update history-service.ts polling mechanism
-  useEffect(() => {
-    if (!user) return;
-    
-    // Detect if we're on mobile using a responsive approach
-    const detectMobile = () => {
-      return typeof window !== 'undefined' && window.innerWidth < 768;
-    };
-    
-    // Use different polling intervals for mobile vs desktop
-    const getMobilePollInterval = () => 5 * 60 * 1000; // 5 minutes for mobile
-    const getDesktopPollInterval = () => 2 * 60 * 1000; // 2 minutes for desktop
-    
-    // Determine initial poll interval
-    const initialPollInterval = detectMobile() ? getMobilePollInterval() : getDesktopPollInterval();
-    let pollInterval = initialPollInterval;
-    
-    console.log(`Setting up history polling with ${pollInterval/1000}s interval (${detectMobile() ? 'mobile' : 'desktop'})`);
-    
-    // Set up polling to refresh data periodically
-    const interval = setInterval(() => {
-      if (!isRefreshing && !isLoading) {
-        console.log('Auto-refreshing chat history (background)');
-        fetchChatHistory(true, false); // Force refresh but not manual
-      }
-    }, pollInterval);
-    
-    // Update interval if window size changes (responsive)
-    const handleResize = () => {
-      const newPollInterval = detectMobile() ? getMobilePollInterval() : getDesktopPollInterval();
-      
-      // Only update if it changed
-      if (newPollInterval !== pollInterval) {
-        pollInterval = newPollInterval;
-        console.log(`Updating history polling interval to ${pollInterval/1000}s (${detectMobile() ? 'mobile' : 'desktop'})`);
-      }
-    };
-    
-    // Listen for resize events
-    if (typeof window !== 'undefined') {
-      window.addEventListener('resize', handleResize);
+    if (hasAuthFailed) {
+      const { remainingTime } = historyService.getAuthFailureInfo();
+      setChatWarning(`Authentication issue. Will retry in ${Math.round(remainingTime/60)}m ${Math.round(remainingTime/1000) % 60}s.`);
+      setIsLoading(false);
+      return;
     }
     
-    return () => {
-      clearInterval(interval);
-      if (typeof window !== 'undefined') {
-        window.removeEventListener('resize', handleResize);
+    // CRITICAL FIX: Add a longer delay before initial fetch to allow auth cookies to settle
+    const timer = setTimeout(() => {
+      console.log('Initial history fetch after delay');
+      fetchChatHistory();
+    }, 2500); // 2.5 second delay
+    
+    return () => clearTimeout(timer);
+  }, [fetchChatHistory, user?.id]);
+
+  // Update polling logic to avoid spamming when auth fails
+  useEffect(() => {
+    // Don't poll if:
+    // 1. No user is logged in
+    // 2. Auth is in failure state
+    // 3. We're in a mobile environment (to save battery)
+    const isLoggedIn = !!user?.id;
+    const hasAuthFailed = historyService.isInAuthFailure();
+    
+    if (!isLoggedIn || hasAuthFailed || !shouldPoll()) {
+      // Skip polling in these cases
+      if (hasAuthFailed && Math.random() < 0.1) {
+        // Log skipped polls at low frequency
+        console.log('Skipping history poll due to auth failure');
       }
-    };
-  }, [user, fetchChatHistory, isRefreshing, isLoading]);
+      return;
+    }
+    
+    // Set appropriate poll interval based on device
+    const pollInterval = isMobile ? getMobilePollInterval() : getDesktopPollInterval();
+    
+    const intervalId = setInterval(() => {
+      // Only poll if page is visible and no auth failure
+      if (isPageVisible() && !historyService.isInAuthFailure()) {
+        // Add random jitter to avoid synchronized API calls
+        const jitter = Math.random() * 2000; // 0-2 seconds of jitter
+        setTimeout(() => fetchChatHistory(), jitter);
+      }
+    }, pollInterval);
+
+    return () => clearInterval(intervalId);
+  }, [fetchChatHistory, isMobile, user?.id]);
   
   // Manual refresh function for the refresh button
   const refreshHistory = useCallback(async () => {
     console.log('Manually refreshing chat history (button click)');
-    await fetchChatHistory(true, true); // Force refresh AND manual (show toast)
+    await fetchChatHistory(true); // Force refresh AND manual (show toast)
   }, [fetchChatHistory]);
   
   // Handle navigation back to main chat page
@@ -308,7 +364,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
       // Only refresh if we haven't updated in the last minute
       if (!lastUpdateTime || now - parseInt(lastUpdateTime) > 60000) {
         console.log('Refreshing history after returning to chat main page');
-        fetchChatHistory(true, false);
+        fetchChatHistory(true);
         localStorage.setItem('lastHistoryUpdate', now.toString());
       }
     }
@@ -317,9 +373,15 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   // Add auto-retry when errors occur
   useEffect(() => {
     if (error) {
+      // Don't retry if we're in auth failure state
+      if (historyService.isInAuthFailure()) {
+        console.log('Skipping auto-retry due to auth failure state');
+        return;
+      }
+      
       const timer = setTimeout(() => {
         console.log('Auto-retrying after error');
-        fetchChatHistory(true, false);
+        fetchChatHistory(true);
       }, 5000);
       
       return () => clearTimeout(timer);
@@ -586,10 +648,45 @@ export const ChatItem = React.memo(PureChatItem, (prevProps, nextProps) => {
   );
 });
 
-// Export the component with memoization
-export const SidebarHistory = React.memo(PureSidebarHistory, (prevProps, nextProps) => {
+// Add component display name for easier debugging
+ChatItem.displayName = 'ChatItem';
+
+// Create a module variable to track component instance for debugging
+let instanceCounter = 0;
+
+// Create the memoized component
+const MemoizedSidebarHistory = React.memo(PureSidebarHistory, (prevProps, nextProps) => {
   // Only re-render if the user ID changes
   return prevProps.user?.id === nextProps.user?.id;
 });
 
+// Add component display name for easier debugging
+MemoizedSidebarHistory.displayName = 'SidebarHistory';
+
+// Wrap the component to track instances and prevent double-mounting issues
+export const SidebarHistory: React.FC<{ user: User | undefined }> = (props) => {
+  // Create a unique instance ID for debugging
+  const instanceId = React.useRef(++instanceCounter).current;
+  
+  // Track component mounting/unmounting
+  React.useEffect(() => {
+    console.log(`SidebarHistory instance ${instanceId} mounted`);
+    
+    // Immediately check for auth failure to prevent initial request spam
+    if (historyService.isInAuthFailure()) {
+      const failureInfo = historyService.getAuthFailureInfo();
+      console.log(`SidebarHistory instance ${instanceId} started in auth failure state`, {
+        remainingSecs: Math.round(failureInfo.remainingTime / 1000)
+      });
+    }
+    
+    return () => {
+      console.log(`SidebarHistory instance ${instanceId} unmounted`);
+    };
+  }, [instanceId]);
+  
+  return <MemoizedSidebarHistory {...props} />;
+};
+
+// Default export uses the wrapped component
 export default SidebarHistory;

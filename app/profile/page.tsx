@@ -1,12 +1,12 @@
 import { redirect } from 'next/navigation';
 import ProfileForm from '@/components/profile-form';
-import { createServerClient } from '@/lib/supabase/server';
+import { createClient } from '@/utils/supabase/server';
 
 export const dynamic = 'force-dynamic';
 
 export default async function ProfilePage() {
   // Get server-side Supabase client
-  const supabase = await createServerClient();
+  const supabase = await createClient();
   
   // Get authenticated user
   const { data: { user } } = await supabase.auth.getUser();

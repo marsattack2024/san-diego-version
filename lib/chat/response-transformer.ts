@@ -1,4 +1,4 @@
-import { createServerClient } from '@/lib/supabase/server';
+import { createClient } from '@/utils/supabase/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 
 /**

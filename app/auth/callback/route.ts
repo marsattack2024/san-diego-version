@@ -1,6 +1,5 @@
-import { createServerClient } from '@/lib/supabase/server';
+import { createClient } from '@/utils/supabase/server';
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 
 export async function GET(request: Request) {
@@ -9,8 +8,7 @@ export async function GET(request: Request) {
   const next = searchParams.get('next') || '/chat';
 
   if (code) {
-    const cookieStore = cookies();
-    const supabase = await createServerClient();
+    const supabase = await createClient();
     
     // Exchange the code for a session
     const { error } = await supabase.auth.exchangeCodeForSession(code);
@@ -53,4 +51,4 @@ export async function GET(request: Request) {
 
   // If there's no code or an error occurred, redirect to the login page
   return NextResponse.redirect(`${origin}/login`);
-} 
+}

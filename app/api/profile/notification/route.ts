@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createServerClient } from '@/lib/supabase/server';
+import { createClient } from '@/utils/supabase/server';
 import { logger } from '@/lib/logger';
 
 /**
@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     });
     
     // Get authenticated Supabase client
-    const supabase = await createServerClient();
+    const supabase = await createClient();
     
     // For future implementation: Store notifications in database here
     

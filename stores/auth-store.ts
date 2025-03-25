@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { createBrowserClient } from '@/lib/supabase/client';
+import { createClient } from '@/utils/supabase/client';
 
 interface User {
   id: string;
@@ -60,7 +60,7 @@ export const useAuthStore = create<AuthState>()(
       
       login: async (email, password) => {
         try {
-          const supabase = createBrowserClient();
+          const supabase = createClient();
           const { data, error } = await supabase.auth.signInWithPassword({
             email,
             password,
@@ -95,7 +95,7 @@ export const useAuthStore = create<AuthState>()(
       
       logout: async () => {
         try {
-          const supabase = createBrowserClient();
+          const supabase = createClient();
           await supabase.auth.signOut();
           set({ 
             user: null, 
@@ -134,7 +134,7 @@ export const useAuthStore = create<AuthState>()(
         }
         
         try {
-          const supabase = createBrowserClient();
+          const supabase = createClient();
           const { data, error } = await supabase.auth.getUser();
           
           if (error) {
@@ -188,7 +188,7 @@ export const useAuthStore = create<AuthState>()(
         }
         
         try {
-          const supabase = createBrowserClient();
+          const supabase = createClient();
           const { data, error } = await supabase
             .from('sd_user_profiles')
             .select('*')
@@ -234,7 +234,7 @@ export const useAuthStore = create<AuthState>()(
         }
         
         try {
-          const supabase = createBrowserClient();
+          const supabase = createClient();
           
           // First check if the profile has is_admin flag
           if (state.profile?.is_admin) {
@@ -300,7 +300,7 @@ export const useAuthStore = create<AuthState>()(
           }
           
           // If not in metadata, check database
-          const supabase = createBrowserClient();
+          const supabase = createClient();
           
           // First try the more efficient RPC function
           try {

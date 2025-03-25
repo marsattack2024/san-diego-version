@@ -1,4 +1,4 @@
-import { createServerClient } from '@/lib/supabase/server';
+import { createClient } from '@/utils/supabase/server';
 import { UserProfile } from './schema';
 
 /**
@@ -18,7 +18,7 @@ export async function getSuggestionsByDocumentId({ documentId }: { documentId: s
  * @returns The user profile or null if not found
  */
 export async function getUserProfile(userId: string): Promise<UserProfile | null> {
-  const supabase = await createServerClient();
+  const supabase = await createClient();
   
   const { data, error } = await supabase
     .from('sd_user_profiles')
@@ -40,7 +40,7 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
  * @returns The updated user profile or null on error
  */
 export async function upsertUserProfile(profile: Partial<UserProfile> & { user_id: string }): Promise<UserProfile | null> {
-  const supabase = await createServerClient();
+  const supabase = await createClient();
   
   const { data, error } = await supabase
     .from('sd_user_profiles')

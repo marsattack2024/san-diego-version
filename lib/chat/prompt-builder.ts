@@ -1,6 +1,6 @@
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { ToolResults, enhancePromptWithToolResults } from '@/lib/agents/prompts';
-import { createServerClient } from '@/lib/supabase/server';
+import { createClient } from '@/utils/supabase/server';
 import { Message } from 'ai';
 
 /**
@@ -239,7 +239,7 @@ export async function buildEnhancedSystemPrompt(
   // 4. Add user profile information - personalization layer
   if (userId) {
     try {
-      const supabase = await createServerClient();
+      const supabase = await createClient();
       
       // Fetch user profile
       const { data: userProfile, error: profileError } = await supabase
@@ -305,7 +305,14 @@ export async function buildEnhancedSystemPrompt(
           if (!sessionGroups[msg.session_id]) {
             sessionGroups[msg.session_id] = [];
           }
-          sessionGroups[msg.session_id].push(msg);
+          
+          // Ensure tools_used is always present before adding to session groups
+          const msgWithTools = {
+            ...msg,
+            tools_used: msg.tools_used || null // Ensure tools_used is always present
+          };
+          
+          sessionGroups[msg.session_id].push(msgWithTools);
         });
         
         // Take only the most recent session for context

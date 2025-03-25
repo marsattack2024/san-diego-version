@@ -1,5 +1,5 @@
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { createServerClient } from '@/lib/supabase/server';
+import { createClient } from '@/utils/supabase/server';
 
 /**
  * Process a stream with validation and storage
@@ -60,7 +60,7 @@ export async function processStreamWithValidation(
         // Store in database if needed
         if (storeInDatabase && chatId && userId) {
           try {
-            const supabase = await createServerClient();
+            const supabase = await createClient();
             await supabase
               .from('sd_chat_messages')
               .insert({
@@ -87,7 +87,7 @@ export async function processStreamWithValidation(
             controller.enqueue(new TextEncoder().encode(metadataChunk));
           } catch (error) {
             edgeLogger.error('Failed to store assistant response', {
-              error,
+              error: error instanceof Error ? error.message : String(error),
               chatId,
               userId
             });
@@ -105,7 +105,9 @@ export async function processStreamWithValidation(
           }
         }
       } catch (error) {
-        edgeLogger.error('Error in stream processing', { error });
+        edgeLogger.error('Error in stream processing', { 
+          error: error instanceof Error ? error.message : String(error)
+        });
       }
     }
   }
@@ -122,7 +124,9 @@ export async function processStreamWithValidation(
   
   // Pipe the original response through our transform stream
   originalResponse.body.pipeTo(transformStream.writable).catch(error => {
-    edgeLogger.error('Error piping stream', { error });
+    edgeLogger.error('Error piping stream', { 
+      error: error instanceof Error ? error.message : String(error)
+    });
   });
   
   // Return a new response with our processed stream

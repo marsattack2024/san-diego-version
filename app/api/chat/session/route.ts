@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { createServerClient } from '@/lib/supabase/server';
-import { getAuthenticatedUser } from '@/lib/supabase/auth-utils';
 import { authCache } from '@/lib/auth/auth-cache';
+import { createClient } from '@/utils/supabase/server';
+import { cookies } from 'next/headers';
+import type { User } from '@supabase/supabase-js';
 
 // Allow dynamic behavior
 export const dynamic = 'force-dynamic';
@@ -161,7 +162,7 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     edgeLogger.error('Unhandled error in chat session creation', { 
-      error,
+      error: error instanceof Error ? error.message : String(error),
       errorMessage: typeof error === 'object' ? (error as any).message : String(error)
     });
     
@@ -171,5 +172,120 @@ export async function POST(request: NextRequest) {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
     });
+  }
+}
+
+// Helper for direct authentication
+async function getAuthenticatedUser(request?: NextRequest) {
+  try {
+    // Create client for DB operations
+    const supabase = await createClient();
+    
+    // Direct authentication using Supabase
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (user) {
+      return { 
+        user, 
+        serverClient: supabase,
+        errorResponse: null 
+      };
+    }
+    
+    return { 
+      user: null, 
+      serverClient: null,
+      errorResponse: NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      )
+    };
+  } catch (error) {
+    edgeLogger.error('Authentication error in session route', { 
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return {
+      user: null,
+      serverClient: null,
+      errorResponse: NextResponse.json(
+        { error: 'Authentication error' },
+        { status: 500 }
+      )
+    };
+  }
+}
+
+export async function GET(request: NextRequest) {
+  const requestId = `sess-${Math.random().toString(36).substring(2, 10)}`;
+  
+  try {
+    // Get authenticated user
+    const { user, serverClient, errorResponse } = await getAuthenticatedUser(request);
+    
+    // Return error response if authentication failed
+    if (errorResponse) {
+      return errorResponse;
+    }
+    
+    // Return 401 if no user (should not happen if errorResponse is set correctly)
+    if (!user) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    
+    // Get query parameters
+    const { searchParams } = new URL(request.url);
+    const chatId = searchParams.get('id');
+    
+    // Return 400 if no chat ID provided
+    if (!chatId) {
+      return NextResponse.json({ error: 'Missing chat ID' }, { status: 400 });
+    }
+    
+    // Get chat session
+    const { data: session, error } = await serverClient
+      .from('sd_chat_sessions')
+      .select('id, title, created_at, updated_at, user_id, agent_id, config')
+      .eq('id', chatId)
+      .eq('user_id', user.id)
+      .single();
+    
+    // If error or no session found, return 404
+    if (error || !session) {
+      edgeLogger.error('Error getting chat session', { 
+        error, 
+        chatId, 
+        userId: user.id,
+        requestId
+      });
+      return NextResponse.json({ error: 'Chat session not found' }, { status: 404 });
+    }
+    
+    // Get chat messages
+    const { data: messages, error: messagesError } = await serverClient
+      .from('sd_chat_messages')
+      .select('id, role, content, created_at, tools_used')
+      .eq('session_id', chatId)
+      .order('created_at');
+    
+    if (messagesError) {
+      edgeLogger.error('Error getting chat messages', { 
+        error: messagesError, 
+        chatId, 
+        userId: user.id,
+        requestId
+      });
+      return NextResponse.json({ error: 'Failed to get chat messages' }, { status: 500 });
+    }
+    
+    return NextResponse.json({
+      session,
+      messages: messages || [],
+    });
+  } catch (error) {
+    edgeLogger.error('Unexpected error in chat session endpoint', { 
+      error: error instanceof Error ? error.message : String(error),
+      requestId 
+    });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

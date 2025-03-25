@@ -1,258 +1,200 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { createServerClient } from '@/lib/supabase/server';
-import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
-import { cookies } from 'next/headers';
 import { Chat } from '@/lib/db/schema';
 import { User } from '@supabase/supabase-js';
+import { headers } from 'next/headers';
+import { createClient } from '@/utils/supabase/server';
+
+// LRU Cache for server-side history caching across requests
+const historyCache = new Map<string, { data: any, timestamp: number }>();
+const CACHE_TTL = 30 * 1000; // 30 seconds in milliseconds
+const MAX_CACHE_ITEMS = 1000;
+
+// Circuit breaker pattern
+let consecutiveErrors = 0;
+let lastErrorTime = 0;
+const ERROR_THRESHOLD = 5;
+const ERROR_TIMEOUT = 60 * 1000; // 1 minute
 
 function formatError(error: unknown): Error {
   if (error instanceof Error) return error;
   return new Error(typeof error === 'string' ? error : JSON.stringify(error));
 }
 
-export async function GET() {
-  const requestId = edgeLogger.generateRequestId();
-  const mockUser: User = {
-    id: '00000000-0000-4000-a000-000000000000',
-    email: 'dev@example.com',
-    app_metadata: {},
-    user_metadata: {},
-    aud: 'authenticated',
-    created_at: new Date().toISOString()
-  };
+function getCachedHistory(userId: string) {
+  const cacheKey = `history:${userId}`;
+  const cachedItem = historyCache.get(cacheKey);
   
-  return edgeLogger.trackOperation('get_chat_history', async () => {
-    try {
-      // Check for development mode fast path
-      const DEV_MODE_ENABLED = process.env.NODE_ENV === 'development' && 
-                             process.env.NEXT_PUBLIC_SKIP_AUTH_CHECKS === 'true';
-      
-      const user = DEV_MODE_ENABLED ? mockUser : await (async () => {
-        const cookieStore = await cookies();
-        const supabase = createSupabaseServerClient(
-          process.env.NEXT_PUBLIC_SUPABASE_URL!,
-          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-          {
-            cookies: {
-              getAll() {
-                return cookieStore.getAll();
-              },
-              setAll(cookiesToSet) {
-                try {
-                  cookiesToSet.forEach(({ name, value, options }) =>
-                    cookieStore.set(name, value, options)
-                  );
-                } catch {
-                  // This can be ignored if you have middleware refreshing users
-                }
-              },
-            },
-          }
-        );
-        
-        const { data: { user } } = await supabase.auth.getUser();
-        return user;
-      })();
-      
-      if (!user) {
-        edgeLogger.warn('User not authenticated when fetching history');
-        return NextResponse.json([], { status: 401 });
-      }
-      
-      // Create Supabase client for database operations
-      const serverClient = await createServerClient();
-      
-      // In development mode with mock user, return mock chat history
-      if (DEV_MODE_ENABLED) {
-        edgeLogger.debug('Development mode - returning mock chat history');
-        const mockChats: Chat[] = [
-          {
-            id: '80d89144-14f4-4549-aec0-d29bdf12d92a',
-            title: 'Development Chat 1',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            userId: '00000000-0000-4000-a000-000000000000',
-            messages: []
-          },
-          {
-            id: '90e79244-25f4-4649-bfd0-e39bef23d92b',
-            title: 'Development Chat 2',
-            createdAt: new Date(Date.now() - 86400000).toISOString(), // 1 day ago
-            updatedAt: new Date(Date.now() - 3600000).toISOString(),  // 1 hour ago
-            userId: '00000000-0000-4000-a000-000000000000',
-            messages: []
-          }
-        ];
-        
-        // Add cache control headers for better client-side caching
-        const response = NextResponse.json(mockChats);
-        response.headers.set('Cache-Control', 'private, max-age=30');
-        
-        return response;
-      }
-      
-      // Only log at debug level to reduce log noise in development
-      edgeLogger.debug('Fetching chat history for user', { userId: user.id });
-      
-      // Fetch chat history for the current user
-      const { data, error } = await serverClient
-        .from('sd_chat_sessions')
-        .select('id, title, created_at, updated_at, user_id, agent_id')
-        .eq('user_id', user.id)
-        .order('updated_at', { ascending: false });
-        
-      if (error) {
-        edgeLogger.error('Failed to fetch chat history from Supabase', { error });
-        return NextResponse.json(
-          { error: 'Failed to fetch chat history' },
-          { status: 500 }
-        );
-      }
-      
-      // Log only if there's new data or issues
-      if (data?.length > 0) {
-        edgeLogger.debug('Chat history fetch results', { 
-          count: data.length,
-          // Only log IDs in development, not in production
-          chatIds: process.env.NODE_ENV === 'development' 
-            ? data.map((chat: { id: string }) => chat.id).slice(0, 5) 
-            : undefined
-        });
-      }
-      
-      // Map the Supabase data to the Chat interface
-      const chats: Chat[] = data.map((chat: { 
-        id: string; 
-        title: string | null; 
-        created_at: string; 
-        updated_at: string;
-        user_id: string;
-      }) => ({
-        id: chat.id,
-        title: chat.title || 'New Chat',
-        createdAt: chat.created_at,
-        updatedAt: chat.updated_at,
-        userId: chat.user_id,
-        messages: [] // We'll fetch messages separately when needed
-      }));
-      
-      // Add cache control headers for better client-side caching
-      // Assuming history can be stale for 30 seconds
-      const response = NextResponse.json(chats);
-      response.headers.set('Cache-Control', 'private, max-age=30');
-      
-      return response;
-    } catch (error) {
-      edgeLogger.error('Error fetching chat history', {
-        error: formatError(error),
-        requestId
+  if (cachedItem && (Date.now() - cachedItem.timestamp) < CACHE_TTL) {
+    return cachedItem.data;
+  }
+  
+  return null;
+}
+
+function setCachedHistory(userId: string, data: any) {
+  const cacheKey = `history:${userId}`;
+  
+  // If cache is getting too large, remove oldest entries
+  if (historyCache.size >= MAX_CACHE_ITEMS) {
+    const entries = Array.from(historyCache.entries());
+    // Sort by timestamp (oldest first)
+    entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+    // Remove oldest 10% of entries
+    const deleteCount = Math.ceil(MAX_CACHE_ITEMS * 0.1);
+    entries.slice(0, deleteCount).forEach(([key]) => historyCache.delete(key));
+  }
+  
+  historyCache.set(cacheKey, {
+    data,
+    timestamp: Date.now()
+  });
+}
+
+export const dynamic = 'force-dynamic';
+
+export async function GET(request: NextRequest) {
+  // Generate a unique request ID for tracing
+  const operationId = `hist_${Math.random().toString(36).substring(2, 10)}`;
+  
+  try {
+    // Log auth headers for debugging
+    const headersList = request.headers;
+    edgeLogger.debug('History API received auth headers', {
+      userId: headersList.get('x-supabase-auth') || 'missing',
+      isAuthValid: headersList.get('x-auth-valid') || 'missing',
+      authTime: headersList.get('x-auth-time') || 'missing',
+      hasProfile: headersList.get('x-has-profile') || 'missing',
+      operationId,
+    });
+    
+    // Direct authentication using Supabase - this is the most reliable method
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (!user) {
+      edgeLogger.warn('User not authenticated when fetching history', {
+        operationId
       });
       
       return NextResponse.json(
-        { error: 'Failed to fetch chat history' },
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+    
+    // Get the date range from query parameters
+    const { searchParams } = new URL(request.url);
+    const timestampParam = searchParams.get('t');
+    
+    // This serves as a cache-busting timestamp
+    if (timestampParam) {
+      edgeLogger.debug('Timestamp param received', { timestamp: timestampParam });
+    }
+    
+    // Fetch user's chat sessions with Supabase query
+    const { data: sessions, error } = await supabase
+      .from('sd_chat_sessions')
+      .select('id, title, created_at, updated_at, agent_id')
+      .eq('user_id', user.id)
+      .order('updated_at', { ascending: false })
+      .limit(50);
+    
+    if (error) {
+      edgeLogger.error('Error fetching chat sessions', { 
+        error, 
+        userId: user.id,
+        operationId 
+      });
+      
+      return NextResponse.json(
+        { error: 'Error fetching chat history' }, 
         { status: 500 }
       );
     }
-  }, { requestId });
+    
+    // Return formatted history data - changed to return array format
+    const chats = (sessions || []).map(session => ({
+      id: session.id,
+      title: session.title || 'New Chat',
+      createdAt: session.created_at,
+      updatedAt: session.updated_at,
+      userId: user.id,
+      agentId: session.agent_id
+    }));
+    
+    edgeLogger.info('Successfully fetched chat history', {
+      count: chats.length,
+      userId: user.id,
+      operationId
+    });
+    
+    // Return array format directly as expected by the client
+    const response = NextResponse.json(chats);
+    
+    // Set cache control headers - short TTL to allow freshness
+    response.headers.set('Cache-Control', 'private, max-age=5');
+    
+    return response;
+  } catch (error) {
+    // Get auth headers for debugging
+    const headers = request.headers;
+    edgeLogger.error('Error in history API', { 
+      error: error instanceof Error ? error.message : String(error),
+      userId: headers.get('x-supabase-auth') || 'unknown',
+      operationId,
+      errorObject: error instanceof Error ? error.stack : null
+    });
+    
+    return NextResponse.json(
+      { error: 'An error occurred' }, 
+      { status: 500 }
+    );
+  }
 }
 
 // Handle chat deletion
-export async function DELETE(request: Request) {
-  const requestId = edgeLogger.generateRequestId();
-  const mockUser: User = {
-    id: '00000000-0000-4000-a000-000000000000',
-    email: 'dev@example.com',
-    app_metadata: {},
-    user_metadata: {},
-    aud: 'authenticated',
-    created_at: new Date().toISOString()
-  };
+export async function DELETE(request: NextRequest) {
+  const operationId = `del_${Math.random().toString(36).substring(2, 10)}`;
   
-  return edgeLogger.trackOperation('delete_chat', async () => {
-    try {
-      // Get the chat ID from the URL
-      const url = new URL(request.url);
-      const id = url.searchParams.get('id');
-      
-      if (!id) {
-        edgeLogger.warn('No chat ID provided for deletion', { requestId });
-        return NextResponse.json(
-          { error: 'Chat ID is required' },
-          { status: 400 }
-        );
-      }
-      
-      // Check for development mode fast path
-      const DEV_MODE_ENABLED = process.env.NODE_ENV === 'development' && 
-                             process.env.NEXT_PUBLIC_SKIP_AUTH_CHECKS === 'true';
-      
-      const user = DEV_MODE_ENABLED ? mockUser : await (async () => {
-        const cookieStore = await cookies();
-        const supabase = createSupabaseServerClient(
-          process.env.NEXT_PUBLIC_SUPABASE_URL!,
-          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-          {
-            cookies: {
-              getAll() {
-                return cookieStore.getAll();
-              },
-              setAll(cookiesToSet) {
-                try {
-                  cookiesToSet.forEach(({ name, value, options }) =>
-                    cookieStore.set(name, value, options)
-                  );
-                } catch {
-                  // This can be ignored if you have middleware refreshing users
-                }
-              },
-            },
-          }
-        );
-        
-        const { data: { user } } = await supabase.auth.getUser();
-        return user;
-      })();
-      
-      if (!user) {
-        edgeLogger.warn('User not authenticated when deleting chat');
-        return NextResponse.json(
-          { error: 'Unauthorized' },
-          { status: 401 }
-        );
-      }
-      
-      // For development mode, just return success
-      if (DEV_MODE_ENABLED) {
-        edgeLogger.debug('Development mode - simulating successful chat deletion', { chatId: id });
-        return NextResponse.json({ success: true });
-      }
-      
-      // Create Supabase client for database operations
-      const serverClient = await createServerClient();
-      
-      // Delete the chat session (this will cascade to chat_histories due to foreign key constraint)
-      const { error } = await serverClient
-        .from('sd_chat_sessions')
-        .delete()
-        .eq('id', id)
-        .eq('user_id', user.id); // Ensure the user owns this chat
-      
-      if (error) {
-        edgeLogger.error('Failed to delete chat from Supabase', { error, chatId: id });
-        return NextResponse.json(
-          { error: 'Failed to delete chat' },
-          { status: 500 }
-        );
-      }
-      
-      edgeLogger.info('Successfully deleted chat', { chatId: id, userId: user.id });
-      
-      return NextResponse.json({ success: true });
-    } catch (error) {
-      edgeLogger.error('Error deleting chat history', {
-        error: formatError(error),
-        requestId
+  try {
+    // Direct authentication using Supabase
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (!user) {
+      edgeLogger.warn('User not authenticated when deleting chat', { operationId });
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+    
+    // Get the chat ID from the URL
+    const url = new URL(request.url);
+    const id = url.searchParams.get('id');
+    
+    if (!id) {
+      edgeLogger.warn('No chat ID provided for deletion', { operationId });
+      return NextResponse.json(
+        { error: 'Chat ID is required' },
+        { status: 400 }
+      );
+    }
+    
+    // Delete the chat session
+    const { error } = await supabase
+      .from('sd_chat_sessions')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', user.id); // Ensure user can only delete their own chats
+    
+    if (error) {
+      edgeLogger.error('Error deleting chat', {
+        error,
+        chatId: id,
+        userId: user.id,
+        operationId
       });
       
       return NextResponse.json(
@@ -260,5 +202,28 @@ export async function DELETE(request: Request) {
         { status: 500 }
       );
     }
-  }, { requestId });
+    
+    edgeLogger.info('Chat deleted successfully', {
+      chatId: id,
+      userId: user.id,
+      operationId
+    });
+    
+    // Invalidate cache for this user
+    const cacheKey = `history:${user.id}`;
+    historyCache.delete(cacheKey);
+    
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    edgeLogger.error('Error in delete chat API', {
+      error: error instanceof Error ? error.message : String(error),
+      operationId,
+      errorObject: error instanceof Error ? error.stack : null
+    });
+    
+    return NextResponse.json(
+      { error: 'An error occurred while deleting the chat' },
+      { status: 500 }
+    );
+  }
 }

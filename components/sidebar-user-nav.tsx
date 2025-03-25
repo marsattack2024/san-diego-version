@@ -17,7 +17,7 @@ import {
   SidebarMenuItem,
 } from '@/components/ui/sidebar';
 import { UserProfile } from '@/lib/db/schema';
-import { useAuth } from '@/lib/supabase/auth-provider';
+import { useAuth } from '@/utils/supabase/auth-provider';
 import { useAuthStore } from '@/stores/auth-store';
 
 // Define a User type that matches what we get from Supabase

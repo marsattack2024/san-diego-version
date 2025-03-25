@@ -1,15 +1,53 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { createServerClient } from '@/lib/supabase/server';
+import { createClient } from '@/utils/supabase/server';
 import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
-import { cookies } from 'next/headers';
-import { PostgrestResponse, PostgrestError, PostgrestSingleResponse } from '@supabase/supabase-js';
+import { cookies, headers } from 'next/headers';
+import { PostgrestResponse, PostgrestError, PostgrestSingleResponse, User } from '@supabase/supabase-js';
 import { authCache } from '@/lib/auth/auth-cache';
-
-import { getAuthenticatedUser } from '@/lib/supabase/auth-utils';
 
 // Add after any runtime configuration, or at the top of the file
 export const dynamic = 'force-dynamic';
+
+// Helper for direct authentication
+async function getAuthenticatedUser(request?: NextRequest) {
+  try {
+    // Create client for DB operations
+    const supabase = await createClient();
+    
+    // Direct authentication using Supabase
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (user) {
+      return { 
+        user, 
+        serverClient: supabase,
+        errorResponse: null 
+      };
+    }
+    
+    return { 
+      user: null, 
+      serverClient: null,
+      errorResponse: NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      )
+    };
+  } catch (error) {
+    edgeLogger.error('Authentication error in chat/[id] route', { 
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return {
+      user: null,
+      serverClient: null,
+      errorResponse: NextResponse.json(
+        { error: 'Authentication error' },
+        { status: 500 }
+      )
+    };
+  }
+}
 
 // API route to fetch chat messages and handle chat-specific operations
 export async function GET(
@@ -114,7 +152,9 @@ export async function GET(
     
     return response;
   } catch (error) {
-    edgeLogger.error('Error in chat/[id] route', { error });
+    edgeLogger.error('Error in chat/[id] route', { 
+      error: error instanceof Error ? error.message : String(error)
+    });
     return NextResponse.json(
       { error: 'An error occurred' },
       { status: 500 }
@@ -244,11 +284,11 @@ export async function PATCH(
     });
   } catch (error) {
     edgeLogger.error('Error in PATCH handler for chat title', { 
-      error,
+      error: error instanceof Error ? error.message : String(error),
       errorMessage: typeof error === 'object' ? (error as any).message : String(error)
     });
     return new Response(JSON.stringify({ 
-      error: 'An error occurred while updating chat title'
+      error: 'Failed to update chat title' 
     }), { 
       status: 500,
       headers: { 'Content-Type': 'application/json' }
@@ -261,201 +301,97 @@ export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  // Extract ID from params for traceability
+  const { id } = params;
+  
   try {
-    // Extract ID from params 
-    const { id } = await Promise.resolve(params);
+    // Get the message from the request body
     const body = await request.json();
-    const { message, toolsUsed, updateTimestamp, messageId } = body;
+    const { message, messageId, updateTimestamp = true } = body;
     
-    // Use the client-provided message ID or generate a new one as fallback
-    const finalMessageId = messageId || crypto.randomUUID();
-    
-    // Add extra debugging information
-    edgeLogger.info('POST request to chat/[id] received', { 
-      sessionId: id,
-      messageRole: message?.role || 'unknown',
-      contentLength: message?.content?.length || 0,
-      providedMessageId: !!messageId,
-      finalMessageId,
-      requestBody: JSON.stringify(body).substring(0, 100) + '...',
-    });
-    
-    if (!message || !message.content || !message.role) {
-      edgeLogger.warn('Invalid message format received', {
-        hasMessage: !!message,
-        hasContent: !!message?.content,
-        hasRole: !!message?.role,
-        bodyKeys: Object.keys(body)
-      });
-      
-      return new Response(JSON.stringify({ 
-        error: 'Invalid message format',
-        details: 'Message must include role and content'
-      }), { 
+    // Validate the message format
+    if (!message || !message.role || !message.content) {
+      edgeLogger.warn('Invalid message format', { chatId: id });
+      return new Response(JSON.stringify({ error: 'Invalid message format' }), { 
         status: 400,
         headers: { 'Content-Type': 'application/json' }
       });
     }
     
-    // Get authenticated user using the optimized utility
+    // Get authenticated user
     const { user, serverClient, errorResponse } = await getAuthenticatedUser(request);
     
     // Return error response if authentication failed
     if (errorResponse) {
-      edgeLogger.warn('Authentication failed when saving message', {
-        sessionId: id,
-        messageRole: message.role
-      });
+      edgeLogger.warn('Authentication failed when saving message', { chatId: id });
       return errorResponse;
     }
     
-    // Fast path: Check if session is already validated in cache
-    if (authCache.isSessionValid(id)) {
-      edgeLogger.debug('Session validation cache hit in message endpoint', { 
-        sessionId: id,
-        messageRole: message.role
-      });
-      
-      // Skip the session existence check, proceed directly to message saving
-    } else {
-      // CRITICAL FIX: Explicitly check if session exists before proceeding
-      edgeLogger.info('Checking if session exists before saving message', {
-        sessionId: id,
-        userId: user.id
-      });
-      
-      const { data: sessionData, error: sessionError } = await serverClient
-        .from('sd_chat_sessions')
-        .select('id')
-        .eq('id', id)
-        .eq('user_id', user.id)
-        .maybeSingle();
-        
-      if (sessionError) {
-        edgeLogger.error('Error checking session existence', {
-          error: sessionError,
-          sessionId: id,
-          userId: user.id
-        });
-        
-        return NextResponse.json({
-          error: 'Failed to check session existence',
-          details: sessionError.message
-        }, { status: 500 });
-      }
-      
-      // If session doesn't exist, explicitly create it
-      if (!sessionData) {
-        edgeLogger.info('Session does not exist, creating it now', {
-          sessionId: id,
-          userId: user.id
-        });
-        
-        // Use first 50 chars of message as title for new sessions
-        const sessionTitle = message.role === 'user' 
-          ? (message.content.length > 50 ? message.content.substring(0, 50) + '...' : message.content)
-          : 'New Conversation';
-          
-        const { error: createError } = await serverClient
-          .from('sd_chat_sessions')
-          .insert({
-            id,
-            user_id: user.id,
-            title: sessionTitle
-          });
-          
-        if (createError) {
-          edgeLogger.error('Failed to create session before saving message', {
-            error: createError,
-            sessionId: id,
-            userId: user.id
-          });
-          
-          return NextResponse.json({
-            error: 'Failed to create chat session',
-            details: createError.message
-          }, { status: 500 });
+    // Format tools used data for storage - handle both array and object formats
+    let formattedToolsUsed = null;
+    
+    if (message.toolsUsed) {
+      // Already an array, use as-is
+      if (Array.isArray(message.toolsUsed)) {
+        formattedToolsUsed = message.toolsUsed;
+      } 
+      // String value, parse if it's JSON
+      else if (typeof message.toolsUsed === 'string') {
+        try {
+          // Try to parse it as JSON
+          const parsed = JSON.parse(message.toolsUsed);
+          formattedToolsUsed = parsed;
+        } catch {
+          // Not valid JSON, use as a simple string array
+          formattedToolsUsed = [message.toolsUsed];
         }
-        
-        edgeLogger.info('Successfully created session before saving message', {
-          sessionId: id,
-          userId: user.id,
-          title: sessionTitle
-        });
       }
-      
-      // Mark the session as valid in cache for future requests
-      authCache.markSessionValid(id);
+      // Object value, convert to array of keys
+      else if (typeof message.toolsUsed === 'object') {
+        formattedToolsUsed = Object.keys(message.toolsUsed);
+      }
     }
     
-    // Log the message information more comprehensively
     edgeLogger.info('Saving chat message', {
       sessionId: id,
-      messageId: finalMessageId,
+      messageId: messageId || 'auto-generated',
       role: message.role,
       contentLength: message.content.length,
-      updateTimestamp: !!updateTimestamp,
-      userId: user.id.slice(0, 8) // Log only first 8 chars for privacy
+      hasTools: !!formattedToolsUsed
     });
     
-    // Store the message (either user or assistant)
-    // Properly format toolsUsed for database
-    let formattedToolsUsed = null;
-    if (toolsUsed) {
-      // Check if toolsUsed has a nested tools array and flatten it
-      if (toolsUsed.tools && Array.isArray(toolsUsed.tools)) {
-        formattedToolsUsed = toolsUsed.tools;
-      } else {
-        formattedToolsUsed = toolsUsed;
-      }
-    }
-    
-    try {
-      // Use the messageId parameter (either provided or generated)
-      const result = await saveMessageWithFallback(
-        serverClient, 
-        id, 
-        message, 
-        user.id, 
-        formattedToolsUsed, 
-        updateTimestamp,
-        finalMessageId // Always provide a message ID
-      );
-      
-      // Check if we got a proper response object
-      if (result instanceof Response) {
-        edgeLogger.info('Message saved successfully', {
-          sessionId: id,
-          messageId: finalMessageId,
-          role: message.role,
-          responseStatus: (result as Response).status
-        });
-        return result;
-      } else {
-        // This shouldn't happen but handle it just in case
-        edgeLogger.error('Unexpected response type from saveMessageWithFallback', {
-          responseType: typeof result
-        });
-        
-        return new Response(JSON.stringify({ 
-          error: 'Internal server error',
-          details: 'Unexpected response type'
-        }), { 
-          status: 500,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-    } catch (error) {
-      edgeLogger.error('Error saving message', { 
-        error,
-        sessionId: id,
-        messageId: finalMessageId,
+    // Save the message to the database with fallback logic
+    const result = await saveMessageWithFallback(
+      serverClient,
+      id, 
+      {
         role: message.role,
-        errorMessage: typeof error === 'object' ? (error as any).message : String(error) 
+        content: message.content
+      },
+      user.id,
+      formattedToolsUsed, 
+      updateTimestamp,
+      messageId // Always provide a message ID
+    );
+    
+    // Check if we got a proper response object
+    if (result instanceof Response) {
+      edgeLogger.info('Message saved successfully', {
+        sessionId: id,
+        messageId: messageId || 'auto-generated',
+        role: message.role,
+        responseStatus: (result as Response).status
       });
+      return result;
+    } else {
+      // This shouldn't happen but handle it just in case
+      edgeLogger.error('Unexpected response type from saveMessageWithFallback', {
+        responseType: typeof result
+      });
+      
       return new Response(JSON.stringify({ 
-        error: 'An error occurred while saving message',
-        details: typeof error === 'object' ? (error as any).message : String(error)
+        error: 'Internal server error',
+        details: 'Unexpected response type'
       }), { 
         status: 500,
         headers: { 'Content-Type': 'application/json' }
@@ -463,12 +399,12 @@ export async function POST(
     }
   } catch (error) {
     edgeLogger.error('Error in POST handler', { 
-      error,
+      error: error instanceof Error ? error.message : String(error),
+      sessionId: id,
       errorMessage: typeof error === 'object' ? (error as any).message : String(error) 
     });
     return new Response(JSON.stringify({ 
-      error: 'An error occurred in message handler',
-      details: typeof error === 'object' ? (error as any).message : String(error)
+      error: 'Failed to save message' 
     }), { 
       status: 500,
       headers: { 'Content-Type': 'application/json' }
@@ -505,368 +441,382 @@ async function saveMessageWithFallback(
   updateTimestamp: boolean,
   messageId?: string
 ): Promise<Response> {
-  // Enhanced validation
-  if (!userId) {
-    edgeLogger.error('saveMessageWithFallback called with null/undefined userId', {
-      sessionId,
-      messageRole: message.role
-    });
-    return NextResponse.json({ 
-      error: 'User ID is required',
-      details: 'Cannot save message without a valid user ID'
-    }, { status: 400 });
-  }
-  
-  if (!sessionId) {
-    edgeLogger.error('saveMessageWithFallback called with null/undefined sessionId', {
-      userId
-    });
-    return NextResponse.json({ 
-      error: 'Session ID is required',
-      details: 'Cannot save message without a valid session ID'
-    }, { status: 400 });
-  }
-  
-  // Ensure we have a valid message ID
-  const finalMessageId = messageId || crypto.randomUUID();
-  
-  // First, try to use the RPC function for better performance
-  // This function handles session creation internally if needed
   try {
-    edgeLogger.info('Calling save_message_and_update_session RPC', { 
-      sessionId, 
-      messageId: finalMessageId,
-      role: message.role,
-      contentLength: message.content.length,
-      hasToolsUsed: toolsUsed !== null,
-      updateTimestamp: !!updateTimestamp,
-      userIdPrefix: userId.substring(0, 8) // Log first 8 chars for traceability
-    });
+    // Enhanced validation
+    if (!userId) {
+      edgeLogger.error('saveMessageWithFallback called with null/undefined userId', {
+        sessionId: sessionId,
+        messageRole: message.role
+      });
+      return NextResponse.json({ 
+        error: 'User ID is required',
+        details: 'Cannot save message without a valid user ID'
+      }, { status: 400 });
+    }
     
-    // Log the exact parameters being sent to the RPC function
-    edgeLogger.info('RPC function parameters', {
-      p_session_id: sessionId,
-      p_role: message.role,
-      p_content_length: message.content.length,
-      p_user_id: userId,
-      p_message_id: finalMessageId,
-      has_p_tools_used: toolsUsed !== null,
-      p_update_timestamp: updateTimestamp
-    });
+    // Ensure we have a valid message ID
+    const finalMessageId = messageId || crypto.randomUUID();
     
-    // Call the PostgreSQL function via RPC with timeout
-    const rpcPromise = serverClient.rpc('save_message_and_update_session', {
-      p_session_id: sessionId,
-      p_role: message.role,
-      p_content: message.content,
-      p_user_id: userId,
-      p_message_id: finalMessageId,
-      p_tools_used: toolsUsed,
-      p_update_timestamp: updateTimestamp
-    });
-    
-    // Add timeout to prevent hanging
-    const { data, error } = await withTimeout<PostgrestSingleResponse<any>>(
-      rpcPromise, 
-      5000, 
-      'RPC call timed out'
-    );
-
-    // Enhanced logging - log the full response data BEFORE checking errors
-    edgeLogger.info('RPC Response Details', {
-      hasError: !!error,
-      responseData: data ? JSON.stringify(data).substring(0, 1000) : null,
-      errorDetails: error ? {
-        code: error.code,
-        message: error.message,
-        details: error.details,
-        hint: error.hint
-      } : null,
-      sessionId,
-      messageRole: message.role,
-      messageLength: message.content.length
-    });
-    
-    // Handle specific error types differently
-    if (error) {
-      // Track RPC errors by role for metrics
-      edgeLogger.warn(`RPC error when saving ${message.role} message`, {
-        errorCode: error.code,
-        errorMessage: error.message,
-        sessionId,
-        messageId: finalMessageId
+    try {
+      // First, try to use the RPC function for better performance
+      // This function handles session creation internally if needed
+      edgeLogger.info('Calling save_message_and_update_session RPC', { 
+        sessionId: sessionId, 
+        messageId: finalMessageId,
+        role: message.role,
+        contentLength: message.content.length,
+        hasToolsUsed: toolsUsed !== null,
+        updateTimestamp: !!updateTimestamp,
+        userIdPrefix: userId.substring(0, 8) // Log first 8 chars for traceability
       });
       
-      // Only fall back on critical error conditions that indicate function unavailability
-      if (error.code === 'PGRST301' || error.code === '42883' || error.message.includes('function') && error.message.includes('does not exist')) {
-        edgeLogger.error('SQL function not available, using fallback method', { 
-          error, 
-          errorCode: error.code,
-          errorMessage: error.message
-        });
-        // Fall through to fallback method below
-      } else {
-        // For other errors, return error immediately rather than attempting fallback
-        edgeLogger.error('Database operation failed with non-recoverable error', {
-          error,
+      // Log the exact parameters being sent to the RPC function
+      edgeLogger.info('RPC function parameters', {
+        p_session_id: sessionId,
+        p_role: message.role,
+        p_content_length: message.content.length,
+        p_user_id: userId,
+        p_message_id: finalMessageId,
+        has_p_tools_used: toolsUsed !== null,
+        p_update_timestamp: updateTimestamp
+      });
+      
+      // Call the PostgreSQL function via RPC with timeout
+      const rpcPromise = serverClient.rpc('save_message_and_update_session', {
+        p_session_id: sessionId,
+        p_role: message.role,
+        p_content: message.content,
+        p_user_id: userId,
+        p_message_id: finalMessageId,
+        p_tools_used: toolsUsed,
+        p_update_timestamp: updateTimestamp
+      });
+      
+      // Add timeout to prevent hanging
+      const { data, error } = await withTimeout<PostgrestSingleResponse<any>>(
+        rpcPromise, 
+        5000, 
+        'RPC call timed out'
+      );
+
+      // Enhanced logging - log the full response data BEFORE checking errors
+      edgeLogger.info('RPC Response Details', {
+        hasError: !!error,
+        responseData: data ? JSON.stringify(data).substring(0, 1000) : null,
+        errorDetails: error ? {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint
+        } : null,
+        sessionId,
+        messageRole: message.role,
+        messageLength: message.content.length
+      });
+      
+      // Handle specific error types differently
+      if (error) {
+        // Track RPC errors by role for metrics
+        edgeLogger.warn(`RPC error when saving ${message.role} message`, {
           errorCode: error.code,
           errorMessage: error.message,
           sessionId,
           messageId: finalMessageId
         });
         
+        // Only fall back on critical error conditions that indicate function unavailability
+        if (error.code === 'PGRST301' || error.code === '42883' || error.message.includes('function') && error.message.includes('does not exist')) {
+          edgeLogger.error('SQL function not available, using fallback method', { 
+            error, 
+            errorCode: error.code,
+            errorMessage: error.message
+          });
+          // Fall through to fallback method below
+        } else {
+          // For other errors, return error immediately rather than attempting fallback
+          edgeLogger.error('Database operation failed with non-recoverable error', {
+            error,
+            errorCode: error.code,
+            errorMessage: error.message,
+            sessionId,
+            messageId: finalMessageId
+          });
+          
+          return NextResponse.json({ 
+            error: 'Database operation failed',
+            details: error.message,
+            code: error.code
+          }, { status: 500 });
+        }
+      } else {
+        // RPC was successful
+        edgeLogger.info('RPC call successful', { 
+          resultData: JSON.stringify(data).substring(0, 500),
+          sessionId,
+          messageId: data && data.message_id ? data.message_id : finalMessageId,
+          role: message.role,
+          success: data?.success,
+          executionTimeMs: data?.execution_time_ms
+        });
+        
+        // Return success response with consistent message ID format
         return NextResponse.json({ 
-          error: 'Database operation failed',
-          details: error.message,
-          code: error.code
-        }, { status: 500 });
+          success: true,
+          message: 'Message saved successfully via RPC',
+          messageId: data && data.message_id ? data.message_id : finalMessageId,
+          role: message.role,
+          rpcResponseDetails: data ? {
+            success: data.success,
+            executionTimeMs: data.execution_time_ms,
+            message: data.message
+          } : null
+        });
       }
-    } else {
-      // RPC was successful
-      edgeLogger.info('RPC call successful', { 
-        resultData: JSON.stringify(data).substring(0, 500),
+    } catch (rpcError) {
+      edgeLogger.error('Error during RPC call', { 
+        error: rpcError instanceof Error ? rpcError.message : String(rpcError),
         sessionId,
-        messageId: data && data.message_id ? data.message_id : finalMessageId,
-        role: message.role,
-        success: data?.success,
-        executionTimeMs: data?.execution_time_ms
+        errorMessage: typeof rpcError === 'object' ? (rpcError as any).message : String(rpcError),
+        stack: typeof rpcError === 'object' && (rpcError as any).stack ? (rpcError as any).stack : 'No stack trace',
+        messageRole: message.role
       });
-      
-      // Return success response with consistent message ID format
-      return NextResponse.json({ 
-        success: true,
-        message: 'Message saved successfully via RPC',
-        messageId: data && data.message_id ? data.message_id : finalMessageId,
-        role: message.role,
-        rpcResponseDetails: data ? {
-          success: data.success,
-          executionTimeMs: data.execution_time_ms,
-          message: data.message
-        } : null
-      });
+      // Fall through to the fallback method
     }
-  } catch (rpcError) {
-    edgeLogger.error('Error during RPC call', { 
-      error: rpcError,
-      sessionId,
-      errorMessage: typeof rpcError === 'object' ? (rpcError as any).message : String(rpcError),
-      stack: typeof rpcError === 'object' && (rpcError as any).stack ? (rpcError as any).stack : 'No stack trace',
-      messageRole: message.role
-    });
-    // Fall through to the fallback method
-  }
-  
-  // ------------------------------
-  // FALLBACK METHOD STARTS HERE
-  // ------------------------------
-  
-  // If we get here, the RPC failed, so we'll try the direct method
-  edgeLogger.warn('Using fallback method to save message', { 
-    sessionId, 
-    messageId: finalMessageId,
-    role: message.role,
-    rpcFailed: true
-  });
-  
-  try {
-    // First check if the chat session exists (important)
-    edgeLogger.info('Checking if session exists in fallback method', {
-      sessionId,
-      userIdPrefix: userId.substring(0, 8)
+    
+    // ------------------------------
+    // FALLBACK METHOD STARTS HERE
+    // ------------------------------
+    
+    // If we get here, the RPC failed, so we'll try the direct method
+    edgeLogger.warn('Using fallback method to save message', { 
+      sessionId, 
+      messageId: finalMessageId,
+      role: message.role,
+      rpcFailed: true
     });
     
-    const sessionPromise = serverClient
-      .from('sd_chat_sessions')
-      .select('id')
-      .eq('id', sessionId)
-      .eq('user_id', userId)
-      .maybeSingle();
-      
-    const { data: sessionData, error: sessionError } = await withTimeout<PostgrestSingleResponse<{id: string}>>(
-      sessionPromise, 
-      3000, 
-      'Session check timed out'
-    );
-      
-    if (sessionError) {
-      edgeLogger.error('Error checking if chat session exists', {
-        error: sessionError,
-        errorCode: sessionError.code,
-        errorMessage: sessionError.message,
+    try {
+      // First check if the chat session exists (important)
+      edgeLogger.info('Checking if session exists in fallback method', {
         sessionId,
         userIdPrefix: userId.substring(0, 8)
       });
       
-      return NextResponse.json(
-        { 
-          error: 'Error checking if chat session exists',
-          details: sessionError.message
-        },
-        { status: 500 }
-      );
-    }
-    
-    if (!sessionData) {
-      // Session doesn't exist - attempt to create it
-      edgeLogger.warn('Chat session not found when saving message - creating new session', { 
-        chatId: sessionId, 
-        userIdPrefix: userId.substring(0, 8),
-        messageRole: message.role
-      });
-      
-      // Create session
-      const createSessionPromise = serverClient
+      const sessionPromise = serverClient
         .from('sd_chat_sessions')
-        .insert({
-          id: sessionId,
-          user_id: userId,
-          title: 'New Conversation'
-        });
+        .select('id')
+        .eq('id', sessionId)
+        .eq('user_id', userId)
+        .maybeSingle();
         
-      const { error: createError } = await withTimeout<PostgrestResponse<any>>(
-        createSessionPromise, 
+      const { data: sessionData, error: sessionError } = await withTimeout<PostgrestSingleResponse<{id: string}>>(
+        sessionPromise, 
         3000, 
-        'Session creation timed out'
+        'Session check timed out'
       );
-      
-      if (createError) {
-        edgeLogger.error('Failed to create chat session during message save', {
-          error: createError,
-          errorCode: createError.code,
-          errorMessage: createError.message,
+        
+      if (sessionError) {
+        edgeLogger.error('Error checking if chat session exists', {
+          error: sessionError,
+          errorCode: sessionError.code,
+          errorMessage: sessionError.message,
           sessionId,
           userIdPrefix: userId.substring(0, 8)
         });
         
         return NextResponse.json(
           { 
-            error: 'Failed to create chat session',
-            details: createError.message
+            error: 'Error checking if chat session exists',
+            details: sessionError.message
           },
           { status: 500 }
         );
       }
       
-      edgeLogger.info('Created new chat session during message save', {
+      if (!sessionData) {
+        // Session doesn't exist - attempt to create it
+        edgeLogger.warn('Chat session not found when saving message - creating new session', { 
+          chatId: sessionId, 
+          userIdPrefix: userId.substring(0, 8),
+          messageRole: message.role
+        });
+        
+        // Create session
+        const createSessionPromise = serverClient
+          .from('sd_chat_sessions')
+          .insert({
+            id: sessionId,
+            user_id: userId,
+            title: 'New Conversation'
+          });
+          
+        const { error: createError } = await withTimeout<PostgrestResponse<any>>(
+          createSessionPromise, 
+          3000, 
+          'Session creation timed out'
+        );
+        
+        if (createError) {
+          edgeLogger.error('Failed to create chat session during message save', {
+            error: createError,
+            errorCode: createError.code,
+            errorMessage: createError.message,
+            sessionId,
+            userIdPrefix: userId.substring(0, 8)
+          });
+          
+          return NextResponse.json(
+            { 
+              error: 'Failed to create chat session',
+              details: createError.message
+            },
+            { status: 500 }
+          );
+        }
+        
+        edgeLogger.info('Created new chat session during message save', {
+          sessionId,
+          userIdPrefix: userId.substring(0, 8)
+        });
+      } else {
+        edgeLogger.info('Session exists, proceeding with message insert', {
+          sessionId,
+          userIdPrefix: userId.substring(0, 8)
+        });
+      }
+      
+      // Insert the message
+      edgeLogger.info('Inserting message via direct DB insert', {
         sessionId,
-        userIdPrefix: userId.substring(0, 8)
-      });
-    } else {
-      edgeLogger.info('Session exists, proceeding with message insert', {
-        sessionId,
-        userIdPrefix: userId.substring(0, 8)
-      });
-    }
-    
-    // Insert the message
-    edgeLogger.info('Inserting message via direct DB insert', {
-      sessionId,
-      messageId: finalMessageId,
-      role: message.role,
-      contentLength: message.content.length,
-      hasToolsUsed: toolsUsed !== null
-    });
-    
-    const insertPromise = serverClient
-      .from('sd_chat_histories')
-      .insert({
-        id: finalMessageId,
-        session_id: sessionId,
-        user_id: userId,
+        messageId: finalMessageId,
         role: message.role,
-        content: message.content,
-        tools_used: toolsUsed
+        contentLength: message.content.length,
+        hasToolsUsed: toolsUsed !== null
       });
       
-    const { data: insertData, error: insertError } = await withTimeout<PostgrestResponse<any>>(
-      insertPromise, 
-      5000, 
-      'Message insertion timed out'
-    );
-    
-    if (insertError) {
-      edgeLogger.error('Failed to insert message', {
-        error: insertError,
-        errorCode: insertError.code,
-        errorMessage: insertError.message,
+      const insertPromise = serverClient
+        .from('sd_chat_histories')
+        .insert({
+          id: finalMessageId,
+          session_id: sessionId,
+          user_id: userId,
+          role: message.role,
+          content: message.content,
+          tools_used: toolsUsed
+        });
+        
+      const { data: insertData, error: insertError } = await withTimeout<PostgrestResponse<any>>(
+        insertPromise, 
+        5000, 
+        'Message insertion timed out'
+      );
+      
+      if (insertError) {
+        edgeLogger.error('Failed to insert message', {
+          error: insertError,
+          errorCode: insertError.code,
+          errorMessage: insertError.message,
+          sessionId,
+          messageId: finalMessageId,
+          role: message.role
+        });
+        
+        return NextResponse.json(
+          { 
+            error: 'Failed to insert message',
+            details: insertError.message
+          },
+          { status: 500 }
+        );
+      }
+      
+      edgeLogger.info('Message inserted successfully', {
         sessionId,
         messageId: finalMessageId,
         role: message.role
       });
       
+      // Update the session timestamp if requested
+      if (updateTimestamp) {
+        edgeLogger.info('Updating session timestamp', { 
+          sessionId,
+          updateRequested: true
+        });
+        
+        const updatePromise = serverClient
+          .from('sd_chat_sessions')
+          .update({ updated_at: new Date().toISOString() })
+          .eq('id', sessionId);
+          
+        const { error: updateError } = await withTimeout<PostgrestResponse<any>>(
+          updatePromise, 
+          3000, 
+          'Session timestamp update timed out'
+        );
+        
+        if (updateError) {
+          edgeLogger.warn('Failed to update session timestamp, but message was saved', {
+            error: updateError,
+            errorCode: updateError.code,
+            errorMessage: updateError.message,
+            sessionId
+          });
+          // We don't fail the request if only the timestamp update fails
+        } else {
+          edgeLogger.info('Session timestamp updated successfully', { sessionId });
+        }
+      }
+      
+      edgeLogger.info('Message saved successfully via fallback method', {
+        sessionId,
+        messageId: finalMessageId,
+        role: message.role
+      });
+      
+      return NextResponse.json({ 
+        success: true,
+        message: 'Message saved successfully via fallback method',
+        messageId: finalMessageId,
+        chatId: finalMessageId // Include chatId for backward compatibility
+      });
+    } catch (error) {
+      edgeLogger.error('Fallback method failed', {
+        error: error instanceof Error ? error.message : String(error),
+        sessionId,
+        messageId: finalMessageId,
+        errorMessage: typeof error === 'object' ? (error as any).message : String(error),
+        stack: typeof error === 'object' && (error as any).stack ? (error as any).stack : 'No stack trace'
+      });
+      
       return NextResponse.json(
         { 
-          error: 'Failed to insert message',
-          details: insertError.message
+          error: 'Failed to save message via fallback method',
+          details: typeof error === 'object' ? (error as any).message : String(error)
         },
         { status: 500 }
       );
     }
-    
-    edgeLogger.info('Message inserted successfully', {
-      sessionId,
-      messageId: finalMessageId,
-      role: message.role
-    });
-    
-    // Update the session timestamp if requested
-    if (updateTimestamp) {
-      edgeLogger.info('Updating session timestamp', { 
-        sessionId,
-        updateRequested: true
-      });
-      
-      const updatePromise = serverClient
-        .from('sd_chat_sessions')
-        .update({ updated_at: new Date().toISOString() })
-        .eq('id', sessionId);
-        
-      const { error: updateError } = await withTimeout<PostgrestResponse<any>>(
-        updatePromise, 
-        3000, 
-        'Session timestamp update timed out'
-      );
-      
-      if (updateError) {
-        edgeLogger.warn('Failed to update session timestamp, but message was saved', {
-          error: updateError,
-          errorCode: updateError.code,
-          errorMessage: updateError.message,
-          sessionId
-        });
-        // We don't fail the request if only the timestamp update fails
-      } else {
-        edgeLogger.info('Session timestamp updated successfully', { sessionId });
-      }
-    }
-    
-    edgeLogger.info('Message saved successfully via fallback method', {
-      sessionId,
-      messageId: finalMessageId,
-      role: message.role
-    });
-    
-    return NextResponse.json({ 
-      success: true,
-      message: 'Message saved successfully via fallback method',
-      messageId: finalMessageId,
-      chatId: finalMessageId // Include chatId for backward compatibility
-    });
   } catch (error) {
-    edgeLogger.error('Fallback method failed', {
-      error,
+    // Ensure finalMessageId is defined in this scope
+    const finalMessageId = messageId || '[unknown-id]';
+    
+    edgeLogger.error('Error saving message', { 
+      error: error instanceof Error ? error.message : String(error),
       sessionId,
       messageId: finalMessageId,
-      errorMessage: typeof error === 'object' ? (error as any).message : String(error),
-      stack: typeof error === 'object' && (error as any).stack ? (error as any).stack : 'No stack trace'
+      role: message.role,
+      contentLength: message.content.length
     });
     
-    return NextResponse.json(
-      { 
-        error: 'Failed to save message via fallback method',
-        details: typeof error === 'object' ? (error as any).message : String(error)
-      },
-      { status: 500 }
-    );
+    // Return error response
+    return new Response(JSON.stringify({ 
+      error: 'Failed to save message', 
+      details: error instanceof Error ? error.message : String(error)
+    }), { 
+      status: 500,
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
   }
 }

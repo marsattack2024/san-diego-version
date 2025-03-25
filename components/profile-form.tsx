@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { createBrowserClient } from '@/lib/supabase/client';
+import { createClient } from '@/utils/supabase/client';
 import { UserProfile } from '@/lib/db/schema';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -50,7 +50,7 @@ export default function ProfileForm({ initialProfile, userId, isFirstLogin }: Pr
   const [loading, setLoading] = useState(false);
   const [isSummarizing, setIsSummarizing] = useState(false);
   const router = useRouter();
-  const supabase = createBrowserClient();
+  const supabase = createClient();
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;

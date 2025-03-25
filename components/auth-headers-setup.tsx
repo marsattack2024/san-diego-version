@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useAuth } from '@/lib/supabase/auth-provider';
+import { useAuth } from '@/utils/supabase/auth-provider';
 
 /**
  * This component sets up authentication headers for all requests
@@ -21,7 +21,9 @@ export function AuthHeadersSetup() {
       // Only add auth headers if user is authenticated
       if (isAuthenticated && user?.id) {
         // Don't add these headers for auth-specific requests to prevent conflicts
-        const url = typeof input === 'string' ? input : input.url;
+        const url = typeof input === 'string' ? input : 
+                    input instanceof Request ? input.url : 
+                    input.toString();
         const isAuthRequest = url.includes('/auth/') || url.includes('/login');
         
         if (!isAuthRequest) {

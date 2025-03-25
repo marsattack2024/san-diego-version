@@ -7,8 +7,147 @@ const pendingRequests: Record<string, Promise<Chat[]> | null> = {};
 
 // Track last refresh time
 let lastRefreshTime = 0;
-const REFRESH_INTERVAL = 15 * 60 * 1000; // 15 minutes (increased from 60 seconds)
-const CACHE_TTL = 30 * 60 * 1000; // 30 minutes cache TTL (increased from 2 minutes)
+const REFRESH_INTERVAL = 15 * 60 * 1000; // 15 minutes
+const CACHE_TTL = 30 * 60 * 1000; // 30 minutes cache TTL
+
+// Auth failure tracking constants
+const AUTH_FAILURE_KEY = 'global_auth_failure';
+const AUTH_FAILURE_COUNT_KEY = 'auth_failure_count';
+const AUTH_FAILURE_LAST_TIME_KEY = 'auth_failure_last_time';
+const AUTH_BACKOFF_DURATION_KEY = 'auth_backoff_duration';
+
+// Exponential backoff settings
+const MIN_AUTH_COOLDOWN = 2 * 60 * 1000; // 2 min initial backoff
+const MAX_AUTH_COOLDOWN = 30 * 60 * 1000; // 30 min max backoff
+const BACKOFF_FACTOR = 2; // Double the backoff each time
+const MAX_FAILURE_COUNT = 5; // Reset after 5 failures
+
+// In-memory state (will be initialized from localStorage)
+let isInAuthFailureCooldown = false;
+let authFailureCount = 0;
+let authBackoffDuration = MIN_AUTH_COOLDOWN;
+let authFailureTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Calculate exponential backoff duration
+ * @param failureCount Number of consecutive failures
+ * @returns Backoff duration in milliseconds
+ */
+function calculateBackoffDuration(failureCount: number): number {
+  // Cap the failure count for calculation
+  const cappedCount = Math.min(failureCount, MAX_FAILURE_COUNT);
+  // Calculate exponential backoff: MIN_BACKOFF * (FACTOR ^ (count-1))
+  const backoff = MIN_AUTH_COOLDOWN * Math.pow(BACKOFF_FACTOR, cappedCount - 1);
+  // Cap at the maximum backoff
+  return Math.min(backoff, MAX_AUTH_COOLDOWN);
+}
+
+/**
+ * Set the global auth failure state with exponential backoff
+ * @param failed Whether authentication has failed
+ */
+function setAuthFailureState(failed: boolean) {
+  try {
+    // Clear any existing timer
+    if (authFailureTimer) {
+      clearTimeout(authFailureTimer);
+      authFailureTimer = null;
+    }
+    
+    if (failed) {
+      // Retrieve current failure count from persistent storage
+      const storedCount = clientCache.get(AUTH_FAILURE_COUNT_KEY, Infinity, true) || 0;
+      
+      // Increment failure count
+      authFailureCount = storedCount + 1;
+      
+      // Calculate new backoff duration based on consecutive failures
+      authBackoffDuration = calculateBackoffDuration(authFailureCount);
+      
+      // Store updated values in persistent storage
+      clientCache.set(AUTH_FAILURE_COUNT_KEY, authFailureCount, Infinity, true);
+      clientCache.set(AUTH_FAILURE_LAST_TIME_KEY, Date.now(), Infinity, true);
+      clientCache.set(AUTH_BACKOFF_DURATION_KEY, authBackoffDuration, Infinity, true);
+      
+      // Set the auth failure flag
+      isInAuthFailureCooldown = true;
+      clientCache.set(AUTH_FAILURE_KEY, true, authBackoffDuration, true);
+      
+      console.log(`Auth failure #${authFailureCount}: Setting cooldown for ${authBackoffDuration/1000}s (${Math.round(authBackoffDuration/60000)} minutes)`);
+      
+      // Set a timer to automatically clear the cooldown
+      authFailureTimer = setTimeout(() => {
+        isInAuthFailureCooldown = false;
+        clientCache.set(AUTH_FAILURE_KEY, false, Infinity, true);
+        console.log('Auth failure cooldown period expired');
+      }, authBackoffDuration);
+    } else {
+      // If explicitly marking auth as successful, clear the failure state
+      isInAuthFailureCooldown = false;
+      authFailureCount = 0;
+      authBackoffDuration = MIN_AUTH_COOLDOWN;
+      
+      // Clear all failure-related flags
+      clientCache.set(AUTH_FAILURE_KEY, false, Infinity, true);
+      clientCache.set(AUTH_FAILURE_COUNT_KEY, 0, Infinity, true);
+      clientCache.remove(AUTH_FAILURE_LAST_TIME_KEY, true);
+      clientCache.set(AUTH_BACKOFF_DURATION_KEY, MIN_AUTH_COOLDOWN, Infinity, true);
+      
+      console.log('Auth failure state cleared - auth is now successful');
+    }
+  } catch (e) {
+    console.warn('Error setting auth failure state:', e);
+  }
+}
+
+// Initialize auth failure state from persistent storage
+try {
+  // Get stored failure state
+  const storedFailureState = clientCache.get(AUTH_FAILURE_KEY, Infinity, true);
+  isInAuthFailureCooldown = !!storedFailureState;
+  
+  // Get stored failure count and backoff info
+  authFailureCount = clientCache.get(AUTH_FAILURE_COUNT_KEY, Infinity, true) || 0;
+  const lastFailureTime = clientCache.get(AUTH_FAILURE_LAST_TIME_KEY, Infinity, true) || 0;
+  authBackoffDuration = clientCache.get(AUTH_BACKOFF_DURATION_KEY, Infinity, true) || MIN_AUTH_COOLDOWN;
+  
+  // Log auth cookie information if available
+  if (typeof document !== 'undefined') {
+    const cookies = document.cookie.split(';').map(c => c.trim());
+    const authCookies = cookies.filter(c => c.includes('auth-token'));
+    console.log('Auth Cookies:', cookies);
+  }
+  
+  // Check if we should still be in a cooldown period
+  if (isInAuthFailureCooldown) {
+    // Calculate time elapsed since last failure
+    const now = Date.now();
+    const elapsedTime = now - lastFailureTime;
+    
+    // Check if cooldown period has already expired
+    if (elapsedTime >= authBackoffDuration) {
+      // Cooldown expired, reset the state
+      isInAuthFailureCooldown = false;
+      clientCache.set(AUTH_FAILURE_KEY, false, Infinity, true);
+      console.log('Restored auth state: Cooldown already expired');
+    } else {
+      // Still in cooldown period, setup a timer for remaining time
+      const remainingTime = authBackoffDuration - elapsedTime;
+      console.log(`Restored auth failure state: ${authFailureCount} failures, ${Math.round(remainingTime/1000)}s remaining in cooldown`);
+      
+      authFailureTimer = setTimeout(() => {
+        isInAuthFailureCooldown = false;
+        clientCache.set(AUTH_FAILURE_KEY, false, Infinity, true);
+        console.log('Auth failure cooldown period expired');
+      }, remainingTime);
+    }
+  } else {
+    console.log('Initialized with clean auth state (no active cooldown)');
+  }
+} catch (e) {
+  // Log and ignore cache errors
+  console.warn('Error initializing auth failure state from cache:', e);
+}
 
 /**
  * History service provides methods for fetching and managing chat history
@@ -16,17 +155,117 @@ const CACHE_TTL = 30 * 60 * 1000; // 30 minutes cache TTL (increased from 2 minu
  */
 export const historyService = {
   /**
+   * Check if we're currently in an auth failure cooldown period
+   * @returns True if in auth failure cooldown
+   */
+  isInAuthFailure(): boolean {
+    // CRITICAL FIX: Always check persistent storage first, as it is the source of truth
+    try {
+      const persistentState = !!clientCache.get(AUTH_FAILURE_KEY, Infinity, true);
+      
+      // If memory state doesn't match storage, update memory
+      if (isInAuthFailureCooldown !== persistentState) {
+        isInAuthFailureCooldown = persistentState;
+        
+        // Log mismatch detection at low frequency
+        if (Math.random() < 0.1) {
+          console.log(`Auth failure state updated from storage: ${persistentState}`);
+        }
+      }
+      
+      return persistentState;
+    } catch (e) {
+      // Default to memory state if storage access fails
+      return isInAuthFailureCooldown;
+    }
+  },
+  
+  /**
+   * Get detailed information about the current auth failure state
+   */
+  getAuthFailureInfo(): {
+    isInCooldown: boolean;
+    failureCount: number;
+    backoffDuration: number;
+    remainingTime: number;
+    lastFailureTime: number;
+  } {
+    const now = Date.now();
+    const lastFailureTime = clientCache.get(AUTH_FAILURE_LAST_TIME_KEY, Infinity, true) || 0;
+    const backoffDuration = clientCache.get(AUTH_BACKOFF_DURATION_KEY, Infinity, true) || MIN_AUTH_COOLDOWN;
+    const elapsedTime = now - lastFailureTime;
+    const remainingTime = Math.max(0, backoffDuration - elapsedTime);
+    
+    return {
+      isInCooldown: this.isInAuthFailure(),
+      failureCount: clientCache.get(AUTH_FAILURE_COUNT_KEY, Infinity, true) || 0,
+      backoffDuration,
+      remainingTime,
+      lastFailureTime
+    };
+  },
+
+  /**
+   * Reset the auth failure state and allow fetching again
+   */
+  resetAuthFailure(): void {
+    setAuthFailureState(false);
+    console.log('Auth failure state manually reset');
+  },
+
+  /**
    * Fetch chat history with client-side caching
    * @param forceRefresh Whether to force a refresh from API
    * @returns Array of chat objects
    */
   async fetchHistory(forceRefresh = false): Promise<Chat[]> {
+    // -------------------- ENHANCED CIRCUIT BREAKER PATTERN --------------------
+    // Before doing ANYTHING AT ALL, check for auth failure state - not even creating IDs or timestamps
+    if (this.isInAuthFailure()) {
+      // ABSOLUTE FAIL-FAST: Return empty array immediately
+      // This is the core of the circuit breaker pattern - no work at all is done
+      
+      // Low-frequency logging to avoid console spam (only 1% of calls will log)
+      if (Math.random() < 0.01) {
+        try {
+          const failureInfo = this.getAuthFailureInfo();
+          console.warn(`History fetch blocked by circuit breaker. Cooldown: ${Math.round(failureInfo.remainingTime/1000)}s remaining`);
+        } catch (e) {
+          // Completely suppress errors in failure state logging to ensure absolute fail-fast
+        }
+      }
+      
+      // Use cached data if available, otherwise return empty array
+      try {
+        const cachedData = clientCache.get('chat_history') as Chat[] | undefined;
+        return (cachedData && Array.isArray(cachedData) && cachedData.length > 0) ? cachedData : [];
+      } catch (e) {
+        // Completely ignore cache errors in failure state
+        return [];
+      }
+    }
+    
     const startTime = performance.now();
     const operationId = Math.random().toString(36).substring(2, 10);
     
     try {
       // Create a unique cache key based on user
       const cacheKey = 'chat_history';
+      
+      // Double-check auth failure state again (could have changed during async ops)
+      if (this.isInAuthFailure()) {
+        // Try to return cached data if available (preferable to empty array)
+        try {
+          const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
+          if (cachedData && Array.isArray(cachedData) && cachedData.length > 0) {
+            return cachedData;
+          }
+        } catch (e) {
+          // Ignore cache errors, return empty array
+        }
+        
+        return [];
+      }
       
       // Track this refresh time regardless of success/failure
       lastRefreshTime = Date.now();
@@ -41,17 +280,6 @@ export const historyService = {
           // On error, clear the pending request and continue with a new fetch
           pendingRequests[cacheKey] = null;
         }
-      }
-      
-      // Check if we're in an auth failure cooldown period
-      try {
-        const isAuthFailed = clientCache.get(`${cacheKey}_auth_failed`);
-        if (isAuthFailed && !forceRefresh) {
-          console.log(`[History:${operationId}] In auth failure cooldown, returning empty history`);
-          return [];
-        }
-      } catch (e) {
-        // Ignore cache errors
       }
       
       // Log fetching attempt
@@ -122,101 +350,129 @@ export const historyService = {
   },
 
   /**
-   * Private method to fetch history from API and cache it
+   * Check if auth cookies exist to avoid unnecessary API calls
+   * @returns Boolean indicating if auth cookies were found
    */
-  async fetchHistoryFromAPI(cacheKey: string, operationId: string): Promise<Chat[]> {
-    const startTime = performance.now();
-    console.log(`[History:${operationId}] Starting API fetch for chat history`);
+  checkForAuthCookies(): boolean {
+    if (typeof document === 'undefined') return false;
     
     try {
-      // Add timeout to avoid hanging requests
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout (increased from 10)
+      const cookies = document.cookie.split(';').map(c => c.trim());
       
-      const response = await fetch('/api/history', {
-        method: 'GET',
-        headers: {
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
-        },
-        signal: controller.signal
-      });
+      // Look specifically for Supabase auth token cookies
+      const hasAuthCookie = cookies.some(c => 
+        c.startsWith('sb-') && 
+        c.includes('-auth-token') && 
+        c !== 'sb-auth-token=' &&
+        !c.endsWith('=')
+      );
       
-      // Clear timeout once we have a response
-      clearTimeout(timeoutId);
-      
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => 'Could not read error text');
-        const errorDetails = {
-          status: response.status,
-          statusText: response.statusText,
-          errorText
-        };
-        
-        // Special handling for authentication errors (401)
-        if (response.status === 401) {
-          console.warn(`[History:${operationId}] Authentication error: Not logged in or session expired`);
-          
-          // Cache an empty array for a longer period to prevent constant retries
-          // This creates a "cooling off" period for auth-failed requests
-          const FAILED_AUTH_CACHE_TTL = 30000; // 30 seconds (much longer than regular retries)
-          try {
-            // Cache empty array but with a special flag to indicate auth failure
-            clientCache.set(cacheKey, [], FAILED_AUTH_CACHE_TTL);
-            clientCache.set(`${cacheKey}_auth_failed`, true, FAILED_AUTH_CACHE_TTL);
-            console.log(`[History:${operationId}] Cached auth failure state for ${FAILED_AUTH_CACHE_TTL/1000}s to prevent constant retries`);
-          } catch (cacheError) {
-            console.warn(`[History:${operationId}] Failed to cache auth failure state:`, cacheError);
-          }
-          
-          // Return empty array - app should handle gracefully
-          return [];
+      // Log presence/absence of auth cookies at a reduced rate
+      if (Math.random() < 0.01) {
+        console.log(`Auth cookie check: ${hasAuthCookie ? 'Present' : 'Missing'}`);
+        if (!hasAuthCookie) {
+          console.log('Cookie debug:', cookies.map(c => c.split('=')[0]));
         }
+      }
+      
+      return hasAuthCookie;
+    } catch (e) {
+      console.warn('Error checking auth cookies:', e);
+      return false;
+    }
+  },
+
+  /**
+   * Fetch history data directly from API
+   * @param cacheKey Cache key for deduplication
+   * @param operationId Operation ID for tracing
+   * @returns Array of chat objects
+   */
+  async fetchHistoryFromAPI(cacheKey: string, operationId: string): Promise<Chat[]> {
+    try {
+      // CRITICAL FIX: Check for cookies before making the request
+      const hasCookies = this.checkForAuthCookies();
+      if (!hasCookies) {
+        console.warn(`No auth cookies found, skipping history fetch to avoid 401`, { operationId });
+        setAuthFailureState(true);
+        return [];
+      }
+      
+      // Add abortTimeout to prevent hanging requests
+      const abortController = new AbortController();
+      const abortTimeout = setTimeout(() => abortController.abort(), 10000);
+
+      // Add a unique operation ID for tracing
+      const headers = new Headers();
+      headers.append('Cache-Control', 'no-cache');
+      headers.append('x-operation-id', operationId);
+      
+      // Add anti-cache parameter with reduced frequency (once per minute max)
+      const cacheBuster = Math.floor(Date.now() / 60000);
+      const url = `/api/history?t=${cacheBuster}`;
+      
+      // Log request to help debug auth issues
+      console.log(`Fetching history with cookies: ${hasCookies ? 'Yes' : 'No'}`, { operationId });
+      
+      // Make the API request
+      const response = await fetch(url, {
+        method: 'GET',
+        headers,
+        credentials: 'include', // Include cookies for auth
+        signal: abortController.signal
+      });
+      
+      // Clear abort timeout
+      clearTimeout(abortTimeout);
+      
+      // Check for auth issues - 401 Unauthorized or 403 Forbidden
+      if (response.status === 401 || response.status === 403) {
+        // Handle auth failure with enhanced circuit breaker pattern
+        setAuthFailureState(true);
         
-        console.error(`[History:${operationId}] API returned error status ${response.status}`, errorDetails);
-        throw new Error(`API returned status ${response.status}: ${errorText}`);
+        // More specific logging with error status
+        console.warn(`Authentication failed (${response.status}) when fetching history. Circuit breaker activated for ${Math.round(authBackoffDuration/1000)}s.`, { operationId });
+        
+        // Remove pending request
+        delete pendingRequests[cacheKey];
+        
+        return [];
       }
       
+      // Reset auth failure state only on successful response
+      if (response.ok) {
+        setAuthFailureState(false);
+      }
+      
+      // Parse response
       const data = await response.json();
-      const duration = Math.round(performance.now() - startTime);
       
-      console.log(`[History:${operationId}] Successfully fetched history from API`, {
-        status: response.status,
-        duration,
-        count: data.length,
-        firstChatId: data.length > 0 ? data[0].id.slice(0, 8) : null,
-        chatIds: data.length > 0 ? data.slice(0, 3).map((c: Chat) => c.id.slice(0, 8)) : []
-      });
-      
-      // Clear any previous auth failure flag
-      try {
-        clientCache.set(`${cacheKey}_auth_failed`, false);
-      } catch (e) {
-        // Ignore
+      // Validate response format - expect an array of chat objects
+      if (!Array.isArray(data)) {
+        console.error('Invalid history API response format', { 
+          data,
+          type: typeof data 
+        });
+        throw new Error('Invalid history API response format ' + JSON.stringify(data));
       }
       
-      // Cache the result for future use
-      try {
-        clientCache.set(cacheKey, data);
-        console.log(`[History:${operationId}] Chat history cached (${data.length} items)`);
-      } catch (cacheError) {
-        console.warn(`[History:${operationId}] Failed to cache chat history:`, cacheError);
-      }
+      // Cache the fetched data
+      clientCache.set('chat_history', data, CACHE_TTL);
       
-      return data;
+      // Return the data
+      return data as Chat[];
     } catch (error) {
-      const duration = Math.round(performance.now() - startTime);
-      const isAbort = error instanceof DOMException && error.name === 'AbortError';
-      
-      console.error(`[History:${operationId}] ${isAbort ? 'Fetch timed out' : 'API error'}:`, {
-        error,
-        duration,
-        isTimeout: isAbort,
-        message: error instanceof Error ? error.message : String(error)
+      // API request error - but NOT auth failure (that's handled above)
+      console.error('Error fetching history from API', { 
+        error: error instanceof Error ? error.message : String(error),
+        operationId 
       });
       
-      // Rethrow with a clearer message for debugging
-      throw new Error(`Failed to fetch chat history: ${isAbort ? 'Request timed out' : error instanceof Error ? error.message : String(error)}`);
+      // Clean up pending request
+      delete pendingRequests[cacheKey];
+      
+      // Throw a cleaner error
+      throw new Error(error instanceof Error ? error.message : 'Unknown error');
     }
   },
 

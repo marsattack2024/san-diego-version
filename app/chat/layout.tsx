@@ -1,6 +1,6 @@
 import { AppSidebar } from '@/components/app-sidebar';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
-import { createServerClient } from '@/lib/supabase/server';
+import { createClient } from '@/utils/supabase/server';
 import { cookies , headers } from 'next/headers';
 
 export default async function ChatLayout({
@@ -18,7 +18,7 @@ export default async function ChatLayout({
     console.log("Auth Cookies:", cookieList.map(c => c.name)); // Debug log, only log names
     
     // Create Supabase server client with cookies
-    const supabase = await createServerClient();
+    const supabase = await createClient();
     
     // Get user from session
     const { data } = await supabase.auth.getUser();

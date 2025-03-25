@@ -3,7 +3,7 @@ import { Toaster } from 'sonner';
 
 import { ThemeProvider } from '@/components/theme-provider';
 import { DeepSearchTracker } from '@/components/deep-search-tracker';
-import { AuthProvider } from '@/lib/supabase/auth-provider';
+import { AuthProvider } from '@/utils/supabase/auth-provider';
 import { AuthHeadersSetup } from '@/components/auth-headers-setup';
 
 import './globals.css';

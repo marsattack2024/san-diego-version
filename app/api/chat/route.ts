@@ -2,7 +2,7 @@ import { validateChatRequest } from '@/lib/chat/validator';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '../../../lib/logger/constants';
 import { type AgentType } from '@/lib/agents/prompts';
-import { createServerClient } from '@/lib/supabase/server';
+import { createClient } from '@/utils/supabase/server';
 import { cookies } from 'next/headers';
 import { z } from 'zod';
 import { Redis } from '@upstash/redis';
@@ -98,7 +98,7 @@ export async function POST(req: Request) {
       
       // Create Supabase client for auth
       const cookieStore = await cookies();
-      const authClient = await createServerClient();
+      const authClient = await createClient();
       
       // Get user ID from session
       const { data: { user } } = await authClient.auth.getUser();
@@ -1096,7 +1096,7 @@ SOURCE: ${url}
               if (id) {
                 edgeLogger.debug('Storing chat session', { id });
                 try {
-                  const authClient = await createServerClient();
+                  const authClient = await createClient();
                   
                   // First check if the session already exists
                   const { data: existingSession } = await authClient

@@ -81,17 +81,37 @@ function PureMultimodalInput({
 
   const adjustHeight = () => {
     if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = `${textareaRef.current.scrollHeight + 2}px`;
+      textareaRef.current.style.height = '72px';
+      const newHeight = Math.min(Math.max(textareaRef.current.scrollHeight, 72), 200);
+      textareaRef.current.style.height = `${newHeight}px`;
     }
   };
 
   const resetHeight = () => {
     if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      textareaRef.current.style.height = '98px';
+      textareaRef.current.style.height = '100px';
     }
   };
+
+  useEffect(() => {
+    if (textareaRef.current) {
+      adjustHeight();
+      
+      if (width && width >= 768) {
+        textareaRef.current.focus();
+      }
+    }
+    
+    const initialAnimationTimeout = setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.style.transition = 'height 0.1s ease-out';
+      }
+    }, 300);
+    
+    return () => {
+      clearTimeout(initialAnimationTimeout);
+    };
+  }, [width]);
 
   const [localStorageInput, setLocalStorageInput] = useLocalStorage(
     'input',
@@ -101,7 +121,6 @@ function PureMultimodalInput({
   useEffect(() => {
     if (textareaRef.current) {
       const domValue = textareaRef.current.value;
-      // Prefer DOM value over localStorage to handle hydration
       const finalValue = domValue || localStorageInput || '';
       setInput(finalValue);
       adjustHeight();
@@ -123,6 +142,8 @@ function PureMultimodalInput({
   const [uploadQueue, setUploadQueue] = useState<Array<string>>([]);
 
   const submitForm = useCallback(() => {
+    if (!input.trim() && !attachments.length) return;
+    
     window.history.replaceState({}, '', `/chat/${chatId}`);
 
     handleSubmit(undefined, {
@@ -130,19 +151,27 @@ function PureMultimodalInput({
     });
 
     setAttachments([]);
+    setInput('');
     setLocalStorageInput('');
+    
     resetHeight();
-
-    if (width && width > 768) {
-      textareaRef.current?.focus();
+    
+    if (width && width >= 768) {
+      window.requestAnimationFrame(() => {
+        if (textareaRef.current) {
+          textareaRef.current.focus();
+        }
+      });
     }
   }, [
+    input,
     attachments,
     handleSubmit,
     setAttachments,
+    setInput,
     setLocalStorageInput,
-    width,
     chatId,
+    width,
   ]);
 
   const uploadFile = async (file: File) => {
@@ -245,10 +274,10 @@ function PureMultimodalInput({
         value={input}
         onChange={handleInput}
         className={cx(
-          'min-h-[24px] max-h-[calc(40vh)] overflow-hidden resize-none rounded-2xl !text-base bg-muted pb-10 dark:border-zinc-700',
+          'min-h-[100px] max-h-[200px] overflow-y-auto resize-none rounded-2xl !text-base bg-muted px-4 py-3 dark:border-zinc-700 md:px-4 px-5',
           className,
         )}
-        rows={2}
+        rows={1}
         autoFocus
         onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey) {
@@ -395,16 +424,12 @@ function PureSendButton({
   const handleSubmit = (event: React.MouseEvent) => {
     event.preventDefault();
     
-    // Prevent double submission
     if (isSubmitting) return;
     
-    // Set submitting state immediately for UI feedback
     setIsSubmitting(true);
     
-    // Call the submit function
     submitForm();
     
-    // Reset after a short delay
     setTimeout(() => {
       setIsSubmitting(false);
     }, 1000);
