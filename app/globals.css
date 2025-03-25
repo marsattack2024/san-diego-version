@@ -23,13 +23,18 @@
 
 /* Chat input textarea sizing */
 .chat-input-textarea {
-  height: 144px;
-  min-height: 144px;
-  max-height: 240px;
+  height: 115px;
+  min-height: 115px;
+  max-height: 360px;
   box-sizing: border-box;
   overflow-y: auto;
   transition: height 0.1s ease-out;
   line-height: 1.5;
+}
+
+/* Custom hover scale for buttons */
+.hover\:scale-115:hover {
+  transform: scale(1.15);
 }
 
 /* Animation delay utilities */

@@ -82,7 +82,7 @@ The `sd_user_profiles` table includes:
 
 - Header caching (`x-has-profile`) prevents repeated database queries
 - Error handling in middleware defaults to allowing access rather than creating redirect loops
-- React's `cache()` function in `lib/supabase/server.ts` deduplicates Supabase client creation
+- React's `cache()` function in `utils/supabase/server.ts` deduplicates Supabase client creation
 
 ## Potential Issues
 

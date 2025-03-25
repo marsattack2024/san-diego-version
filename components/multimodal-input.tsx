@@ -83,8 +83,8 @@ const PureMultimodalInput = ({
     
     // Calculate new height based on content
     const newHeight = Math.min(
-      Math.max(textareaRef.current.scrollHeight, 144),
-      240
+      Math.max(textareaRef.current.scrollHeight, 115),
+      360
     );
     
     textareaRef.current.style.height = `${newHeight}px`;
@@ -93,7 +93,7 @@ const PureMultimodalInput = ({
   // Simpler reset height function
   const resetHeight = useCallback(() => {
     if (!textareaRef.current) return;
-    textareaRef.current.style.height = '144px';
+    textareaRef.current.style.height = '115px';
   }, []);
 
   const [localStorageInput, setLocalStorageInput] = useLocalStorage(
@@ -363,7 +363,7 @@ const PureMultimodalInput = ({
         )}
 
         {/* Make sure the controls always stay at the bottom of the input area */}
-        <div className="absolute bottom-0 left-0 right-0 px-4 py-2 flex justify-between items-center border-t dark:border-zinc-700 bg-muted rounded-b-2xl">
+        <div className="absolute bottom-0 left-0 right-0 px-4 py-2 flex justify-between items-center bg-muted rounded-b-2xl">
           <DeepSearchButton 
             deepSearchEnabled={deepSearchEnabled} 
             setDeepSearchEnabled={setDeepSearchEnabled} 
@@ -411,9 +411,9 @@ function PureDeepSearchButton({
         <Button
           data-testid="deep-search-button"
           className={cx(
-            "rounded-md h-9 px-3 border dark:border-zinc-700 flex items-center gap-2",
+            "rounded-full h-10 px-4 border dark:border-zinc-700 flex items-center gap-2 transition-all duration-200",
             deepSearchEnabled 
-              ? "bg-primary text-primary-foreground hover:bg-primary/90" 
+              ? "bg-primary text-primary-foreground hover:bg-primary/80" 
               : "bg-transparent hover:bg-accent hover:text-accent-foreground"
           )}
           onClick={(event) => {
@@ -424,8 +424,8 @@ function PureDeepSearchButton({
           variant={deepSearchEnabled ? "default" : "outline"}
           size="sm"
         >
-          <MagnifyingGlassIcon size={14} />
-          <span className="text-xs font-medium">Deep Search</span>
+          <MagnifyingGlassIcon size={16} />
+          <span className="text-sm font-medium">Deep Search</span>
         </Button>
       </TooltipTrigger>
       <TooltipContent side="top">
@@ -449,14 +449,14 @@ function PureStopButton({
   return (
     <Button
       data-testid="stop-button"
-      className="rounded-full p-1.5 h-fit border dark:border-zinc-600"
+      className="rounded-full p-2 h-10 w-10 border dark:border-zinc-600"
       onClick={(event) => {
         event.preventDefault();
         stop();
         setMessages((messages) => sanitizeUIMessages(messages));
       }}
     >
-      <StopIcon size={14} />
+      <StopIcon size={16} />
     </Button>
   );
 }
@@ -492,13 +492,13 @@ function PureSendButton({
     <Button
       data-testid="send-button"
       className={cx(
-        "rounded-full p-1.5 h-fit border dark:border-zinc-600",
+        "rounded-full p-2 h-10 w-10 border dark:border-zinc-600 transition-all duration-200 hover:scale-115",
         isSubmitting && "opacity-70"
       )}
       onClick={handleSubmit}
       disabled={input.length === 0 || uploadQueue.length > 0 || isSubmitting}
     >
-      <ArrowUpIcon size={14} />
+      <ArrowUpIcon size={16} />
     </Button>
   );
 }
