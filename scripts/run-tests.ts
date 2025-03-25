@@ -15,7 +15,8 @@ import { tests as loggingTests } from './tests/logging.test';
 import { tests as perplexityTests } from './tests/perplexity.test';
 import { tests as scraperTests } from './tests/scraper.test';
 import { tests as envTests } from './tests/env-test';
-import { tests as supabaseRpcTests } from './tests/supabase-rpc-test';
+// Commented out to prevent RPC test messages from being generated
+// import { tests as supabaseRpcTests } from './tests/supabase-rpc-test';
 import { tests as perplexityDirectTests } from './tests/perplexity-direct-test';
 
 const logger = edgeLogger;
@@ -38,7 +39,8 @@ const TEST_SUITES: Record<string, TestCase[]> = {
   'perplexity': perplexityTests,
   'scraper': scraperTests,
   'env': envTests,
-  'supabase-rpc': supabaseRpcTests,
+  // Commented out to prevent RPC test messages from being generated
+  // 'supabase-rpc': supabaseRpcTests,
   'perplexity-direct': perplexityDirectTests,
   // Add more test suites here as they are created
 };

@@ -507,7 +507,7 @@ export const historyService = {
       }
       
       // No valid cached state, make a lightweight request to check auth status
-      const probe = await fetch('/api/chat/test-permissions', {
+      const probe = await fetch('/api/auth/status', {
         method: 'GET',
         credentials: 'include',
         cache: 'no-store',
@@ -517,16 +517,16 @@ export const historyService = {
         }
       });
       
-      // Check if we got the auth-ready header
-      const authReady = probe.headers.get('x-auth-ready') === 'true';
+      // Check if we got a successful response and the user is authenticated
+      const authReady = probe.ok && probe.status === 200;
       const authState = probe.headers.get('x-auth-state');
       
       // Store the auth ready state
       clientCache.set(AUTH_READY_KEY, authReady, AUTH_READY_TTL);
       clientCache.set(AUTH_READY_TIMESTAMP_KEY, Date.now(), AUTH_READY_TTL);
       
-      // Log auth state at a reduced rate
-      if (Math.random() < 0.05) {
+      // Log auth state at a reduced rate (1% of the time)
+      if (Math.random() < 0.01) {
         console.log(`Auth readiness check: ${authReady ? 'Ready' : 'Not ready'}, State: ${authState || 'unknown'}`);
       }
       
