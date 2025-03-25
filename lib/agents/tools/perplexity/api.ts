@@ -74,19 +74,24 @@ export async function callPerplexityAPI(query: string): Promise<{
     const host = process.env.VERCEL_URL || 'localhost:3000';
     const apiUrl = `${protocol}://${host}/api/perplexity`;
 
+    // Define headers with special User-Agent for internal requests
+    const headers = {
+      "Content-Type": "application/json",
+      "User-Agent": "Mozilla/5.0 SanDiego/1.0"
+    };
+    
     logger.info("Perplexity serverless API request", {
       operation: "perplexity_serverless_request",
       operationId,
       url: apiUrl,
+      headers, // Log the headers being sent
       runtime: runtimeInfo.type
     });
     
     // Call our serverless API endpoint
     const response = await fetch(apiUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
+      headers,
       body: JSON.stringify({ query })
     });
 

@@ -48,6 +48,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { createClient } from '@/utils/supabase/client';
 import { cn } from '@/lib/utils';
+import { throttle } from 'lodash';
 
 // Consistent type definition for grouped chats
 type GroupedChats = {
@@ -293,38 +294,52 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     return () => clearTimeout(timer);
   }, [fetchChatHistory, user?.id]);
 
-  // Update polling logic to avoid spamming when auth fails
+  // Add throttled fetch function to reduce API calls
+  const throttledFetchChatHistory = useCallback(
+    throttle((forceRefresh = false) => {
+      if (!isRefreshing && user?.id && isPageVisible()) {
+        fetchChatHistory(forceRefresh);
+      }
+    }, 10000), // 10 second throttle
+    [user?.id, isRefreshing]
+  );
+  
+  // Setup polling for history updates with adaptive intervals
   useEffect(() => {
-    // Don't poll if:
-    // 1. No user is logged in
-    // 2. Auth is in failure state
-    // 3. We're in a mobile environment (to save battery)
-    const isLoggedIn = !!user?.id;
-    const hasAuthFailed = historyService.isInAuthFailure();
+    // Skip polling completely if no user or no user ID
+    if (!user?.id) return;
     
-    if (!isLoggedIn || hasAuthFailed || !shouldPoll()) {
-      // Skip polling in these cases
-      if (hasAuthFailed && Math.random() < 0.1) {
-        // Log skipped polls at low frequency
-        console.log('Skipping history poll due to auth failure');
-      }
-      return;
-    }
+    // Don't set up polling if we should skip it
+    if (!shouldPoll()) return;
     
-    // Set appropriate poll interval based on device
-    const pollInterval = isMobile ? getMobilePollInterval() : getDesktopPollInterval();
+    // Determine polling interval based on device type
+    const pollingInterval = isMobile ? 
+      getMobilePollInterval() : 
+      getDesktopPollInterval();
     
+    // Add jitter to prevent synchronized requests
+    const jitter = Math.floor(Math.random() * 5000);
+    const effectiveInterval = pollingInterval + jitter;
+    
+    console.log(`Setting up history polling: ${Math.round(effectiveInterval/1000)}s`);
+    
+    // Set up polling interval with adaptive timing
     const intervalId = setInterval(() => {
-      // Only poll if page is visible and no auth failure
-      if (isPageVisible() && !historyService.isInAuthFailure()) {
-        // Add random jitter to avoid synchronized API calls
-        const jitter = Math.random() * 2000; // 0-2 seconds of jitter
-        setTimeout(() => fetchChatHistory(), jitter);
+      // Only fetch if page is visible and not already refreshing
+      if (isPageVisible() && !isRefreshing) {
+        console.log('Running scheduled history check');
+        throttledFetchChatHistory(false);
+      } else {
+        console.log('Skipping history poll: ' + 
+          (!isPageVisible() ? 'page not visible' : 'already refreshing'));
       }
-    }, pollInterval);
-
-    return () => clearInterval(intervalId);
-  }, [fetchChatHistory, isMobile, user?.id]);
+    }, effectiveInterval);
+    
+    // Clean up interval on unmount
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [throttledFetchChatHistory, isMobile, user?.id]);
   
   // Manual refresh function for the refresh button
   const refreshHistory = useCallback(async () => {

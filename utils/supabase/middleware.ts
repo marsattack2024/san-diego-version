@@ -12,10 +12,10 @@ export async function updateSession(request: NextRequest) {
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
         cookies: {
-          async getAll() {
+          getAll() {
             return request.cookies.getAll()
           },
-          async setAll(cookiesToSet) {
+          setAll(cookiesToSet) {
             cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
             supabaseResponse = NextResponse.next({
               request,
@@ -54,6 +54,19 @@ export async function updateSession(request: NextRequest) {
       !request.nextUrl.pathname.startsWith('/_next') &&
       !request.nextUrl.pathname.includes('favicon.ico')
     ) {
+      // For API routes, return JSON error instead of redirecting
+      if (request.nextUrl.pathname.startsWith('/api/')) {
+        return NextResponse.json(
+          { 
+            error: 'Unauthorized', 
+            message: 'Authentication required',
+            code: 'auth/unauthorized'
+          }, 
+          { status: 401 }
+        );
+      }
+      
+      // For regular routes, redirect to login
       const url = request.nextUrl.clone()
       url.pathname = '/login'
       return NextResponse.redirect(url)
@@ -106,10 +119,10 @@ export function createClient(request: NextRequest, response: NextResponse) {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        async getAll() {
+        getAll() {
           return request.cookies.getAll()
         },
-        async setAll(cookiesToSet) {
+        setAll(cookiesToSet) {
           cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
           cookiesToSet.forEach(({ name, value, options }) =>
             response.cookies.set(name, value, options)

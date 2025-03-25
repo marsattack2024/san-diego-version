@@ -7,9 +7,17 @@ const pendingRequests: Record<string, Promise<Chat[]> | null> = {};
 
 // Track last refresh time
 let lastRefreshTime = 0;
-const REFRESH_INTERVAL = 15 * 60 * 1000; // 15 minutes
+const REFRESH_INTERVAL = 15 * 60 * 1000; // 15 minutes (increased from previous value)
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutes cache TTL
 const CACHE_TTL_ERROR = 10 * 60 * 1000; // 10 minutes cache TTL for error state
+
+// Add cache and request optimization
+const MIN_REFRESH_INTERVAL = 30 * 1000; // 30 seconds minimum between refreshes
+
+// Rate limit tracking
+let lastSuccessfulFetch = 0;
+let consecutiveSuccessfulFetches = 0;
+let adaptiveRefreshInterval = REFRESH_INTERVAL;
 
 // Auth failure tracking constants
 const AUTH_FAILURE_KEY = 'global_auth_failure';
@@ -246,6 +254,24 @@ export const historyService = {
       }
     }
     
+    // Rate limit check - use adaptive refresh interval
+    const now = Date.now();
+    const timeSinceLastFetch = now - lastSuccessfulFetch;
+    
+    // Only allow forced refreshes more often than the minimum interval
+    if (!forceRefresh && timeSinceLastFetch < MIN_REFRESH_INTERVAL) {
+      console.log(`Throttling history fetch: ${(MIN_REFRESH_INTERVAL - timeSinceLastFetch)/1000}s remaining`);
+      // Return cached data immediately
+      try {
+        const cachedData = clientCache.get('chat_history') as Chat[] | undefined;
+        if (cachedData && Array.isArray(cachedData) && cachedData.length > 0) {
+          return cachedData;
+        }
+      } catch (e) {
+        // Ignore cache errors
+      }
+    }
+    
     const startTime = performance.now();
     const operationId = Math.random().toString(36).substring(2, 10);
     
@@ -268,9 +294,6 @@ export const historyService = {
         return [];
       }
       
-      // Track this refresh time regardless of success/failure
-      lastRefreshTime = Date.now();
-      
       // If already loading, don't start a new request
       if (pendingRequests[cacheKey]) {
         console.log(`[History:${operationId}] Reusing existing in-flight request`);
@@ -283,36 +306,65 @@ export const historyService = {
         }
       }
       
-      // Log fetching attempt
-      console.log(`[History:${operationId}] Fetching chat history`, {
-        forceRefresh,
-        cacheKey,
-        hasPendingRequest: !!pendingRequests[cacheKey],
-        timestamp: new Date().toISOString()
-      });
+      // Log fetching attempt at reduced frequency
+      if (Math.random() < 0.2 || forceRefresh) {
+        console.log(`[History:${operationId}] Fetching chat history`, {
+          forceRefresh,
+          cacheKey,
+          hasPendingRequest: !!pendingRequests[cacheKey],
+          timeSinceLastFetch: timeSinceLastFetch / 1000,
+          timestamp: new Date().toISOString()
+        });
+      }
       
       // Try cache first if not forcing refresh
       if (!forceRefresh) {
         try {
-          // Use the TTL parameter of the client cache (2 minutes)
+          // Use the TTL parameter of the client cache
           const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
           if (cachedData && cachedData.length > 0) {
-            console.log(`[History:${operationId}] Using cached data with ${cachedData.length} items`);
+            // Only log cache hits at reduced frequency
+            if (Math.random() < 0.2) {
+              console.log(`[History:${operationId}] Using cached data with ${cachedData.length} items`);
+            }
             
             // Check if we need a background refresh (only if not accessed recently)
             const timeSinceLastRefresh = Date.now() - lastRefreshTime;
-            if (timeSinceLastRefresh > REFRESH_INTERVAL) {
-              console.log(`[History:${operationId}] Starting background refresh after using cache (${Math.round(timeSinceLastRefresh / 1000)}s since last refresh)`);
+            if (timeSinceLastRefresh > adaptiveRefreshInterval) {
+              if (Math.random() < 0.2) {
+                console.log(`[History:${operationId}] Starting background refresh after using cache (${Math.round(timeSinceLastRefresh / 1000)}s since last refresh)`);
+              }
+              
               // Schedule a background refresh after a short delay
               setTimeout(() => {
                 this.fetchHistoryFromAPI(cacheKey, `${operationId}-background`)
                   .then(freshData => {
                     // Update cache with fresh data
                     clientCache.set(cacheKey, freshData);
+                    
+                    // Update adaptive refresh interval based on success
+                    lastSuccessfulFetch = Date.now();
+                    consecutiveSuccessfulFetches++;
+                    
+                    // Gradually increase refresh interval after consecutive successes
+                    if (consecutiveSuccessfulFetches > 3) {
+                      adaptiveRefreshInterval = Math.min(
+                        adaptiveRefreshInterval * 1.5, 
+                        REFRESH_INTERVAL
+                      );
+                    }
                   })
-                  .catch(err => console.error('Background refresh failed:', err));
+                  .catch(err => {
+                    console.error('Background refresh failed:', err);
+                    consecutiveSuccessfulFetches = 0;
+                    // Decrease refresh interval on failure
+                    adaptiveRefreshInterval = Math.max(
+                      adaptiveRefreshInterval / 2,
+                      MIN_REFRESH_INTERVAL
+                    );
+                  });
               }, 100);
-            } else {
+            } else if (Math.random() < 0.1) {
               console.log(`[History:${operationId}] Skipping background refresh (only ${Math.round(timeSinceLastRefresh / 1000)}s since last refresh)`);
             }
             

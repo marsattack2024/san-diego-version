@@ -3,8 +3,6 @@
  * Simplified implementation using only LRU cache
  */
 
-'use client';
-
 import { LRUCache } from 'lru-cache';
 import { User } from '@supabase/supabase-js';
 

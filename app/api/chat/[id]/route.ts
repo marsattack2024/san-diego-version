@@ -4,7 +4,7 @@ import { createClient } from '@/utils/supabase/server';
 import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
 import { cookies, headers } from 'next/headers';
 import { PostgrestResponse, PostgrestError, PostgrestSingleResponse, User } from '@supabase/supabase-js';
-import { authCache } from '@/lib/auth/auth-cache';
+import { authCache } from '@/utils/auth/auth-cache';
 
 // Add after any runtime configuration, or at the top of the file
 export const dynamic = 'force-dynamic';
@@ -54,10 +54,13 @@ export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  // Next.js App Router requires params to be awaited before access to prevent hydration issues
+  const id = (await Promise.resolve(params)).id;
+  
+  // Start performance tracking
+  const startTime = performance.now();
+  
   try {
-    // Extract ID from params
-    const { id } = await Promise.resolve(params);
-    
     // Reduce log verbosity to debug level
     edgeLogger.debug('GET chat by ID request', { chatId: id });
     
@@ -167,9 +170,11 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  // Next.js App Router requires params to be awaited before access to prevent hydration issues
+  const id = (await Promise.resolve(params)).id;
+  
   try {
-    // Extract ID from params
-    const { id } = await Promise.resolve(params);
+    // Get the request body
     const body = await request.json();
     const { title } = body;
     
@@ -301,8 +306,8 @@ export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  // Extract ID from params for traceability
-  const { id } = params;
+  // Next.js App Router requires params to be awaited before access to prevent hydration issues
+  const id = (await Promise.resolve(params)).id;
   
   try {
     // Get the message from the request body

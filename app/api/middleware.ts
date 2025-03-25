@@ -43,6 +43,9 @@ export async function apiMiddleware(request: NextRequest) {
         // Return the rate limit response
         return historyResponse;
       }
+      
+      // Skip detailed logging for history endpoints to reduce noise
+      request.headers.set('x-skip-detailed-logging', 'true');
     } else {
       // Apply normal rate limiting based on API route type
       let rateLimitResponse = null;
@@ -124,9 +127,20 @@ export async function apiMiddleware(request: NextRequest) {
     // Log API request (only if not a ping/health endpoint)
     if (!pathname.includes('/health') && !pathname.includes('/ping')) {
       const duration = Date.now() - startTime;
-      // Only log if processing took more than 50ms to reduce noise
-      if (duration > 50) {
-        edgeLogger.info('API request processed', {
+      const skipDetailedLogging = request.headers.get('x-skip-detailed-logging') === 'true';
+      
+      // Only log if:
+      // 1. Processing took more than 50ms to reduce noise, or
+      // 2. It's a non-history endpoint, or
+      // 3. It's a history endpoint but the request is slow (>200ms)
+      if ((duration > 50 && !pathname.startsWith('/api/history')) || 
+          (pathname.startsWith('/api/history') && duration > 200)) {
+        
+        // Use info level for normal requests, debug level for history to reduce noise
+        const logLevel = pathname.startsWith('/api/history') ? 'debug' : 'info';
+        const logMethod = logLevel === 'debug' ? edgeLogger.debug : edgeLogger.info;
+        
+        logMethod('API request processed', {
           path: pathname,
           method: request.method,
           durationMs: duration,

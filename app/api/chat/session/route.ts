@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { authCache } from '@/lib/auth/auth-cache';
+import { authCache } from '@/utils/auth/auth-cache';
 import { createClient } from '@/utils/supabase/server';
 import { cookies } from 'next/headers';
 import type { User } from '@supabase/supabase-js';

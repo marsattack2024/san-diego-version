@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { createClient } from '@/utils/supabase/server';
 
 // Important: No runtime declaration means this runs as a serverless function
 
@@ -12,6 +13,72 @@ export async function POST(req: NextRequest) {
     operationId,
     important: true
   });
+  
+  // Add detailed header logging for debugging
+  const headerEntries = Array.from(req.headers.entries());
+  const headers = Object.fromEntries(headerEntries);
+  edgeLogger.info('Perplexity request headers', {
+    operation: 'perplexity_headers_debug',
+    operationId,
+    headers,
+    userAgent: req.headers.get('user-agent'),
+    important: true
+  });
+  
+  // Check if the request is from our own server (internal API-to-API)
+  const userAgent = req.headers.get('user-agent') || '';
+  const isInternalRequest = userAgent.includes('SanDiego');
+  
+  edgeLogger.info('Perplexity authentication decision', {
+    operation: 'perplexity_auth_debug',
+    operationId,
+    userAgent,
+    isInternalRequest,
+    important: true
+  });
+  
+  // Only authenticate external requests, skip auth for internal server communication
+  if (!isInternalRequest) {
+    // Authenticate the request
+    try {
+      const supabase = await createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      if (!user) {
+        edgeLogger.warn('Unauthorized access attempt to Perplexity API', {
+          operation: 'perplexity_unauthorized',
+          operationId
+        });
+        
+        return NextResponse.json({
+          success: false,
+          error: 'Unauthorized'
+        }, { status: 401 });
+      }
+      
+      edgeLogger.info('User authenticated for Perplexity API', {
+        operation: 'perplexity_auth_success',
+        operationId,
+        userId: user.id
+      });
+    } catch (authError) {
+      edgeLogger.error('Authentication error in Perplexity API', {
+        operation: 'perplexity_auth_error',
+        operationId,
+        error: authError instanceof Error ? authError.message : String(authError)
+      });
+      
+      return NextResponse.json({
+        success: false,
+        error: 'Authentication error'
+      }, { status: 500 });
+    }
+  } else {
+    edgeLogger.info('Internal API-to-API request detected, skipping authentication', {
+      operation: 'perplexity_internal_call',
+      operationId
+    });
+  }
   
   // Parse the request body
   let body;
