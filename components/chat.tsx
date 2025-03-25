@@ -606,6 +606,48 @@ export function Chat({
     return () => clearTimeout(timeoutId);
   }, [messages.length]); // Depend on message count
 
+  // Add before the return statement to ensure proper scrolling when the input expands
+  useEffect(() => {
+    // Function to ensure the input is visible
+    const ensureInputVisible = () => {
+      if (inputContainerRef.current) {
+        // Use a simpler check that doesn't cause excessive scrolling
+        const rect = inputContainerRef.current.getBoundingClientRect();
+        const isOutOfView = rect.bottom > window.innerHeight + 100; // Increased offset to account for larger input
+        
+        if (isOutOfView) {
+          inputContainerRef.current.scrollIntoView({ 
+            behavior: 'smooth', 
+            block: 'end',
+            inline: 'nearest'
+          });
+        }
+      }
+    };
+    
+    // Watch for input changes to ensure visibility, but only for longer inputs
+    if (input.length > 100) {
+      requestAnimationFrame(ensureInputVisible);
+    }
+    
+    // Set up resize observer with debouncing
+    if (inputContainerRef.current) {
+      let timeoutId: ReturnType<typeof setTimeout>;
+      
+      const resizeObserver = new ResizeObserver(() => {
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(ensureInputVisible, 100);
+      });
+      
+      resizeObserver.observe(inputContainerRef.current);
+      
+      return () => {
+        clearTimeout(timeoutId);
+        resizeObserver.disconnect();
+      };
+    }
+  }, [input]);
+
   // Display the messages with the correct layout
   return (
     <TooltipProvider delayDuration={0}>
@@ -618,7 +660,7 @@ export function Chat({
             isLoading={isLoading}
           />
         )}
-        <div ref={chatContainerRef} className="flex-1 overflow-y-auto pb-1">
+        <div ref={chatContainerRef} className="flex-1 overflow-y-auto pb-8">
           <Messages
             chatId={id}
             isLoading={isLoading}

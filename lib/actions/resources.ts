@@ -1,6 +1,6 @@
 'use server';
 
-import { createBrowserClient } from '../supabase/client';
+import { createClient as createBrowserClient } from '@/utils/supabase/client';
 import { createEmbedding } from '../vector/embeddings';
 import { edgeLogger } from '../logger/edge-logger';
 import { insertResourceSchema, type NewResourceParams } from './resources.types';

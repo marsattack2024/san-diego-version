@@ -32,7 +32,7 @@ import equal from 'fast-deep-equal';
 import { useChatStore } from '@/stores/chat-store';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 
-function PureMultimodalInput({
+const PureMultimodalInput = ({
   chatId,
   input,
   setInput,
@@ -66,77 +66,87 @@ function PureMultimodalInput({
     chatRequestOptions?: ChatRequestOptions,
   ) => void;
   className?: string;
-}) {
+}) => {
+  // Define constants for height values - moved to CSS variables
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
   
   const deepSearchEnabled = useChatStore(state => state.getDeepSearchEnabled());
   const setDeepSearchEnabled = useChatStore(state => state.setDeepSearchEnabled);
 
-  useEffect(() => {
-    if (textareaRef.current) {
-      adjustHeight();
-    }
+  // Simplified height adjustment function with useCallback
+  const adjustHeight = useCallback(() => {
+    if (!textareaRef.current) return;
+    
+    // Reset height to auto to properly calculate scrollHeight
+    textareaRef.current.style.height = 'auto';
+    
+    // Calculate new height based on content
+    const newHeight = Math.min(
+      Math.max(textareaRef.current.scrollHeight, 144),
+      240
+    );
+    
+    textareaRef.current.style.height = `${newHeight}px`;
   }, []);
 
-  const adjustHeight = () => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = '72px';
-      const newHeight = Math.min(Math.max(textareaRef.current.scrollHeight, 72), 200);
-      textareaRef.current.style.height = `${newHeight}px`;
-    }
-  };
-
-  const resetHeight = () => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = '100px';
-    }
-  };
-
-  useEffect(() => {
-    if (textareaRef.current) {
-      adjustHeight();
-      
-      if (width && width >= 768) {
-        textareaRef.current.focus();
-      }
-    }
-    
-    const initialAnimationTimeout = setTimeout(() => {
-      if (textareaRef.current) {
-        textareaRef.current.style.transition = 'height 0.1s ease-out';
-      }
-    }, 300);
-    
-    return () => {
-      clearTimeout(initialAnimationTimeout);
-    };
-  }, [width]);
+  // Simpler reset height function
+  const resetHeight = useCallback(() => {
+    if (!textareaRef.current) return;
+    textareaRef.current.style.height = '144px';
+  }, []);
 
   const [localStorageInput, setLocalStorageInput] = useLocalStorage(
     'input',
     '',
   );
 
+  // Initialization effect
   useEffect(() => {
-    if (textareaRef.current) {
-      const domValue = textareaRef.current.value;
-      const finalValue = domValue || localStorageInput || '';
-      setInput(finalValue);
+    if (!textareaRef.current) return;
+    
+    // Initial value setup
+    const finalValue = textareaRef.current.value || localStorageInput || '';
+    setInput(finalValue);
+    
+    // Initial height setup with slight delay to ensure proper calculation
+    requestAnimationFrame(() => {
       adjustHeight();
-    }
-    // Only run once after hydration
+      
+      // Add smooth transition after initial render
+      if (textareaRef.current) {
+        textareaRef.current.style.transition = 'height 0.1s ease-out';
+      }
+    });
+    
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Handle autofocus separately
+  useEffect(() => {
+    if (width && width >= 768) {
+      const timeoutId = setTimeout(() => {
+        textareaRef.current?.focus();
+      }, 100);
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [width]);
+
+  // Update local storage when input changes
   useEffect(() => {
     setLocalStorageInput(input);
   }, [input, setLocalStorageInput]);
 
-  const handleInput = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(event.target.value);
-    adjustHeight();
-  };
+  // Monitor input changes for height adjustment
+  useEffect(() => {
+    if (input === '') {
+      resetHeight();
+    } else {
+      // Use requestAnimationFrame to ensure DOM has updated
+      requestAnimationFrame(adjustHeight);
+    }
+  }, [input, adjustHeight, resetHeight]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadQueue, setUploadQueue] = useState<Array<string>>([]);
@@ -150,17 +160,18 @@ function PureMultimodalInput({
       experimental_attachments: attachments,
     });
 
+    // Clear form state
     setAttachments([]);
     setInput('');
     setLocalStorageInput('');
     
+    // Reset height
     resetHeight();
     
+    // Focus the textarea on desktop
     if (width && width >= 768) {
-      window.requestAnimationFrame(() => {
-        if (textareaRef.current) {
-          textareaRef.current.focus();
-        }
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
       });
     }
   }, [
@@ -170,9 +181,56 @@ function PureMultimodalInput({
     setAttachments,
     setInput,
     setLocalStorageInput,
+    resetHeight,
     chatId,
     width,
   ]);
+
+  // Clean input handler
+  const handleInput = useCallback((event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(event.target.value);
+  }, [setInput]);
+
+  // Key down handler
+  const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+
+      if (isLoading) {
+        toast.error('Please wait for the model to finish its response!');
+      } else {
+        submitForm();
+      }
+    }
+  }, [isLoading, submitForm]);
+
+  // Simplified resize observer with debounce
+  useEffect(() => {
+    if (!textareaRef.current) return;
+    
+    let timeoutId: ReturnType<typeof setTimeout>;
+    
+    const resizeObserver = new ResizeObserver(() => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        if (textareaRef.current) {
+          const rect = textareaRef.current.getBoundingClientRect();
+          const isPartiallyOffscreen = rect.bottom > window.innerHeight;
+          
+          if (isPartiallyOffscreen) {
+            textareaRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+          }
+        }
+      }, 100); // Debounce resize events
+    });
+    
+    resizeObserver.observe(textareaRef.current);
+    
+    return () => {
+      clearTimeout(timeoutId);
+      resizeObserver.disconnect();
+    };
+  }, []);
 
   const uploadFile = async (file: File) => {
     const formData = new FormData();
@@ -267,67 +325,61 @@ function PureMultimodalInput({
         </div>
       )}
 
-      <Textarea
-        data-testid="multimodal-input"
-        ref={textareaRef}
-        placeholder="Send a message..."
-        value={input}
-        onChange={handleInput}
-        className={cx(
-          'min-h-[100px] max-h-[200px] overflow-y-auto resize-none rounded-2xl !text-base bg-muted px-4 py-3 dark:border-zinc-700 md:px-4 px-5',
-          className,
-        )}
-        rows={1}
-        autoFocus
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' && !event.shiftKey) {
-            event.preventDefault();
+      <div className="relative w-full rounded-2xl border dark:border-zinc-700 bg-muted">
+        <Textarea
+          data-testid="multimodal-input"
+          ref={textareaRef}
+          placeholder="Send a message..."
+          value={input}
+          onChange={handleInput}
+          className={cx(
+            // Remove conflicting Tailwind height classes and use a custom class instead
+            'chat-input-textarea',
+            'w-full resize-none overflow-y-auto',
+            'bg-transparent px-4 pb-12 pt-3 border-none !text-base',
+            className,
+          )}
+          rows={1}
+          autoFocus
+          onKeyDown={handleKeyDown}
+        />
 
-            if (isLoading) {
-              toast.error('Please wait for the model to finish its response!');
-            } else {
-              submitForm();
-            }
-          }
-        }}
-      />
-
-      {deepSearchEnabled && (
-        <div className="absolute right-14 top-[50%] translate-y-[-50%] text-xs text-muted-foreground flex items-center">
-          <MagnifyingGlassIcon size={12} className="mr-1" />
-          {isLoading ? (
-            <span className="flex items-center">
-              <span className="mr-1">DeepSearching</span>
-              <span className="inline-flex">
-                <span className="deepsearch-dot deepsearch-dot-1">.</span>
-                <span className="deepsearch-dot deepsearch-dot-2">.</span>
-                <span className="deepsearch-dot deepsearch-dot-3">.</span>
+        {deepSearchEnabled && (
+          <div className="absolute right-14 top-[15px] text-xs text-muted-foreground flex items-center">
+            <MagnifyingGlassIcon size={12} className="mr-1" />
+            {isLoading ? (
+              <span className="flex items-center">
+                <span className="mr-1">DeepSearching</span>
+                <span className="inline-flex">
+                  <span className="deepsearch-dot deepsearch-dot-1">.</span>
+                  <span className="deepsearch-dot deepsearch-dot-2">.</span>
+                  <span className="deepsearch-dot deepsearch-dot-3">.</span>
+                </span>
               </span>
-            </span>
+            ) : (
+              <span className="sr-only">DeepSearch enabled</span>
+            )}
+          </div>
+        )}
+
+        {/* Make sure the controls always stay at the bottom of the input area */}
+        <div className="absolute bottom-0 left-0 right-0 px-4 py-2 flex justify-between items-center border-t dark:border-zinc-700 bg-muted rounded-b-2xl">
+          <DeepSearchButton 
+            deepSearchEnabled={deepSearchEnabled} 
+            setDeepSearchEnabled={setDeepSearchEnabled} 
+            isLoading={isLoading} 
+          />
+          
+          {isLoading ? (
+            <StopButton stop={stop} setMessages={setMessages} />
           ) : (
-            <span className="sr-only">DeepSearch enabled</span>
+            <SendButton
+              input={input}
+              submitForm={submitForm}
+              uploadQueue={uploadQueue}
+            />
           )}
         </div>
-      )}
-
-      <div className="absolute bottom-0 p-2 w-fit flex flex-row justify-start">
-        <DeepSearchButton 
-          deepSearchEnabled={deepSearchEnabled} 
-          setDeepSearchEnabled={setDeepSearchEnabled} 
-          isLoading={isLoading} 
-        />
-      </div>
-
-      <div className="absolute bottom-0 right-0 p-2 w-fit flex flex-row justify-end">
-        {isLoading ? (
-          <StopButton stop={stop} setMessages={setMessages} />
-        ) : (
-          <SendButton
-            input={input}
-            submitForm={submitForm}
-            uploadQueue={uploadQueue}
-          />
-        )}
       </div>
     </div>
   );
@@ -359,17 +411,18 @@ function PureDeepSearchButton({
         <Button
           data-testid="deep-search-button"
           className={cx(
-            "rounded-md rounded-bl-lg p-[7px] h-fit dark:border-zinc-700 flex items-center gap-2",
+            "rounded-md h-9 px-3 border dark:border-zinc-700 flex items-center gap-2",
             deepSearchEnabled 
               ? "bg-primary text-primary-foreground hover:bg-primary/90" 
-              : "hover:dark:bg-zinc-900 hover:bg-zinc-200"
+              : "bg-transparent hover:bg-accent hover:text-accent-foreground"
           )}
           onClick={(event) => {
             event.preventDefault();
             setDeepSearchEnabled(!deepSearchEnabled);
           }}
           disabled={isLoading}
-          variant={deepSearchEnabled ? "default" : "ghost"}
+          variant={deepSearchEnabled ? "default" : "outline"}
+          size="sm"
         >
           <MagnifyingGlassIcon size={14} />
           <span className="text-xs font-medium">Deep Search</span>

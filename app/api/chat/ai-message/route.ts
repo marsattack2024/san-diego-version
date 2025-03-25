@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { aiRateLimit } from '@/lib/middleware/rate-limit';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { createAdminClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/utils/supabase/server';
 
 // Create a Supabase client with the service role key to bypass RLS
 const supabaseAdmin = createAdminClient();

@@ -1,7 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createServerClient } from '@/lib/supabase/server';
+import { createClient as createServerClient } from '@/utils/supabase/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { getAuthenticatedUser } from '@/lib/supabase/auth-utils';
+// Implementing getAuthenticatedUser inline since we don't have the auth-utils file
+async function getAuthenticatedUser(request?: NextRequest) {
+  try {
+    const supabase = await createServerClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (user) {
+      return { user, serverClient: supabase, errorResponse: null };
+    }
+    
+    return { 
+      user: null, 
+      serverClient: null,
+      errorResponse: NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    };
+  } catch (error) {
+    edgeLogger.error('Authentication error', { error });
+    return {
+      user: null,
+      serverClient: null,
+      errorResponse: NextResponse.json({ error: 'Authentication error' }, { status: 500 })
+    };
+  }
+}
 import { cookies } from 'next/headers';
 
 export const dynamic = 'force-dynamic';
