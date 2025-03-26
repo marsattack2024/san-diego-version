@@ -15,7 +15,7 @@ export async function middleware(request: NextRequest) {
   // Special bypass for widget-related paths to allow anonymous access
   if (
     pathname.startsWith('/api/widget-chat') || 
-    pathname.startsWith('/widget/') || // Added trailing slash to prevent matching '/admin/widget'
+    pathname.startsWith('/widget/') || // Trailing slash prevents matching '/admin/widget'
     pathname === '/widget.js' ||
     pathname === '/debug.js'
   ) {

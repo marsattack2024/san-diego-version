@@ -26,97 +26,174 @@ The chat widget:
 - Can be embedded via a simple script tag or Google Tag Manager
 - Is managed through the admin dashboard at `/admin/widget`
 
-## RAG Implementation
+## Widget Management
 
-The chat widget now has fully functional RAG (Retrieval Augmented Generation) capabilities, allowing it to accurately retrieve and utilize information from the knowledge base:
+The widget management interface is fully integrated into the admin dashboard:
 
-- Implementation relies on the `findSimilarDocumentsOptimized` function with Vector search
-- Document similarity scores are properly calculated across different document formats
-- RAG results are incorporated directly into user messages for better context relevance
-- Multi-step tool calling (up to 3 steps) allows for dynamic information retrieval during chat
-- The system responds with "I don't have specific information about that in my knowledge base" when no matches are found
+- ✅ Dedicated admin widget page at `/admin/widget`
+- ✅ Enhanced widget configurator with tabbed interface
+- ✅ Navigation link in admin sidebar
+- ✅ Dynamic generation of embed codes with proper domain references
 
-Key improvements from recent fixes:
+### Implementation Details
 
-- Added consistent similarity score handling that checks multiple field names (score/similarity)
-- Improved similarity calculation with handling for zero-value edge cases
-- Enhanced the way RAG content is presented to the model for higher quality responses
-- Better formatting of knowledge base content for improved readability
-- Fixed issues with similarity calculation to properly sort and prioritize relevant documents
-- Changed RAG content integration from system messages to direct user message context
+- The admin widget page is implemented as a client component with proper authentication
+- Metadata is exported from a server component (layout.tsx)
+- Dynamic rendering is enforced with `export const dynamic = "force-dynamic"`
+- A comprehensive route.config.js ensures proper caching behavior
 
-### RAG Testing & Verification
+## Authentication Implementation
 
-The following verification steps confirmed proper RAG functionality:
+The widget admin page implements robust authentication with:
 
-- [x] RAG can retrieve information about "quiz software" used by Photography to Profits (confirmed to be Typeform)
-- [x] Query execution logs show proper similarity score calculation and document retrieval
-- [x] Multi-step tool calling works as expected
-- [x] Both direct RAG check and dynamic tool-based retrieval function properly
+1. **Direct Supabase Authentication Check**:
+   ```typescript
+   const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+   ```
 
-### Identified and Fixed Issues
+2. **Multiple Admin Verification Methods**:
+   ```typescript
+   // Primary: RPC call to is_admin function
+   const { data: isAdminRpc, error: rpcError } = await supabase.rpc('is_admin', { 
+     uid: userId 
+   });
+   
+   // Fallback: Direct profile check
+   const { data: profile, error: profileError } = await supabase
+     .from('sd_user_profiles')
+     .select('is_admin')
+     .eq('user_id', userId)
+     .single();
+   ```
 
-The RAG implementation had several issues that were identified and fixed:
+3. **Comprehensive Error Handling**:
+   - Proper redirection for unauthenticated users
+   - Clear error messages for authentication issues
+   - Loading states during authentication checks
 
-1. **Inconsistent Similarity Field Access**: The system was using both `doc.score` and `doc.similarity` inconsistently, causing problems when one field was missing.
-2. **Invalid Similarity Calculations**: Some calculations were resulting in incorrect values, including zero similarity scores.
-3. **System vs User Message Format**: Knowledge base content was being added as a system message, which wasn't given enough weight by the model.
-4. **Duplicate Message Handling**: Multiple user messages were being created, causing confusion in the conversation flow.
-5. **Conflicting Instructions**: The system prompt contained potentially contradicting directives.
+## Cross-Domain Technical Architecture
 
-These issues were resolved by:
-- Creating a unified `getSimilarity` helper function to consistently retrieve similarity scores
-- Filtering out invalid similarity scores and applying proper normalization
-- Integrating RAG content directly into user messages for better context understanding
-- Unifying message handling to maintain proper conversation flow
-- Streamlining the system prompt for clarity and effectiveness
+The widget implements a sophisticated cross-domain architecture enabling it to be hosted on `marlan.photographytoprofits.com` while functioning seamlessly when embedded on external domains.
 
-## Migration to Admin Dashboard (Completed)
+### CORS Implementation
 
-The widget management has been completely migrated from static HTML files to the admin dashboard:
+Enhanced CORS handling with support for both specific domains and wildcards:
 
-- ✅ Created dedicated admin widget page at `/admin/widget`
-- ✅ Implemented enhanced widget configurator with tabbed interface
-- ✅ Added navigation link in admin sidebar
-- ✅ Configured redirects from old paths
-- ✅ Removed all standalone static HTML files for widget testing
-- ✅ Implemented direct API integration using proper API SDK patterns
+```typescript
+// Function to add CORS headers to a response with improved origin handling
+function addCorsHeaders(response: Response, req: NextRequest): Response {
+  const origin = req.headers.get('origin') || '';
+  const allowedOrigins = getAllowedOrigins();
+  
+  // Enhanced logic: If wildcard is in allowed origins OR the specific origin is allowed
+  const isWildcardAllowed = allowedOrigins.includes('*');
+  const isSpecificOriginAllowed = origin && allowedOrigins.includes(origin);
+  
+  const corsHeaders = new Headers(response.headers);
+  
+  // Set Access-Control-Allow-Origin with proper value based on request
+  if (isSpecificOriginAllowed) {
+    // When specific origin is allowed, use that exact origin (best practice)
+    corsHeaders.set('Access-Control-Allow-Origin', origin);
+  } else if (isWildcardAllowed) {
+    // When wildcard is allowed and origin isn't specifically allowed, use wildcard
+    corsHeaders.set('Access-Control-Allow-Origin', '*');
+  }
+  
+  // Set other CORS headers
+  corsHeaders.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  corsHeaders.set('Access-Control-Allow-Headers', 'Content-Type');
+  corsHeaders.set('Access-Control-Max-Age', '86400');
+  
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: corsHeaders
+  });
+}
+```
 
-### Removed Static Files
+### URL Resolution Strategy
 
-All static HTML test files have been deprecated and removed, with functionality now integrated into the admin dashboard:
+Robust URL resolution that works even without environment variables:
 
-- ❌ `/public/widget-test.html` - Removed standalone test page
-- ❌ `/public/widget-embed.html` - Removed standalone embed example
-- ❌ `/app/widget/page.tsx` - Removed old widget demo page
-
-### Configuration Updates
-
-Following the migration away from static HTML files, these configuration updates were applied:
-
-1. **Vercel Configuration**:
-   - Rewrites for `/widget.js` to `/widget/chat-widget.js` should be maintained
-   - Headers for `/widget-test.html` and `/widget-embed.html` can be removed from `vercel.json`
-   - Redirects from `/widget`, `/widget-test`, and `/widget-embed` to `/admin/widget` should remain
-
-2. **Middleware Updates**:
-   - Maintain bypass for `/widget.js` and `/api/widget-chat` endpoints
-   - Special HTML file handling can be simplified to focus on remaining relevant paths
-
-3. **Build Process**:
-   - Build script for widget remains unchanged (`npm run build:widget`)
-   - `postbuild` script in `package.json` already correctly handles widget building
-   - No additional configuration changes needed for static files as they've been removed
+```typescript
+// More robust URL resolution with immediate client-side fallback
+const [baseUrl, setBaseUrl] = useState(() => {
+  // Client-side rendering - use window.location.origin directly if available
+  if (typeof window !== 'undefined') {
+    // Browser available - use origin directly
+    return window.location.origin;
+  }
+  
+  // Server-side rendering - fall back to getSiteUrl()
+  try {
+    return getSiteUrl();
+  } catch (e) {
+    console.error('Error getting site URL:', e);
+    // This fallback will be replaced with actual URL after client-side hydration
+    return 'https://marlan.photographytoprofits.com';
+  }
+})
+```
 
 ## Widget Script Route Handler
 
-The route handler at `/widget.js/route.ts` now serves as the primary method for accessing the widget script, with the static file still available at `/widget/chat-widget.js` as a fallback or direct reference.
+The route handler at `/widget.js/route.ts` serves as the primary method for accessing the widget script:
 
-## Current Embedding Options
+```typescript
+export async function GET(req: NextRequest) {
+  try {
+    // Get the static file URL
+    const url = new URL('/widget/chat-widget.js', req.url);
+    
+    // Fetch the file content directly
+    const scriptResponse = await fetch(url);
+    
+    if (!scriptResponse.ok) {
+      throw new Error(`Failed to fetch widget script: ${scriptResponse.status}`);
+    }
+    
+    // Get the script content
+    const scriptContent = await scriptResponse.text();
+    
+    // Create a new response with the script content and proper headers
+    const response = new Response(scriptContent, {
+      headers: {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'public, max-age=3600' // Cache for 1 hour
+      }
+    });
+    
+    // Add CORS headers and return
+    return addCorsHeaders(response, req);
+  } catch (error) {
+    // Enhanced error handling with detailed logging
+    console.error('Widget.js route: Error serving widget script:', error);
+    
+    // Return fallback script that logs the error but still with proper headers
+    const errorResponse = new Response(
+      `console.error("Failed to load chat widget script: ${errorMessage}");`, 
+      {
+        status: 500,
+        headers: {
+          'Content-Type': 'application/javascript; charset=utf-8',
+          ...getCorsHeaders(req)
+        },
+      }
+    );
+    
+    return errorResponse;
+  }
+}
+```
 
-Following our migration, we recommend the following methods for embedding the widget:
+## Embedding Options
 
-1. **Preferred Method: Standard Script Tag** (generate from admin dashboard)
+The admin interface provides several embedding options:
+
+### Standard Script Tag
+
 ```html
 <script>
 (function() {
@@ -136,278 +213,13 @@ Following our migration, we recommend the following methods for embedding the wi
 </script>
 ```
 
-2. **Google Tag Manager Method** (generate from admin dashboard)
-3. **Direct Body Embed Method** (generate from admin dashboard)
+### Google Tag Manager Method
+Available through the admin widget interface with copy-to-clipboard functionality.
 
-All embedding methods are now generated dynamically from the admin dashboard interface with proper domain references and configuration options.
+### Direct Body Embed Method
+Available through the admin widget interface with copy-to-clipboard functionality.
 
-## Cross-Domain Technical Architecture
-
-The Marlin chat widget implements a sophisticated cross-domain architecture that enables it to be hosted on `marlan.photographytoprofits.com` while functioning seamlessly when embedded on external domains like `programs.thehighrollersclub.io`. This section explains the technical components that make this possible.
-
-### 1. Script Loading & CORS Implementation
-
-The widget script loading across domains is enabled through several technical components:
-
-- **Route Handler Implementation** (`/app/widget.js/route.ts`):
-  ```typescript
-  export async function GET() {
-    try {
-      const filePath = path.join(process.cwd(), 'public', 'widget', 'chat-widget.js');
-      const fileContent = await fs.readFile(filePath, 'utf8');
-      
-      return new Response(fileContent, {
-        headers: {
-          'Content-Type': 'application/javascript; charset=utf-8',
-          'Cache-Control': 'public, max-age=3600',
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, OPTIONS',
-          'Access-Control-Max-Age': '86400'
-        },
-      });
-    } catch (error) {
-      return new Response('Widget script not found', { status: 404 });
-    }
-  }
-  ```
-  - Directly serves the JavaScript file content rather than redirecting
-  - Sets appropriate MIME type and CORS headers to permit cross-origin execution
-  - This direct content serving avoids CORS preflight issues that can occur with redirects
-
-- **Vercel.json Header Configuration**:
-  ```json
-  {
-    "source": "/widget.js",
-    "headers": [
-      {
-        "key": "Content-Type",
-        "value": "application/javascript; charset=utf-8"
-      },
-      {
-        "key": "Cache-Control",
-        "value": "public, max-age=31536000, immutable"
-      },
-      {
-        "key": "Access-Control-Allow-Origin",
-        "value": "*"
-      },
-      {
-        "key": "Access-Control-Allow-Methods",
-        "value": "GET, OPTIONS"
-      },
-      {
-        "key": "Access-Control-Max-Age",
-        "value": "86400"
-      }
-    ]
-  }
-  ```
-  - These headers ensure browsers can load and execute the script from any domain
-  - Cache-Control headers optimize performance for repeat visitors
-
-### 2. Authentication Bypass & Security Model
-
-The middleware implements a security model that allows public access to widget resources while protecting admin functionality:
-
-- **Middleware Path Detection** (`middleware.ts`):
-  ```typescript
-  // Special bypass for widget-related paths to allow anonymous access
-  if (
-    pathname.startsWith('/api/widget-chat') || 
-    pathname.startsWith('/widget') || 
-    pathname === '/widget.js' ||
-    pathname === '/debug.js'
-  ) {
-    console.log('Bypassing auth middleware for Widget features:', pathname);
-    return;
-  }
-  
-  // Continue with normal authentication flow for other paths
-  return await updateSession(request);
-  ```
-  - This bypass allows unauthenticated access to widget resources from any domain
-  - Admin dashboard routes (`/admin/widget`) still require authentication
-  - The authentication bypass is critical for cross-domain functionality as external domains cannot access your authentication cookies
-
-- **Origin Validation in API Routes**:
-  ```typescript
-  // Extract the origin from the request headers
-  const requestOrigin = request.headers.get('origin') || '*';
-  
-  // Check if the origin is allowed based on environment configuration
-  const allowedOrigins = process.env.WIDGET_ALLOWED_ORIGINS?.split(',') || ['*'];
-  const allowedOrigin = allowedOrigins.includes(requestOrigin) || allowedOrigins.includes('*') 
-    ? requestOrigin 
-    : allowedOrigins[0];
-  ```
-  - Environment variable `WIDGET_ALLOWED_ORIGINS` can restrict access to specific domains
-  - Provides granular cross-origin access control when needed
-
-### 3. Session Management & Client-Side Storage
-
-The widget uses client-side storage to maintain session state across page loads on the embedding domain:
-
-- **Browser Storage Implementation** (`/lib/widget/session.ts`):
-  ```typescript
-  export function getSession(): ChatWidgetSession {
-    try {
-      const storedSession = localStorage.getItem(SESSION_STORAGE_KEY);
-      if (storedSession) {
-        const session = JSON.parse(storedSession) as ChatWidgetSession;
-        
-        // Check if the session is still valid (not expired)
-        if (session && session.lastActive) {
-          const lastActive = new Date(session.lastActive).getTime();
-          const now = new Date().getTime();
-          
-          // Session is valid if less than 24 hours old
-          if (now - lastActive < SESSION_EXPIRY_MS) {
-            return session;
-          }
-        }
-      }
-    } catch (e) {
-      console.error('Error retrieving session:', e);
-    }
-    
-    // Create a new session if none exists or it's expired
-    return createSession();
-  }
-  ```
-  - Uses `localStorage` for persistent session storage with 24-hour expiry
-  - Unique session ID generation via `crypto.randomUUID()`
-  - Since localStorage is domain-specific, each domain using the widget maintains its own separate sessions
-  - The session ID is sent to the API to maintain conversation context
-  
-- **Cross-Domain Session Synchronization**:
-  - Session IDs are included in requests to the API (`/api/widget-chat`) 
-  - API responses include the session ID in headers for synchronization
-  - This approach maintains conversation context while respecting browser's same-origin policy for storage
-
-### 4. API Communication Architecture
-
-The widget API endpoint (`/api/widget-chat/route.ts`) supports cross-domain requests:
-
-- **Edge Runtime Configuration**:
-  ```typescript
-  export const runtime = 'edge';
-  ```
-  - Edge functions provide lower latency for global distribution
-  - Edge runtime simplifies CORS implementation
-
-- **CORS Response Headers**:
-  ```typescript
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': allowedOrigin,
-      'Access-Control-Allow-Methods': 'POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'x-rate-limit-limit': rateLimit.toString(),
-      'x-rate-limit-remaining': remaining.toString(),
-      'x-rate-limit-reset': reset.toString(),
-      'x-session-id': sessionId
-    },
-  });
-  ```
-  - These headers allow the embedding domain to make API requests to the widget backend
-  - Custom headers (`x-session-id`, etc.) carry session and rate limit information
-
-- **OPTIONS Method Handling**:
-  ```typescript
-  if (request.method === 'OPTIONS') {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        'Access-Control-Allow-Origin': allowedOrigin,
-        'Access-Control-Allow-Methods': 'POST, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-        'Access-Control-Max-Age': '86400'
-      }
-    });
-  }
-  ```
-  - Proper handling of CORS preflight requests is essential for cross-domain functionality
-  - Browsers send OPTIONS requests before actual POST requests in cross-origin scenarios
-
-### 5. Self-Contained Widget Implementation
-
-The widget script (`/lib/widget/widget-script.js`) is designed to run independently:
-
-- **No External Dependencies**:
-  ```javascript
-  (function() {
-    // All functionality contained within this IIFE
-    // No external libraries or dependencies
-    
-    // Configuration from host page
-    const config = window.marlinChatConfig || {};
-    
-    // DOM creation, event handling, API communication all contained here
-  })();
-  ```
-  - All DOM manipulation, styling, event handling, and API communication contained in a single file
-  - Uses IIFE (Immediately Invoked Function Expression) to avoid global scope pollution
-  - Configuration via `window.marlinChatConfig` on the host page
-
-- **Dynamic DOM Injection**:
-  ```javascript
-  function createWidgetElements() {
-    // Create all DOM elements needed for the widget
-    const widgetContainer = document.createElement('div');
-    widgetContainer.className = 'marlin-chat-widget';
-    // ...additional element creation
-    
-    // Append to document body
-    document.body.appendChild(widgetContainer);
-  }
-  ```
-  - Creates and injects all HTML/CSS at runtime
-  - No need for modifying the host page's HTML structure
-  - This approach works across any domain regardless of the host page's structure
-
-- **Cross-Domain API Communication**:
-  ```javascript
-  async function sendMessage(message) {
-    try {
-      const response = await fetch(config.apiEndpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          message: message,
-          sessionId: currentSession.id
-        })
-      });
-      
-      // Process streaming response...
-    } catch (error) {
-      // Error handling...
-    }
-  }
-  ```
-  - Uses standard `fetch` API with proper content type
-  - Sends session ID with each request for conversation tracking
-  - This approach works across domains because the API endpoint has CORS headers
-
-This architecture ensures the widget works seamlessly across domains while maintaining security, session persistence, and a consistent user experience.
-
-## Current Structure and Updates
-
-### Migration to Admin Dashboard
-
-The widget management has been completely migrated to the admin dashboard:
-
-- ✅ Created dedicated admin widget page at `/admin/widget`
-- ✅ Implemented enhanced widget configurator with tabbed interface
-- ✅ Added navigation link in admin sidebar
-- ✅ Configured redirects from old paths
-- ✅ Removed standalone demo and test pages
-
-### Current Component Structure
+## Current Component Structure
 
 ```
 /components
@@ -425,6 +237,8 @@ The widget management has been completely migrated to the admin dashboard:
   /admin
     /widget
       /page.tsx                # Admin widget management page
+      /layout.tsx              # Server component for metadata
+      /route.config.js         # Dynamic rendering configuration
   /widget.js
     /route.ts                  # Route handler for the widget script
   /api/widget-chat
@@ -432,12 +246,11 @@ The widget management has been completely migrated to the admin dashboard:
 
 /lib
   /widget
-    /session.ts               # Session management utilities
-    /rate-limit.ts            # Rate limiting implementation
-    /widget-script.js         # Self-contained widget JavaScript
-    /gtm-snippet.html         # Google Tag Manager ready HTML snippet
-    /gtm-simple.html          # Simplified GTM snippet
-    /body-snippet.html        # Direct body embed snippet
+    /env-validator.ts          # Environment validation with fallbacks
+    /rate-limit.ts             # Rate limiting implementation
+    /widget-script.js          # Self-contained widget JavaScript
+    /gtm-snippet.html          # Google Tag Manager ready HTML snippet
+    /body-snippet.html         # Direct body embed snippet
 
 /public
   /widget
@@ -445,186 +258,11 @@ The widget management has been completely migrated to the admin dashboard:
     /chat-widget.js.map       # Source map for debugging - GENERATED
 ```
 
-### Files Removed in Migration
+### Removed Legacy Files
 
-The following standalone files have been removed as their functionality is now integrated into the admin dashboard:
+The following legacy files have been removed as they're no longer needed:
 
-- ❌ `/app/widget/page.tsx` - Old widget demo page
-- ❌ `/app/widget/widget-configurator.tsx` - Old configurator component
-- ❌ `/public/widget-test.html` - Standalone test page
-- ❌ `/public/widget-embed.html` - Standalone embed example
-
-## Implementation Details
-
-### 1. Session Management (`lib/widget/session.ts`)
-
-The widget uses browser localStorage for session persistence with the following features:
-- Unique session ID generation with `crypto.randomUUID()`
-- Session expiry after 24 hours of inactivity
-- Functions for creating, retrieving, updating, and clearing sessions
-- Message history tracking within the session
-
-Key functions:
-- `generateSessionId()`: Creates a unique UUID for session identification
-- `getSession()`: Retrieves the current session or creates a new one
-- `addMessageToSession()`: Adds a message to the session and updates the last active timestamp
-- `clearSession()`: Removes the session from localStorage
-
-### 2. Rate Limiting (`lib/widget/rate-limit.ts`)
-
-A dual-layer rate limiting system that:
-- Uses Redis as the primary store with in-memory fallback
-- Limits to 3 requests per minute per session
-- Falls back to IP-based limiting when session ID is not available
-- Provides detailed rate limit information in response headers
-
-Implementation:
-- Redis-based limiting with TTL for distributed environments
-- Memory-based fallback for development or when Redis is unavailable
-- Proper error handling to allow requests if rate limiting fails
-
-### 3. Widget Script (`lib/widget/widget-script.js`)
-
-A self-contained JavaScript file that:
-- Creates and injects all necessary DOM elements
-- Manages widget state (open/closed)
-- Handles user interactions
-- Communicates with the API
-- Processes streaming responses
-
-Key features:
-- Self-contained with no external dependencies
-- Customizable appearance (colors, position, size)
-- Responsive design with mobile support
-- Message formatting with Markdown-like styling
-- Real-time response streaming
-- Error handling and retry logic
-
-### 4. API Route (`app/api/widget-chat/route.ts`)
-
-A dedicated API route that:
-- Processes widget chat requests
-- Applies rate limiting
-- Searches the knowledge base with RAG
-- Streams AI responses back to the widget
-
-Key features:
-- Edge runtime for improved performance
-- CORS support for cross-domain embedding
-- Robust error handling
-- Session tracking
-- Rate limiting middleware integration
-- RAG (Retrieval Augmented Generation) for knowledge base access
-- AI response streaming
-
-### 5. Widget Script Route Handler (`app/widget.js/route.ts`)
-
-A dedicated route handler that:
-- Reads the actual widget script from the filesystem
-- Serves the content with proper MIME type headers
-- Applies CORS headers for cross-domain access
-- Includes error handling for file not found scenarios
-- Uses shorter cache time for debugging (3600 seconds)
-
-### 6. Admin Widget Page (`app/admin/widget/page.tsx`)
-
-A comprehensive admin page that:
-- Provides a management interface for the chat widget
-- Allows customization of widget appearance and behavior
-- Generates embed codes for different implementation methods
-- Shows a live preview of the widget with current settings
-- Includes documentation for implementation and troubleshooting
-
-Key features:
-- Tabbed interface for configuration, embed codes, and documentation
-- Live preview updates as settings are changed
-- Multiple embed code options (standard, GTM, direct)
-- Copy-to-clipboard functionality for easy implementation
-- Access restricted to admin users
-
-## Embedding Options
-
-#### Standard Script Tag
-
-```html
-<script>
-(function() {
-  // Configure the widget
-  window.marlinChatConfig = {
-    position: 'bottom-right',
-    title: 'Ask Marlin',
-    primaryColor: '#0070f3',
-    apiEndpoint: 'https://marlan.photographytoprofits.com/api/widget-chat'
-  };
-  
-  // Load the widget script
-  var script = document.createElement('script');
-  script.src = 'https://marlan.photographytoprofits.com/widget.js';
-  script.async = true;
-  script.defer = true;
-  document.head.appendChild(script);
-})();
-</script>
-```
-
-> **Important Note**: We have two reliable ways to access the widget script:
-> 1. Direct reference to the static file: `/widget/chat-widget.js`
-> 2. Through the route handler: `/widget.js`
->
-> Both methods properly serve the actual JavaScript content. The route handler reads the script file from the filesystem and serves it with appropriate headers, while the rewrite rule in `vercel.json` provides compatibility by redirecting `/widget.js` to the static file.
-
-#### Google Tag Manager Integration
-
-Available through the admin widget interface with copy-to-clipboard functionality.
-
-#### Direct Body Embed
-
-Available through the admin widget interface with copy-to-clipboard functionality.
-
-## Deployment Configuration
-
-### 1. Updated Middleware (`middleware.ts`)
-
-Enhanced middleware that:
-- Bypasses authentication for all widget-related paths
-- Properly handles static files
-- Includes direct checks for HTML and JS files
-- Uses improved matcher patterns
-- Maintains normal authentication flow for admin widget page
-
-```typescript
-// Special bypass for widget-related paths to allow anonymous access
-if (
-  pathname.startsWith('/api/widget-chat') || 
-  pathname.startsWith('/widget') || 
-  pathname === '/widget.js' ||
-  pathname === '/debug.js' ||
-  pathname.includes('.html') ||
-  pathname.includes('/chat-widget.js')
-) {
-  console.log('Bypassing auth middleware for Widget features:', pathname);
-  return;
-}
-
-// The admin/widget path does not need special handling here as it should
-// go through normal authentication via updateSession like other admin paths
-```
-
-### 2. Enhanced Vercel Configuration (`vercel.json`)
-
-```json
-{
-  "headers": [
-    // Headers configuration for widget resources
-  ],
-  "rewrites": [
-    { "source": "/widget.js", "destination": "/widget/chat-widget.js" }
-  ],
-  "redirects": [
-    { "source": "/widget", "destination": "/admin/widget", "permanent": true }
-  ]
-}
-```
+- ❌ `/app/widget-test/route.ts` - Standalone test page now replaced by the admin widget interface
 
 ## Environment Variables
 
@@ -646,804 +284,126 @@ REDIS_URL=your-redis-url
 REDIS_TOKEN=your-redis-token
 ```
 
-## Production Verification Checklist
+## Production Issues and Solutions
 
-After implementation, verify the following to ensure proper widget functionality:
+The widget implementation addresses several key production issues:
 
-- [x] `/admin/widget` page loads correctly for authenticated admin users
-- [x] Widget configuration options work correctly
-- [x] Embed code generation creates valid code snippets
-- [x] `/widget` redirects to `/admin/widget`
-- [x] Widget script loads correctly from both `/widget.js` and `/widget/chat-widget.js`
-- [x] Widget can connect to the API at `/api/widget-chat` and receive responses
-- [x] No CORS errors are present in the browser console
-- [x] Rate limiting is functioning correctly (3 requests per minute)
+### 1. Client/Server Component Separation
 
-## Build Results
+**Problem**: Mixing client components with metadata exports causes hydration errors.
 
-The latest build verification confirms the successful implementation of all widget-related features:
+**Solution**: 
+- Split into separate components:
+  - `layout.tsx`: Server component that exports metadata
+  - `page.tsx`: Client component with 'use client' directive
+- Both components include `export const dynamic = "force-dynamic"` to ensure proper rendering
 
-```
-> my-v0-project@0.1.0 build:widget
-> esbuild lib/widget/widget-script.js --bundle --minify --outfile=public/widget/chat-widget.js --sourcemap
-  public/widget/chat-widget.js      10.6kb
-  public/widget/chat-widget.js.map  22.6kb
-⚡ Done in 2ms
-Widget built to: public/widget/chat-widget.js
-```
+### 2. Authentication Implementation
 
-Key verification points:
-- Widget script successfully built and minified to 10.6kb (with 22.6kb source map)
-- All routes confirmed working in the build output including:
-  - `/api/widget-chat` (API endpoint)
-  - `/widget.js` (Route handler)
-  - `/admin/widget` (Admin management page)
-- All redirects from legacy paths (`/widget`, `/widget-test`, `/widget-embed`) confirmed working
-- Middleware correctly bypassing authentication for widget-related resources
+**Problem**: Middleware-based admin verification works in development but not production.
 
-The successful build confirms that all configuration changes related to the removal of static HTML files have been properly implemented. With the integration of Typeform quiz software information in the knowledge base, the RAG system has been verified to correctly retrieve and present this data when queried.
-
-### Verified RAG Performance
-
-After the build, the RAG implementation was tested with multiple queries, including questions about quiz software. The system successfully:
-
-1. Retrieved information confirming Typeform as the quiz software used by Photography to Profits
-2. Properly calculated similarity scores using the fixed helper functions
-3. Presented results in the correct format with appropriate context integration
-4. Handled zero-score edge cases appropriately
-
-## Usage Instructions
-
-### Accessing the Widget Management Interface
-
-1. Log in to the admin dashboard
-2. Navigate to "Widget" in the sidebar
-3. Use the interface to configure the widget appearance and behavior
-4. Copy the appropriate embed code for your implementation method
-
-### Embedding the Widget
-
-To embed the chat widget on an external website, use one of the code snippets generated in the admin interface:
-
-1. **Standard Script Tag**: Simple JavaScript implementation
-2. **Google Tag Manager**: For websites using GTM
-3. **Direct Body Embed**: Simplified version for direct embedding
-
-### Troubleshooting
-
-#### Common Issues
-
-1. **Widget not loading**: 
-   - Check browser console for errors
-   - Verify that the widget script URL is correct
-   - Ensure CORS headers are properly configured
-
-2. **API errors**:
-   - Verify the `apiEndpoint` is correctly set
-   - Check rate limiting settings
-   - Examine server logs for detailed error information
-
-3. **404 errors for widget resources**:
-   - The `/widget.js` route handler serves the file content directly
-   - Both relative and absolute URLs for the script should work correctly
-
-4. **Script loading errors in embedded contexts**:
-   - When embedding on external sites, always use absolute URLs for script sources
-   - Example: `https://marlan.photographytoprofits.com/widget.js`
-   - This prevents path resolution issues when loading from different domains
-
-5. **Admin widget page not accessible**:
-   - Verify that the user has admin permissions
-   - Check that middleware is properly configured for admin routes
-   - Ensure Supabase authentication is working correctly
-
-### Development Notes
-
-When making changes to the widget system:
-
-1. Always run `npm run build:widget` after modifying widget source code
-2. Test changes in the admin widget interface before deployment
-3. Ensure proper CORS configuration for all routes
-4. Update any references to domains if they change
-5. After deployment, verify script loading from `/widget.js` route handler
-
-## Vercel Deployment Compatibility
-
-Recent updates have been made to ensure the chat widget functions correctly when deployed to Vercel:
-
-### 1. Edge Runtime Implementation
-
-The widget.js route handler has been updated to use Edge Runtime, eliminating Node.js filesystem operations that aren't compatible with Vercel's serverless environment:
-
-```typescript
-// Old implementation - NOT Vercel compatible
-export async function GET(req: NextRequest) {
-  try {
-    const fs = require('fs');
-    const path = require('path');
-    const filePath = path.join(process.cwd(), 'public/widget/chat-widget.js');
-    const fileContent = fs.readFileSync(filePath, 'utf-8');
-    // Rest of implementation...
-  }
-}
-
-// New implementation - Vercel compatible with Edge Runtime
-export const runtime = 'edge';
-
-export async function GET(req: NextRequest) {
-  try {
-    // Instead of filesystem operations, use a redirect
-    const url = new URL('/widget/chat-widget.js', req.url);
-    const response = Response.redirect(url, 307);
-    return addCorsHeaders(response, req);
-  }
-}
-```
-
-### 2. Environment Variables Configuration
-
-A `.env.production` template has been created with all required environment variables for Vercel deployment:
-
-```
-# Critical for widget domain references
-NEXT_PUBLIC_SITE_URL=https://your-vercel-url.vercel.app
-
-# Required for authentication and RAG functionality
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-OPENAI_API_KEY=
-
-# Widget configuration
-WIDGET_ALLOWED_ORIGINS=https://programs.thehighrollersclub.io,https://example.com,*
-```
-
-All of these variables must be configured in your Vercel project settings for the widget to function correctly.
-
-### 3. Dynamic URL Resolution
-
-Widget components have been updated with a multi-tier URL resolution strategy:
-
-```typescript
-// In component files
-const [baseUrl, setBaseUrl] = useState(process.env.NEXT_PUBLIC_SITE_URL || 'https://marlan.photographytoprofits.com');
-
-// Set base URL with fallback to window.location.origin if running in browser
-useEffect(() => {
-  if (typeof window !== 'undefined' && !process.env.NEXT_PUBLIC_SITE_URL) {
-    setBaseUrl(window.location.origin);
-  }
-}, []);
-```
-
-This ensures the widget properly references the correct domain even if environment variables are not set.
-
-### 4. Vercel Function Configuration
-
-The `vercel.json` file has been updated with explicit function configuration:
-
-```json
-"functions": {
-  "app/widget.js/route.ts": {
-    "memory": 1024,
-    "maxDuration": 10
-  },
-  "app/api/widget-chat/route.ts": {
-    "memory": 1024,
-    "maxDuration": 60
-  }
-}
-```
-
-These settings ensure adequate memory and execution time for the widget's functionality.
-
-### 5. Troubleshooting Vercel Deployments
-
-Common Vercel deployment issues:
-
-1. **Missing Admin Widget**:
-   - Verify all environment variables are correctly set
-   - Check the build output for widget script generation
-
-2. **404 Errors for Widget Script**:
-   - Confirm the redirect in widget.js route handler is working
-   - Ensure the build command includes `npm run build:widget`
-   
-3. **Incorrect Domain References**:
-   - Make sure `NEXT_PUBLIC_SITE_URL` is set to your actual Vercel domain
-   - Check embed codes for correct domain references
-
-For more detailed information about Vercel deployment, see `lib/widget/README.md`.
-
-## Widget Troubleshooting Guide
-
-This section provides detailed guidance for troubleshooting common issues with the widget implementation, particularly focusing on deployment and cross-domain functionality.
-
-### Admin Widget Page Missing from Navigation
-
-If the admin widget page isn't appearing in the admin navigation, several technical factors could be responsible:
-
-#### 1. Authentication Flow Issues in Production
-
-The most critical issue in production is that admin authentication flows work differently than in development:
-
-```typescript
-// SOLUTION: Add direct admin check with client component
-const { data: isAdminRpc, error: rpcError } = await supabase.rpc('is_admin', { 
-  uid: userId 
-});
-
-// Set state based on admin check result
-setIsAdmin(!!isAdminRpc);
-
-// Redirect non-admins to unauthorized page
-if (!isAdminRpc) {
-  router.push('/unauthorized');
-  return;
-}
-```
-
-**Why this happens**: 
-- In development, middleware sets authentication headers that are checked by the API
-- In production, these headers might not be correctly passed between services
-- The x-is-admin header that identifies admin users may be missing in the production environment
-- Without client-side verification, admin status is not confirmed
-
-**Resolution**:
-- Add direct Supabase client authentication check in the page component
-- Implement explicit admin verification with RPC call (most reliable method)
-- Add fallback to profile-based admin check if RPC fails
-- Redirect unauthorized users to the appropriate page
-
-#### 2. Static vs Dynamic Rendering Issues (Critical Production Issue)
-
-The second critical issue is that Next.js is trying to statically render the admin widget page:
-
-```typescript
-// FIXED: Add these to both layout.tsx, page.tsx, and route.config.js
-export const dynamic = "force-dynamic";
-export const fetchCache = 'force-no-store';
-export const revalidate = 0;
-```
-
-**Why this happens**: 
-- In development, Next.js treats pages as dynamic by default
-- In production, pages without `dynamic = "force-dynamic"` may be pre-rendered at build time
-- Pre-rendered pages lose authentication context and can't determine the user's admin status
-- The page may be incorrectly excluded from navigation since authentication hasn't run
-
-**Resolution**:
-- Add `export const dynamic = "force-dynamic"` to both layout and page files
-- Create a comprehensive route.config.js with additional caching controls
-- Add client-side loading state with visual feedback during authentication checks
-- Use enhanced console logging to help diagnose rendering issues in production
-
-#### 2. Middleware Path Precedence Conflict
-
-Another potential cause is a conflict in middleware path handling:
-
-```typescript
-// CRITICAL: This order is important - specific paths must be checked first
-if (pathname === '/admin/widget') {
-  console.log('[Middleware] Admin widget page accessed, passing through normal auth flow');
-  return await updateSession(request);
-}
-
-// Then check general patterns - the trailing slash in /widget/ prevents matching /admin/widget
-if (
-  pathname.startsWith('/api/widget-chat') || 
-  pathname.startsWith('/widget/') || 
-  pathname === '/widget.js' ||
-  pathname === '/debug.js'
-) {
-  console.log('Bypassing auth middleware for Widget features:', pathname);
-  return;
-}
-```
-
-**Resolution**: 
-- Ensure the specific `/admin/widget` path check appears BEFORE the general `/widget` path checks
-- Use trailing slashes in general patterns (e.g., `/widget/`) to prevent matching `/admin/widget`
-- Check middleware logs for the path processing sequence
-
-#### 3. Client/Server Component Conflict
-
-The widget page uses both client features and metadata:
-
-```typescript
-'use client'; // Marks as client component
-
-// However, this can only be exported from a server component
-export const metadata: Metadata = {
-  title: 'Widget Management',
-  description: 'Configure and manage the embedding of the Marlin chat widget',
-}
-```
-
-**Resolution**:
-- Split into separate server (for metadata) and client components
-- Move metadata to a layout component (`admin/widget/layout.tsx`)
-- Handle error boundaries properly in the client component
-
-#### 4. Missing Environment Variables
-
-The widget configurator relies on specific environment variables:
-
-```typescript
-// Required variables for proper widget configuration
-const CRITICAL_VARS = [
-  'NEXT_PUBLIC_SITE_URL',
-  'NEXT_PUBLIC_SUPABASE_URL',
-  'NEXT_PUBLIC_SUPABASE_ANON_KEY'
-];
-```
-
-**Resolution**:
-- Verify all required environment variables are set in production
-- Check for fallback handling in the widget configurator
-- Add runtime validation and user-friendly error messages
-
-### CORS Configuration Issues
-
-For external embedding to work, proper CORS headers are essential:
-
-#### 1. Missing CORS Headers
-
-All widget endpoints need appropriate CORS headers:
-
-```typescript
-// Function to add CORS headers to a response
-function addCorsHeaders(response: Response, req: NextRequest): Response {
-  const origin = req.headers.get('origin') || '';
-  const allowedOrigins = getAllowedOrigins();
-  const isAllowedOrigin = allowedOrigins.includes('*') || allowedOrigins.includes(origin);
-  
-  const corsHeaders = new Headers(response.headers);
-  corsHeaders.set('Access-Control-Allow-Origin', isAllowedOrigin ? origin : allowedOrigins[0]);
-  corsHeaders.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  corsHeaders.set('Access-Control-Allow-Headers', 'Content-Type');
-  corsHeaders.set('Access-Control-Max-Age', '86400');
-  
-  return new Response(response.body, {
-    status: response.status,
-    headers: corsHeaders
+**Solution**:
+- Implement direct Supabase client authentication:
+  ```typescript
+  // Check admin status through RPC call (most reliable method)
+  const { data: isAdminRpc, error: rpcError } = await supabase.rpc('is_admin', { 
+    uid: userId 
   });
-}
-```
-
-**Resolution**:
-- Verify that all widget-related endpoints set appropriate CORS headers
-- Check that OPTIONS handlers are implemented for all cross-origin endpoints
-- Ensure the WIDGET_ALLOWED_ORIGINS environment variable is properly set
-
-#### 2. Vercel.json and CORS Settings Mismatch
-
-Vercel.json configuration should match API route CORS settings:
-
-```json
-{
-  "headers": [
-    {
-      "source": "/widget.js",
-      "headers": [
-        {
-          "key": "Access-Control-Allow-Origin",
-          "value": "*"
-        },
-        {
-          "key": "Access-Control-Allow-Methods",
-          "value": "GET, OPTIONS"
-        }
-      ]
-    }
-  ]
-}
-```
-
-**Resolution**:
-- Ensure Vercel.json headers match the CORS headers set in API routes
-- Check that paths in Vercel.json are correctly defined
-- Verify that all necessary widget routes have CORS headers configured
-
-### Path and URL Configuration Issues
-
-Path-related problems can prevent proper widget loading:
-
-#### 1. Middleware Matcher Pattern Conflicts
-
-The middleware matcher pattern determines which paths are processed:
-
-```typescript
-export const config = {
-  matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|api/check-status|widget/chat-widget.js|images/|styles/).*)',
-  ],
-};
-```
-
-**Resolution**:
-- Ensure widget script paths are properly excluded from middleware matching
-- Check for conflicting redirects or rewrites in vercel.json
-- Verify that static file paths are accessible without authentication
-
-#### 2. Vercel.json Rewrites and Redirects
-
-Rewrites and redirects can affect path resolution:
-
-```json
-"rewrites": [
-  { "source": "/widget.js", "destination": "/widget/chat-widget.js" }
-],
-"redirects": [
-  { "source": "/widget", "destination": "/admin/widget", "permanent": true }
-]
-```
-
-**Resolution**:
-- Check for conflicting redirect rules
-- Ensure rewrite rules are correctly routing widget requests
-- Verify the static file paths are correctly referenced
-
-### API Endpoint Configuration Issues
-
-Incorrect API endpoint URLs can prevent widget functionality:
-
-#### 1. Base URL Resolution
-
-The widget configurator uses multiple fallbacks for URL resolution:
-
-```typescript
-// More robust URL resolution to prevent hydration issues - use multiple fallbacks
-const [baseUrl, setBaseUrl] = useState(() => {
-  try {
-    // Use the enhanced getSiteUrl function with fallbacks
-    return getSiteUrl();
-  } catch (e) {
-    console.error('Error getting site URL:', e);
-    return 'https://marlan.photographytoprofits.com';
+  
+  // Fallback to profile check if RPC fails
+  if (rpcError) {
+    const { data: profile, error: profileError } = await supabase
+      .from('sd_user_profiles')
+      .select('is_admin')
+      .eq('user_id', userId)
+      .single();
   }
-})
-```
+  ```
+- Add comprehensive error handling and loading states
 
-**Resolution**:
-- Verify NEXT_PUBLIC_SITE_URL is set correctly in production
-- Check browser console logs for URL resolution issues
-- Ensure the embed code is using the correct API endpoint URL
+### 3. Dynamic Rendering Configuration
 
-#### 2. Embed Code Generation
+**Problem**: Next.js tries to statically render admin pages in production.
 
-The embed snippets must reference the correct domain and endpoints:
+**Solution**:
+- Add explicit dynamic rendering configuration:
+  ```javascript
+  // Force dynamic route handling for the admin widget page
+  export const dynamic = 'force-dynamic';
+  // Force all requests to revalidate for this route
+  export const fetchCache = 'force-no-store';
+  // Set revalidation time to 0 to prevent caching
+  export const revalidate = 0;
+  ```
+- Implement in both page and layout components
 
-```typescript
-const scriptCode = `
-(function(w, d, s, o, f, js, fjs) {
-  w['ChatWidgetObject'] = o;
-  w[o] = w[o] || function() { (w[o].q = w[o].q || []).push(arguments) };
-  js = d.createElement(s), fjs = d.getElementsByTagName(s)[0];
-  js.id = o; js.src = f; js.async = 1; fjs.parentNode.insertBefore(js, fjs);
-}(window, document, 'script', 'chatWidget', '${finalUrl}/widget.js'));
-`;
-```
+### 4. URL Resolution
 
-**Resolution**:
-- Verify that embed code generation uses the correct domain
-- Check for hardcoded URLs in embed snippets
-- Update any existing embed codes with correct URL references
+**Problem**: Environment variables might not be set correctly in production.
 
-## Production Implementation Notes
-
-Recent updates have significantly improved the widget's reliability in production environments. These critical changes ensure the widget functions correctly across different deployment contexts.
-
-### 1. Client/Server Component Architecture Fix
-
-The admin widget page implementation has been restructured to resolve component hydration conflicts:
-
-```typescript
-// BEFORE - Hydration conflicts with client components exporting metadata
-// app/admin/widget/page.tsx
-'use client';
-
-import React from 'react';
-import { Metadata } from 'next';
-
-export const metadata: Metadata = { // This caused hydration issues
-  title: 'Widget Management',
-  description: 'Configure and manage the embedding of the Marlin chat widget',
-}
-
-export default function AdminWidgetPage() {
-  // Client component implementation
-}
-```
-
-```typescript
-// AFTER - Proper separation of server/client components
-// app/admin/widget/layout.tsx (Server Component)
-import { Metadata } from 'next'
-
-export const metadata: Metadata = {
-  title: 'Widget Management',
-  description: 'Configure and manage the embedding of the Marlin chat widget',
-}
-
-export default function AdminWidgetLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
-  return children
-}
-
-// app/admin/widget/page.tsx (Client Component)
-'use client';
-
-export default function AdminWidgetPage() {
-  // Client component implementation with proper hydration
-}
-```
-
-This architecture properly separates metadata (server component concern) from client-side interactivity, resolving hydration errors that could prevent the widget page from rendering in production.
-
-### 2. Enhanced CORS Implementation
-
-The CORS handling has been improved to ensure proper cross-origin support:
-
-```typescript
-// Improved CORS implementation with better origin handling
-function addCorsHeaders(response: Response, req: NextRequest): Response {
-  const origin = req.headers.get('origin') || '';
-  const allowedOrigins = getAllowedOrigins();
-  
-  // Enhanced logic: More precise handling of wildcard vs specific origins
-  const isWildcardAllowed = allowedOrigins.includes('*');
-  const isSpecificOriginAllowed = origin && allowedOrigins.includes(origin);
-  
-  const corsHeaders = new Headers(response.headers);
-  
-  // More precise CORS header setting based on origin type
-  if (isSpecificOriginAllowed) {
-    // When specific origin is allowed, use that exact origin (best practice)
-    corsHeaders.set('Access-Control-Allow-Origin', origin);
-  } else if (isWildcardAllowed) {
-    // When wildcard is allowed and origin isn't specifically allowed, use wildcard
-    corsHeaders.set('Access-Control-Allow-Origin', '*');
-  } else if (allowedOrigins.length > 0) {
-    // Fallback to first allowed origin
-    corsHeaders.set('Access-Control-Allow-Origin', allowedOrigins[0]);
-  }
-  
-  // Additional development logging for easier troubleshooting
-  if (process.env.NODE_ENV === 'development') {
-    console.log('CORS Headers set:', {
-      origin,
-      isWildcardAllowed,
-      isSpecificOriginAllowed,
-      allowOrigin: corsHeaders.get('Access-Control-Allow-Origin')
-    });
-  }
-  
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: corsHeaders
-  });
-}
-```
-
-This implementation precisely handles different origin scenarios according to web standards and adds enhanced logging for easier debugging.
-
-### 3. Client-First URL Resolution Strategy
-
-The URL resolution strategy has been completely reworked to ensure reliable operation even without environment variables:
-
-```typescript
-// Updated widget configurator with immediate client-side URL detection
-const [baseUrl, setBaseUrl] = useState(() => {
-  // Client-side rendering - use window.location.origin immediately if available
+**Solution**:
+- Implement client-first URL resolution with multiple fallbacks:
+  ```typescript
+  // Client-side rendering - use window.location.origin directly if available
   if (typeof window !== 'undefined') {
-    // Browser available - use origin directly as most reliable source
+    // Browser available - use origin directly
     return window.location.origin;
   }
-  
-  // Server-side rendering - fall back to getSiteUrl()
-  try {
-    return getSiteUrl();
-  } catch (e) {
-    console.error('Error getting site URL:', e);
-    // This fallback will be replaced with actual URL after client-side hydration
-    return 'https://marlan.photographytoprofits.com';
-  }
-})
-```
+  ```
+- Enhanced validation that accounts for browser environments
 
-The `getSiteUrl()` function has also been enhanced:
+## Production Verification Checklist
 
-```typescript
-export function getSiteUrl(): string {
-  // Client-side: Prioritize browser origin as the most accurate source
-  if (typeof window !== 'undefined') {
-    const browserOrigin = window.location.origin;
-    
-    // Use browser origin if available, otherwise try env vars
-    return browserOrigin || 
-           process.env.NEXT_PUBLIC_SITE_URL || 
-           process.env.NEXT_PUBLIC_APP_URL || 
-           'https://marlan.photographytoprofits.com';
-  }
-  
-  // Server-side: Use environment variables with fallbacks
-  return process.env.NEXT_PUBLIC_SITE_URL || 
-         process.env.NEXT_PUBLIC_APP_URL || 
-         (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
-         'https://marlan.photographytoprofits.com';
-}
-```
+After deployment, verify the following to ensure proper widget functionality:
 
-This approach ensures that:
-1. On the client, we immediately use the browser's own origin as the most accurate source of truth
-2. We avoid hydration mismatches by using consistent strategies on server and client
-3. Multiple fallbacks ensure the widget never fails due to missing environment variables
+- [ ] `/admin/widget` page loads correctly for authenticated admin users
+- [ ] Authentication works properly with both RPC and profile-based admin checks
+- [ ] Widget script loads correctly from both `/widget.js` and `/widget/chat-widget.js`
+- [ ] Widget can connect to the API at `/api/widget-chat` and receive responses
+- [ ] CORS headers are correctly set for cross-domain embedding
+- [ ] Environment variables are properly validated with appropriate fallbacks
+- [ ] Rate limiting is functioning correctly (3 requests per minute)
+- [ ] Redirects from `/widget-test` and `/widget-embed` to `/admin/widget` work correctly
 
-### 4. Environment Variable Validation
+## Troubleshooting Guide
 
-The environment variable validation has been improved to work properly in both client and server contexts:
+### Admin Widget Page Not Loading
 
-```typescript
-export function validateCriticalEnv() {
-  // On client-side, browser origin can substitute for NEXT_PUBLIC_SITE_URL
-  let effectiveMissing = [...CRITICAL_VARS];
-  
-  if (typeof window !== 'undefined') {
-    // If we have a valid browser origin, we don't need NEXT_PUBLIC_SITE_URL
-    if (window.location.origin && window.location.origin !== 'null') {
-      effectiveMissing = effectiveMissing.filter(v => v !== 'NEXT_PUBLIC_SITE_URL');
-    }
-  }
-  
-  // Check which variables are actually missing
-  const missing = effectiveMissing.filter(v => !process.env[v]);
-  const isValid = missing.length === 0;
-  
-  // More context-aware validation results
-  return {
-    isValid,
-    missing,
-    message: isValid 
-      ? 'All critical environment variables are set'
-      : `Missing critical environment variables: ${missing.join(', ')}`
-  };
-}
-```
+1. **Authentication Issues**:
+   - Check browser console for authentication errors
+   - Verify the user has admin permissions in both tables
+   - Test direct URL access to check for redirect behavior
 
-This implementation properly accounts for the browser environment where URLs can be derived from the window object, preventing false warnings about missing environment variables.
+2. **Rendering Issues**:
+   - Verify `export const dynamic = "force-dynamic"` is present in both page and layout
+   - Check that route.config.js includes all necessary configuration
+   - Look for client/server component conflicts in browser console
 
-### 5. Production-Ready Admin Authentication
+3. **Middleware Conflicts**:
+   - Check middleware logs for path handling order
+   - Ensure specific paths are checked before general patterns
+   - Verify authentication headers are being properly set
 
-A critical improvement for production is the explicit admin authentication implemented in the widget page:
+### Widget Script Not Loading
 
-```typescript
-// Enhanced authentication with admin status check
-useEffect(() => {
-  const checkAuth = async () => {
-    try {
-      console.log('AdminWidgetPage: Checking auth and admin status');
-      const supabase = createClient(); // Uses proper @supabase/ssr client
-      
-      // First check if user is logged in
-      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
-      
-      if (sessionError || !sessionData?.session?.user) {
-        console.error('Auth error or no session:', sessionError);
-        setError(new Error('Authentication required. Please log in.'));
-        router.push('/login');
-        return;
-      }
-      
-      const userId = sessionData.session.user.id;
-      
-      // Check admin status through RPC call (most reliable method)
-      const { data: isAdminRpc, error: rpcError } = await supabase.rpc('is_admin', { 
-        uid: userId 
-      });
-      
-      if (rpcError) {
-        console.error('Admin RPC check error:', rpcError);
-        
-        // Fallback to profile check
-        const { data: profile, error: profileError } = await supabase
-          .from('sd_user_profiles')
-          .select('is_admin')
-          .eq('user_id', userId)
-          .single();
-          
-        if (profileError || !profile?.is_admin) {
-          // Not an admin, redirect to unauthorized
-          setError(new Error('Admin access required.'));
-          router.push('/unauthorized');
-          return;
-        }
-        
-        setIsAdmin(true);
-      } else {
-        setIsAdmin(!!isAdminRpc);
-        
-        if (!isAdminRpc) {
-          // Not an admin, redirect to unauthorized
-          setError(new Error('Admin access required.'));
-          router.push('/unauthorized');
-          return;
-        }
-      }
-      
-      // User is authorized and admin
-      setIsLoaded(true);
-    } catch (err) {
-      console.error('Auth check error:', err);
-      setError(err instanceof Error ? err : new Error('Failed to check authentication'));
-    }
-  };
-  
-  checkAuth();
-}, [router]);
-```
+1. **CORS Issues**:
+   - Check browser console for CORS errors
+   - Verify Origin header in Network tab matches allowed origins
+   - Ensure OPTIONS requests are handled properly
 
-This approach addresses several critical issues in production environments:
+2. **Path Resolution**:
+   - Check for 404 errors in Network tab
+   - Verify static files exist in the expected location
+   - Ensure middleware is bypassing authentication for widget resources
 
-1. **Middleware Header Inconsistency**: Instead of relying on middleware setting the `x-is-admin` header (which might be inconsistent in production), it directly queries the database
-2. **Multiple Verification Methods**: Uses both RPC call and profile check to determine admin status
-3. **Graceful Error Handling**: Provides clear error messages and redirects for unauthorized users
-4. **Loading State UI**: Shows a loading spinner during authentication to improve user experience
+### API Connection Failures
 
-The solution ensures admin pages work reliably across all environments by using direct database queries rather than depending on HTTP headers.
+1. **URL Configuration**:
+   - Verify API endpoint URL in embed snippet matches actual deployment
+   - Check for hardcoded URLs that might point to development environment
+   - Test API endpoint directly to verify it's accessible
 
-## Updated Production Deployment Checklist
-
-To ensure your widget works correctly in production, follow this updated checklist:
-
-1. **Component Structure**
-   - ✅ Ensure the metadata is defined in `app/admin/widget/layout.tsx` (server component)
-   - ✅ Keep all client-side logic in `app/admin/widget/page.tsx` with the 'use client' directive
-   - ✅ Implement proper error boundaries for client components
-
-2. **Next.js Rendering Configuration**
-   - ✅ Add `export const dynamic = "force-dynamic"` to both widget layout and page files
-   - ✅ Add `export const fetchCache = 'force-no-store'` and `export const revalidate = 0` to prevent caching
-   - ✅ Create a `route.config.js` file with all necessary configuration options
-   - ✅ Implement authentication verification using client-side effects
-   - ✅ Handle rendering errors gracefully with proper user feedback
-
-3. **Authentication Implementation**
-   - ✅ Add direct Supabase client authentication check in the page component
-   - ✅ Implement explicit admin verification with RPC call
-   - ✅ Add fallback to profile-based admin check if RPC fails
-   - ✅ Redirect unauthorized users to the appropriate page
-   - ✅ Add loading state with UI feedback during authentication
-
-4. **Environment Variables**
-   - Set critical variables in your production environment:
-     - `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` for authentication
-     - `NEXT_PUBLIC_SITE_URL` recommended but not required (falls back to browser origin)
-     - `WIDGET_ALLOWED_ORIGINS` for CORS (include specific domains or use '*' for open access)
-
-5. **Middleware Configuration**
-   - ✅ Verify the middleware checks `/admin/widget` path BEFORE other widget paths
-   - ✅ Use trailing slashes in general patterns to prevent matching `/admin/widget`
-   - ✅ Ensure the middleware configuration correctly matches all required paths
-
-6. **Build Process**
-   - Ensure your build script includes `npm run build:widget` to generate the widget script
-   - The `postbuild` script should handle this automatically: `"postbuild": "npm run build:widget"`
-   - Verify the built widget file exists at `/public/widget/chat-widget.js` after deployment
-
-7. **CORS Configuration**
-   - Check that all widget endpoints correctly implement CORS headers
-   - Verify OPTIONS request handlers are implemented for preflight requests
-   - Ensure the allowed origins list includes your embedding domains
-
-8. **Production Verification**
-   - After deployment, check browser console for authentication and admin status logs
-   - Verify authentication is working by looking for successful RPC or profile checks
-   - Test admin access by logging in with both admin and non-admin accounts
-   - Ensure non-admin users are properly redirected to unauthorized pages
-   - Verify the widget configurator only loads for authenticated admin users
-
-By following these guidelines, the widget system will function reliably in production environments, even without all environment variables set, and will properly handle cross-domain embedding while maintaining proper admin page navigation and rendering.
+2. **Rate Limiting**:
+   - Check rate limit headers in API responses
+   - Verify Redis connection if using Redis-based rate limiting
+   - Check for rate limit error messages in API responses
