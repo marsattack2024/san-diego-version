@@ -55,7 +55,7 @@ async function isAdmin(supabase: any, userId: string) {
 }
 
 // GET /api/admin/dashboard - Get dashboard statistics
-export async function GET(request: Request) {
+export async function GET(_request: Request) {
   console.log("[Dashboard API] Request received");
   
   // Get cookies with proper handler (same as users route)

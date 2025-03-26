@@ -6,14 +6,13 @@ import { createClient } from '@/utils/supabase/server';
 import { cookies } from 'next/headers';
 import { z } from 'zod';
 import { Redis } from '@upstash/redis';
+import { NextRequest, NextResponse } from 'next/server';
+import { PostgrestError, PostgrestSingleResponse, User } from '@supabase/supabase-js';
+import { OpenAI } from 'openai';
 
 // Import only validation & utility modules at the top level
 import { extractUrls } from '@/lib/chat/url-utils';
 import { ToolManager } from '@/lib/chat/tool-manager';
-import { buildAIMessages } from '@/lib/chat/prompt-builder';
-import { createResponseValidator } from '@/lib/chat/response-validator';
-
-// Import the wrapLanguageModel function
 import { streamText } from 'ai';
 
 // Allow streaming responses up to 120 seconds instead of 60
@@ -56,11 +55,14 @@ function checkEnvironment() {
   };
 }
 
+// Define a timeout type to use instead of NodeJS.Timeout
+type TimeoutId = ReturnType<typeof setTimeout>;
+
 export async function POST(req: Request) {
   try {
     const startTime = Date.now(); // Add timestamp for performance tracking
     const timeoutThreshold = 110000; // 110 seconds (just under our maxDuration)
-    let operationTimeoutId: NodeJS.Timeout | undefined = undefined;
+    let operationTimeoutId: TimeoutId | undefined = undefined;
     
     // Simplified environment check
     const envCheck = checkEnvironment();
@@ -72,7 +74,8 @@ export async function POST(req: Request) {
     });
     
     // Set up a timeout for the entire operation
-    const operationPromise = new Promise<Response>(async (resolve, reject) => {
+    // Create the async function outside the Promise constructor
+    const processRequest = async (resolve: (value: Response) => void, reject: (reason?: any) => void) => {
       // Set timeout to abort operation before Edge runtime timeout
       operationTimeoutId = setTimeout(() => {
         edgeLogger.error('Operation timeout triggered', {
@@ -442,28 +445,32 @@ export async function POST(req: Request) {
                 
                 // Set a 20-second timeout for Deep Search operations
                 const deepSearchPromise = callPerplexityAPI(deepSearchQuery);
+                
+                // Create the timeout resolver function outside the Promise constructor
+                const createTimeoutResolver = (resolve: (value: { content: string; model: string; timing: { total: number } }) => void) => {
+                  setTimeout(() => {
+                    edgeLogger.warn('Deep Search operation timed out', {
+                      operation: 'deep_search_timeout',
+                      operationId,
+                      durationMs: Date.now() - deepSearchStartTime,
+                      threshold: 20000,
+                      important: true
+                    });
+                    resolve({ 
+                      content: "Deep Search timed out after 20 seconds. The AI will continue without these results and use only internal knowledge and any other available sources.",
+                      model: "timeout",
+                      timing: { total: Date.now() - deepSearchStartTime }
+                    });
+                  }, 20000);
+                };
+                
                 const deepSearchResponse = await Promise.race([
                   deepSearchPromise,
                   new Promise<{
                     content: string;
                     model: string;
                     timing: { total: number };
-                  }>((resolve) => {
-                    setTimeout(() => {
-                      edgeLogger.warn('Deep Search operation timed out', {
-                        operation: 'deep_search_timeout',
-                        operationId,
-                        durationMs: Date.now() - deepSearchStartTime,
-                        threshold: 20000,
-                        important: true
-                      });
-                      resolve({ 
-                        content: "Deep Search timed out after 20 seconds. The AI will continue without these results and use only internal knowledge and any other available sources.",
-                        model: "timeout",
-                        timing: { total: Date.now() - deepSearchStartTime }
-                      });
-                    }, 20000);
-                  })
+                  }>(resolve => createTimeoutResolver(resolve))
                 ]);
                 
                 // Extract the content from the response object
@@ -1168,6 +1175,10 @@ SOURCE: ${url}
         operationTimeoutId = undefined;
         resolve(new Response(`Error: ${error instanceof Error ? error.message : String(error)}`, { status: 500 }));
       }
+    };
+    
+    const operationPromise = new Promise<Response>((resolve, reject) => {
+      processRequest(resolve, reject).catch(reject);
     });
     
     // Return the promise that will resolve either with the successful response or a timeout

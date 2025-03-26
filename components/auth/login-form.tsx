@@ -102,7 +102,7 @@ export function LoginForm() {
       </CardContent>
       <CardFooter className="flex justify-center">
         <p className="text-sm text-gray-500">
-          Contact your instructor if you need access to the system.
+        Email <a href="mailto:humberto@photographytoprofits.com?subject=Access%20to%20Marlin" className="text-blue-600 hover:underline">humberto@photographytoprofits.com</a> for access if you're a p2p employee or THRC Mastermind 2.0 Member.
         </p>
       </CardFooter>
     </Card>

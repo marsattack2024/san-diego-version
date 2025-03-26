@@ -22,7 +22,7 @@ This document outlines the steps needed to deploy the AI Chat Application to Ver
 Prepare the following environment variables for Vercel:
 
 - [ ] `OPENAI_API_KEY` - Your OpenAI API key
-- [ ] `PERPLEXITY_API_KEY` - Your Perplexity API key (optional)
+- [ ] `PERPLEXITY_API_KEY` - Your Perplexity API key (required for Deep Search feature)
 - [ ] `NEXT_PUBLIC_SUPABASE_URL` - Your Supabase project URL
 - [ ] `NEXT_PUBLIC_SUPABASE_ANON_KEY` - Your Supabase anonymous key
 - [ ] `NEXT_PUBLIC_APP_URL` - Your Vercel deployment URL (can be updated after deployment)
@@ -34,6 +34,21 @@ Prepare the following environment variables for Vercel:
 - [ ] `ENABLE_DEEP_SEARCH` - Set to "true" or "false"
 - [ ] `MAX_DOCUMENTS` - Set to "10" or another number
 - [ ] `SIMILARITY_THRESHOLD` - Set to "0.5" or another number
+
+### Environment Variable Setup for Vercel Serverless Functions
+
+When deploying to Vercel, environment variables need special configuration to work properly in serverless functions:
+
+1. Set environment variables in the Vercel dashboard
+2. Make sure variable names are exactly as shown above (e.g., `PERPLEXITY_API_KEY`, not `perplexity_api_key`)
+3. Do not add quotes or spaces to the variable values
+4. Ensure your Perplexity API key starts with `pplx-`
+5. After setting environment variables, do a clean deployment by selecting "Clear build cache and deploy" in the Vercel dashboard
+
+For Perplexity API in particular, if you experience authentication errors:
+- Verify the API key is correctly set in Vercel
+- Check deployment logs for "missing API key" or "invalid API key" messages
+- If errors persist, check the app logs for specific error details
 
 ## Step 3: Deploy to Vercel
 

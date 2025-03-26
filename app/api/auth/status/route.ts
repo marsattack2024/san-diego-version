@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
  * Returns 200 if authenticated, 401 if not
  * Also sets x-auth-state header for debugging
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Create Supabase server client
     const supabase = await createServerClient();

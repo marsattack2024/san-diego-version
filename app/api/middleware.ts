@@ -144,7 +144,6 @@ export async function apiMiddleware(request: NextRequest) {
     // Log API request (only if not a ping/health endpoint)
     if (!pathname.includes('/health') && !pathname.includes('/ping')) {
       const duration = Date.now() - startTime;
-      const skipDetailedLogging = request.headers.get('x-skip-detailed-logging') === 'true';
       
       // Only log if:
       // 1. Processing took more than 50ms to reduce noise, or
@@ -171,7 +170,7 @@ export async function apiMiddleware(request: NextRequest) {
 /**
  * Helper function to create a middleware that combines our apiMiddleware with additional checks
  */
-export function createApiMiddleware(additionalMiddleware?: (req: NextRequest) => Promise<NextResponse | null>) {
+export function createApiMiddleware(additionalMiddleware?: (_req: NextRequest) => Promise<NextResponse | null>) {
   return async function(request: NextRequest) {
     // First apply our standard API middleware
     const response = await apiMiddleware(request);

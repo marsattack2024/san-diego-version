@@ -94,22 +94,22 @@ const PureChatItem = ({
   isDeleting?: boolean;
 }) => {
   return (
-    <SidebarMenuItem>
+    <SidebarMenuItem className="px-1">
       <Link href={`/chat/${chat.id}`}>
         <SidebarMenuButton
           asChild={false}
           isActive={isActive}
-          className="flex items-center group"
+          className="flex items-center group rounded-md px-2 py-1.5 hover:bg-sidebar-item-hover transition-colors"
           onClick={() => setOpenMobile(false)}
         >
           <div className="flex items-center gap-2 flex-1 min-w-0">
-            <MessageSquare size={16} />
-            <span className="truncate">{chat.title || "New Chat"}</span>
+            <MessageSquare size={16} className="flex-shrink-0 text-sidebar-foreground/70" />
+            <span className="truncate text-sm">{chat.title || "New Chat"}</span>
           </div>
         </SidebarMenuButton>
       </Link>
       
-      <div className="opacity-0 group-hover:opacity-100 transition-opacity absolute right-1 top-1.5">
+      <div className="opacity-0 group-hover:opacity-100 transition-opacity absolute right-2 top-1.5">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -528,11 +528,11 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     const groupedChats = groupChatsByDate(chats);
 
     return (
-      <div className="space-y-2">
+      <div className="space-y-1 pt-1">
         {/* Today's chats */}
         {groupedChats.today.length > 0 && (
           <>
-            <div className="px-2 py-1 text-xs text-sidebar-foreground/50">
+            <div className="px-2 py-0.5 text-xs text-sidebar-foreground/50">
               Today
             </div>
             {groupedChats.today.map((chat) => (
@@ -551,7 +551,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
         {/* Past week */}
         {groupedChats.pastWeek.length > 0 && (
           <>
-            <div className="px-2 py-1 text-xs text-sidebar-foreground/50 mt-6">
+            <div className="px-2 py-0.5 text-xs text-sidebar-foreground/50 mt-4">
               Past 7 days
             </div>
             {groupedChats.pastWeek.map((chat) => (
@@ -570,7 +570,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
         {/* Older */}
         {groupedChats.older.length > 0 && (
           <>
-            <div className="px-2 py-1 text-xs text-sidebar-foreground/50 mt-6">
+            <div className="px-2 py-0.5 text-xs text-sidebar-foreground/50 mt-4">
               Older ({groupedChats.older.length})
             </div>
             {/* Show limited number of older chats if there are many */}
@@ -614,8 +614,8 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
 
   // Main component render
   return (
-    <div className="sidebar-history relative">
-      <SidebarGroup className="flex-shrink-0">
+    <div className="sidebar-history relative h-full overflow-hidden border-r border-border">
+      <SidebarGroup className="flex-shrink-0 h-full overflow-hidden flex flex-col">
         <SidebarGroupLabel>
           <div className="flex items-center justify-between">
             <div className="flex-1"></div>
@@ -637,7 +637,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
             </div>
           </div>
         </SidebarGroupLabel>
-        <SidebarGroupContent>
+        <SidebarGroupContent className="overflow-y-auto pb-20">
           <SidebarMenu>
             {isLoading ? (
               <div className="flex justify-center py-8">

@@ -63,7 +63,6 @@ export default function UsersPage() {
 
   // State for mutations
   const [isSending, setIsSending] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
 
   // Fetch users data
   const fetchUsers = async () => {
@@ -156,7 +155,6 @@ export default function UsersPage() {
 
   // Delete a user
   const deleteUser = async (userId: string) => {
-    setIsDeleting(true);
     try {
       const response = await fetch(`/api/admin/users/${userId}`, {
         method: 'DELETE',
@@ -179,8 +177,6 @@ export default function UsersPage() {
         description: error instanceof Error ? error.message : "Could not delete user",
         variant: "destructive",
       });
-    } finally {
-      setIsDeleting(false);
     }
   };
 

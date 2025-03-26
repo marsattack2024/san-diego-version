@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { logger } from '@/lib/logger';
-import { withLogging } from '@/lib/logger/api-logger';
+import { withRequestTracking } from '@/lib/logger/edge-logger';
 
 async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -8,7 +8,7 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 
   try {
-    const { message, data, level, url } = req.body;
+    const { message, data, url } = req.body;
     
     // Log client error with server logger
     logger.error(`Client error: ${message}`, {
@@ -24,4 +24,4 @@ async function handler(req: NextApiRequest, res: NextApiResponse) {
   }
 }
 
-export default withLogging(handler); 
+export default withRequestTracking(handler); 

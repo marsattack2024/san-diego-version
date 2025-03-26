@@ -60,6 +60,16 @@ export async function callPerplexityAPI(query: string): Promise<{
       vercelEnv: process.env.VERCEL_ENV || 'unknown'
     };
     
+    // Log API key existence and format information (not the key itself)
+    logger.info("Perplexity API key check", {
+      operation: "perplexity_key_check",
+      operationId,
+      keyExists: !!process.env.PERPLEXITY_API_KEY,
+      keyLength: process.env.PERPLEXITY_API_KEY?.length || 0,
+      keyFormatValid: process.env.PERPLEXITY_API_KEY?.startsWith('pplx-') || false,
+      important: true
+    });
+    
     logger.info("Calling Perplexity API via serverless function", {
       operation: "perplexity_call_started",
       operationId,

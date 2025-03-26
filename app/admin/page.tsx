@@ -1,14 +1,12 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useIsMobile } from '@/hooks/use-mobile';
 
 export default function AdminDashboard() {
   // State for dashboard stats
   const [stats, setStats] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
-  const isMobile = useIsMobile();
 
   // Fetch dashboard stats
   useEffect(() => {

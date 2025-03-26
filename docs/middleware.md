@@ -556,7 +556,51 @@ Our implementation follows the recommended Supabase Auth patterns with some cust
 3. **Circuit Breaker Pattern**: Implemented circuit breaker for auth failures to prevent cascading failures.
 4. **Explicit Headers for All States**: Setting explicit headers for both authenticated and unauthenticated states.
 
+## Vercel Serverless Environment Variable Troubleshooting
+
+### Common Environment Variable Issues in Vercel Serverless Functions
+
+When deploying to Vercel, environment variables can be tricky, especially for APIs like Perplexity that run in serverless functions. Here are common issues and solutions:
+
+#### 1. Missing or Inaccessible Environment Variables
+- **Symptom**: API returns 401 or 500 errors due to missing API keys
+- **Common Causes**:
+  - Environment variable not set in Vercel dashboard
+  - Environment variable has incorrect name
+  - Environment variable not accessible in serverless context
+- **Diagnosis**:
+  - Add logging to check if environment variable exists
+  - Check env var format and length
+  - Review Vercel build logs
+- **Solutions**:
+  - Set environment variables in Vercel dashboard
+  - Use `@` prefix in vercel.json for secret references
+  - Ensure correct casing and naming
+  - Avoid NEXT_PUBLIC_ prefix for private API keys
+
+#### 2. Serverless vs Edge Runtime Context Differences
+- **Symptom**: Environment variables work in Edge Functions but not in Serverless Functions
+- **Common Causes**:
+  - Different environment handling between runtimes
+  - `next.config.mjs` env setup not properly propagating to serverless
+- **Diagnosis**:
+  - Add explicit environment checks with detailed logging
+  - Test with minimal API endpoint
+- **Solutions**:
+  - Configure environment in vercel.json
+  - Force clean deployment with cache invalidation
+  - Ensure proper env var mapping in both contexts
+
+#### 3. Verifying Environment Variables in Production
+To verify environment variables in production without exposing sensitive data:
+- Log the existence and format of keys, not the values
+- Check for expected key prefixes or patterns
+- Monitor API responses for auth failures
+- Use Vercel Logs to check environment variable presence
+
 ## References
 
 - [Supabase Auth Documentation](https://supabase.com/docs/guides/auth/server-side/nextjs)
 - [Next.js Middleware Documentation](https://nextjs.org/docs/app/building-your-application/routing/middleware)
+- [Vercel Environment Variables](https://vercel.com/docs/projects/environment-variables)
+- [Next.js Environment Variables](https://nextjs.org/docs/basic-features/environment-variables)

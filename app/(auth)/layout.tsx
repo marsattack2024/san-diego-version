@@ -1,4 +1,4 @@
-import { AuthButton } from '@/components/auth/auth-button';
+import React from 'react';
 
 // Mark this layout as dynamic since it uses cookies
 export const dynamic = 'force-dynamic';

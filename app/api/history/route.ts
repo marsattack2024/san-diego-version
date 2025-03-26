@@ -1,19 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { Chat } from '@/lib/db/schema';
-import { User } from '@supabase/supabase-js';
 import { createClient } from '@/utils/supabase/server';
 
 // LRU Cache for server-side history caching across requests
 const historyCache = new Map<string, { data: any, timestamp: number }>();
 const CACHE_TTL = 30 * 1000; // 30 seconds in milliseconds
 const MAX_CACHE_ITEMS = 1000;
-
-// Circuit breaker pattern
-let consecutiveErrors = 0;
-let lastErrorTime = 0;
-const ERROR_THRESHOLD = 5;
-const ERROR_TIMEOUT = 60 * 1000; // 1 minute
 
 function formatError(error: unknown): Error {
   if (error instanceof Error) return error;

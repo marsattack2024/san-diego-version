@@ -1,6 +1,9 @@
 import { NextRequest } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 
+// Define the ReadableStreamController type that wasn't properly imported
+type ReadableStreamController<T> = ReadableStreamDefaultController<T>;
+
 // Global event emitter for server-sent events
 export const runtime = 'edge';
 
@@ -19,8 +22,10 @@ export function sendEventToClients(event: { type: string; status: string; detail
   clients.forEach((client) => {
     try {
       client.enqueue(data);
-    } catch (err) {
-      edgeLogger.error('Error sending event to client', { error: err });
+    } catch (err: unknown) {
+      edgeLogger.error('Error sending event to client', { 
+        error: err instanceof Error ? err.message : String(err) 
+      });
       // Remove failed clients from the set
       clients.delete(client);
     }
@@ -54,11 +59,14 @@ export async function GET(req: NextRequest) {
         try {
           const pingData = `data: {"type":"ping"}\n\n`;
           controller.enqueue(new TextEncoder().encode(pingData));
-        } catch (err) {
+        } catch (err: unknown) {
           // If there's an error, the client is probably disconnected
           clearInterval(pingInterval);
           clients.delete(controller);
-          edgeLogger.info('Client disconnected during ping', { connectionId });
+          edgeLogger.info('Client disconnected during ping', { 
+            connectionId,
+            error: err instanceof Error ? err.message : String(err)
+          });
         }
       }, 30000);
       
