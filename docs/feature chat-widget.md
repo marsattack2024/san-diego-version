@@ -862,9 +862,64 @@ This section provides detailed guidance for troubleshooting common issues with t
 
 If the admin widget page isn't appearing in the admin navigation, several technical factors could be responsible:
 
-#### 1. Middleware Path Precedence Conflict
+#### 1. Authentication Flow Issues in Production
 
-The most common cause is a conflict in middleware path handling:
+The most critical issue in production is that admin authentication flows work differently than in development:
+
+```typescript
+// SOLUTION: Add direct admin check with client component
+const { data: isAdminRpc, error: rpcError } = await supabase.rpc('is_admin', { 
+  uid: userId 
+});
+
+// Set state based on admin check result
+setIsAdmin(!!isAdminRpc);
+
+// Redirect non-admins to unauthorized page
+if (!isAdminRpc) {
+  router.push('/unauthorized');
+  return;
+}
+```
+
+**Why this happens**: 
+- In development, middleware sets authentication headers that are checked by the API
+- In production, these headers might not be correctly passed between services
+- The x-is-admin header that identifies admin users may be missing in the production environment
+- Without client-side verification, admin status is not confirmed
+
+**Resolution**:
+- Add direct Supabase client authentication check in the page component
+- Implement explicit admin verification with RPC call (most reliable method)
+- Add fallback to profile-based admin check if RPC fails
+- Redirect unauthorized users to the appropriate page
+
+#### 2. Static vs Dynamic Rendering Issues (Critical Production Issue)
+
+The second critical issue is that Next.js is trying to statically render the admin widget page:
+
+```typescript
+// FIXED: Add these to both layout.tsx, page.tsx, and route.config.js
+export const dynamic = "force-dynamic";
+export const fetchCache = 'force-no-store';
+export const revalidate = 0;
+```
+
+**Why this happens**: 
+- In development, Next.js treats pages as dynamic by default
+- In production, pages without `dynamic = "force-dynamic"` may be pre-rendered at build time
+- Pre-rendered pages lose authentication context and can't determine the user's admin status
+- The page may be incorrectly excluded from navigation since authentication hasn't run
+
+**Resolution**:
+- Add `export const dynamic = "force-dynamic"` to both layout and page files
+- Create a comprehensive route.config.js with additional caching controls
+- Add client-side loading state with visual feedback during authentication checks
+- Use enhanced console logging to help diagnose rendering issues in production
+
+#### 2. Middleware Path Precedence Conflict
+
+Another potential cause is a conflict in middleware path handling:
 
 ```typescript
 // CRITICAL: This order is important - specific paths must be checked first
@@ -890,7 +945,7 @@ if (
 - Use trailing slashes in general patterns (e.g., `/widget/`) to prevent matching `/admin/widget`
 - Check middleware logs for the path processing sequence
 
-#### 2. Client/Server Component Conflict
+#### 3. Client/Server Component Conflict
 
 The widget page uses both client features and metadata:
 
@@ -909,7 +964,7 @@ export const metadata: Metadata = {
 - Move metadata to a layout component (`admin/widget/layout.tsx`)
 - Handle error boundaries properly in the client component
 
-#### 3. Missing Environment Variables
+#### 4. Missing Environment Variables
 
 The widget configurator relies on specific environment variables:
 
@@ -1261,6 +1316,85 @@ export function validateCriticalEnv() {
 
 This implementation properly accounts for the browser environment where URLs can be derived from the window object, preventing false warnings about missing environment variables.
 
+### 5. Production-Ready Admin Authentication
+
+A critical improvement for production is the explicit admin authentication implemented in the widget page:
+
+```typescript
+// Enhanced authentication with admin status check
+useEffect(() => {
+  const checkAuth = async () => {
+    try {
+      console.log('AdminWidgetPage: Checking auth and admin status');
+      const supabase = createClient(); // Uses proper @supabase/ssr client
+      
+      // First check if user is logged in
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError || !sessionData?.session?.user) {
+        console.error('Auth error or no session:', sessionError);
+        setError(new Error('Authentication required. Please log in.'));
+        router.push('/login');
+        return;
+      }
+      
+      const userId = sessionData.session.user.id;
+      
+      // Check admin status through RPC call (most reliable method)
+      const { data: isAdminRpc, error: rpcError } = await supabase.rpc('is_admin', { 
+        uid: userId 
+      });
+      
+      if (rpcError) {
+        console.error('Admin RPC check error:', rpcError);
+        
+        // Fallback to profile check
+        const { data: profile, error: profileError } = await supabase
+          .from('sd_user_profiles')
+          .select('is_admin')
+          .eq('user_id', userId)
+          .single();
+          
+        if (profileError || !profile?.is_admin) {
+          // Not an admin, redirect to unauthorized
+          setError(new Error('Admin access required.'));
+          router.push('/unauthorized');
+          return;
+        }
+        
+        setIsAdmin(true);
+      } else {
+        setIsAdmin(!!isAdminRpc);
+        
+        if (!isAdminRpc) {
+          // Not an admin, redirect to unauthorized
+          setError(new Error('Admin access required.'));
+          router.push('/unauthorized');
+          return;
+        }
+      }
+      
+      // User is authorized and admin
+      setIsLoaded(true);
+    } catch (err) {
+      console.error('Auth check error:', err);
+      setError(err instanceof Error ? err : new Error('Failed to check authentication'));
+    }
+  };
+  
+  checkAuth();
+}, [router]);
+```
+
+This approach addresses several critical issues in production environments:
+
+1. **Middleware Header Inconsistency**: Instead of relying on middleware setting the `x-is-admin` header (which might be inconsistent in production), it directly queries the database
+2. **Multiple Verification Methods**: Uses both RPC call and profile check to determine admin status
+3. **Graceful Error Handling**: Provides clear error messages and redirects for unauthorized users
+4. **Loading State UI**: Shows a loading spinner during authentication to improve user experience
+
+The solution ensures admin pages work reliably across all environments by using direct database queries rather than depending on HTTP headers.
+
 ## Updated Production Deployment Checklist
 
 To ensure your widget works correctly in production, follow this updated checklist:
@@ -1270,25 +1404,46 @@ To ensure your widget works correctly in production, follow this updated checkli
    - ✅ Keep all client-side logic in `app/admin/widget/page.tsx` with the 'use client' directive
    - ✅ Implement proper error boundaries for client components
 
-2. **Environment Variables**
+2. **Next.js Rendering Configuration**
+   - ✅ Add `export const dynamic = "force-dynamic"` to both widget layout and page files
+   - ✅ Add `export const fetchCache = 'force-no-store'` and `export const revalidate = 0` to prevent caching
+   - ✅ Create a `route.config.js` file with all necessary configuration options
+   - ✅ Implement authentication verification using client-side effects
+   - ✅ Handle rendering errors gracefully with proper user feedback
+
+3. **Authentication Implementation**
+   - ✅ Add direct Supabase client authentication check in the page component
+   - ✅ Implement explicit admin verification with RPC call
+   - ✅ Add fallback to profile-based admin check if RPC fails
+   - ✅ Redirect unauthorized users to the appropriate page
+   - ✅ Add loading state with UI feedback during authentication
+
+4. **Environment Variables**
    - Set critical variables in your production environment:
      - `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` for authentication
      - `NEXT_PUBLIC_SITE_URL` recommended but not required (falls back to browser origin)
      - `WIDGET_ALLOWED_ORIGINS` for CORS (include specific domains or use '*' for open access)
 
-3. **Middleware Configuration**
+5. **Middleware Configuration**
    - ✅ Verify the middleware checks `/admin/widget` path BEFORE other widget paths
    - ✅ Use trailing slashes in general patterns to prevent matching `/admin/widget`
    - ✅ Ensure the middleware configuration correctly matches all required paths
 
-4. **Build Process**
+6. **Build Process**
    - Ensure your build script includes `npm run build:widget` to generate the widget script
    - The `postbuild` script should handle this automatically: `"postbuild": "npm run build:widget"`
    - Verify the built widget file exists at `/public/widget/chat-widget.js` after deployment
 
-5. **CORS Configuration**
+7. **CORS Configuration**
    - Check that all widget endpoints correctly implement CORS headers
    - Verify OPTIONS request handlers are implemented for preflight requests
    - Ensure the allowed origins list includes your embedding domains
+
+8. **Production Verification**
+   - After deployment, check browser console for authentication and admin status logs
+   - Verify authentication is working by looking for successful RPC or profile checks
+   - Test admin access by logging in with both admin and non-admin accounts
+   - Ensure non-admin users are properly redirected to unauthorized pages
+   - Verify the widget configurator only loads for authenticated admin users
 
 By following these guidelines, the widget system will function reliably in production environments, even without all environment variables set, and will properly handle cross-domain embedding while maintaining proper admin page navigation and rendering.
