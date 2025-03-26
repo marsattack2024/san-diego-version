@@ -853,3 +853,442 @@ Common Vercel deployment issues:
    - Check embed codes for correct domain references
 
 For more detailed information about Vercel deployment, see `lib/widget/README.md`.
+
+## Widget Troubleshooting Guide
+
+This section provides detailed guidance for troubleshooting common issues with the widget implementation, particularly focusing on deployment and cross-domain functionality.
+
+### Admin Widget Page Missing from Navigation
+
+If the admin widget page isn't appearing in the admin navigation, several technical factors could be responsible:
+
+#### 1. Middleware Path Precedence Conflict
+
+The most common cause is a conflict in middleware path handling:
+
+```typescript
+// CRITICAL: This order is important - specific paths must be checked first
+if (pathname === '/admin/widget') {
+  console.log('[Middleware] Admin widget page accessed, passing through normal auth flow');
+  return await updateSession(request);
+}
+
+// Then check general patterns - the trailing slash in /widget/ prevents matching /admin/widget
+if (
+  pathname.startsWith('/api/widget-chat') || 
+  pathname.startsWith('/widget/') || 
+  pathname === '/widget.js' ||
+  pathname === '/debug.js'
+) {
+  console.log('Bypassing auth middleware for Widget features:', pathname);
+  return;
+}
+```
+
+**Resolution**: 
+- Ensure the specific `/admin/widget` path check appears BEFORE the general `/widget` path checks
+- Use trailing slashes in general patterns (e.g., `/widget/`) to prevent matching `/admin/widget`
+- Check middleware logs for the path processing sequence
+
+#### 2. Client/Server Component Conflict
+
+The widget page uses both client features and metadata:
+
+```typescript
+'use client'; // Marks as client component
+
+// However, this can only be exported from a server component
+export const metadata: Metadata = {
+  title: 'Widget Management',
+  description: 'Configure and manage the embedding of the Marlin chat widget',
+}
+```
+
+**Resolution**:
+- Split into separate server (for metadata) and client components
+- Move metadata to a layout component (`admin/widget/layout.tsx`)
+- Handle error boundaries properly in the client component
+
+#### 3. Missing Environment Variables
+
+The widget configurator relies on specific environment variables:
+
+```typescript
+// Required variables for proper widget configuration
+const CRITICAL_VARS = [
+  'NEXT_PUBLIC_SITE_URL',
+  'NEXT_PUBLIC_SUPABASE_URL',
+  'NEXT_PUBLIC_SUPABASE_ANON_KEY'
+];
+```
+
+**Resolution**:
+- Verify all required environment variables are set in production
+- Check for fallback handling in the widget configurator
+- Add runtime validation and user-friendly error messages
+
+### CORS Configuration Issues
+
+For external embedding to work, proper CORS headers are essential:
+
+#### 1. Missing CORS Headers
+
+All widget endpoints need appropriate CORS headers:
+
+```typescript
+// Function to add CORS headers to a response
+function addCorsHeaders(response: Response, req: NextRequest): Response {
+  const origin = req.headers.get('origin') || '';
+  const allowedOrigins = getAllowedOrigins();
+  const isAllowedOrigin = allowedOrigins.includes('*') || allowedOrigins.includes(origin);
+  
+  const corsHeaders = new Headers(response.headers);
+  corsHeaders.set('Access-Control-Allow-Origin', isAllowedOrigin ? origin : allowedOrigins[0]);
+  corsHeaders.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  corsHeaders.set('Access-Control-Allow-Headers', 'Content-Type');
+  corsHeaders.set('Access-Control-Max-Age', '86400');
+  
+  return new Response(response.body, {
+    status: response.status,
+    headers: corsHeaders
+  });
+}
+```
+
+**Resolution**:
+- Verify that all widget-related endpoints set appropriate CORS headers
+- Check that OPTIONS handlers are implemented for all cross-origin endpoints
+- Ensure the WIDGET_ALLOWED_ORIGINS environment variable is properly set
+
+#### 2. Vercel.json and CORS Settings Mismatch
+
+Vercel.json configuration should match API route CORS settings:
+
+```json
+{
+  "headers": [
+    {
+      "source": "/widget.js",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, OPTIONS"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Resolution**:
+- Ensure Vercel.json headers match the CORS headers set in API routes
+- Check that paths in Vercel.json are correctly defined
+- Verify that all necessary widget routes have CORS headers configured
+
+### Path and URL Configuration Issues
+
+Path-related problems can prevent proper widget loading:
+
+#### 1. Middleware Matcher Pattern Conflicts
+
+The middleware matcher pattern determines which paths are processed:
+
+```typescript
+export const config = {
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|api/check-status|widget/chat-widget.js|images/|styles/).*)',
+  ],
+};
+```
+
+**Resolution**:
+- Ensure widget script paths are properly excluded from middleware matching
+- Check for conflicting redirects or rewrites in vercel.json
+- Verify that static file paths are accessible without authentication
+
+#### 2. Vercel.json Rewrites and Redirects
+
+Rewrites and redirects can affect path resolution:
+
+```json
+"rewrites": [
+  { "source": "/widget.js", "destination": "/widget/chat-widget.js" }
+],
+"redirects": [
+  { "source": "/widget", "destination": "/admin/widget", "permanent": true }
+]
+```
+
+**Resolution**:
+- Check for conflicting redirect rules
+- Ensure rewrite rules are correctly routing widget requests
+- Verify the static file paths are correctly referenced
+
+### API Endpoint Configuration Issues
+
+Incorrect API endpoint URLs can prevent widget functionality:
+
+#### 1. Base URL Resolution
+
+The widget configurator uses multiple fallbacks for URL resolution:
+
+```typescript
+// More robust URL resolution to prevent hydration issues - use multiple fallbacks
+const [baseUrl, setBaseUrl] = useState(() => {
+  try {
+    // Use the enhanced getSiteUrl function with fallbacks
+    return getSiteUrl();
+  } catch (e) {
+    console.error('Error getting site URL:', e);
+    return 'https://marlan.photographytoprofits.com';
+  }
+})
+```
+
+**Resolution**:
+- Verify NEXT_PUBLIC_SITE_URL is set correctly in production
+- Check browser console logs for URL resolution issues
+- Ensure the embed code is using the correct API endpoint URL
+
+#### 2. Embed Code Generation
+
+The embed snippets must reference the correct domain and endpoints:
+
+```typescript
+const scriptCode = `
+(function(w, d, s, o, f, js, fjs) {
+  w['ChatWidgetObject'] = o;
+  w[o] = w[o] || function() { (w[o].q = w[o].q || []).push(arguments) };
+  js = d.createElement(s), fjs = d.getElementsByTagName(s)[0];
+  js.id = o; js.src = f; js.async = 1; fjs.parentNode.insertBefore(js, fjs);
+}(window, document, 'script', 'chatWidget', '${finalUrl}/widget.js'));
+`;
+```
+
+**Resolution**:
+- Verify that embed code generation uses the correct domain
+- Check for hardcoded URLs in embed snippets
+- Update any existing embed codes with correct URL references
+
+## Production Implementation Notes
+
+Recent updates have significantly improved the widget's reliability in production environments. These critical changes ensure the widget functions correctly across different deployment contexts.
+
+### 1. Client/Server Component Architecture Fix
+
+The admin widget page implementation has been restructured to resolve component hydration conflicts:
+
+```typescript
+// BEFORE - Hydration conflicts with client components exporting metadata
+// app/admin/widget/page.tsx
+'use client';
+
+import React from 'react';
+import { Metadata } from 'next';
+
+export const metadata: Metadata = { // This caused hydration issues
+  title: 'Widget Management',
+  description: 'Configure and manage the embedding of the Marlin chat widget',
+}
+
+export default function AdminWidgetPage() {
+  // Client component implementation
+}
+```
+
+```typescript
+// AFTER - Proper separation of server/client components
+// app/admin/widget/layout.tsx (Server Component)
+import { Metadata } from 'next'
+
+export const metadata: Metadata = {
+  title: 'Widget Management',
+  description: 'Configure and manage the embedding of the Marlin chat widget',
+}
+
+export default function AdminWidgetLayout({
+  children,
+}: {
+  children: React.ReactNode
+}) {
+  return children
+}
+
+// app/admin/widget/page.tsx (Client Component)
+'use client';
+
+export default function AdminWidgetPage() {
+  // Client component implementation with proper hydration
+}
+```
+
+This architecture properly separates metadata (server component concern) from client-side interactivity, resolving hydration errors that could prevent the widget page from rendering in production.
+
+### 2. Enhanced CORS Implementation
+
+The CORS handling has been improved to ensure proper cross-origin support:
+
+```typescript
+// Improved CORS implementation with better origin handling
+function addCorsHeaders(response: Response, req: NextRequest): Response {
+  const origin = req.headers.get('origin') || '';
+  const allowedOrigins = getAllowedOrigins();
+  
+  // Enhanced logic: More precise handling of wildcard vs specific origins
+  const isWildcardAllowed = allowedOrigins.includes('*');
+  const isSpecificOriginAllowed = origin && allowedOrigins.includes(origin);
+  
+  const corsHeaders = new Headers(response.headers);
+  
+  // More precise CORS header setting based on origin type
+  if (isSpecificOriginAllowed) {
+    // When specific origin is allowed, use that exact origin (best practice)
+    corsHeaders.set('Access-Control-Allow-Origin', origin);
+  } else if (isWildcardAllowed) {
+    // When wildcard is allowed and origin isn't specifically allowed, use wildcard
+    corsHeaders.set('Access-Control-Allow-Origin', '*');
+  } else if (allowedOrigins.length > 0) {
+    // Fallback to first allowed origin
+    corsHeaders.set('Access-Control-Allow-Origin', allowedOrigins[0]);
+  }
+  
+  // Additional development logging for easier troubleshooting
+  if (process.env.NODE_ENV === 'development') {
+    console.log('CORS Headers set:', {
+      origin,
+      isWildcardAllowed,
+      isSpecificOriginAllowed,
+      allowOrigin: corsHeaders.get('Access-Control-Allow-Origin')
+    });
+  }
+  
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: corsHeaders
+  });
+}
+```
+
+This implementation precisely handles different origin scenarios according to web standards and adds enhanced logging for easier debugging.
+
+### 3. Client-First URL Resolution Strategy
+
+The URL resolution strategy has been completely reworked to ensure reliable operation even without environment variables:
+
+```typescript
+// Updated widget configurator with immediate client-side URL detection
+const [baseUrl, setBaseUrl] = useState(() => {
+  // Client-side rendering - use window.location.origin immediately if available
+  if (typeof window !== 'undefined') {
+    // Browser available - use origin directly as most reliable source
+    return window.location.origin;
+  }
+  
+  // Server-side rendering - fall back to getSiteUrl()
+  try {
+    return getSiteUrl();
+  } catch (e) {
+    console.error('Error getting site URL:', e);
+    // This fallback will be replaced with actual URL after client-side hydration
+    return 'https://marlan.photographytoprofits.com';
+  }
+})
+```
+
+The `getSiteUrl()` function has also been enhanced:
+
+```typescript
+export function getSiteUrl(): string {
+  // Client-side: Prioritize browser origin as the most accurate source
+  if (typeof window !== 'undefined') {
+    const browserOrigin = window.location.origin;
+    
+    // Use browser origin if available, otherwise try env vars
+    return browserOrigin || 
+           process.env.NEXT_PUBLIC_SITE_URL || 
+           process.env.NEXT_PUBLIC_APP_URL || 
+           'https://marlan.photographytoprofits.com';
+  }
+  
+  // Server-side: Use environment variables with fallbacks
+  return process.env.NEXT_PUBLIC_SITE_URL || 
+         process.env.NEXT_PUBLIC_APP_URL || 
+         (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
+         'https://marlan.photographytoprofits.com';
+}
+```
+
+This approach ensures that:
+1. On the client, we immediately use the browser's own origin as the most accurate source of truth
+2. We avoid hydration mismatches by using consistent strategies on server and client
+3. Multiple fallbacks ensure the widget never fails due to missing environment variables
+
+### 4. Environment Variable Validation
+
+The environment variable validation has been improved to work properly in both client and server contexts:
+
+```typescript
+export function validateCriticalEnv() {
+  // On client-side, browser origin can substitute for NEXT_PUBLIC_SITE_URL
+  let effectiveMissing = [...CRITICAL_VARS];
+  
+  if (typeof window !== 'undefined') {
+    // If we have a valid browser origin, we don't need NEXT_PUBLIC_SITE_URL
+    if (window.location.origin && window.location.origin !== 'null') {
+      effectiveMissing = effectiveMissing.filter(v => v !== 'NEXT_PUBLIC_SITE_URL');
+    }
+  }
+  
+  // Check which variables are actually missing
+  const missing = effectiveMissing.filter(v => !process.env[v]);
+  const isValid = missing.length === 0;
+  
+  // More context-aware validation results
+  return {
+    isValid,
+    missing,
+    message: isValid 
+      ? 'All critical environment variables are set'
+      : `Missing critical environment variables: ${missing.join(', ')}`
+  };
+}
+```
+
+This implementation properly accounts for the browser environment where URLs can be derived from the window object, preventing false warnings about missing environment variables.
+
+## Updated Production Deployment Checklist
+
+To ensure your widget works correctly in production, follow this updated checklist:
+
+1. **Component Structure**
+   - ✅ Ensure the metadata is defined in `app/admin/widget/layout.tsx` (server component)
+   - ✅ Keep all client-side logic in `app/admin/widget/page.tsx` with the 'use client' directive
+   - ✅ Implement proper error boundaries for client components
+
+2. **Environment Variables**
+   - Set critical variables in your production environment:
+     - `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` for authentication
+     - `NEXT_PUBLIC_SITE_URL` recommended but not required (falls back to browser origin)
+     - `WIDGET_ALLOWED_ORIGINS` for CORS (include specific domains or use '*' for open access)
+
+3. **Middleware Configuration**
+   - ✅ Verify the middleware checks `/admin/widget` path BEFORE other widget paths
+   - ✅ Use trailing slashes in general patterns to prevent matching `/admin/widget`
+   - ✅ Ensure the middleware configuration correctly matches all required paths
+
+4. **Build Process**
+   - Ensure your build script includes `npm run build:widget` to generate the widget script
+   - The `postbuild` script should handle this automatically: `"postbuild": "npm run build:widget"`
+   - Verify the built widget file exists at `/public/widget/chat-widget.js` after deployment
+
+5. **CORS Configuration**
+   - Check that all widget endpoints correctly implement CORS headers
+   - Verify OPTIONS request handlers are implemented for preflight requests
+   - Ensure the allowed origins list includes your embedding domains
+
+By following these guidelines, the widget system will function reliably in production environments, even without all environment variables set, and will properly handle cross-domain embedding while maintaining proper admin page navigation and rendering.

@@ -20,44 +20,56 @@ export function AdminWidgetConfigurator() {
   const [showEmbed, setShowEmbed] = useState(false)
   const [envWarning, setEnvWarning] = useState<string | null>(null)
   
-  // More robust URL resolution to prevent hydration issues - use multiple fallbacks
+  // More robust URL resolution with immediate client-side fallback
   const [baseUrl, setBaseUrl] = useState(() => {
+    // Client-side rendering - use window.location.origin directly if available
+    if (typeof window !== 'undefined') {
+      // Browser available - use origin directly
+      return window.location.origin;
+    }
+    
+    // Server-side rendering - fall back to getSiteUrl()
     try {
-      // Use the enhanced getSiteUrl function with fallbacks
       return getSiteUrl();
     } catch (e) {
       console.error('Error getting site URL:', e);
+      // This fallback will be replaced with actual URL after client-side hydration
       return 'https://marlan.photographytoprofits.com';
     }
   })
   
-  // Set base URL with fallback to window.location.origin if running in browser
+  // Additional verification and logging after component mounts
   useEffect(() => {
-    // Only try to update URL after component mounts (client-side only)
+    // Only run on client
     if (typeof window !== 'undefined') {
+      // Always ensure baseUrl is set to at least window.location.origin
       if (!baseUrl || baseUrl === 'https://marlan.photographytoprofits.com') {
-        // If we're using the fallback, try to get a better URL from the browser
         const browserUrl = window.location.origin;
-        console.log('Setting base URL from browser:', browserUrl);
+        console.log('Updating baseUrl from browser:', browserUrl);
         setBaseUrl(browserUrl);
       }
       
-      // Log DEBUG info in development
+      // Enhanced debug logging 
       if (process.env.NODE_ENV === 'development') {
         console.log('Widget configurator environment:', {
           baseUrl,
+          windowOrigin: window.location.origin,
           NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL || '(not set)',
-          browserOrigin: window.location.origin
+          usingFallback: baseUrl === 'https://marlan.photographytoprofits.com'
         });
       }
+      
+      // Validate environment variables and update warnings
+      const envValidation = validateCriticalEnv();
+      if (!envValidation.isValid) {
+        // Only show warnings if we have actual missing variables
+        // (excluding NEXT_PUBLIC_SITE_URL when we have a valid browser URL)
+        if (envValidation.missing.some(v => v !== 'NEXT_PUBLIC_SITE_URL')) {
+          setEnvWarning(envValidation.message);
+        }
+      }
     }
-    
-    // Validate environment variables
-    const envValidation = validateCriticalEnv();
-    if (!envValidation.isValid) {
-      setEnvWarning(envValidation.message);
-    }
-  }, [baseUrl])
+  }, [baseUrl]);
   
   // Handle input changes
   const handleChange = (key: keyof ChatWidgetConfig, value: any) => {

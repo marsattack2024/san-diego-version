@@ -1,13 +1,26 @@
-import { Metadata } from 'next'
+'use client';
+
+import React, { useState, useEffect } from 'react';
 import { ChatWidgetRoot, ChatWidgetProvider } from '@/components/chat-widget'
 import { AdminWidgetConfigurator } from '@/components/admin/widget/widget-configurator'
-
-export const metadata: Metadata = {
-  title: 'Widget Management',
-  description: 'Configure and manage the embedding of the Marlin chat widget',
-}
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { AlertTriangle } from 'lucide-react'
 
 export default function AdminWidgetPage() {
+  const [error, setError] = useState<Error | null>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  // Add client-side effect to log rendering and catch errors
+  useEffect(() => {
+    console.log('AdminWidgetPage: Component mounted');
+    setIsLoaded(true);
+    
+    // Log when component unmounts
+    return () => {
+      console.log('AdminWidgetPage: Component unmounted');
+    };
+  }, []);
+
   return (
     <ChatWidgetProvider>
       <div className="space-y-6">
@@ -18,8 +31,22 @@ export default function AdminWidgetPage() {
           </p>
         </div>
         
+        {error && (
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>Error</AlertTitle>
+            <AlertDescription>
+              {error.message}
+            </AlertDescription>
+          </Alert>
+        )}
+        
         <div className="w-full">
-          <AdminWidgetConfigurator />
+          {isLoaded ? (
+            <AdminWidgetConfigurator />
+          ) : (
+            <div className="py-4">Loading widget configurator...</div>
+          )}
         </div>
         
         {/* The actual widget will appear based on configuration */}

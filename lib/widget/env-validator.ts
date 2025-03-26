@@ -17,13 +17,34 @@ const WIDGET_VARS = [
 const ALL_REQUIRED_VARS = [...CRITICAL_VARS, 'OPENAI_API_KEY'];
 
 /**
- * Get the site URL with fallbacks
+ * Get the site URL with improved fallbacks
+ * Will prioritize accurate environment variables but provide robust fallbacks
  * @returns The site URL from environment variables or a fallback
  */
 export function getSiteUrl(): string {
-  // Debug logging in development
-  if (process.env.NODE_ENV === 'development' && typeof window === 'undefined') {
-    console.log('DEBUG - Environment variables available:', {
+  // Client-side: Try to use browser origin as most accurate source
+  if (typeof window !== 'undefined') {
+    const browserOrigin = window.location.origin;
+    
+    // Log for debugging
+    if (process.env.NODE_ENV === 'development') {
+      console.log('getSiteUrl (client):', {
+        browserOrigin,
+        NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL || '(not set)',
+        NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL || '(not set)'
+      });
+    }
+    
+    // Use browser origin if available, otherwise try env vars
+    return browserOrigin || 
+           process.env.NEXT_PUBLIC_SITE_URL || 
+           process.env.NEXT_PUBLIC_APP_URL || 
+           'https://marlan.photographytoprofits.com';
+  }
+  
+  // Server-side: Use environment variables with logging
+  if (process.env.NODE_ENV === 'development') {
+    console.log('getSiteUrl (server):', {
       NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL || '(not set)',
       NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL || '(not set)',
       VERCEL_URL: process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '(not set)',
@@ -42,22 +63,33 @@ export function getSiteUrl(): string {
  * @returns Object containing validation results
  */
 export function validateCriticalEnv() {
+  // On client-side, browser origin can substitute for NEXT_PUBLIC_SITE_URL
+  let effectiveMissing = [...CRITICAL_VARS];
+  
+  if (typeof window !== 'undefined') {
+    // If we have a valid browser origin, we don't need NEXT_PUBLIC_SITE_URL
+    if (window.location.origin && window.location.origin !== 'null') {
+      effectiveMissing = effectiveMissing.filter(v => v !== 'NEXT_PUBLIC_SITE_URL');
+    }
+  }
+  
+  // Check which variables are actually missing
+  const missing = effectiveMissing.filter(v => !process.env[v]);
+  const isValid = missing.length === 0;
+  
+  // Server-side logging
   if (typeof window === 'undefined') {
-    // Server-side: log all available environment variables for troubleshooting
     console.log('DEBUG - Environment variables validation:', {
       NEXT_PUBLIC_SITE_URL: !!process.env.NEXT_PUBLIC_SITE_URL,
       NEXT_PUBLIC_SUPABASE_URL: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
       NEXT_PUBLIC_SUPABASE_ANON_KEY: !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
       runtime: 'server'
     });
-  }
-  
-  const missing = CRITICAL_VARS.filter(v => !process.env[v]);
-  const isValid = missing.length === 0;
-  
-  if (!isValid && typeof window === 'undefined') {
-    console.warn(`⚠️ Missing critical environment variables: ${missing.join(', ')}`);
-    console.warn('Widget functionality may be limited!');
+    
+    if (!isValid) {
+      console.warn(`⚠️ Missing critical environment variables: ${missing.join(', ')}`);
+      console.warn('Widget functionality may be limited!');
+    }
   }
   
   return {
@@ -74,7 +106,17 @@ export function validateCriticalEnv() {
  * @returns Object containing validation results with details
  */
 export function validateWidgetEnv() {
-  const missing = ALL_REQUIRED_VARS.filter(v => !process.env[v]);
+  // On client-side, browser origin can substitute for NEXT_PUBLIC_SITE_URL
+  let effectiveRequiredVars = [...ALL_REQUIRED_VARS];
+  
+  if (typeof window !== 'undefined') {
+    // If we have a valid browser origin, we don't need NEXT_PUBLIC_SITE_URL
+    if (window.location.origin && window.location.origin !== 'null') {
+      effectiveRequiredVars = effectiveRequiredVars.filter(v => v !== 'NEXT_PUBLIC_SITE_URL');
+    }
+  }
+  
+  const missing = effectiveRequiredVars.filter(v => !process.env[v]);
   const missingWidgetVars = WIDGET_VARS.filter(v => !process.env[v]);
   
   const isValid = missing.length === 0;

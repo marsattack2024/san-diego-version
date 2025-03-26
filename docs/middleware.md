@@ -604,3 +604,152 @@ To verify environment variables in production without exposing sensitive data:
 - [Next.js Middleware Documentation](https://nextjs.org/docs/app/building-your-application/routing/middleware)
 - [Vercel Environment Variables](https://vercel.com/docs/projects/environment-variables)
 - [Next.js Environment Variables](https://nextjs.org/docs/basic-features/environment-variables)
+
+# Middleware Implementation Guide
+
+## Overview
+
+This document explains how middleware is implemented in the application, with a focus on path handling, authentication, and special routes like the widget.
+
+## Path Handling Principles
+
+### Path Prioritization
+
+The order of path checks in middleware is critical:
+
+```typescript
+export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+  
+  // 1. Check specific paths first (highest priority)
+  if (pathname === '/admin/widget') {
+    return await updateSession(request);
+  }
+  
+  // 2. Check pattern-based paths next
+  if (pathname.startsWith('/api/widget-chat')) {
+    return;
+  }
+  
+  // 3. Apply general authentication last
+  return await updateSession(request);
+}
+```
+
+**Key Rules:**
+- Always check specific, exact paths before pattern matching
+- Use explicit path comparison (`===`) for critical routes
+- Log all path processing for easier debugging
+
+### Pattern Matching Best Practices
+
+When using pattern matching, be precise to avoid unintended matches:
+
+```typescript
+// Good: Uses trailing slash to prevent matching unintended paths
+if (pathname.startsWith('/widget/')) { ... }
+
+// Bad: Could match both /widget and /admin/widget
+if (pathname.startsWith('/widget')) { ... }
+```
+
+**Best Practices:**
+- Use trailing slashes to prevent prefix matching issues
+- Consider using regex for more complex pattern matching
+- Test edge cases, especially for paths with shared prefixes
+
+## Authentication Flow
+
+### Authentication Bypass for Public Routes
+
+Some routes must be publicly accessible:
+
+```typescript
+// Special bypass for widget-related paths to allow anonymous access
+if (
+  pathname.startsWith('/api/widget-chat') || 
+  pathname.startsWith('/widget/') || 
+  pathname === '/widget.js'
+) {
+  console.log('Bypassing auth middleware for public features:', pathname);
+  return;
+}
+```
+
+### Authentication Required for Protected Routes
+
+Protected routes should always go through authentication:
+
+```typescript
+// Admin pages require authentication
+if (pathname.startsWith('/admin')) {
+  console.log(`Processing admin page ${pathname} with auth flow`);
+  return await updateSession(request);
+}
+```
+
+## Matcher Configuration
+
+The matcher configuration determines which paths are processed by middleware:
+
+```typescript
+export const config = {
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|api/check-status|widget/chat-widget.js|images/|styles/).*)',
+  ],
+};
+```
+
+### Exclusion Patterns
+
+- Exclude static assets to improve performance
+- Exclude public API endpoints that need to bypass authentication
+- Carefully test excluded paths to ensure they work as expected
+
+### Testing Middleware
+
+When modifying middleware, test these scenarios:
+1. Public routes remain accessible without authentication
+2. Protected routes require proper authentication
+3. Special paths like admin/widget follow the intended authentication flow
+4. Static assets and excluded paths are properly handled
+
+## Common Problems and Solutions
+
+### Problem: Path Collision
+
+**Example:** `/admin/widget` being handled by general `/widget` pattern
+
+**Solution:**
+- Always check most specific paths first
+- Add logging to track which condition is handling the path
+- Use trailing slashes to prevent unintended prefix matching
+
+### Problem: Authentication Bypass Not Working
+
+**Solution:**
+- Verify the path is in the correct bypass condition
+- Check for typos in path strings
+- Confirm the path is not being caught by a more general condition first
+
+### Problem: Static Files Not Loading
+
+**Solution:**
+- Ensure paths are properly excluded in the matcher configuration
+- Check for conflicting middleware conditions
+- Verify static file paths in network requests
+
+## Logging Best Practices
+
+Add logging to track middleware path processing:
+
+```typescript
+console.log('[Middleware] Processing request for:', pathname);
+
+if (pathname === '/admin/widget') {
+  console.log('[Middleware] Admin widget page accessed, applying auth');
+  // ...
+}
+```
+
+These logs help diagnose routing and authentication issues in production.
