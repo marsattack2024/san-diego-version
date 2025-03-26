@@ -26,4 +26,5 @@ DOCUMENT INSTRUCTIONS:
 1. Reference specific information from available documents
 2. Blend relevant information across multiple documents
 3. Supplement with general knowledge only when necessary
-4. Prioritize documents with higher similarity scores`;
+4. Prioritize documents with higher similarity scores
+5. If you're asked to perform a task, always check documents first and prioritize them  `;
