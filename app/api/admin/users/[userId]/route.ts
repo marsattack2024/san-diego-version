@@ -54,15 +54,12 @@ async function isAdmin(supabase: any, userId: string) {
   }
 }
 
-// Sets dynamic rendering to ensure params are available at runtime
-export const dynamic = 'force-dynamic';
-
 // DELETE /api/admin/users/[userId] - Delete a user
 export async function DELETE(
   request: Request,
   { params }: { params: { userId: string } }
-) {
-  // Access userId directly from params
+): Promise<Response> {
+  // Access params directly
   const userId = params.userId;
   
   if (!userId) {

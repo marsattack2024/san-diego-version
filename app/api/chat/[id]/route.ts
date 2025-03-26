@@ -3,15 +3,8 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createClient } from '@/utils/supabase/server';
 import { PostgrestResponse, PostgrestSingleResponse } from '@supabase/supabase-js';
 
-// Force dynamic rendering for proper authentication
+// Add after any runtime configuration, or at the top of the file
 export const dynamic = 'force-dynamic';
-
-// Helper function to extract chat ID from URL
-function getChatIdFromUrl(url: string): string {
-  const urlObj = new URL(url);
-  const pathSegments = urlObj.pathname.split('/');
-  return pathSegments[pathSegments.length - 1];
-}
 
 // Helper for direct authentication
 async function getAuthenticatedUser(request?: NextRequest) {
@@ -54,9 +47,12 @@ async function getAuthenticatedUser(request?: NextRequest) {
 }
 
 // API route to fetch chat messages and handle chat-specific operations
-export async function GET(_request: NextRequest) {
-  // Extract id from URL path
-  const id = getChatIdFromUrl(_request.url);
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: { id: string } }
+): Promise<Response> {
+  // Access params directly, no need to await in Next.js 15
+  const id = params.id;
   
   // Start performance tracking
   const startTime = performance.now();
@@ -167,9 +163,12 @@ export async function GET(_request: NextRequest) {
 }
 
 // Update chat details (title, etc.)
-export async function PATCH(_request: NextRequest) {
-  // Extract id from URL path
-  const id = getChatIdFromUrl(_request.url);
+export async function PATCH(
+  _request: NextRequest,
+  { params }: { params: { id: string } }
+): Promise<Response> {
+  // Access params directly, no need to await in Next.js 15
+  const id = params.id;
   
   try {
     // Get the request body
@@ -300,9 +299,12 @@ export async function PATCH(_request: NextRequest) {
 }
 
 // Save assistant message (called from frontend after streaming completes)
-export async function POST(_request: NextRequest) {
-  // Extract id from URL path
-  const id = getChatIdFromUrl(_request.url);
+export async function POST(
+  _request: NextRequest,
+  { params }: { params: { id: string } }
+): Promise<Response> {
+  // Access params directly, no need to await in Next.js 15
+  const id = params.id;
   
   try {
     // Get the message from the request body
