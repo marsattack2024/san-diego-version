@@ -247,7 +247,6 @@ export async function POST(req: NextRequest) {
           
           const result = await findSimilarDocumentsOptimized(query, {
             limit: 5,
-            // No need to set similarityThreshold here as it's handled in the function
             sessionId
           });
           
@@ -274,9 +273,18 @@ export async function POST(req: NextRequest) {
           // Only use the top 3 most relevant documents
           const topDocuments = documents.slice(0, 3);
           
+          // Ensure consistent access to similarity score regardless of field name
+          // Some implementations use 'score', others use 'similarity'
+          const getSimilarity = (doc: any): number => {
+            // Check all possible similarity field names and default to 0 if none found
+            return doc.score ?? doc.similarity ?? 0;
+          };
+          
           // Format the results with detailed information
           const formattedResults = topDocuments.map((doc, index) => {
-            const similarityPercent = Math.round((doc.score || 0) * 100);
+            const similarity = getSimilarity(doc);
+            const similarityPercent = Math.round(similarity * 100);
+            
             // Safely handle ID - ensure it's a string
             const idString = typeof doc.id === 'string' ? doc.id : String(doc.id);
             const idPreview = idString.length > 8 ? idString.substring(0, 8) : idString;
@@ -293,12 +301,14 @@ export async function POST(req: NextRequest) {
             return `Document #${index + 1} [ID: ${idPreview}] (${similarityPercent}% relevant):\n${formattedContent}\n`;
           }).join('\n-------------------------------------------\n\n');
 
-          // Add aggregate metrics
-          const avgSimilarity = Math.round(
-            topDocuments.reduce((sum, doc) => sum + (doc.score || 0), 0) / topDocuments.length * 100
-          );
+          // Add aggregate metrics - handle case where all scores might be 0
+          const similarities = topDocuments.map(doc => getSimilarity(doc));
+          const validSimilarities = similarities.filter(val => val > 0);
+          const avgSimilarity = validSimilarities.length > 0 
+            ? Math.round(validSimilarities.reduce((sum, val) => sum + val, 0) / validSimilarities.length * 100)
+            : 0;
 
-          return `Found ${topDocuments.length} most relevant documents (out of ${documents.length} retrieved, average similarity of top 3: ${avgSimilarity}%):\n\n${formattedResults}`;
+          return `Found ${topDocuments.length} relevant documents (average similarity: ${avgSimilarity}%):\n\n${formattedResults}`;
         } catch (error) {
           edgeLogger.error('Knowledge base search failed', {
             query,
@@ -318,37 +328,39 @@ export async function POST(req: NextRequest) {
     
     // If we have knowledge base context from our direct check, add it as a system message
     if (knowledgeBaseContext) {
-      messages.push({
-        role: 'system',
-        content: `Here is relevant information from our knowledge base about the user's query:\n\n${knowledgeBaseContext}\n\nUse this information to inform your response.`
+      messages.push({ 
+        role: 'user', 
+        content: `Please answer my question using the following information from the knowledge base:\n\n${knowledgeBaseContext}\n\nMy question is: ${message}` 
       });
+    } else {
+      messages.push({ role: 'user', content: message });
     }
-    
-    // Add the user message last
-    messages.push({ role: 'user', content: message });
     
     try {
       // Use the streamText function with the knowledge base tool and multi-step calls
       const result = await streamText({
         model: openai('gpt-4o'),
         messages,
-        temperature: 0.7,
+        temperature: 0.5,
         maxTokens: 1000,
         tools: {
           knowledgeBase: knowledgeBaseTool
         },
         // Enable multi-step tool calling to use the search results
         maxSteps: 3,
-        // Add a system message to ensure the model is explicitly asked to synthesize results
-        system: `${systemPrompt}
+        // Simplified system prompt that focuses on RAG prioritization
+        system: `You are a helpful assistant embedded on the Marlin photography website.
         
-IMPORTANT: After using tools to gather information, you MUST provide a final response that:
-1. Synthesizes the information from the knowledge base
-2. Directly answers the user's question in a clear, concise manner
-3. Does NOT include any raw tool output, but instead presents the information in a helpful, conversational format
-4. Make sure to add line breaks and make the information easy to see for the user since it's a small chat window. 
-5. Format responses with clear paragraph breaks and use numbered or bulleted lists when appropriate.
-6. If the tool returns "No relevant information found", acknowledge that and provide general guidance if possible`,
+IMPORTANT INSTRUCTIONS:
+1. ALWAYS prioritize knowledge base information when answering questions.
+2. If the knowledge base contains relevant information, use it as your primary source.
+3. Provide concise, accurate responses based on the knowledge base.
+4. If no relevant information is found in the knowledge base, respond with "I don't have specific information about that in my knowledge base."
+5. Do not hallucinate or make up information that isn't provided in the knowledge base.
+6. The user is interacting with a chat widget on the website.
+7. Keep responses friendly, helpful and professional.
+8. Format responses clearly with paragraph breaks and bullet points when appropriate.
+9. After calling tools, always synthesize the information in a conversational format.`,
         onStepFinish: ({ text, toolCalls, toolResults, finishReason }) => {
           edgeLogger.info('Step finished in streamText call', {
             hasText: !!text && text.length > 0,
