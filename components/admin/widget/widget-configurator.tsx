@@ -20,17 +20,36 @@ export function AdminWidgetConfigurator() {
   const [showEmbed, setShowEmbed] = useState(false)
   const [envWarning, setEnvWarning] = useState<string | null>(null)
   
-  // More robust URL resolution to prevent hydration issues
+  // More robust URL resolution to prevent hydration issues - use multiple fallbacks
   const [baseUrl, setBaseUrl] = useState(() => {
-    // Safe for SSR - don't access window during render
-    return process.env.NEXT_PUBLIC_SITE_URL || 'https://marlan.photographytoprofits.com'
+    try {
+      // Use the enhanced getSiteUrl function with fallbacks
+      return getSiteUrl();
+    } catch (e) {
+      console.error('Error getting site URL:', e);
+      return 'https://marlan.photographytoprofits.com';
+    }
   })
   
   // Set base URL with fallback to window.location.origin if running in browser
   useEffect(() => {
-    // Only set URL from window after component mounts
-    if (!process.env.NEXT_PUBLIC_SITE_URL && typeof window !== 'undefined') {
-      setBaseUrl(window.location.origin)
+    // Only try to update URL after component mounts (client-side only)
+    if (typeof window !== 'undefined') {
+      if (!baseUrl || baseUrl === 'https://marlan.photographytoprofits.com') {
+        // If we're using the fallback, try to get a better URL from the browser
+        const browserUrl = window.location.origin;
+        console.log('Setting base URL from browser:', browserUrl);
+        setBaseUrl(browserUrl);
+      }
+      
+      // Log DEBUG info in development
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Widget configurator environment:', {
+          baseUrl,
+          NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL || '(not set)',
+          browserOrigin: window.location.origin
+        });
+      }
     }
     
     // Validate environment variables
@@ -38,7 +57,7 @@ export function AdminWidgetConfigurator() {
     if (!envValidation.isValid) {
       setEnvWarning(envValidation.message);
     }
-  }, [])
+  }, [baseUrl])
   
   // Handle input changes
   const handleChange = (key: keyof ChatWidgetConfig, value: any) => {

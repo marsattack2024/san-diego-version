@@ -17,8 +17,20 @@ export async function middleware(request: NextRequest) {
     return;
   }
 
+  // Explicitly log access to admin widget page path
+  if (pathname === '/admin/widget') {
+    console.log('[Middleware] Processing admin widget page request, continuing with auth check');
+  }
+
   // The session cookie is updated/refreshed in the response
-  return await updateSession(request);
+  const response = await updateSession(request);
+  
+  // Log authentication results for admin pages
+  if (pathname.startsWith('/admin')) {
+    console.log(`[Middleware] Admin page ${pathname} auth processed with status:`, response?.status || 'No response');
+  }
+  
+  return response;
 }
 
 export const config = {

@@ -80,7 +80,13 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                   "flex items-center gap-2 w-full rounded-md p-2 text-sm font-medium hover:bg-sidebar-accent transition-colors",
                   pathname === "/admin/widget" && "bg-sidebar-accent text-sidebar-accent-foreground"
                 )}
-                onClick={() => isMobile && setSidebarOpen(false)}
+                onClick={(e) => {
+                  console.log('DEBUG - Clicking widget nav link');
+                  // Only close sidebar on mobile
+                  if (isMobile) {
+                    setSidebarOpen(false);
+                  }
+                }}
               >
                 <svg 
                   className="h-4 w-4" 

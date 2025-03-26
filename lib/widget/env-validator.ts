@@ -17,10 +17,41 @@ const WIDGET_VARS = [
 const ALL_REQUIRED_VARS = [...CRITICAL_VARS, 'OPENAI_API_KEY'];
 
 /**
+ * Get the site URL with fallbacks
+ * @returns The site URL from environment variables or a fallback
+ */
+export function getSiteUrl(): string {
+  // Debug logging in development
+  if (process.env.NODE_ENV === 'development' && typeof window === 'undefined') {
+    console.log('DEBUG - Environment variables available:', {
+      NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL || '(not set)',
+      NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL || '(not set)',
+      VERCEL_URL: process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '(not set)',
+    });
+  }
+
+  // Try multiple environment variables with priority
+  return process.env.NEXT_PUBLIC_SITE_URL || 
+         process.env.NEXT_PUBLIC_APP_URL || 
+         (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
+         'https://marlan.photographytoprofits.com';
+}
+
+/**
  * Validates if all critical environment variables are set
  * @returns Object containing validation results
  */
 export function validateCriticalEnv() {
+  if (typeof window === 'undefined') {
+    // Server-side: log all available environment variables for troubleshooting
+    console.log('DEBUG - Environment variables validation:', {
+      NEXT_PUBLIC_SITE_URL: !!process.env.NEXT_PUBLIC_SITE_URL,
+      NEXT_PUBLIC_SUPABASE_URL: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      runtime: 'server'
+    });
+  }
+  
   const missing = CRITICAL_VARS.filter(v => !process.env[v]);
   const isValid = missing.length === 0;
   
@@ -67,18 +98,6 @@ export function validateWidgetEnv() {
       ? 'All required environment variables are set'
       : `Missing required environment variables: ${missing.join(', ')}`
   };
-}
-
-/**
- * Gets the appropriate site URL with fallbacks
- * Should only be called client-side after hydration or with isServer flag
- */
-export function getSiteUrl(isServer = typeof window === 'undefined') {
-  if (!isServer && typeof window !== 'undefined') {
-    return process.env.NEXT_PUBLIC_SITE_URL || window.location.origin;
-  }
-  
-  return process.env.NEXT_PUBLIC_SITE_URL || 'https://marlan.photographytoprofits.com';
 }
 
 // Immediately log validation results during module initialization in non-browser environments

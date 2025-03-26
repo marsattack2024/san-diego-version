@@ -63,16 +63,29 @@ export const runtime = 'edge';
 // Serve the widget script file
 export async function GET(req: NextRequest) {
   try {
-    // Log for debugging
-    console.log('Widget.js route handler: Serving widget script via redirect');
+    // Log for debugging purposes
+    console.log('Widget.js route handler: Serving widget script directly');
     
-    // Instead of reading from filesystem, redirect to the static file
-    // This works in edge runtime without requiring fs operations
+    // Get the static file URL
     const url = new URL('/widget/chat-widget.js', req.url);
     
-    // Create a redirect response with cache headers
-    const response = Response.redirect(url, 307);
-    response.headers.set('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
+    // Fetch the file content directly
+    const scriptResponse = await fetch(url);
+    
+    if (!scriptResponse.ok) {
+      throw new Error(`Failed to fetch widget script: ${scriptResponse.status} ${scriptResponse.statusText}`);
+    }
+    
+    // Get the script content
+    const scriptContent = await scriptResponse.text();
+    
+    // Create a new response with the script content and proper headers
+    const response = new Response(scriptContent, {
+      headers: {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'public, max-age=3600' // Cache for 1 hour
+      }
+    });
     
     // Add CORS headers and return
     return addCorsHeaders(response, req);
