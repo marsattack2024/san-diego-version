@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
 
@@ -54,20 +54,13 @@ async function isAdmin(supabase: any, userId: string) {
   }
 }
 
-// Proper type for Next.js 15 route handlers
-type Context = {
-  params: {
-    userId: string;
-  };
-};
-
 // DELETE /api/admin/users/[userId] - Delete a user
 export async function DELETE(
   request: Request,
-  context: Context
+  { params }: { params: { userId: string } }
 ) {
-  // Use await with params to satisfy Next.js warning
-  const userId = context.params.userId;
+  // Access params directly, no need to await in Next.js 15
+  const userId = params.userId;
   
   if (!userId) {
     return NextResponse.json({ error: 'User ID is required' }, { status: 400 });
