@@ -22,8 +22,8 @@
   
   // Dynamically load the widget resources
   var script = document.createElement('script');
-  // Updated to use the API route instead of the static file
-  script.src = 'https://programs.thehighrollersclub.io/widget.js';
+  // Updated to point directly to the built file location
+  script.src = 'https://programs.thehighrollersclub.io/widget/chat-widget.js';
   script.async = true;
   script.defer = true;
   script.onerror = function() {
