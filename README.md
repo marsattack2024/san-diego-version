@@ -1,25 +1,86 @@
-# AI Chat Application with Vercel AI SDK, Shadcn UI, and RAG
+# Marlan - The Photo Profit Bot
 
-This application demonstrates how to build a modern AI chat application using the Vercel AI SDK, Shadcn UI components, and Retrieval-Augmented Generation (RAG).
+An AI-powered chat application designed specifically for marketing assistance to portrait photographers. Marlan leverages GPT-4o models via the Vercel AI SDK, enhanced with retrieval-augmented generation (RAG), web scraping capabilities, and deep web search functionality through the Perplexity API.
 
 ## Features
 
-- 💬 Chat with AI using the Vercel AI SDK
-- 🔍 Retrieval-Augmented Generation (RAG) for more accurate responses
-- 🌐 Web search and scraping capabilities
-- 📊 Deep research using Perplexity API
-- 🔐 Authentication with Supabase
-- 🎨 Beautiful UI with Shadcn UI components
-- 📱 Responsive design for all devices
+- 💬 Specialized AI agent types (default, copywriting, Google Ads, Facebook Ads, quiz) for photography marketing
+- 🔍 Retrieval-Augmented Generation (RAG) using Supabase with pgvector extension
+- 🌐 Automatic URL detection and comprehensive web scraping with content caching
+- 📊 Deep web search via Perplexity API (sonar/sonar-pro models) with real-time progress tracking
+- 🔐 Secure authentication using Supabase Auth with JWT-based session handling
+- 👤 User profile creation with photography business context for personalized AI interactions
+- 🎨 Beautiful UI with Shadcn UI components using Radix UI primitives
+- 📱 Responsive design for all device sizes with Tailwind CSS
+- 📜 Message history saved to database for continuity between sessions
+- 🎯 Automatic agent selection based on keyword scoring and content analysis
+- 🔗 Website URL scraping and automatic summary generation for comprehensive studio context
+- 👨‍💼 Admin portal for user management with profile creation capabilities
 
 ## Prerequisites
 
 - Node.js 18+ and npm
-- Supabase account
+- Supabase account with vector extension enabled
 - OpenAI API key
 - Perplexity API key (optional, for deep search)
 
-## San Diego Project - Next.js with Supabase Auth
+## Technical Architecture
+
+### Frontend
+- Next.js 15 App Router with TypeScript and ESM module system
+- React with shadcn/ui components for UI consistency using Radix UI primitives
+- Client-side state management with Zustand stores
+- Server-Side Events for real-time DeepSearch progress tracking
+
+### Backend
+- Next.js API routes for serverless functionality
+- Supabase for authentication, database, and vector search
+- Multi-tier rate limiting for API protection (auth, AI, general API)
+- Edge middleware for session validation, profile checks, and token refresh
+- Efficient caching layers for web content, embeddings, and API responses
+
+### AI Integration
+- Vercel AI SDK for model interaction and streaming
+- OpenAI models (gpt-4o) with function calling capabilities
+- Dynamic tool registration and invocation system
+- Perplexity integration (sonar/sonar-pro) for web research with improved context
+- Custom agent router with keyword scoring for intelligent routing
+
+### Data Management
+- Supabase PostgreSQL database with pgvector extension for semantic search
+- Efficient data structures for messages, conversations, profiles, and vector embeddings
+- Row-level security policies for data protection
+- LRU (Least Recently Used) cache for scraped content and formatted responses
+- Real-time logging with structured format for debugging and monitoring
+
+## Key User Flows
+
+### User Onboarding
+1. User signs up via email authentication
+2. Upon first login, user is redirected to profile setup page
+3. User completes profile with business details (full name, company name, description, location)
+4. Website URL can be provided for automatic content scraping and summary generation
+5. System processes website in background and generates a concise business summary
+6. Once profile is complete, user is directed to the chat interface
+7. Profile information is automatically included in all future AI interactions
+
+### Chat Interaction
+1. User selects agent type (or uses auto-detection)
+2. User sends a message query
+3. System analyzes query using keyword scoring to determine appropriate specialized agent
+4. If URLs are detected, content is automatically scraped and processed
+5. If Deep Search is enabled, Perplexity API is called with progress tracking
+6. Results from knowledge sources are prioritized (RAG → Web Scraping → Deep Search)
+7. AI generates a streaming response with reference to tools used
+8. Conversation is saved to history for future context and continuity
+
+### Website Summarization
+1. User provides their photography business website URL in profile
+2. System automatically scrapes the website content using the comprehensive scraper
+3. Content is processed with AI to generate a focused summary of the photography business
+4. Summary emphasizes key business aspects: services, style, specialization, and geography
+5. Website summary is stored with user profile and included in all future AI interactions
+6. Summary provides context without requiring repeated explanations from the user
 
 ## Middleware Configuration Changes for Next.js 15
 
@@ -128,6 +189,8 @@ export async function GET() {
    ```
    NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
    NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
+   OPENAI_API_KEY=your_openai_api_key
+   PERPLEXITY_API_KEY=your_perplexity_api_key (optional)
    ```
 
 3. Run the development server:
@@ -245,13 +308,6 @@ Some API endpoints implement a circuit breaker pattern to prevent cascading fail
 
 6. Open [http://localhost:3000](http://localhost:3000) in your browser.
 
-### Environment Setup
-
-1. Copy `.env.example` to `.env.local`
-2. Fill in the required environment variables
-3. Install dependencies with `npm install`
-4. Run the development server with `npm run dev`
-
 ### Development Mode Shortcuts
 
 For development only, you can bypass authentication checks by setting:
@@ -329,7 +385,7 @@ After deploying to Vercel, you need to update your Supabase authentication setti
 1. Visit your deployed application
 2. Test the authentication flow
 3. Test the chat functionality
-4. Test the RAG functionality by uploading documents
+4. Test the RAG functionality
 
 ## Environment Variables
 
@@ -346,26 +402,41 @@ After deploying to Vercel, you need to update your Supabase authentication setti
 ## Project Structure
 
 - `app/` - Next.js app router pages
+  - `chat/` - Main chat interface
+  - `api/` - Backend API endpoints
+  - `auth/` - Authentication pages
+  - `profile/` - User profile management
+  - `admin/` - Admin functionality
 - `components/` - UI components
-- `lib/` - Core utilities & business logic
-  - `agents/` - Agent implementations
-  - `chat/` - Chat logic
+  - `ui/` - UI primitives (shadcn/ui)
+  - `chat.tsx` - Main chat component
+  - `message.tsx`, `messages.tsx` - Message rendering
+  - `multimodal-input.tsx` - Input with file attachment support
+- `lib/` - Core utilities and business logic
+  - `agents/` - AI agent implementations
+  - `chat/` - Chat-related logic
   - `logger/` - Unified logging system
-  - `supabase/` - Supabase client
   - `vector/` - Vector search functionality
+  - `api/` - API services
+  - `middleware/` - Backend middleware
+- `stores/` - Zustand state stores
+  - `chat-store.ts` - Manages chat state
 - `public/` - Static assets
 - `types/` - TypeScript types
+- `hooks/` - React hooks
 
 ## Technologies Used
 
-- [Next.js](https://nextjs.org/) - React framework
-- [Vercel AI SDK](https://sdk.vercel.ai/docs) - AI integration
-- [Shadcn UI](https://ui.shadcn.com/) - UI components
-- [Supabase](https://supabase.com/) - Backend and authentication
-- [OpenAI](https://openai.com/) - AI models
-- [Perplexity](https://www.perplexity.ai/) - Deep search
-- [Tailwind CSS](https://tailwindcss.com/) - Styling
-- [TypeScript](https://www.typescriptlang.org/) - Type safety
+- [Next.js 15](https://nextjs.org/) - React framework with App Router
+- [Vercel AI SDK](https://sdk.vercel.ai/docs) - AI integration for streaming responses
+- [Shadcn UI](https://ui.shadcn.com/) - UI components based on Radix UI
+- [Supabase](https://supabase.com/) - Backend, authentication and vector search
+- [OpenAI](https://openai.com/) - GPT-4o models
+- [Perplexity](https://www.perplexity.ai/) - Deep search via sonar/sonar-pro models
+- [Tailwind CSS](https://tailwindcss.com/) - Utility-first CSS framework
+- [TypeScript](https://www.typescriptlang.org/) - Type safety with ESM module system
+- [Zustand](https://zustand-demo.pmnd.rs/) - State management
+- [LRU Cache](https://github.com/isaacs/node-lru-cache) - For content and embedding caching
 
 ## Known Issues
 
@@ -378,7 +449,7 @@ After deploying to Vercel, you need to update your Supabase authentication setti
 
 ### Performance Optimizations
 
-- **Vote API Consolidation**: We've eliminated redundant API calls to `/api/vote` by extracting vote data directly from chat messages. This reduces network requests, improves performance, and minimizes 401 errors. See `docs/performance-optimizations.md` for details.
+- **Vote API Consolidation**: We've eliminated redundant API calls to `/api/vote` by extracting vote data directly from chat messages. This reduces network requests, improves performance, and minimizes 401 errors.
 
 ### UI/Accessibility Issues
 
