@@ -93,6 +93,8 @@
   },
   "rewrites": [
     { "source": "/widget-test", "destination": "/widget-test.html" },
-    { "source": "/test", "destination": "/test.html" }
+    { "source": "/test", "destination": "/test.html" },
+    { "source": "/widget-embed", "destination": "/widget-embed.html" },
+    { "source": "/widget.js", "destination": "/widget/chat-widget.js" }
   ]
 } 

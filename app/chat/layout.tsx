@@ -4,6 +4,9 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { createClient } from '@/utils/supabase/server';
 import { cookies } from 'next/headers';
 
+// Force dynamic rendering since this layout uses cookies
+export const dynamic = "force-dynamic";
+
 export default async function ChatLayout({
   children,
 }: {
