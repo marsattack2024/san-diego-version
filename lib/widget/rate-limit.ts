@@ -6,11 +6,17 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 let redis: Redis | null = null;
 
 try {
-  if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) {
+  // Check for URL - try all possible environment variable names
+  const url = process.env.KV_REST_API_URL || process.env.REDIS_URL || process.env.KV_URL || process.env.UPSTASH_REDIS_REST_URL;
+  // Check for token
+  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+  
+  if (url && token) {
     redis = new Redis({
-      url: process.env.UPSTASH_REDIS_REST_URL,
-      token: process.env.UPSTASH_REDIS_REST_TOKEN,
+      url,
+      token,
     });
+    edgeLogger.info('Redis rate limiter initialized successfully', { url });
   } else {
     edgeLogger.warn('Redis credentials not found, rate limiting will be memory-based only');
   }

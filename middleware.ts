@@ -41,6 +41,5 @@ export const config = {
     '/api/history/:path*',
     // Explicitly excluding Perplexity API and Widget Chat API from auth middleware
     // '/api/perplexity/:path*',
-    '/api/widget-chat/:path*',
   ],
 }
