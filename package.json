@@ -13,7 +13,8 @@
     "setup-supabase": "node scripts/setup-supabase.js",
     "deploy": "node scripts/deploy-vercel.js",
     "test:perplexity": "tsx scripts/tests/perplexity.test.ts",
-    "setup:first-admin": "node scripts/setup/setup-first-admin.js"
+    "setup:first-admin": "node scripts/setup/setup-first-admin.js",
+    "build:widget": "esbuild lib/widget/widget-script.js --bundle --minify --outfile=public/widget/chat-widget.js --sourcemap"
   },
   "dependencies": {
     "@ai-sdk/fireworks": "^0.1.12",

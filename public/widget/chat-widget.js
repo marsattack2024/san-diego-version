@@ -1,46 +1,9 @@
-/**
- * Marlin Chat Widget - Embeddable Script
- * This script is designed to be embedded via Google Tag Manager
- * Version: 0.1.0
- */
-
-// Use IIFE to avoid polluting global namespace
-(function() {
-  // Check if the widget is already loaded
-  if (window.marlinChatWidgetLoaded) {
-    console.warn('Marlin Chat Widget already loaded. Skipping initialization.');
-    return;
-  }
-
-  // Set flag to prevent multiple initializations
-  window.marlinChatWidgetLoaded = true;
-
-  /**
-   * Widget configuration defaults
-   */
-  const DEFAULT_CONFIG = {
-    position: 'bottom-right',
-    title: 'Ask Marlin',
-    primaryColor: '#0070f3',
-    bubbleIcon: null, // Optional custom icon URL
-    apiEndpoint: 'https://thehighrollersclub.io/api/widget-chat',
-    width: '350px',
-    height: '500px',
-    zIndex: 9999
-  };
-
-  /**
-   * Create and inject widget styles
-   */
-  function injectStyles() {
-    const styleEl = document.createElement('style');
-    styleEl.id = 'marlin-chat-widget-styles';
-    styleEl.innerHTML = `
+"use strict";(()=>{(function(){if(window.marlinChatWidgetLoaded){console.warn("Marlin Chat Widget already loaded. Skipping initialization.");return}window.marlinChatWidgetLoaded=!0;let x={position:"bottom-right",title:"Ask Marlin",primaryColor:"#0070f3",bubbleIcon:null,apiEndpoint:"https://thehighrollersclub.io/api/widget-chat",width:"350px",height:"500px",zIndex:9999};function w(){let e=document.createElement("style");e.id="marlin-chat-widget-styles",e.innerHTML=`
       .marlin-chat-widget-container {
         position: fixed;
-        z-index: ${config.zIndex};
-        max-height: ${config.height};
-        width: ${config.width};
+        z-index: ${i.zIndex};
+        max-height: ${i.height};
+        width: ${i.width};
         display: flex;
         flex-direction: column;
         background-color: #ffffff;
@@ -62,7 +25,7 @@
         align-items: center;
         justify-content: space-between;
         padding: 12px 16px;
-        background-color: ${config.primaryColor};
+        background-color: ${i.primaryColor};
         color: #ffffff;
       }
 
@@ -106,7 +69,7 @@
       }
 
       .marlin-chat-widget-send {
-        background-color: ${config.primaryColor};
+        background-color: ${i.primaryColor};
         border: none;
         border-radius: 8px;
         color: #ffffff;
@@ -117,11 +80,11 @@
 
       .marlin-chat-widget-bubble {
         position: fixed;
-        z-index: ${config.zIndex};
+        z-index: ${i.zIndex};
         width: 60px;
         height: 60px;
         border-radius: 50%;
-        background-color: ${config.primaryColor};
+        background-color: ${i.primaryColor};
         display: flex;
         align-items: center;
         justify-content: center;
@@ -144,7 +107,7 @@
 
       .marlin-chat-widget-message.user {
         align-self: flex-end;
-        background-color: ${config.primaryColor};
+        background-color: ${i.primaryColor};
         color: #ffffff;
         border-bottom-right-radius: 4px;
       }
@@ -217,269 +180,17 @@
           transform: translateY(-4px);
         }
       }
-    `;
-    document.head.appendChild(styleEl);
-  }
-
-  /**
-   * Create widget DOM elements
-   */
-  function createWidgetElements() {
-    // Chat bubble
-    const bubble = document.createElement('div');
-    bubble.className = `marlin-chat-widget-bubble ${config.position}`;
-    bubble.innerHTML = config.bubbleIcon ? 
-      `<img src="${config.bubbleIcon}" alt="Chat" width="30" height="30">` : 
-      '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" color="#ffffff"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>';
-    document.body.appendChild(bubble);
-
-    // Chat container
-    const container = document.createElement('div');
-    container.className = `marlin-chat-widget-container ${config.position}`;
-    container.style.display = 'none';
-    
-    // Header
-    const header = document.createElement('div');
-    header.className = 'marlin-chat-widget-header';
-    header.innerHTML = `
-      <h3 class="marlin-chat-widget-title">${config.title}</h3>
+    `,document.head.appendChild(e)}function y(){let e=document.createElement("div");e.className=`marlin-chat-widget-bubble ${i.position}`,e.innerHTML=i.bubbleIcon?`<img src="${i.bubbleIcon}" alt="Chat" width="30" height="30">`:'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" color="#ffffff"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>',document.body.appendChild(e);let a=document.createElement("div");a.className=`marlin-chat-widget-container ${i.position}`,a.style.display="none";let n=document.createElement("div");n.className="marlin-chat-widget-header",n.innerHTML=`
+      <h3 class="marlin-chat-widget-title">${i.title}</h3>
       <button class="marlin-chat-widget-close">&times;</button>
-    `;
-    
-    // Messages container
-    const messagesContainer = document.createElement('div');
-    messagesContainer.className = 'marlin-chat-widget-messages';
-    
-    // Input container
-    const inputContainer = document.createElement('div');
-    inputContainer.className = 'marlin-chat-widget-input-container';
-    inputContainer.innerHTML = `
+    `;let s=document.createElement("div");s.className="marlin-chat-widget-messages";let r=document.createElement("div");return r.className="marlin-chat-widget-input-container",r.innerHTML=`
       <input type="text" class="marlin-chat-widget-input" placeholder="Type your message...">
       <button class="marlin-chat-widget-send">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
       </button>
-    `;
-    
-    // Assemble the widget
-    container.appendChild(header);
-    container.appendChild(messagesContainer);
-    container.appendChild(inputContainer);
-    document.body.appendChild(container);
-    
-    return {
-      bubble,
-      container,
-      messagesContainer,
-      closeButton: header.querySelector('.marlin-chat-widget-close'),
-      input: inputContainer.querySelector('.marlin-chat-widget-input'),
-      sendButton: inputContainer.querySelector('.marlin-chat-widget-send')
-    };
-  }
-
-  /**
-   * Add a message to the chat
-   */
-  function addMessage(text, role = 'assistant') {
-    const message = document.createElement('div');
-    message.className = `marlin-chat-widget-message ${role}`;
-    message.textContent = text;
-    elements.messagesContainer.appendChild(message);
-    elements.messagesContainer.scrollTop = elements.messagesContainer.scrollHeight;
-  }
-
-  /**
-   * Show typing indicator
-   */
-  function showTyping() {
-    const typing = document.createElement('div');
-    typing.className = 'marlin-chat-widget-typing';
-    typing.innerHTML = `
+    `,a.appendChild(n),a.appendChild(s),a.appendChild(r),document.body.appendChild(a),{bubble:e,container:a,messagesContainer:s,closeButton:n.querySelector(".marlin-chat-widget-close"),input:r.querySelector(".marlin-chat-widget-input"),sendButton:r.querySelector(".marlin-chat-widget-send")}}function c(e,a="assistant"){let n=document.createElement("div");n.className=`marlin-chat-widget-message ${a}`,n.textContent=e,t.messagesContainer.appendChild(n),t.messagesContainer.scrollTop=t.messagesContainer.scrollHeight}function b(){let e=document.createElement("div");e.className="marlin-chat-widget-typing",e.innerHTML=`
       <div class="marlin-chat-widget-typing-dot"></div>
       <div class="marlin-chat-widget-typing-dot"></div>
       <div class="marlin-chat-widget-typing-dot"></div>
-    `;
-    typing.id = 'marlin-chat-widget-typing';
-    elements.messagesContainer.appendChild(typing);
-    elements.messagesContainer.scrollTop = elements.messagesContainer.scrollHeight;
-  }
-
-  /**
-   * Hide typing indicator
-   */
-  function hideTyping() {
-    const typing = document.getElementById('marlin-chat-widget-typing');
-    if (typing) {
-      typing.remove();
-    }
-  }
-
-  /**
-   * Toggle chat widget visibility
-   */
-  function toggleWidget() {
-    const isVisible = elements.container.style.display !== 'none';
-    
-    if (isVisible) {
-      elements.container.classList.remove('open');
-      setTimeout(() => {
-        elements.container.style.display = 'none';
-      }, 300);
-    } else {
-      elements.container.style.display = 'flex';
-      setTimeout(() => {
-        elements.container.classList.add('open');
-        // Focus input field
-        elements.input.focus();
-      }, 10);
-    }
-  }
-
-  /**
-   * Get or create a session ID for the user
-   */
-  function getSessionId() {
-    let sessionId = localStorage.getItem('marlin-chat-session-id');
-    
-    if (!sessionId) {
-      sessionId = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-        const r = Math.random() * 16 | 0;
-        const v = c === 'x' ? r : (r & 0x3 | 0x8);
-        return v.toString(16);
-      });
-      localStorage.setItem('marlin-chat-session-id', sessionId);
-    }
-    
-    return sessionId;
-  }
-
-  /**
-   * Send message to API
-   */
-  async function sendMessage(text) {
-    if (!text.trim()) return;
-    
-    // Add user message to chat
-    addMessage(text, 'user');
-    
-    // Clear input
-    elements.input.value = '';
-    
-    // Show typing indicator
-    showTyping();
-    
-    try {
-      const sessionId = getSessionId();
-      const response = await fetch(config.apiEndpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          message: text,
-          sessionId
-        })
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      // Check if response is a stream
-      if (response.headers.get('content-type')?.includes('text/event-stream')) {
-        // Handle streaming response
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let responseText = '';
-        
-        hideTyping();
-        const message = document.createElement('div');
-        message.className = 'marlin-chat-widget-message assistant';
-        elements.messagesContainer.appendChild(message);
-        
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          
-          const chunk = decoder.decode(value, { stream: true });
-          // Extract text from event stream format
-          const textChunk = chunk.replace(/^data: /, '').trim();
-          if (textChunk && textChunk !== '[DONE]') {
-            responseText += textChunk;
-            message.textContent = responseText;
-            elements.messagesContainer.scrollTop = elements.messagesContainer.scrollHeight;
-          }
-        }
-      } else {
-        // Handle regular JSON response
-        const data = await response.json();
-        hideTyping();
-        
-        if (data.error) {
-          addMessage(`Error: ${data.message || data.error}`, 'assistant');
-        } else {
-          addMessage(data.message || 'Sorry, I couldn\'t process that.', 'assistant');
-        }
-      }
-    } catch (error) {
-      console.error('Error sending message:', error);
-      hideTyping();
-      addMessage('Sorry, there was an error processing your request. Please try again later.', 'assistant');
-    }
-  }
-
-  /**
-   * Initialize event listeners
-   */
-  function initEventListeners() {
-    // Toggle chat on bubble click
-    elements.bubble.addEventListener('click', toggleWidget);
-    
-    // Close chat on close button click
-    elements.closeButton.addEventListener('click', toggleWidget);
-    
-    // Send message on button click
-    elements.sendButton.addEventListener('click', () => {
-      sendMessage(elements.input.value);
-    });
-    
-    // Send message on Enter key
-    elements.input.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        sendMessage(elements.input.value);
-      }
-    });
-  }
-
-  /**
-   * Initialize the widget
-   */
-  function init(userConfig = {}) {
-    // Merge default config with user config
-    config = { ...DEFAULT_CONFIG, ...userConfig };
-    
-    // Create styles and DOM elements
-    injectStyles();
-    elements = createWidgetElements();
-    
-    // Add welcome message
-    addMessage('Hi there! How can I help you today?');
-    
-    // Initialize event listeners
-    initEventListeners();
-    
-    // Log initialization
-    console.log('Marlin Chat Widget initialized successfully');
-  }
-
-  // Expose initialization function to global scope
-  window.initChatWidget = init;
-  
-  // Variables for closures
-  let config;
-  let elements;
-
-  // Auto-initialize if configuration exists
-  if (window.marlinChatConfig) {
-    init(window.marlinChatConfig);
-  }
-})(); 
+    `,e.id="marlin-chat-widget-typing",t.messagesContainer.appendChild(e),t.messagesContainer.scrollTop=t.messagesContainer.scrollHeight}function g(){let e=document.getElementById("marlin-chat-widget-typing");e&&e.remove()}function h(){t.container.style.display!=="none"?(t.container.classList.remove("open"),setTimeout(()=>{t.container.style.display="none"},300)):(t.container.style.display="flex",setTimeout(()=>{t.container.classList.add("open"),t.input.focus()},10))}function C(){let e=localStorage.getItem("marlin-chat-session-id");return e||(e="xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g,function(a){let n=Math.random()*16|0;return(a==="x"?n:n&3|8).toString(16)}),localStorage.setItem("marlin-chat-session-id",e)),e}async function u(e){if(e.trim()){c(e,"user"),t.input.value="",b();try{let a=C();console.log("Sending message to widget API:",e);let n=await fetch(i.apiEndpoint,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:e,sessionId:a})});if(console.log("Response status:",n.status),console.log("Response content-type:",n.headers.get("content-type")),!n.ok){try{let o=await n.json();console.error("API error:",o),g();let p=o.message||o.error||`Error: ${n.status} ${n.statusText}`;c(`Sorry, there was a problem: ${p}. Please try again later.`,"assistant")}catch(o){console.error("Failed to parse error response:",o),g(),c(`Sorry, there was an error (${n.status}). Please try again later.`,"assistant")}return}let s=n.body.getReader(),r=new TextDecoder;g();let l=document.createElement("div");l.className="marlin-chat-widget-message assistant",t.messagesContainer.appendChild(l);let d="";try{for(;;){let{done:p,value:k}=await s.read();if(p){console.log("Stream complete");break}let m=r.decode(k,{stream:!0});console.log("Received chunk:",JSON.stringify(m)),m.trim()&&(d+=m,l.textContent=d,t.messagesContainer.scrollTop=t.messagesContainer.scrollHeight)}let o=r.decode();o.trim()&&(console.log("Final chunk:",JSON.stringify(o)),d+=o,l.textContent=d),d.trim()||(console.warn("Empty response received from streaming API"),l.textContent="I'm sorry, I couldn't find specific information about that in my knowledge base. Please try asking in a different way or about another topic."),console.log("Final response text:",d)}catch(o){console.error("Error processing stream:",o),l.textContent="Sorry, there was an error processing the response stream. Please try again."}}catch(a){console.error("Error sending message:",a),g(),c("Sorry, there was an error connecting to the server. Please check your connection and try again later.","assistant")}}}function v(){t.bubble.addEventListener("click",h),t.closeButton.addEventListener("click",h),t.sendButton.addEventListener("click",()=>{u(t.input.value)}),t.input.addEventListener("keypress",e=>{e.key==="Enter"&&u(t.input.value)})}function f(e={}){i={...x,...e},w(),t=y(),c("Hi there! How can I help you today?"),v(),console.log("Marlin Chat Widget initialized successfully")}window.initChatWidget=f;let i,t;window.marlinChatConfig&&f(window.marlinChatConfig)})();})();
+//# sourceMappingURL=chat-widget.js.map
