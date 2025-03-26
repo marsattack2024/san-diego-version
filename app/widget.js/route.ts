@@ -5,9 +5,8 @@ import { join } from 'path'
 // Serve the widget script file
 export async function GET(req: NextRequest) {
   try {
-    // In production, serve the pre-built widget-script.js
-    // In development, we could dynamically generate it
-    const filePath = join(process.cwd(), 'lib/widget/widget-script.js')
+    // In production, serve the pre-built widget-script.js from the public directory
+    const filePath = join(process.cwd(), 'public/widget/chat-widget.js')
     const scriptContent = readFileSync(filePath, 'utf-8')
     
     // Add cache control headers for efficient delivery

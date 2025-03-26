@@ -16,8 +16,8 @@ export async function middleware(request: NextRequest) {
   }
   
   // Special bypass for widget chat API to allow anonymous access
-  if (pathname.startsWith('/api/widget-chat')) {
-    console.log('Bypassing auth middleware for Widget Chat API');
+  if (pathname.startsWith('/api/widget-chat') || pathname === '/widget' || pathname === '/widget.js') {
+    console.log('Bypassing auth middleware for Widget features');
     return;
   }
   
