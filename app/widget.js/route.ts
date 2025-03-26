@@ -44,7 +44,7 @@ export async function OPTIONS(req: NextRequest) {
 // Serve the widget script file
 export async function GET(req: NextRequest) {
   try {
-    // In production, serve the pre-built widget-script.js from the public directory
+    // Point directly to where the file is actually being built
     const filePath = join(process.cwd(), 'public/widget/chat-widget.js')
     const scriptContent = readFileSync(filePath, 'utf-8')
     
@@ -52,8 +52,8 @@ export async function GET(req: NextRequest) {
     const response = new Response(scriptContent, {
       headers: {
         'Content-Type': 'application/javascript; charset=utf-8',
-        'Cache-Control': 'public, max-age=31536000, immutable', // Use longer cache, immutable for better performance
-        'X-Content-Type-Options': 'nosniff', // Prevent MIME type sniffing
+        'Cache-Control': 'public, max-age=31536000, immutable',
+        'X-Content-Type-Options': 'nosniff',
       },
     })
     

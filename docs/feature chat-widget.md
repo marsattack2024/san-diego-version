@@ -564,6 +564,7 @@ During implementation and deployment, we encountered several issues that require
 - Middleware authentication path matching was too restrictive (using exact matches)
 - Next.js wasn't properly serving HTML files from the public directory when middleware was in place
 - Path misalignment between built files and routes
+- Vercel deployment treating static HTML files differently than expected
 
 **Solutions Implemented**:
 
@@ -611,6 +612,61 @@ const response = new Response(scriptContent, {
 "postbuild": "npm run build:widget && echo 'Widget built to: public/widget/chat-widget.js'",
 ```
 
+5. **Created dedicated route handlers** for both widget.js and widget-test:
+```typescript
+// app/widget.js/route.ts
+export async function GET(req: NextRequest) {
+  try {
+    // Point directly to where the file is actually being built
+    const filePath = join(process.cwd(), 'public/widget/chat-widget.js')
+    const scriptContent = readFileSync(filePath, 'utf-8')
+    
+    // Create response with proper content type and caching headers
+    const response = new Response(scriptContent, {
+      headers: {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'public, max-age=31536000, immutable',
+        'X-Content-Type-Options': 'nosniff',
+      },
+    })
+    
+    // Add CORS headers and return
+    return addCorsHeaders(response, req);
+  } catch (error) {
+    console.error('Error serving widget script:', error)
+    const errorResponse = new Response('console.error("Failed to load chat widget script");', {
+      status: 500,
+      headers: {
+        'Content-Type': 'application/javascript; charset=utf-8',
+      },
+    })
+    return addCorsHeaders(errorResponse, req);
+  }
+}
+
+// app/widget-test/route.ts
+export async function GET() {
+  try {
+    const filePath = join(process.cwd(), 'public/widget-test.html');
+    const htmlContent = readFileSync(filePath, 'utf8');
+    
+    return new NextResponse(htmlContent, {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'public, max-age=3600',
+        'X-Content-Type-Options': 'nosniff',
+      }
+    });
+  } catch (error) {
+    console.error('Error serving widget-test.html:', error);
+    return new NextResponse('Error loading widget test page', { 
+      status: 500,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' }
+    });
+  }
+}
+```
+
 ### 2. CORS and Content Type Issues
 
 **Problem**: Even when the widget script was found, browsers sometimes rejected it due to CORS or content type issues.
@@ -620,6 +676,7 @@ const response = new Response(scriptContent, {
 - Added CORS headers for cross-origin requests
 - Implemented proper cache control with immutable directive
 - Added `nosniff` directive to prevent content type sniffing
+- Created a dedicated route handler to serve the file with correct headers
 
 ### 3. Middleware Patterns
 
@@ -637,11 +694,22 @@ export const config = {
 }
 ```
 
+### 4. Static Files vs Route Handlers
+
+**Problem**: Next.js and Vercel's handling of static files in the public directory can be inconsistent, especially with middleware involved.
+
+**Solution**: Moved from relying on static file serving to explicit route handlers:
+- Created dedicated route handlers for `/widget.js` and `/widget-test`
+- These route handlers read the files from disk and serve them with proper headers
+- This approach provides more control over content types, caching, and CORS
+- Route handlers are more reliable than static file serving when middleware is involved
+
 These solutions ensure that:
 1. The widget script is properly served with correct headers
 2. Static HTML test pages are accessible without authentication
 3. The middleware correctly bypasses authentication for widget-related paths
 4. All paths are correctly aligned between the build output and the routes
+5. Route handlers provide consistent, reliable access to widget assets
 
 ## Production Verification Checklist
 
