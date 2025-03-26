@@ -54,12 +54,15 @@ async function isAdmin(supabase: any, userId: string) {
   }
 }
 
+// Sets dynamic rendering to ensure params are available at runtime
+export const dynamic = 'force-dynamic';
+
 // DELETE /api/admin/users/[userId] - Delete a user
 export async function DELETE(
   request: Request,
   { params }: { params: { userId: string } }
 ) {
-  // Access params directly, no need to await in Next.js 15
+  // Access userId directly from params
   const userId = params.userId;
   
   if (!userId) {

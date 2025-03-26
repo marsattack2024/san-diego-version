@@ -3,8 +3,15 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createClient } from '@/utils/supabase/server';
 import { PostgrestResponse, PostgrestSingleResponse } from '@supabase/supabase-js';
 
-// Add after any runtime configuration, or at the top of the file
+// Force dynamic rendering for proper authentication
 export const dynamic = 'force-dynamic';
+
+// Helper function to extract chat ID from URL
+function getChatIdFromUrl(url: string): string {
+  const urlObj = new URL(url);
+  const pathSegments = urlObj.pathname.split('/');
+  return pathSegments[pathSegments.length - 1];
+}
 
 // Helper for direct authentication
 async function getAuthenticatedUser(request?: NextRequest) {
@@ -47,12 +54,9 @@ async function getAuthenticatedUser(request?: NextRequest) {
 }
 
 // API route to fetch chat messages and handle chat-specific operations
-export async function GET(
-  _request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  // Access params directly, no need to await in Next.js 15
-  const id = params.id;
+export async function GET(_request: NextRequest) {
+  // Extract id from URL path
+  const id = getChatIdFromUrl(_request.url);
   
   // Start performance tracking
   const startTime = performance.now();
@@ -163,12 +167,9 @@ export async function GET(
 }
 
 // Update chat details (title, etc.)
-export async function PATCH(
-  _request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  // Access params directly, no need to await in Next.js 15
-  const id = params.id;
+export async function PATCH(_request: NextRequest) {
+  // Extract id from URL path
+  const id = getChatIdFromUrl(_request.url);
   
   try {
     // Get the request body
@@ -299,12 +300,9 @@ export async function PATCH(
 }
 
 // Save assistant message (called from frontend after streaming completes)
-export async function POST(
-  _request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  // Access params directly, no need to await in Next.js 15
-  const id = params.id;
+export async function POST(_request: NextRequest) {
+  // Extract id from URL path
+  const id = getChatIdFromUrl(_request.url);
   
   try {
     // Get the message from the request body
