@@ -10,7 +10,7 @@ import { AlertCircle, Loader2 } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import Link from 'next/link';
 
-export function LoginForm() {
+export function SignupForm() {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -18,7 +18,7 @@ export function LoginForm() {
   
   const supabase = createClient();
 
-  const handleMagicLinkLogin = async (e: React.FormEvent) => {
+  const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
@@ -36,6 +36,7 @@ export function LoginForm() {
         email,
         options: {
           emailRedirectTo: `${window.location.origin}/auth/callback`,
+          shouldCreateUser: true, // Ensure user is created if they don't exist
         },
       });
 
@@ -43,9 +44,9 @@ export function LoginForm() {
         throw error;
       }
 
-      setSuccess('Check your email for the magic link to log in.');
+      setSuccess('Check your email for the magic link to sign in to your new account.');
     } catch (err: any) {
-      console.error('Magic link error:', err);
+      console.error('Signup error:', err);
       setError(err.message || 'An error occurred. Please try again.');
     } finally {
       setLoading(false);
@@ -55,13 +56,13 @@ export function LoginForm() {
   return (
     <Card className="w-full max-w-md mx-auto">
       <CardHeader>
-        <CardTitle>Login</CardTitle>
+        <CardTitle>Sign Up</CardTitle>
         <CardDescription>
-          Enter your email to receive a magic link
+          Enter your email to create an account
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={handleMagicLinkLogin} className="space-y-4">
+        <form onSubmit={handleSignup} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="email">Email</Label>
             <Input
@@ -97,23 +98,23 @@ export function LoginForm() {
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 Sending magic link...
               </>
-            ) : 'Send Magic Link'}
+            ) : 'Sign Up with Email'}
           </Button>
         </form>
       </CardContent>
       <CardFooter className="flex flex-col space-y-4">
         <div className="text-center">
           <p className="text-sm text-gray-500">
-            Don't have an account?{' '}
-            <Link href="/signup" className="text-blue-600 hover:underline">
-              Sign up
+            Already have an account?{' '}
+            <Link href="/login" className="text-blue-600 hover:underline">
+              Sign in
             </Link>
           </p>
         </div>
         <p className="text-sm text-gray-500 text-center">
-        Email <a href="mailto:humberto@photographytoprofits.com?subject=Access%20to%20Marlin" className="text-blue-600 hover:underline">humberto@photographytoprofits.com</a> for access if you're a p2p employee or THRC Mastermind 2.0 Member.
+          Email <a href="mailto:humberto@photographytoprofits.com?subject=Access%20to%20Marlin" className="text-blue-600 hover:underline">humberto@photographytoprofits.com</a> for access if you're a p2p employee or THRC Mastermind 2.0 Member.
         </p>
       </CardFooter>
     </Card>
   );
-}
+} 

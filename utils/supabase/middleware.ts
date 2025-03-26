@@ -113,6 +113,7 @@ export async function updateSession(request: NextRequest) {
   if (
     !user &&
     !pathname.startsWith('/login') &&
+    !pathname.startsWith('/signup') && // Allow access to signup page
     !pathname.startsWith('/auth') &&
     !pathname.includes('/_next') &&
     !pathname.includes('/api/history') && // Don't redirect history API calls
