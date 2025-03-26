@@ -1,0 +1,64 @@
+<!-- 
+  Marlin Chat Widget - Google Tag Manager Snippet
+  This HTML snippet should be added as a Custom HTML tag in Google Tag Manager
+  for programs.thehighrollersclub.io
+-->
+<script>
+// Use an IIFE (Immediately Invoked Function Expression) for proper scoping
+(function() {
+  // Skip if already loaded or on unsupported browsers
+  if (window.marlinChatWidgetLoaded || !window.localStorage) {
+    return;
+  }
+  
+  // Configure the widget (customize as needed)
+  window.marlinChatConfig = {
+    position: 'bottom-right',
+    title: 'Ask Marlin',
+    primaryColor: '#0070f3',
+    // Update this to your actual API endpoint
+    apiEndpoint: 'https://thehighrollersclub.io/api/widget-chat'
+  };
+  
+  // Dynamically load the widget resources
+  var script = document.createElement('script');
+  script.src = 'https://thehighrollersclub.io/widget/chat-widget.js';
+  script.async = true;
+  script.defer = true;
+  script.onerror = function() {
+    console.warn('Failed to load Marlin Chat Widget');
+  };
+  
+  // Track GTM events for analytics
+  script.onload = function() {
+    // Push dataLayer event for successful widget load
+    if (window.dataLayer) {
+      window.dataLayer.push({
+        'event': 'marlinChatWidgetLoaded',
+        'marlinChatWidget': {
+          'status': 'loaded'
+        }
+      });
+    }
+    
+    // Add event listeners to track widget usage if initChatWidget exists
+    if (window.initChatWidget) {
+      // Custom event listener for widget interactions
+      document.addEventListener('marlinChatWidgetEvent', function(e) {
+        if (window.dataLayer && e.detail) {
+          window.dataLayer.push({
+            'event': 'marlinChatWidgetInteraction',
+            'marlinChatWidget': e.detail
+          });
+        }
+      });
+      
+      // Initialize the widget
+      window.initChatWidget(window.marlinChatConfig);
+    }
+  };
+  
+  // Append the script to the document
+  document.head.appendChild(script);
+})();
+</script> 

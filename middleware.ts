@@ -15,6 +15,12 @@ export async function middleware(request: NextRequest) {
     return;
   }
   
+  // Special bypass for widget chat API to allow anonymous access
+  if (pathname.startsWith('/api/widget-chat')) {
+    console.log('Bypassing auth middleware for Widget Chat API');
+    return;
+  }
+  
   return await updateSession(request)
 }
 
@@ -33,7 +39,8 @@ export const config = {
     // Explicitly include API routes that need auth
     '/api/chat/:path*',
     '/api/history/:path*',
-    // Explicitly excluding Perplexity API from auth middleware
+    // Explicitly excluding Perplexity API and Widget Chat API from auth middleware
     // '/api/perplexity/:path*',
+    '/api/widget-chat/:path*',
   ],
 }

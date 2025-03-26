@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Marlin Chat Widget Test</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      line-height: 1.6;
+      max-width: 800px;
+      margin: 40px auto;
+      padding: 20px;
+    }
+    h1 {
+      color: #0070f3;
+    }
+    .test-info {
+      background-color: #f5f5f5;
+      border-left: 4px solid #0070f3;
+      padding: 15px;
+      margin: 20px 0;
+    }
+    .test-question {
+      font-weight: bold;
+      margin-top: 30px;
+    }
+    button {
+      background-color: #0070f3;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      border-radius: 5px;
+      cursor: pointer;
+      margin-top: 10px;
+    }
+    button:hover {
+      background-color: #005cc5;
+    }
+  </style>
+</head>
+<body>
+  <h1>Marlin Chat Widget Test Page</h1>
+  <div class="test-info">
+    <p>The chat widget should appear in the bottom-right corner of this page.</p>
+    <p>This test page will help verify that the widget loads correctly and can process messages.</p>
+  </div>
+
+  <div class="test-question">
+    <p>To test RAG functionality, click the widget bubble and ask:</p>
+    <p>"What is the best way to run a 40 Over 40 campaign?"</p>
+    <button id="copy-question">Copy Question</button>
+  </div>
+
+  <script>
+    // Copy test question to clipboard
+    document.getElementById('copy-question').addEventListener('click', function() {
+      navigator.clipboard.writeText('What is the best way to run a 40 Over 40 campaign?')
+        .then(() => {
+          alert('Question copied to clipboard! Paste it into the chat widget.');
+        })
+        .catch(err => {
+          console.error('Failed to copy: ', err);
+        });
+    });
+
+    // Configure the widget
+    window.marlinChatConfig = {
+      position: 'bottom-right',
+      title: 'Ask Marlin',
+      primaryColor: '#0070f3',
+      apiEndpoint: '/api/widget-chat'
+    };
+  </script>
+  <script src="/widget/chat-widget.js" async defer></script>
+</body>
+</html> 
