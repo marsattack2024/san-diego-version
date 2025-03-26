@@ -19,33 +19,27 @@ The chat widget will:
 /components
   /chat-widget
     /index.tsx            # Main entry point and container component
-    /chat-widget-bubble.tsx  # Floating bubble that expands to chat
-    /chat-widget-window.tsx  # Chat window with messages and input
-    /chat-widget-header.tsx  # Simple header with title/close button
-    /chat-widget-messages.tsx # Message display component
-    /chat-widget-input.tsx   # Simplified input component
+    /chat-widget.tsx      # Main UI component for the widget
     /chat-widget-provider.tsx # Context provider for state management
+    /embed-snippet.tsx    # Component for generating embeddable code
     /types.ts             # TypeScript types for the widget
 
 /app
-  /api
-    /widget-chat
-      /route.ts          # API route specific to the widget
-    /widget-session
-      /route.ts          # Session management for the widget
+  /widget
+    /page.tsx            # Demo page for testing the widget
+    /widget-configurator.tsx # Component for configuring the widget
+  /widget.js
+    /route.ts            # API route for serving the widget script
 
 /lib
   /widget
     /session.ts         # Session management utilities
     /rate-limit.ts      # Rate limiting implementation
-    /constants.ts       # Widget-specific constants
     /widget-script.js   # Self-contained widget JavaScript
     /gtm-snippet.html   # Google Tag Manager ready HTML snippet
 
-/public
-  /widget
-    /chat-widget.js     # Bundled script for embedding
-    /styles.css         # Optional external styles
+/docs
+  /chat-widget.md       # Documentation for the chat widget
 ```
 
 ### Implementation Status
@@ -86,319 +80,31 @@ The chat widget will:
    - ✅ Integration with dataLayer for analytics
    - ✅ Configurable appearance and behavior
 
-#### Components In Progress
+7. **UI Components**
+   - ✅ Main container component (`chat-widget.tsx`)
+   - ✅ Context provider for state management (`chat-widget-provider.tsx`)
+   - ✅ Root component export (`index.tsx`)
+   - ✅ Embed snippet generator (`embed-snippet.tsx`)
 
-1. **UI Components**
-   - ⏳ Main container component
-   - ⏳ Chat bubble and window components
-   - ⏳ Message display and input components
+8. **Demo & Configuration**
+   - ✅ Widget demo page (`app/widget/page.tsx`)
+   - ✅ Widget configurator (`app/widget/widget-configurator.tsx`)
+   - ✅ Widget script server endpoint (`app/widget.js/route.ts`)
 
-2. **Context Provider**
-   - ⏳ State management for widget UI
-   - ⏳ Connection to the widget API
+9. **Documentation**
+   - ✅ Comprehensive documentation (`docs/chat-widget.md`)
 
-3. **Bundling and Distribution**
-   - ⏳ Production bundling of the widget script
-   - ⏳ Optimized assets for production
+#### Remaining Tasks
 
-### Technical Implementation Details
+1. **Testing and Refinement**
+   - ⏳ End-to-end testing of the widget in different environments
+   - ⏳ Performance optimization
+   - ⏳ Browser compatibility testing
 
-#### Widget API (`app/api/widget-chat/route.ts`)
-
-The widget API has been implemented using the Vercel AI SDK and NextJS Edge runtime. Key features:
-
-- **Rate Limiting**: Uses the `rateLimitMiddleware` to enforce limits of 3 requests per minute
-- **Session Management**: Accepts and generates session IDs for tracking conversations
-- **Streaming Responses**: Uses the Vercel AI SDK's `streamText` function to stream responses from OpenAI
-- **Error Handling**: Comprehensive error handling with appropriate status codes and messages
-
-The API is designed to be lightweight and performant, with a max duration of 120 seconds to allow for longer responses when needed.
-
-#### AI SDK and RAG Integration
-
-The widget leverages the Vercel AI SDK and our existing RAG (Retrieval Augmented Generation) system:
-
-- **Vercel AI SDK**: Uses `streamText` function from the AI SDK to generate streaming responses
-- **OpenAI Integration**: Connects to OpenAI's models via the `@ai-sdk/openai` provider
-- **Stream Processing**: Responses are streamed in real-time using `toDataStreamResponse()`
-- **RAG System**: Connects to the same vector database used by the main application
-- **Knowledge Base Access**: Retrieves relevant context from our knowledge base to enhance responses
-- **Consistent Experience**: Uses the same prompt builder system as the main application for consistent responses
-
-#### Rate Limiting (`lib/widget/rate-limit.ts`)
-
-The rate limiting implementation is robust and flexible:
-
-- **Redis-based**: Primary storage using Redis (via Upstash) when available
-- **In-memory Fallback**: Falls back to an in-memory store when Redis is not available
-- **Identifier Flexibility**: Uses session ID when available, with IP address as fallback
-- **Automatic Cleanup**: Periodically cleans up expired entries from the in-memory store
-- **Response Headers**: Returns appropriate rate limit headers (X-RateLimit-*)
-- **Detailed Logging**: Includes comprehensive logging for troubleshooting
-
-#### Session Management (`lib/widget/session.ts`)
-
-Session management is handled client-side to minimize server load:
-
-- **UUID Generation**: Creates cryptographically secure UUIDs for session identification
-- **LocalStorage Persistence**: Sessions stored in localStorage for persistence across page refreshes
-- **Automatic Expiry**: Sessions expire after 24 hours of inactivity
-- **Message Management**: Functions for adding messages to the session
-- **Error Handling**: Graceful fallback if localStorage is not available
-
-#### Widget Script (`lib/widget/widget-script.js`)
-
-The widget script creates the complete UI and handles all client-side logic:
-
-- **Self-contained**: Injects all necessary HTML and CSS
-- **Responsive Design**: Adapts to different screen sizes
-- **Customizable**: Configurable appearance and behavior
-- **Stream Handling**: Processes streamed responses in real-time
-- **Session Management**: Maintains conversation state across page refreshes
-- **Error Handling**: Graceful fallback for error conditions
-
-## Google Tag Manager Integration
-
-The chat widget will be designed to be easily deployed via Google Tag Manager (GTM) on the programs.thehighrollersclub.io domain. This approach offers several benefits:
-
-- **No code changes required to the main site**
-- **Easy deployment and updates** without developer intervention
-- **Centralized management** of the widget configuration
-
-### GTM Implementation Steps
-
-1. **Prepare the Widget Script**:
-   - Create a self-contained script that dynamically loads widget resources
-   - Ensure the script uses proper scoping to avoid conflicts with the host page
-   - Include fallback mechanisms for error handling
-
-2. **Configure Google Tag Manager**:
-   - Create a new tag in GTM using Custom HTML tag type
-   - Paste the widget initialization script into the HTML field
-   - Set up triggers to control where and when the widget appears
-   - Test the implementation in GTM's preview mode before publishing
-
-3. **Script Structure**:
-
-```html
-<script>
-// Use an IIFE (Immediately Invoked Function Expression) for proper scoping
-(function() {
-  // Dynamically load the widget resources
-  var script = document.createElement('script');
-  script.src = 'https://your-domain.com/widget/chat-widget.js';
-  script.async = true;
-  script.defer = true;
-  document.head.appendChild(script);
-  
-  // Initialize the widget once the script is loaded
-  script.onload = function() {
-    window.initChatWidget({
-      position: 'bottom-right',
-      title: 'Ask Marlin',
-      primaryColor: '#0070f3'
-    });
-  };
-  
-  // Handle loading errors gracefully
-  script.onerror = function() {
-    console.warn('Failed to load the chat widget');
-  };
-})();
-</script>
-```
-
-### GTM Best Practices
-
-For optimal performance and compatibility when deploying through Google Tag Manager:
-
-1. **Asynchronous Loading**:
-   - Use `async` and `defer` attributes to prevent blocking page rendering
-   - Implement proper event handling for script loading and initialization
-
-2. **Resource Efficiency**:
-   - Minimize the initial script size by loading UI components on demand
-   - Use lazy loading for resources that aren't immediately needed
-   - Implement efficient caching strategies for static assets
-
-3. **Conflict Prevention**:
-   - Use namespaced function and variable names
-   - Avoid relying on global variables or modifying existing ones
-   - Check for existing instances before initializing to prevent duplicates
-
-4. **Tracking and Integration**:
-   - Add data attributes to facilitate analytics tracking
-   - Implement event triggers that can be captured in GTM
-   - Consider implementing custom GTM events for important widget interactions
-
-5. **Error Handling and Logging**:
-   - Implement robust error catching and fallback mechanisms
-   - Include logging that can help diagnose issues in production
-   - Provide meaningful error messages that can guide troubleshooting
-
-## Local Testing Instructions
-
-To test the chat widget locally during development:
-
-### 1. Test the API Endpoint
-
-You can test the API endpoint using curl or Postman:
-
-```bash
-curl -X POST http://localhost:3000/api/widget-chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Hello, how can you help photographers?", "sessionId": "test-session-123"}'
-```
-
-This should return a streaming response from the AI.
-
-### 2. Test the Widget UI
-
-To test the widget UI directly:
-
-1. Create a test HTML file in your `public` directory (e.g., `public/widget-test.html`):
-
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Widget Test</title>
-</head>
-<body>
-  <h1>Marlin Chat Widget Test Page</h1>
-  <p>The chat widget should appear in the bottom-right corner.</p>
-  
-  <script>
-    window.marlinChatConfig = {
-      position: 'bottom-right',
-      title: 'Ask Marlin',
-      primaryColor: '#0070f3',
-      apiEndpoint: 'http://localhost:3000/api/widget-chat'
-    };
-  </script>
-  <script src="/widget/chat-widget.js" async defer></script>
-</body>
-</html>
-```
-
-2. Copy your `widget-script.js` to `public/widget/chat-widget.js`
-
-3. Access the test page at `http://localhost:3000/widget-test.html`
-
-### 3. Test the GTM Implementation
-
-To simulate the GTM implementation locally:
-
-1. Create another test file in `public/widget-gtm-test.html`:
-
-```html
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Widget GTM Test</title>
-</head>
-<body>
-  <h1>Marlin Chat Widget GTM Test Page</h1>
-  <p>The chat widget should load via our GTM-like implementation.</p>
-  
-  <script>
-  (function() {
-    if (window.marlinChatWidgetLoaded || !window.localStorage) {
-      return;
-    }
-    
-    window.marlinChatConfig = {
-      position: 'bottom-right',
-      title: 'Ask Marlin',
-      primaryColor: '#0070f3',
-      apiEndpoint: 'http://localhost:3000/api/widget-chat'
-    };
-    
-    var script = document.createElement('script');
-    script.src = 'http://localhost:3000/widget/chat-widget.js';
-    script.async = true;
-    script.defer = true;
-    script.onerror = function() {
-      console.warn('Failed to load Marlin Chat Widget');
-    };
-    
-    script.onload = function() {
-      console.log('Widget script loaded successfully');
-      if (window.initChatWidget) {
-        window.initChatWidget(window.marlinChatConfig);
-      }
-    };
-    
-    document.head.appendChild(script);
-  })();
-  </script>
-</body>
-</html>
-```
-
-2. Access this test page at `http://localhost:3000/widget-gtm-test.html`
-
-## Embedding Method
-
-The widget will be embeddable via Google Tag Manager using a Custom HTML tag:
-
-1. Log into Google Tag Manager account
-2. Navigate to Tags and click "New"
-3. Choose "Custom HTML" as the tag type
-4. Add the following code to the HTML field (update domains as needed):
-
-```html
-<script>
-// Use an IIFE for proper scoping
-(function() {
-  // Skip if already loaded or on unsupported browsers
-  if (window.marlinChatWidgetLoaded || !window.localStorage) {
-    return;
-  }
-  
-  // Configure the widget
-  window.marlinChatConfig = {
-    position: 'bottom-right',
-    title: 'Ask Marlin',
-    primaryColor: '#0070f3',
-    apiEndpoint: 'https://programs.thehighrollersclub.io/api/widget-chat'
-  };
-  
-  // Dynamically load the widget resources
-  var script = document.createElement('script');
-  script.src = 'https://programs.thehighrollersclub.io/widget/chat-widget.js';
-  script.async = true;
-  script.defer = true;
-  script.onerror = function() {
-    console.warn('Failed to load Marlin Chat Widget');
-  };
-  
-  // Track GTM events for analytics
-  script.onload = function() {
-    if (window.dataLayer) {
-      window.dataLayer.push({
-        'event': 'marlinChatWidgetLoaded',
-        'marlinChatWidget': { 'status': 'loaded' }
-      });
-    }
-    
-    if (window.initChatWidget) {
-      window.initChatWidget(window.marlinChatConfig);
-    }
-  };
-  
-  // Append the script to the document
-  document.head.appendChild(script);
-})();
-</script>
-```
-
-5. Set up a trigger for "All Pages" or specific pages as needed
-6. Save and publish the changes
+2. **Production Deployment**
+   - ⏳ Final bundling and minification
+   - ⏳ CDN configuration for the widget script
+   - ⏳ GTM deployment in production environment
 
 ## Implementation Progress
 
@@ -409,11 +115,12 @@ The widget will be embeddable via Google Tag Manager using a Custom HTML tag:
 - [x] Widget script implementation
 - [x] GTM snippet creation
 - [x] Integration with RAG (Retrieval Augmented Generation)
-- [ ] Core UI React components
-- [ ] Context provider for state management
+- [x] Core UI React components
+- [x] Context provider for state management
+- [x] Demo page and configurator
+- [x] Documentation
 - [ ] Production bundling and deployment
-- [ ] Testing and refinement
-- [ ] Documentation
+- [ ] Final testing and refinement
 
 ## AI Integration Details
 
