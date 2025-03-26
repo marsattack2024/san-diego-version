@@ -6,6 +6,13 @@ import { PostgrestResponse, PostgrestSingleResponse } from '@supabase/supabase-j
 // Add after any runtime configuration, or at the top of the file
 export const dynamic = 'force-dynamic';
 
+// Proper type for Next.js 15 route handlers
+type Context = {
+  params: {
+    id: string;
+  };
+};
+
 // Helper for direct authentication
 async function getAuthenticatedUser(request?: NextRequest) {
   try {
@@ -49,10 +56,10 @@ async function getAuthenticatedUser(request?: NextRequest) {
 // API route to fetch chat messages and handle chat-specific operations
 export async function GET(
   _request: NextRequest,
-  { params }: { params: { id: string } }
+  context: Context
 ) {
   // Next.js App Router requires params to be awaited before access to prevent hydration issues
-  const id = (await Promise.resolve(params)).id;
+  const id = context.params.id;
   
   // Start performance tracking
   const startTime = performance.now();
@@ -165,10 +172,10 @@ export async function GET(
 // Update chat details (title, etc.)
 export async function PATCH(
   _request: NextRequest,
-  { params }: { params: { id: string } }
+  context: Context
 ) {
   // Next.js App Router requires params to be awaited before access to prevent hydration issues
-  const id = (await Promise.resolve(params)).id;
+  const id = context.params.id;
   
   try {
     // Get the request body
@@ -301,10 +308,10 @@ export async function PATCH(
 // Save assistant message (called from frontend after streaming completes)
 export async function POST(
   _request: NextRequest,
-  { params }: { params: { id: string } }
+  context: Context
 ) {
   // Next.js App Router requires params to be awaited before access to prevent hydration issues
-  const id = (await Promise.resolve(params)).id;
+  const id = context.params.id;
   
   try {
     // Get the message from the request body

@@ -54,13 +54,20 @@ async function isAdmin(supabase: any, userId: string) {
   }
 }
 
+// Proper type for Next.js 15 route handlers
+type Context = {
+  params: {
+    userId: string;
+  };
+};
+
 // DELETE /api/admin/users/[userId] - Delete a user
 export async function DELETE(
   request: Request,
-  context: { params: { userId: string } }
+  context: Context
 ) {
   // Use await with params to satisfy Next.js warning
-  const userId = (await Promise.resolve(context.params)).userId;
+  const userId = context.params.userId;
   
   if (!userId) {
     return NextResponse.json({ error: 'User ID is required' }, { status: 400 });
