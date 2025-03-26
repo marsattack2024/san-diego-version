@@ -37,7 +37,14 @@ export function ChatWidget({ config = {} }: ChatWidgetProps) {
   const { messages, input, handleInputChange, handleSubmit, isLoading, error } = useChat({
     api: '/api/widget-chat',
     id: session?.id,
-    body: { sessionId: session?.id },
+    body: ({ messages }: { messages: Message[] }) => {
+      // Get the last user message if any
+      const lastMessage = messages[messages.length - 1]?.content || input
+      return {
+        message: lastMessage,
+        sessionId: session?.id
+      }
+    },
     onResponse: (response) => {
       // Extract any headers we need
       const sessionId = response.headers.get('x-session-id')

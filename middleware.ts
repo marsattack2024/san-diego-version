@@ -29,6 +29,9 @@ export async function middleware(request: NextRequest) {
     return;
   }
   
+  // The admin/widget path does not need special handling here as it should
+  // go through normal authentication via updateSession like other admin paths
+  
   return await updateSession(request)
 }
 

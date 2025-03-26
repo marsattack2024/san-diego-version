@@ -126,9 +126,11 @@
     "NODE_ENV": "production"
   },
   "rewrites": [
-    { "source": "/widget-test", "destination": "/widget-test.html" },
-    { "source": "/test", "destination": "/test.html" },
-    { "source": "/widget-embed", "destination": "/widget-embed.html" },
     { "source": "/widget.js", "destination": "/widget/chat-widget.js" }
+  ],
+  "redirects": [
+    { "source": "/widget", "destination": "/admin/widget", "permanent": true },
+    { "source": "/widget-test", "destination": "/admin/widget", "permanent": true },
+    { "source": "/widget-embed", "destination": "/admin/widget", "permanent": true }
   ]
 } 

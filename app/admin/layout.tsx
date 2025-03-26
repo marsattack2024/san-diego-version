@@ -74,6 +74,30 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 <span>Users</span>
               </Link>
               
+              <Link 
+                href="/admin/widget" 
+                className={cn(
+                  "flex items-center gap-2 w-full rounded-md p-2 text-sm font-medium hover:bg-sidebar-accent transition-colors",
+                  pathname === "/admin/widget" && "bg-sidebar-accent text-sidebar-accent-foreground"
+                )}
+                onClick={() => isMobile && setSidebarOpen(false)}
+              >
+                <svg 
+                  className="h-4 w-4" 
+                  xmlns="http://www.w3.org/2000/svg" 
+                  viewBox="0 0 24 24"
+                  fill="none" 
+                  stroke="currentColor" 
+                  strokeWidth="2" 
+                  strokeLinecap="round" 
+                  strokeLinejoin="round"
+                >
+                  <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+                <span>Widget</span>
+              </Link>
+              
               <div className="pt-6">
                 <Link 
                   href="/chat" 

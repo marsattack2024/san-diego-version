@@ -1,4 +1,4 @@
-# Chat Widget Implementation Plan
+# Chat Widget Implementation
 
 This document outlines the implementation details for the Marlin chat widget, a custom embeddable widget that integrates with our knowledge base and AI assistant. The widget is designed to be embedded on external websites via a simple script tag.
 
@@ -24,73 +24,66 @@ The chat widget:
 - Provides a streamlined UI matching Marlin's style
 - Includes rate limiting (3 requests per minute)
 - Can be embedded via a simple script tag or Google Tag Manager
+- Is managed through the admin dashboard at `/admin/widget`
 
-## Current Structure and Fixed Issues
+## Current Structure and Updates
 
-### Previous Issues Now Resolved
+### Migration to Admin Dashboard
 
-1. **Route Conflicts:**
-   - ✅ Resolved: Removed conflicting `/app/widget-test/page.tsx` that was causing build errors
-   - Now using only route handler with proper Content-Type headers
+The widget management has been completely migrated to the admin dashboard:
 
-2. **Domain Consistency:**
-   - ✅ Fixed: All references to API endpoints and script sources now use `marlan.photographytoprofits.com`
-   - Embed snippets now correctly reference this domain for API requests and script loading
-
-3. **CORS Configuration:**
-   - ✅ Enhanced: Updated `vercel.json` with explicit headers for all widget resources
-   - Added proper Content-Type headers for HTML files
-   - Set `Access-Control-Allow-Origin: *` for cross-domain embedding
-
-4. **Static File Access:**
-   - ✅ Improved: Updated middleware to better handle static files
-   - Added additional bypass patterns for HTML and JS files
-   - Enhanced matcher pattern to exclude JS files from auth requirement
-
-5. **Widget Script Loading:**
-   - ✅ Fixed: Updated `/widget.js` route handler to serve the actual file content instead of client-side redirect
-   - Implemented proper filesystem reading with error handling
-   - Set appropriate CORS and caching headers
+- ✅ Created dedicated admin widget page at `/admin/widget`
+- ✅ Implemented enhanced widget configurator with tabbed interface
+- ✅ Added navigation link in admin sidebar
+- ✅ Configured redirects from old paths
+- ✅ Removed standalone demo and test pages
 
 ### Current Component Structure
 
 ```
 /components
+  /admin
+    /widget
+      /widget-configurator.tsx  # Admin-specific widget configurator
   /chat-widget
-    /index.tsx            # Main entry point and container component
-    /chat-widget.tsx      # Main UI component for the widget
-    /chat-widget-provider.tsx # Context provider for state management
-    /embed-snippet.tsx    # Component for generating embeddable code
-    /types.ts             # TypeScript types for the widget
+    /index.tsx                  # Main entry point and container component
+    /chat-widget.tsx            # Main UI component for the widget
+    /chat-widget-provider.tsx   # Context provider for state management
+    /embed-snippet.tsx          # Component for generating embeddable code
+    /types.ts                   # TypeScript types for the widget
 
 /app
-  /widget
-    /page.tsx            # Demo page for testing the widget - VERIFIED ✓
-    /widget-configurator.tsx # Component for configuring the widget - VERIFIED ✓
+  /admin
+    /widget
+      /page.tsx                # Admin widget management page
   /widget.js
-    /route.ts            # Route handler for the widget script - VERIFIED ✓
-  /widget-test
-    /route.ts            # Route handler for the test page - VERIFIED ✓
+    /route.ts                  # Route handler for the widget script
   /api/widget-chat
-    /route.ts            # API endpoint for widget requests - VERIFIED ✓
+    /route.ts                  # API endpoint for widget requests
 
 /lib
   /widget
-    /session.ts         # Session management utilities - VERIFIED ✓
-    /rate-limit.ts      # Rate limiting implementation - VERIFIED ✓
-    /widget-script.js   # Self-contained widget JavaScript - VERIFIED ✓
-    /gtm-snippet.html   # Google Tag Manager ready HTML snippet - VERIFIED ✓
-    /gtm-simple.html    # Simplified GTM snippet - VERIFIED ✓
-    /body-snippet.html  # Direct body embed snippet - VERIFIED ✓
+    /session.ts               # Session management utilities
+    /rate-limit.ts            # Rate limiting implementation
+    /widget-script.js         # Self-contained widget JavaScript
+    /gtm-snippet.html         # Google Tag Manager ready HTML snippet
+    /gtm-simple.html          # Simplified GTM snippet
+    /body-snippet.html        # Direct body embed snippet
 
 /public
   /widget
-    /chat-widget.js     # Built and minified widget script - GENERATED ✓
-    /chat-widget.js.map # Source map for debugging - GENERATED ✓
-  /widget-test.html     # HTML test page for the widget - VERIFIED ✓
-  /widget-embed.html    # Standalone embedding example - VERIFIED ✓
-  /debug.js             # Simple debug file to test static file serving - VERIFIED ✓
+    /chat-widget.js           # Built and minified widget script - GENERATED
+    /chat-widget.js.map       # Source map for debugging - GENERATED
 ```
+
+### Files Removed in Migration
+
+The following standalone files have been removed as their functionality is now integrated into the admin dashboard:
+
+- ❌ `/app/widget/page.tsx` - Old widget demo page
+- ❌ `/app/widget/widget-configurator.tsx` - Old configurator component
+- ❌ `/public/widget-test.html` - Standalone test page
+- ❌ `/public/widget-embed.html` - Standalone embed example
 
 ## Implementation Details
 
@@ -164,41 +157,23 @@ A dedicated route handler that:
 - Includes error handling for file not found scenarios
 - Uses shorter cache time for debugging (3600 seconds)
 
-Implementation:
-```typescript
-// Serve the widget script file
-export async function GET(req: NextRequest) {
-  try {
-    // Read the actual file content from the filesystem
-    const fs = require('fs');
-    const path = require('path');
-    const filePath = path.join(process.cwd(), 'public/widget/chat-widget.js');
-    
-    // Check if file exists
-    if (!fs.existsSync(filePath)) {
-      console.error('Widget.js route: File not found at path:', filePath);
-      throw new Error('Widget script file not found');
-    }
-    
-    const fileContent = fs.readFileSync(filePath, 'utf-8');
-    
-    const response = new Response(fileContent, {
-      headers: {
-        'Content-Type': 'application/javascript; charset=utf-8',
-        'Cache-Control': 'public, max-age=3600',
-        'X-Content-Type-Options': 'nosniff',
-      },
-    });
-    
-    // Add CORS headers and return
-    return addCorsHeaders(response, req);
-  } catch (error) {
-    // Error handling...
-  }
-}
-```
+### 6. Admin Widget Page (`app/admin/widget/page.tsx`)
 
-### 6. Embedding Options
+A comprehensive admin page that:
+- Provides a management interface for the chat widget
+- Allows customization of widget appearance and behavior
+- Generates embed codes for different implementation methods
+- Shows a live preview of the widget with current settings
+- Includes documentation for implementation and troubleshooting
+
+Key features:
+- Tabbed interface for configuration, embed codes, and documentation
+- Live preview updates as settings are changed
+- Multiple embed code options (standard, GTM, direct)
+- Copy-to-clipboard functionality for easy implementation
+- Access restricted to admin users
+
+## Embedding Options
 
 #### Standard Script Tag
 
@@ -223,62 +198,19 @@ export async function GET(req: NextRequest) {
 </script>
 ```
 
-> **Important Note**: We now have two reliable ways to access the widget script:
+> **Important Note**: We have two reliable ways to access the widget script:
 > 1. Direct reference to the static file: `/widget/chat-widget.js`
 > 2. Through the route handler: `/widget.js`
 >
-> Both methods now properly serve the actual JavaScript content. The route handler reads the script file from the filesystem and serves it with appropriate headers, while the rewrite rule in `vercel.json` provides compatibility by redirecting `/widget.js` to the static file.
+> Both methods properly serve the actual JavaScript content. The route handler reads the script file from the filesystem and serves it with appropriate headers, while the rewrite rule in `vercel.json` provides compatibility by redirecting `/widget.js` to the static file.
 
-#### Google Tag Manager Integration (`lib/widget/gtm-snippet.html`)
+#### Google Tag Manager Integration
 
-A GTM-ready snippet that:
-- Checks if the widget is already loaded
-- Configures the widget with default or custom settings
-- Loads the widget script asynchronously
-- Includes error handling
-- Pushes events to the dataLayer for analytics tracking
+Available through the admin widget interface with copy-to-clipboard functionality.
 
-#### Simplified GTM Version (`lib/widget/gtm-simple.html`)
+#### Direct Body Embed
 
-A minimal GTM snippet that:
-- Has fewer lines for easier GTM implementation
-- Contains only essential configuration
-- Omits analytics tracking for simpler integration
-
-#### Direct Body Embed (`lib/widget/body-snippet.html`)
-
-A basic embed to be placed directly before the closing `</body>` tag:
-- Minimal code for direct HTML embedding
-- Configures and loads the widget with default settings
-
-#### Standalone Example Page (`public/widget-embed.html`)
-
-A complete HTML page that:
-- Demonstrates the widget in action
-- Provides copyable embed code with instructions
-- Serves as a self-contained example
-
-### 7. Testing Pages
-
-#### Widget Demo Page (`app/widget/page.tsx`)
-
-An interactive demo page that:
-- Displays the chat widget
-- Provides a configuration interface
-- Generates embed code for copying
-- Shows real-time previews of configuration changes
-
-#### Widget Test Pages (`public/widget-test.html` and `/app/widget-test/route.ts`)
-
-The static HTML file:
-- Embeds the widget with default settings
-- Provides a simple test environment
-- Includes sample questions for testing
-
-The route handler:
-- Serves the HTML file with proper headers
-- Sets content type and caching directives
-- Provides error handling
+Available through the admin widget interface with copy-to-clipboard functionality.
 
 ## Deployment Configuration
 
@@ -289,6 +221,7 @@ Enhanced middleware that:
 - Properly handles static files
 - Includes direct checks for HTML and JS files
 - Uses improved matcher patterns
+- Maintains normal authentication flow for admin widget page
 
 ```typescript
 // Special bypass for widget-related paths to allow anonymous access
@@ -303,6 +236,9 @@ if (
   console.log('Bypassing auth middleware for Widget features:', pathname);
   return;
 }
+
+// The admin/widget path does not need special handling here as it should
+// go through normal authentication via updateSession like other admin paths
 ```
 
 ### 2. Enhanced Vercel Configuration (`vercel.json`)
@@ -310,80 +246,13 @@ if (
 ```json
 {
   "headers": [
-    {
-      "source": "/api/widget-chat",
-      "headers": [
-        {
-          "key": "Access-Control-Allow-Origin",
-          "value": "*"
-        },
-        // Other CORS headers...
-      ]
-    },
-    {
-      "source": "/widget.js",
-      "headers": [
-        {
-          "key": "Content-Type",
-          "value": "application/javascript; charset=utf-8"
-        },
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=31536000, immutable"
-        },
-        {
-          "key": "Access-Control-Allow-Origin",
-          "value": "*"
-        },
-        // Other headers...
-      ]
-    },
-    {
-      "source": "/widget/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=31536000, immutable"
-        },
-        {
-          "key": "Access-Control-Allow-Origin",
-          "value": "*"
-        },
-        // Other headers...
-      ]
-    },
-    {
-      "source": "/widget-test.html",
-      "headers": [
-        {
-          "key": "Content-Type",
-          "value": "text/html; charset=utf-8"
-        },
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=3600"
-        }
-      ]
-    },
-    {
-      "source": "/widget-embed.html",
-      "headers": [
-        {
-          "key": "Content-Type",
-          "value": "text/html; charset=utf-8"
-        },
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=3600"
-        }
-      ]
-    }
+    // Headers configuration for widget resources
   ],
   "rewrites": [
-    { "source": "/widget-test", "destination": "/widget-test.html" },
-    { "source": "/test", "destination": "/test.html" },
-    { "source": "/widget-embed", "destination": "/widget-embed.html" },
     { "source": "/widget.js", "destination": "/widget/chat-widget.js" }
+  ],
+  "redirects": [
+    { "source": "/widget", "destination": "/admin/widget", "permanent": true }
   ]
 }
 ```
@@ -410,115 +279,33 @@ REDIS_TOKEN=your-redis-token
 
 ## Production Verification Checklist
 
-After implementing the fixes, verify the following to ensure proper widget functionality:
+After implementation, verify the following to ensure proper widget functionality:
 
-- [ ] `/widget` page loads correctly and displays the widget demo
-- [ ] `/widget-test` is accessible without authentication
-- [ ] `/debug.js` loads correctly, confirming static file serving works
+- [ ] `/admin/widget` page loads correctly for authenticated admin users
+- [ ] Widget configuration options work correctly
+- [ ] Embed code generation creates valid code snippets
+- [ ] `/widget` redirects to `/admin/widget`
 - [x] Widget script loads correctly from both `/widget.js` and `/widget/chat-widget.js`
 - [ ] Widget can connect to the API at `/api/widget-chat` and receive responses
 - [ ] No CORS errors are present in the browser console
 - [ ] Rate limiting is functioning correctly (3 requests per minute)
-- [x] The widget script is properly cached (check Cache-Control headers)
-- [x] Build logs confirm the widget script is built to the correct location
-- [ ] Session management works with localStorage persistence
-- [ ] The widget is responsive on mobile devices
-- [ ] Embedding via GTM successfully loads the widget
 
-## Chat Widget Documentation
+## Usage Instructions
 
-### Overview
+### Accessing the Widget Management Interface
 
-The chat widget provides a way to embed Marlin's AI chat functionality into external websites. It consists of:
+1. Log in to the admin dashboard
+2. Navigate to "Widget" in the sidebar
+3. Use the interface to configure the widget appearance and behavior
+4. Copy the appropriate embed code for your implementation method
 
-- Frontend JavaScript widget that can be loaded on any website
-- Widget-specific API endpoint optimized for external use
-- Test pages for verifying functionality
+### Embedding the Widget
 
-### Implementation Details
+To embed the chat widget on an external website, use one of the code snippets generated in the admin interface:
 
-#### Widget Script
-
-The widget script is built using the following components:
-
-- **Source**: `lib/widget/widget-script.js`
-- **Build Process**: Uses esbuild to compile and minify the widget script
-- **Build Command**: `npm run build:widget`
-- **Output**: Generates `public/widget/chat-widget.js`
-
-#### API Endpoints
-
-The widget system has several dedicated API endpoints:
-
-1. **Widget Script Loader**: `/widget.js` - Route handler that serves or redirects to the widget script
-   - Implementation: `app/widget.js/route.ts`
-   - Purpose: Provides CORS-enabled access to the widget script
-
-2. **Widget Chat API**: `/api/widget-chat` - Dedicated chat endpoint for the widget
-   - Implementation: `app/api/widget-chat/route.ts`
-   - Features: CORS support, rate limiting, specialized response handling
-
-3. **Widget Test Page**: `/widget-test` - HTML page for testing the widget
-   - Implementation: `app/widget-test/route.ts`
-   - Purpose: Provides a live demo of the widget and embed instructions
-
-#### Deployment Configuration
-
-For proper functionality in production, the following must be configured:
-
-1. **CORS Headers**: Set in both API route handlers and in `vercel.json`
-2. **Rewrites**: Defined in `vercel.json` to ensure static files are properly served
-3. **Environment Variables**:
-   - `WIDGET_ALLOWED_ORIGINS`: Comma-separated list of allowed origins (defaults include `*` for development)
-   - `WIDGET_RATE_LIMIT`: Number of requests per window (default: 10)
-   - `WIDGET_RATE_LIMIT_WINDOW`: Time window in seconds (default: 60)
-
-### Usage Instructions
-
-#### Embedding the Widget
-
-To embed the chat widget on an external website, add the following code:
-
-```html
-<script>
-    window.marlinConfig = {
-        apiEndpoint: "https://marlan.photographytoprofits.com/api/widget-chat",
-        title: "Marlin Assistant",
-        description: "Ask me anything about photography",
-        welcomeMessage: "Hi! I'm Marlin, your photography assistant. How can I help you today?",
-        placeholder: "Ask about photography...",
-        primaryColor: "#0d8bf2"
-    };
-    
-    (function() {
-        var script = document.createElement('script');
-        script.src = "https://marlan.photographytoprofits.com/widget/chat-widget.js";
-        script.defer = true;
-        script.onload = function() {
-            console.log("Marlin Chat Widget loaded successfully");
-        };
-        script.onerror = function() {
-            console.error("Failed to load Marlin Chat Widget");
-        };
-        document.body.appendChild(script);
-    })();
-</script>
-```
-
-#### Configuration Options
-
-The widget can be customized using the `window.marlinConfig` object:
-
-| Option | Type | Description |
-|--------|------|-------------|
-| apiEndpoint | string | URL for the widget chat API endpoint |
-| title | string | Title displayed in the widget header |
-| description | string | Description under the title |
-| welcomeMessage | string | Initial message displayed when the widget opens |
-| placeholder | string | Placeholder text for the input field |
-| primaryColor | string | Main color for widget accents (hex format) |
-| position | string | Widget position (default: "bottom-right") |
-| debug | boolean | Enable debug mode with console logging |
+1. **Standard Script Tag**: Simple JavaScript implementation
+2. **Google Tag Manager**: For websites using GTM
+3. **Direct Body Embed**: Simplified version for direct embedding
 
 ### Troubleshooting
 
@@ -535,29 +322,25 @@ The widget can be customized using the `window.marlinConfig` object:
    - Examine server logs for detailed error information
 
 3. **404 errors for widget resources**:
-   - ✅ Fixed: The `/widget.js` route handler now properly serves the file content
-   - The handler reads the script file from the filesystem and serves it with appropriate headers
-   - No more client-side redirects that caused script loading failures
-   - Both relative and absolute URLs for the script should now work correctly
+   - The `/widget.js` route handler serves the file content directly
+   - Both relative and absolute URLs for the script should work correctly
 
 4. **Script loading errors in embedded contexts**:
    - When embedding on external sites, always use absolute URLs for script sources
    - Example: `https://marlan.photographytoprofits.com/widget/chat-widget.js`
    - This prevents path resolution issues when loading from different domains
 
-#### Testing
-
-The widget can be tested on the following pages:
-
-1. Demo page: `/widget-test` 
-2. Test page with embed code: `/widget-embed`
+5. **Admin widget page not accessible**:
+   - Verify that the user has admin permissions
+   - Check that middleware is properly configured for admin routes
+   - Ensure Supabase authentication is working correctly
 
 ### Development Notes
 
 When making changes to the widget system:
 
 1. Always run `npm run build:widget` after modifying widget source code
-2. Test on the demo page before deployment 
+2. Test changes in the admin widget interface before deployment
 3. Ensure proper CORS configuration for all routes
 4. Update any references to domains if they change
 5. After deployment, verify script loading from both `/widget.js` and `/widget/chat-widget.js`
