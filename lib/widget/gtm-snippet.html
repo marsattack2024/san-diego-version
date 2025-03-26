@@ -16,17 +16,19 @@
     position: 'bottom-right',
     title: 'Ask Marlin',
     primaryColor: '#0070f3',
-    // Update this to your actual API endpoint
-    apiEndpoint: 'https://thehighrollersclub.io/api/widget-chat'
+    // Updated to the correct API endpoint
+    apiEndpoint: 'https://programs.thehighrollersclub.io/api/widget-chat'
   };
   
   // Dynamically load the widget resources
   var script = document.createElement('script');
-  script.src = 'https://thehighrollersclub.io/widget/chat-widget.js';
+  // Updated to use the API route instead of the static file
+  script.src = 'https://programs.thehighrollersclub.io/widget.js';
   script.async = true;
   script.defer = true;
   script.onerror = function() {
     console.warn('Failed to load Marlin Chat Widget');
+    console.error('Widget script failed to load from ' + script.src);
   };
   
   // Track GTM events for analytics

@@ -1,0 +1,29 @@
+<!-- 
+  Marlin Chat Widget - Simplified GTM Snippet
+  This HTML snippet is optimized for Google Tag Manager
+-->
+<script>
+(function() {
+  // Skip if already loaded
+  if (window.marlinChatWidgetLoaded) {
+    return;
+  }
+  
+  // Configure the widget
+  window.marlinChatConfig = {
+    position: 'bottom-right',
+    title: 'Ask Marlin',
+    primaryColor: '#0070f3',
+    apiEndpoint: 'https://programs.thehighrollersclub.io/api/widget-chat'
+  };
+  
+  // Create and append the script
+  var script = document.createElement('script');
+  script.src = 'https://programs.thehighrollersclub.io/widget.js';
+  script.async = true;
+  script.defer = true;
+  
+  // Append to document head
+  document.head.appendChild(script);
+})();
+</script> 

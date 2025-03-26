@@ -15,9 +15,15 @@ export async function middleware(request: NextRequest) {
     return;
   }
   
-  // Special bypass for widget chat API to allow anonymous access
-  if (pathname.startsWith('/api/widget-chat') || pathname === '/widget' || pathname === '/widget.js') {
-    console.log('Bypassing auth middleware for Widget features');
+  // Special bypass for widget-related paths to allow anonymous access
+  if (
+    pathname.startsWith('/api/widget-chat') || 
+    pathname === '/widget' || 
+    pathname === '/widget.js' || 
+    pathname === '/widget-test.html' ||
+    pathname === '/test.html'
+  ) {
+    console.log('Bypassing auth middleware for Widget features:', pathname);
     return;
   }
   
@@ -35,11 +41,9 @@ export const config = {
      * - api routes that don't require auth
      * - auth routes
      */
-    '/((?!_next/static|_next/image|favicon.ico|auth/|public/|api/public|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|auth/|public/|api/public|widget-test\\.html|test\\.html|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
     // Explicitly include API routes that need auth
     '/api/chat/:path*',
     '/api/history/:path*',
-    // Explicitly excluding Perplexity API and Widget Chat API from auth middleware
-    // '/api/perplexity/:path*',
   ],
 }

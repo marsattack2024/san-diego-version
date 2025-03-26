@@ -375,3 +375,179 @@ The widget leverages the Vercel AI SDK and our RAG (Retrieval Augmented Generati
 - **Error Handling**: Comprehensive error handling with graceful degradation
 - **GTM Compatibility**: Special attention to asynchronous loading and conflict prevention
 - **AI Integration**: Leverages existing RAG system and Vercel AI SDK for consistent responses
+
+## Widget Script Loading Implementation
+
+During deployment and testing on production, we encountered issues with the chat widget not loading correctly on external sites. The browser console showed 404 errors when attempting to load the widget script from `programs.thehighrollersclub.io/widget/chat-widget.js` and MIME type errors.
+
+### Problem Analysis
+
+We identified two key issues:
+1. The script path used in the GTM snippet (`/widget/chat-widget.js`) didn't match the actual API route available in production (`/widget.js`)
+2. CORS headers were not properly configured to allow loading the script from external domains
+
+### Solution Implemented: API Route for Widget Script
+
+We implemented a robust API route at `app/widget.js/route.ts` that serves the bundled JavaScript file with appropriate headers. This approach provides several advantages over serving a static file:
+
+- **Proper Content-Type**: Ensures the JavaScript is served with the correct MIME type
+- **CORS Support**: Includes appropriate CORS headers to allow cross-origin requests
+- **Improved Caching**: Implements optimal cache headers for performance
+- **Better Error Handling**: Provides detailed logging and fallback responses
+
+#### Implementation Details:
+
+```typescript
+import { NextRequest } from 'next/server'
+import { readFileSync } from 'fs'
+import { join } from 'path'
+
+// Get allowed origins from environment or use default
+const getAllowedOrigins = () => {
+  const originsFromEnv = process.env.WIDGET_ALLOWED_ORIGINS;
+  return originsFromEnv 
+    ? originsFromEnv.split(',') 
+    : ['https://programs.thehighrollersclub.io', 'http://localhost:3000', '*'];
+};
+
+// Function to add CORS headers to a response
+function addCorsHeaders(response: Response, req: NextRequest): Response {
+  const origin = req.headers.get('origin') || '';
+  const allowedOrigins = getAllowedOrigins();
+  const isAllowedOrigin = allowedOrigins.includes(origin) || allowedOrigins.includes('*');
+  
+  const corsHeaders = new Headers(response.headers);
+  
+  if (isAllowedOrigin) {
+    corsHeaders.set('Access-Control-Allow-Origin', origin);
+  } else {
+    corsHeaders.set('Access-Control-Allow-Origin', allowedOrigins[0]);
+  }
+  
+  corsHeaders.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  corsHeaders.set('Access-Control-Allow-Headers', 'Content-Type');
+  corsHeaders.set('Access-Control-Max-Age', '86400');
+  
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: corsHeaders
+  });
+}
+
+// Handle OPTIONS requests for CORS preflight
+export async function OPTIONS(req: NextRequest) {
+  const response = new Response(null, { status: 204 });
+  return addCorsHeaders(response, req);
+}
+
+// Serve the widget script file
+export async function GET(req: NextRequest) {
+  try {
+    // In production, serve the pre-built widget-script.js from the public directory
+    const filePath = join(process.cwd(), 'public/widget/chat-widget.js')
+    const scriptContent = readFileSync(filePath, 'utf-8')
+    
+    // Create response with proper content type and caching headers
+    const response = new Response(scriptContent, {
+      headers: {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'public, max-age=3600, s-maxage=86400',
+      },
+    })
+    
+    // Add CORS headers and return
+    return addCorsHeaders(response, req);
+  } catch (error) {
+    console.error('Error serving widget script:', error)
+    const errorResponse = new Response('console.error("Failed to load chat widget script");', {
+      status: 500,
+      headers: {
+        'Content-Type': 'application/javascript; charset=utf-8',
+      },
+    })
+    return addCorsHeaders(errorResponse, req);
+  }
+}
+```
+
+### Additional Configuration
+
+To ensure the widget works correctly in production, we also updated:
+
+1. **Vercel Configuration**: Added headers for the `/widget.js` path in `vercel.json`:
+
+```json
+{
+  "source": "/widget.js",
+  "headers": [
+    {
+      "key": "Content-Type",
+      "value": "application/javascript; charset=utf-8"
+    },
+    {
+      "key": "Cache-Control",
+      "value": "public, max-age=31536000, immutable"
+    },
+    {
+      "key": "Access-Control-Allow-Origin",
+      "value": "*"
+    },
+    {
+      "key": "Access-Control-Allow-Methods",
+      "value": "GET, OPTIONS"
+    },
+    {
+      "key": "Access-Control-Max-Age",
+      "value": "86400"
+    }
+  ]
+}
+```
+
+2. **GTM Snippet**: Updated the Google Tag Manager snippet to use the correct paths:
+
+```html
+<script>
+(function() {
+  // Skip if already loaded
+  if (window.marlinChatWidgetLoaded) {
+    return;
+  }
+  
+  // Configure the widget
+  window.marlinChatConfig = {
+    position: 'bottom-right',
+    title: 'Ask Marlin',
+    primaryColor: '#0070f3',
+    apiEndpoint: 'https://programs.thehighrollersclub.io/api/widget-chat'
+  };
+  
+  // Create and append the script
+  var script = document.createElement('script');
+  script.src = 'https://programs.thehighrollersclub.io/widget.js';
+  script.async = true;
+  script.defer = true;
+  
+  // Append to document head
+  document.head.appendChild(script);
+})();
+</script>
+```
+
+3. **Simplified GTM Version**: Created a simplified version of the GTM snippet in `lib/widget/gtm-simple.html` that's optimized for Google Tag Manager.
+
+### Testing Verification
+
+This implementation was tested and verified to work correctly across:
+- Different browsers (Chrome, Firefox, Safari)
+- Mobile and desktop devices
+- Through Google Tag Manager integration
+- Direct script inclusion
+
+The updated approach resolved the 404 errors and MIME type issues by ensuring:
+1. The correct endpoint path is used for the widget script
+2. Proper CORS headers are applied to allow cross-origin requests
+3. The correct Content-Type header is set to `application/javascript; charset=utf-8`
+
+This solution maintains our architectural goal of exposing the widget through a well-defined API while ensuring it works seamlessly across different sites.
