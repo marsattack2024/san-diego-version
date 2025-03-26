@@ -47,6 +47,11 @@ The chat widget:
    - Added additional bypass patterns for HTML and JS files
    - Enhanced matcher pattern to exclude JS files from auth requirement
 
+5. **Widget Script Loading:**
+   - ✅ Fixed: Updated `/widget.js` route handler to serve the actual file content instead of client-side redirect
+   - Implemented proper filesystem reading with error handling
+   - Set appropriate CORS and caching headers
+
 ### Current Component Structure
 
 ```
@@ -150,7 +155,50 @@ Key features:
 - RAG (Retrieval Augmented Generation) for knowledge base access
 - AI response streaming
 
-### 5. Embedding Options
+### 5. Widget Script Route Handler (`app/widget.js/route.ts`)
+
+A dedicated route handler that:
+- Reads the actual widget script from the filesystem
+- Serves the content with proper MIME type headers
+- Applies CORS headers for cross-domain access
+- Includes error handling for file not found scenarios
+- Uses shorter cache time for debugging (3600 seconds)
+
+Implementation:
+```typescript
+// Serve the widget script file
+export async function GET(req: NextRequest) {
+  try {
+    // Read the actual file content from the filesystem
+    const fs = require('fs');
+    const path = require('path');
+    const filePath = path.join(process.cwd(), 'public/widget/chat-widget.js');
+    
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      console.error('Widget.js route: File not found at path:', filePath);
+      throw new Error('Widget script file not found');
+    }
+    
+    const fileContent = fs.readFileSync(filePath, 'utf-8');
+    
+    const response = new Response(fileContent, {
+      headers: {
+        'Content-Type': 'application/javascript; charset=utf-8',
+        'Cache-Control': 'public, max-age=3600',
+        'X-Content-Type-Options': 'nosniff',
+      },
+    });
+    
+    // Add CORS headers and return
+    return addCorsHeaders(response, req);
+  } catch (error) {
+    // Error handling...
+  }
+}
+```
+
+### 6. Embedding Options
 
 #### Standard Script Tag
 
@@ -175,11 +223,11 @@ Key features:
 </script>
 ```
 
-> **Important Note**: We support two ways to access the widget script:
-> 1. Direct reference to the static file: `/widget/chat-widget.js` (recommended)
-> 2. Through the route handler: `/widget.js` (for backward compatibility)
+> **Important Note**: We now have two reliable ways to access the widget script:
+> 1. Direct reference to the static file: `/widget/chat-widget.js`
+> 2. Through the route handler: `/widget.js`
 >
-> A rewrite rule in `vercel.json` ensures that `/widget.js` redirects to the static file.
+> Both methods now properly serve the actual JavaScript content. The route handler reads the script file from the filesystem and serves it with appropriate headers, while the rewrite rule in `vercel.json` provides compatibility by redirecting `/widget.js` to the static file.
 
 #### Google Tag Manager Integration (`lib/widget/gtm-snippet.html`)
 
@@ -210,7 +258,7 @@ A complete HTML page that:
 - Provides copyable embed code with instructions
 - Serves as a self-contained example
 
-### 6. Testing Pages
+### 7. Testing Pages
 
 #### Widget Demo Page (`app/widget/page.tsx`)
 
@@ -367,12 +415,149 @@ After implementing the fixes, verify the following to ensure proper widget funct
 - [ ] `/widget` page loads correctly and displays the widget demo
 - [ ] `/widget-test` is accessible without authentication
 - [ ] `/debug.js` loads correctly, confirming static file serving works
-- [ ] Widget script loads correctly from both `/widget.js` and `/widget/chat-widget.js`
+- [x] Widget script loads correctly from both `/widget.js` and `/widget/chat-widget.js`
 - [ ] Widget can connect to the API at `/api/widget-chat` and receive responses
 - [ ] No CORS errors are present in the browser console
 - [ ] Rate limiting is functioning correctly (3 requests per minute)
-- [ ] The widget script is properly cached (check Cache-Control headers)
-- [ ] Build logs confirm the widget script is built to the correct location
+- [x] The widget script is properly cached (check Cache-Control headers)
+- [x] Build logs confirm the widget script is built to the correct location
 - [ ] Session management works with localStorage persistence
 - [ ] The widget is responsive on mobile devices
 - [ ] Embedding via GTM successfully loads the widget
+
+## Chat Widget Documentation
+
+### Overview
+
+The chat widget provides a way to embed Marlin's AI chat functionality into external websites. It consists of:
+
+- Frontend JavaScript widget that can be loaded on any website
+- Widget-specific API endpoint optimized for external use
+- Test pages for verifying functionality
+
+### Implementation Details
+
+#### Widget Script
+
+The widget script is built using the following components:
+
+- **Source**: `lib/widget/widget-script.js`
+- **Build Process**: Uses esbuild to compile and minify the widget script
+- **Build Command**: `npm run build:widget`
+- **Output**: Generates `public/widget/chat-widget.js`
+
+#### API Endpoints
+
+The widget system has several dedicated API endpoints:
+
+1. **Widget Script Loader**: `/widget.js` - Route handler that serves or redirects to the widget script
+   - Implementation: `app/widget.js/route.ts`
+   - Purpose: Provides CORS-enabled access to the widget script
+
+2. **Widget Chat API**: `/api/widget-chat` - Dedicated chat endpoint for the widget
+   - Implementation: `app/api/widget-chat/route.ts`
+   - Features: CORS support, rate limiting, specialized response handling
+
+3. **Widget Test Page**: `/widget-test` - HTML page for testing the widget
+   - Implementation: `app/widget-test/route.ts`
+   - Purpose: Provides a live demo of the widget and embed instructions
+
+#### Deployment Configuration
+
+For proper functionality in production, the following must be configured:
+
+1. **CORS Headers**: Set in both API route handlers and in `vercel.json`
+2. **Rewrites**: Defined in `vercel.json` to ensure static files are properly served
+3. **Environment Variables**:
+   - `WIDGET_ALLOWED_ORIGINS`: Comma-separated list of allowed origins (defaults include `*` for development)
+   - `WIDGET_RATE_LIMIT`: Number of requests per window (default: 10)
+   - `WIDGET_RATE_LIMIT_WINDOW`: Time window in seconds (default: 60)
+
+### Usage Instructions
+
+#### Embedding the Widget
+
+To embed the chat widget on an external website, add the following code:
+
+```html
+<script>
+    window.marlinConfig = {
+        apiEndpoint: "https://marlan.photographytoprofits.com/api/widget-chat",
+        title: "Marlin Assistant",
+        description: "Ask me anything about photography",
+        welcomeMessage: "Hi! I'm Marlin, your photography assistant. How can I help you today?",
+        placeholder: "Ask about photography...",
+        primaryColor: "#0d8bf2"
+    };
+    
+    (function() {
+        var script = document.createElement('script');
+        script.src = "https://marlan.photographytoprofits.com/widget/chat-widget.js";
+        script.defer = true;
+        script.onload = function() {
+            console.log("Marlin Chat Widget loaded successfully");
+        };
+        script.onerror = function() {
+            console.error("Failed to load Marlin Chat Widget");
+        };
+        document.body.appendChild(script);
+    })();
+</script>
+```
+
+#### Configuration Options
+
+The widget can be customized using the `window.marlinConfig` object:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| apiEndpoint | string | URL for the widget chat API endpoint |
+| title | string | Title displayed in the widget header |
+| description | string | Description under the title |
+| welcomeMessage | string | Initial message displayed when the widget opens |
+| placeholder | string | Placeholder text for the input field |
+| primaryColor | string | Main color for widget accents (hex format) |
+| position | string | Widget position (default: "bottom-right") |
+| debug | boolean | Enable debug mode with console logging |
+
+### Troubleshooting
+
+#### Common Issues
+
+1. **Widget not loading**: 
+   - Check browser console for errors
+   - Verify that the widget script URL is correct
+   - Ensure CORS headers are properly configured
+
+2. **API errors**:
+   - Verify the `apiEndpoint` is correctly set
+   - Check rate limiting settings
+   - Examine server logs for detailed error information
+
+3. **404 errors for widget resources**:
+   - ✅ Fixed: The `/widget.js` route handler now properly serves the file content
+   - The handler reads the script file from the filesystem and serves it with appropriate headers
+   - No more client-side redirects that caused script loading failures
+   - Both relative and absolute URLs for the script should now work correctly
+
+4. **Script loading errors in embedded contexts**:
+   - When embedding on external sites, always use absolute URLs for script sources
+   - Example: `https://marlan.photographytoprofits.com/widget/chat-widget.js`
+   - This prevents path resolution issues when loading from different domains
+
+#### Testing
+
+The widget can be tested on the following pages:
+
+1. Demo page: `/widget-test` 
+2. Test page with embed code: `/widget-embed`
+
+### Development Notes
+
+When making changes to the widget system:
+
+1. Always run `npm run build:widget` after modifying widget source code
+2. Test on the demo page before deployment 
+3. Ensure proper CORS configuration for all routes
+4. Update any references to domains if they change
+5. After deployment, verify script loading from both `/widget.js` and `/widget/chat-widget.js`

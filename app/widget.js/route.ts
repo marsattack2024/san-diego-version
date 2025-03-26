@@ -1,6 +1,4 @@
 import { NextRequest } from 'next/server'
-import { readFileSync, statSync } from 'fs'
-import { join } from 'path'
 
 // Get allowed origins from environment or use default
 const getAllowedOrigins = () => {
@@ -44,30 +42,29 @@ export async function OPTIONS(req: NextRequest) {
 // Serve the widget script file
 export async function GET(req: NextRequest) {
   try {
-    // Point directly to where the file is actually being built
-    const filePath = join(process.cwd(), 'public/widget/chat-widget.js')
-    console.log('Widget.js route: Attempting to serve widget from path:', filePath);
+    // Log for debugging
+    console.log('Widget.js route handler: Serving widget script');
     
-    // Check if file exists before reading
-    try {
-      const stats = statSync(filePath);
-      console.log('Widget.js route: File exists, size:', stats.size, 'bytes');
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error('Widget.js route: File does not exist at path:', filePath, 'Error:', errorMessage);
+    // Read the actual file content from the filesystem
+    const fs = require('fs');
+    const path = require('path');
+    const filePath = path.join(process.cwd(), 'public/widget/chat-widget.js');
+    
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      console.error('Widget.js route: File not found at path:', filePath);
+      throw new Error('Widget script file not found');
     }
     
-    const scriptContent = readFileSync(filePath, 'utf-8')
-    console.log('Widget.js route: Successfully read file, content length:', scriptContent.length);
+    const fileContent = fs.readFileSync(filePath, 'utf-8');
     
-    // Create response with proper content type and caching headers
-    const response = new Response(scriptContent, {
+    const response = new Response(fileContent, {
       headers: {
         'Content-Type': 'application/javascript; charset=utf-8',
-        'Cache-Control': 'public, max-age=31536000, immutable',
+        'Cache-Control': 'public, max-age=3600', // Shorter cache time for debugging
         'X-Content-Type-Options': 'nosniff',
       },
-    })
+    });
     
     // Add CORS headers and return
     return addCorsHeaders(response, req);
@@ -78,7 +75,7 @@ export async function GET(req: NextRequest) {
       headers: {
         'Content-Type': 'application/javascript; charset=utf-8',
       },
-    })
+    });
     return addCorsHeaders(errorResponse, req);
   }
 } 
