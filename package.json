@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node scripts/dev.js",
     "build": "next build",
-    "postbuild": "npm run build:widget",
+    "postbuild": "npm run build:widget && echo 'Widget built to: public/widget/chat-widget.js'",
     "start": "next start",
     "lint": "next lint",
     "update-imports": "node scripts/update-imports.js",

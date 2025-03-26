@@ -52,7 +52,8 @@ export async function GET(req: NextRequest) {
     const response = new Response(scriptContent, {
       headers: {
         'Content-Type': 'application/javascript; charset=utf-8',
-        'Cache-Control': 'public, max-age=3600, s-maxage=86400',
+        'Cache-Control': 'public, max-age=31536000, immutable', // Use longer cache, immutable for better performance
+        'X-Content-Type-Options': 'nosniff', // Prevent MIME type sniffing
       },
     })
     

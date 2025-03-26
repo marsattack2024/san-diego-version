@@ -90,5 +90,9 @@
   ],
   "env": {
     "NODE_ENV": "production"
-  }
+  },
+  "rewrites": [
+    { "source": "/widget-test", "destination": "/widget-test.html" },
+    { "source": "/test", "destination": "/test.html" }
+  ]
 } 

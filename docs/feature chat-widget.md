@@ -551,3 +551,107 @@ The updated approach resolved the 404 errors and MIME type issues by ensuring:
 3. The correct Content-Type header is set to `application/javascript; charset=utf-8`
 
 This solution maintains our architectural goal of exposing the widget through a well-defined API while ensuring it works seamlessly across different sites.
+
+## Troubleshooting Common Widget Issues
+
+During implementation and deployment, we encountered several issues that required specific fixes. This section documents these challenges and their solutions for future reference.
+
+### 1. 404 Errors and Access Issues
+
+**Problem**: Widget pages (`/widget`, `/widget-test.html`) were not accessible, and the widget script was not loading correctly, resulting in 404 errors.
+
+**Root Causes**:
+- Middleware authentication path matching was too restrictive (using exact matches)
+- Next.js wasn't properly serving HTML files from the public directory when middleware was in place
+- Path misalignment between built files and routes
+
+**Solutions Implemented**:
+
+1. **Updated middleware path handling** to use pattern matching instead of exact matching:
+```typescript
+// Before
+if (
+  pathname === '/api/widget-chat' || 
+  pathname === '/widget' || 
+  pathname === '/widget.js' || 
+  pathname === '/widget-test.html'
+) { ... }
+
+// After
+if (
+  pathname.startsWith('/api/widget-chat') || 
+  pathname.startsWith('/widget') || 
+  pathname === '/widget.js' || 
+  pathname.includes('widget-test.html') ||
+  pathname.includes('test.html')
+) { ... }
+```
+
+2. **Added explicit rewrites in vercel.json** to ensure HTML files are properly served:
+```json
+"rewrites": [
+  { "source": "/widget-test", "destination": "/widget-test.html" },
+  { "source": "/test", "destination": "/test.html" }
+]
+```
+
+3. **Enhanced MIME type handling** in the widget.js route to prevent browser MIME type errors:
+```typescript
+const response = new Response(scriptContent, {
+  headers: {
+    'Content-Type': 'application/javascript; charset=utf-8',
+    'Cache-Control': 'public, max-age=31536000, immutable',
+    'X-Content-Type-Options': 'nosniff',
+  },
+});
+```
+
+4. **Improved build verification** by updating the package.json postbuild script:
+```json
+"postbuild": "npm run build:widget && echo 'Widget built to: public/widget/chat-widget.js'",
+```
+
+### 2. CORS and Content Type Issues
+
+**Problem**: Even when the widget script was found, browsers sometimes rejected it due to CORS or content type issues.
+
+**Solution**: Enhanced the route handler for `/widget.js` with proper headers:
+- Set explicit Content-Type headers
+- Added CORS headers for cross-origin requests
+- Implemented proper cache control with immutable directive
+- Added `nosniff` directive to prevent content type sniffing
+
+### 3. Middleware Patterns
+
+**Problem**: The middleware matcher patterns were not correctly bypassing authentication for widget-related routes.
+
+**Solution**: Updated the matcher pattern in middleware.ts to properly exclude widget paths:
+```javascript
+export const config = {
+  matcher: [
+    '/((?!_next/static|_next/image|favicon.ico|auth/|public/|api/public|widget-test\\.html|test\\.html|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    // Explicitly include API routes that need auth
+    '/api/chat/:path*',
+    '/api/history/:path*',
+  ],
+}
+```
+
+These solutions ensure that:
+1. The widget script is properly served with correct headers
+2. Static HTML test pages are accessible without authentication
+3. The middleware correctly bypasses authentication for widget-related paths
+4. All paths are correctly aligned between the build output and the routes
+
+## Production Verification Checklist
+
+After implementing the fixes above, verify the following to ensure proper widget functionality:
+
+- [ ] `/widget` page loads correctly and displays the widget demo
+- [ ] `/widget-test.html` and `/test.html` are accessible without authentication
+- [ ] Widget script loads correctly from `/widget.js` with proper MIME type
+- [ ] Widget can connect to the API at `/api/widget-chat` and receive responses
+- [ ] No CORS errors are present in the browser console
+- [ ] Rate limiting is functioning correctly (3 requests per minute)
+- [ ] The widget script is properly cached (check Cache-Control headers)
+- [ ] Build logs confirm the widget script is built to the correct location

@@ -18,10 +18,10 @@ export async function middleware(request: NextRequest) {
   // Special bypass for widget-related paths to allow anonymous access
   if (
     pathname.startsWith('/api/widget-chat') || 
-    pathname === '/widget' || 
+    pathname.startsWith('/widget') || 
     pathname === '/widget.js' || 
-    pathname === '/widget-test.html' ||
-    pathname === '/test.html'
+    pathname.includes('widget-test.html') ||
+    pathname.includes('test.html')
   ) {
     console.log('Bypassing auth middleware for Widget features:', pathname);
     return;
