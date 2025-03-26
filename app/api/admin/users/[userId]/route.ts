@@ -57,10 +57,10 @@ async function isAdmin(supabase: any, userId: string) {
 // DELETE /api/admin/users/[userId] - Delete a user
 export async function DELETE(
   request: Request,
-  { params }: { params: { userId: string } }
+  { params }: { params: Promise<{ userId: string }> }
 ): Promise<Response> {
-  // Access params directly
-  const userId = params.userId;
+  // Access userId from params with await
+  const { userId } = await params;
   
   if (!userId) {
     return NextResponse.json({ error: 'User ID is required' }, { status: 400 });
