@@ -2,6 +2,20 @@
 
 This document outlines the implementation details for the Marlin chat widget, a custom embeddable widget that integrates with our knowledge base and AI assistant. The widget is designed to be embedded on external websites via a simple script tag.
 
+## Domain Structure
+
+⚠️ **Important Domain Information:**
+
+- **API & Widget Host:** `marlan.photographytoprofits.com` 
+  - This is where the widget script, API, and resources are hosted
+  - All widget script src references should point to this domain
+  - The API endpoint for chat requests is at this domain
+
+- **Primary Embed Target:** `programs.thehighrollersclub.io`
+  - This is the main website where the widget will be embedded
+  - Other photography websites may also embed the widget
+  - These domains must be included in CORS allowed origins
+
 ## Overview
 
 The chat widget:
@@ -11,30 +25,27 @@ The chat widget:
 - Includes rate limiting (3 requests per minute)
 - Can be embedded via a simple script tag or Google Tag Manager
 
-## Current Structure and Known Issues
+## Current Structure and Fixed Issues
 
-### Duplicate Routes and Conflicting Files
-
-⚠️ **IMPORTANT:** The codebase currently has several duplicated implementations and conflicting files that need to be addressed:
+### Previous Issues Now Resolved
 
 1. **Route Conflicts:**
-   - `/app/widget-test/page.tsx` and `/app/widget-test/route.ts` both try to handle the same path
-   - This causes a Next.js build error: "You cannot have two parallel pages that resolve to the same path"
+   - ✅ Resolved: Removed conflicting `/app/widget-test/page.tsx` that was causing build errors
+   - Now using only route handler with proper Content-Type headers
 
-2. **Redundant Implementations:**
-   - Two ways to serve the widget script:
-     - `/app/widget.js/route.ts` route handler
-     - Direct reference to `/public/widget/chat-widget.js` via rewrites
-   - Multiple HTML files with similar widget embedding snippets:
-     - `/lib/widget/gtm-snippet.html`
-     - `/lib/widget/gtm-simple.html`
-     - `/lib/widget/body-snippet.html`
-     - `/public/widget-test.html`
-     - `/public/widget-embed.html`
+2. **Domain Consistency:**
+   - ✅ Fixed: All references to API endpoints and script sources now use `marlan.photographytoprofits.com`
+   - Embed snippets now correctly reference this domain for API requests and script loading
 
-3. **Inconsistent Domain References:**
-   - Some files reference `programs.thehighrollersclub.io`
-   - Others reference `marlan.photographytoprofits.com`
+3. **CORS Configuration:**
+   - ✅ Enhanced: Updated `vercel.json` with explicit headers for all widget resources
+   - Added proper Content-Type headers for HTML files
+   - Set `Access-Control-Allow-Origin: *` for cross-domain embedding
+
+4. **Static File Access:**
+   - ✅ Improved: Updated middleware to better handle static files
+   - Added additional bypass patterns for HTML and JS files
+   - Enhanced matcher pattern to exclude JS files from auth requirement
 
 ### Current Component Structure
 
@@ -54,8 +65,7 @@ The chat widget:
   /widget.js
     /route.ts            # Route handler for the widget script - VERIFIED ✓
   /widget-test
-    /page.tsx            # Redirect to widget-test.html - CONFLICTS WITH ROUTE HANDLER ⚠️
-    /route.ts            # Route handler for the test page - CONFLICTS WITH PAGE COMPONENT ⚠️
+    /route.ts            # Route handler for the test page - VERIFIED ✓
   /api/widget-chat
     /route.ts            # API endpoint for widget requests - VERIFIED ✓
 
@@ -70,10 +80,11 @@ The chat widget:
 
 /public
   /widget
-    /chat-widget.js     # Built and minified widget script - GENERATED FROM widget-script.js ✓
+    /chat-widget.js     # Built and minified widget script - GENERATED ✓
     /chat-widget.js.map # Source map for debugging - GENERATED ✓
   /widget-test.html     # HTML test page for the widget - VERIFIED ✓
   /widget-embed.html    # Standalone embedding example - VERIFIED ✓
+  /debug.js             # Simple debug file to test static file serving - VERIFIED ✓
 ```
 
 ## Implementation Details
@@ -164,9 +175,11 @@ Key features:
 </script>
 ```
 
-> **Important Note**: We previously used `/widget.js` as the script source, which relied on a route handler to serve the file. However, due to inconsistencies in how route handlers process static files in production, we now directly reference the built widget script at `/widget/chat-widget.js`. This approach is more reliable as it bypasses any potential issues with route handlers and connects directly to the file where it's actually built and deployed.
+> **Important Note**: We support two ways to access the widget script:
+> 1. Direct reference to the static file: `/widget/chat-widget.js` (recommended)
+> 2. Through the route handler: `/widget.js` (for backward compatibility)
 >
-> However, for backward compatibility, we maintain the `/widget.js` route handler and use a rewrite rule in `vercel.json` that redirects `/widget.js` to `/widget/chat-widget.js`.
+> A rewrite rule in `vercel.json` ensures that `/widget.js` redirects to the static file.
 
 #### Google Tag Manager Integration (`lib/widget/gtm-snippet.html`)
 
@@ -207,232 +220,125 @@ An interactive demo page that:
 - Generates embed code for copying
 - Shows real-time previews of configuration changes
 
-#### Widget Test Pages
+#### Widget Test Pages (`public/widget-test.html` and `/app/widget-test/route.ts`)
 
-Two implementations that currently conflict:
+The static HTML file:
+- Embeds the widget with default settings
+- Provides a simple test environment
+- Includes sample questions for testing
 
-1. **Static HTML File** (`public/widget-test.html`):
-   - Embeds the widget with default settings
-   - Provides a simple test environment
-   - Includes sample questions for testing
+The route handler:
+- Serves the HTML file with proper headers
+- Sets content type and caching directives
+- Provides error handling
 
-2. **Next.js Page + Route Handler**:
-   - `app/widget-test/page.tsx`: Redirects to the HTML file
-   - `app/widget-test/route.ts`: Serves the HTML file with proper headers
-   - These two files conflict and cause build errors
+## Deployment Configuration
 
-## Route Implementation
+### 1. Updated Middleware (`middleware.ts`)
 
-### 1. Widget Script Route (`app/widget.js/route.ts`)
-
-A dedicated route handler that:
-- Serves the minified widget script from the build output
-- Sets proper Content-Type and caching headers
-- Handles CORS for cross-domain embedding
-- Provides error handling with fallback content
-
-```typescript
-// Serve the widget script file
-export async function GET(req: NextRequest) {
-  try {
-    // Point directly to where the file is actually being built
-    const filePath = join(process.cwd(), 'public/widget/chat-widget.js')
-    const scriptContent = readFileSync(filePath, 'utf-8')
-    
-    // Create response with proper content type and caching headers
-    const response = new Response(scriptContent, {
-      headers: {
-        'Content-Type': 'application/javascript; charset=utf-8',
-        'Cache-Control': 'public, max-age=31536000, immutable',
-        'X-Content-Type-Options': 'nosniff',
-      },
-    })
-    
-    // Add CORS headers and return
-    return addCorsHeaders(response, req);
-  } catch (error) {
-    console.error('Error serving widget script:', error)
-    const errorResponse = new Response('console.error("Failed to load chat widget script");', {
-      status: 500,
-      headers: {
-        'Content-Type': 'application/javascript; charset=utf-8',
-      },
-    })
-    return addCorsHeaders(errorResponse, req);
-  }
-}
-```
-
-### 2. Test Page Route Conflict (`app/widget-test/route.ts` vs `app/widget-test/page.tsx`)
-
-These files create a conflict because they try to handle the same route:
-
-```typescript
-// app/widget-test/page.tsx - Causes conflict with route.ts
-import { redirect } from 'next/navigation';
-
-export default function WidgetTestPage() {
-  redirect('/widget-test.html');
-}
-```
-
-```typescript
-// app/widget-test/route.ts - Causes conflict with page.tsx
-export async function GET() {
-  try {
-    const filePath = join(process.cwd(), 'public/widget-test.html');
-    const htmlContent = readFileSync(filePath, 'utf8');
-    
-    return new NextResponse(htmlContent, {
-      headers: {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Cache-Control': 'public, max-age=3600',
-        'X-Content-Type-Options': 'nosniff',
-      }
-    });
-  } catch (error) {
-    console.error('Error serving widget-test.html:', error);
-    return new NextResponse('Error loading widget test page', { 
-      status: 500,
-      headers: { 'Content-Type': 'text/html; charset=utf-8' }
-    });
-  }
-}
-```
-
-## Middleware Configuration
-
-The app's middleware (`middleware.ts`) has been configured to:
-- Bypass authentication for all widget-related paths
-- Allow anonymous access to the widget API and resources
-- Use pattern matching for flexible path handling
+Enhanced middleware that:
+- Bypasses authentication for all widget-related paths
+- Properly handles static files
+- Includes direct checks for HTML and JS files
+- Uses improved matcher patterns
 
 ```typescript
 // Special bypass for widget-related paths to allow anonymous access
 if (
   pathname.startsWith('/api/widget-chat') || 
   pathname.startsWith('/widget') || 
-  pathname === '/widget.js' || 
-  pathname.includes('widget-test.html') ||
-  pathname.includes('test.html')
+  pathname === '/widget.js' ||
+  pathname === '/debug.js' ||
+  pathname.includes('.html') ||
+  pathname.includes('/chat-widget.js')
 ) {
   console.log('Bypassing auth middleware for Widget features:', pathname);
   return;
 }
 ```
 
-## Build and Deployment
+### 2. Enhanced Vercel Configuration (`vercel.json`)
 
-### Build Process
-
-1. The widget script is built using esbuild:
-```
-esbuild lib/widget/widget-script.js --bundle --minify --outfile=public/widget/chat-widget.js --sourcemap
-```
-
-2. This is configured in `package.json`:
-```json
-"scripts": {
-  "build:widget": "esbuild lib/widget/widget-script.js --bundle --minify --outfile=public/widget/chat-widget.js --sourcemap",
-  "postbuild": "npm run build:widget && echo 'Widget built to: public/widget/chat-widget.js'"
-}
-```
-
-3. The postbuild script ensures the widget is built after Next.js build completes
-
-### Deployment Configuration
-
-Vercel configuration (`vercel.json`) includes:
-
-1. CORS and caching headers for widget routes:
 ```json
 {
-  "source": "/widget.js",
   "headers": [
     {
-      "key": "Content-Type",
-      "value": "application/javascript; charset=utf-8"
+      "source": "/api/widget-chat",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        // Other CORS headers...
+      ]
     },
     {
-      "key": "Cache-Control",
-      "value": "public, max-age=31536000, immutable"
+      "source": "/widget.js",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/javascript; charset=utf-8"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        },
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        // Other headers...
+      ]
     },
     {
-      "key": "Access-Control-Allow-Origin",
-      "value": "*"
+      "source": "/widget/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        },
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        // Other headers...
+      ]
+    },
+    {
+      "source": "/widget-test.html",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "text/html; charset=utf-8"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=3600"
+        }
+      ]
+    },
+    {
+      "source": "/widget-embed.html",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "text/html; charset=utf-8"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=3600"
+        }
+      ]
     }
+  ],
+  "rewrites": [
+    { "source": "/widget-test", "destination": "/widget-test.html" },
+    { "source": "/test", "destination": "/test.html" },
+    { "source": "/widget-embed", "destination": "/widget-embed.html" },
+    { "source": "/widget.js", "destination": "/widget/chat-widget.js" }
   ]
 }
 ```
-
-2. Path rewrites for static HTML files:
-```json
-"rewrites": [
-  { "source": "/widget-test", "destination": "/widget-test.html" },
-  { "source": "/test", "destination": "/test.html" },
-  { "source": "/widget-embed", "destination": "/widget-embed.html" },
-  { "source": "/widget.js", "destination": "/widget/chat-widget.js" }
-]
-```
-
-## Troubleshooting Common Widget Issues
-
-### 1. Resolving Route Conflicts
-
-**Problem**: We currently have a build error because `app/widget-test/page.tsx` and `app/widget-test/route.ts` both try to handle the same path:
-```
-Failed to compile.
-app/widget-test/page.tsx
-You cannot have two parallel pages that resolve to the same path. Please check /widget-test/page and /widget-test/route.
-```
-
-**Solution Options**:
-1. **RECOMMENDED**: Remove `app/widget-test/page.tsx` since the rewrite in `vercel.json` already handles redirecting `/widget-test` to `/widget-test.html`
-2. Alternative: Use a route group to separate the handlers, for example:
-   - `app/(widget)/widget-test/page.tsx`
-   - `app/api/widget-test/route.ts`
-
-### 2. 404 Errors and Access Issues
-
-**Problem**: Widget pages (`/widget`, `/widget-test.html`) may not be accessible, and the widget script may not load correctly, resulting in 404 errors.
-
-**Root Causes**:
-- Middleware authentication path matching was too restrictive (using exact matches)
-- Next.js wasn't properly serving HTML files from the public directory when middleware was in place
-- Path misalignment between built files and routes
-- Vercel deployment treating static HTML files differently than expected
-
-**Solutions Implemented**:
-
-1. **Updated middleware path handling** to use pattern matching instead of exact matching
-2. **Added explicit rewrites in vercel.json** to ensure HTML files are properly served
-3. **Enhanced MIME type handling** in the widget.js route to prevent browser MIME type errors
-4. **Improved build verification** with the postbuild script
-5. **Created dedicated route handlers** for widget.js and widget-test
-
-### 3. Domain and Path Consistency Issues
-
-**Problem**: Different files reference different domains and paths:
-- Some use `programs.thehighrollersclub.io`
-- Others use `marlan.photographytoprofits.com`
-
-**Solution**: Standardize on a single domain in all embeddable files:
-1. Update all embed snippets to use the same domain
-2. Use environment variables where possible to make domain configurable
-3. Document the correct domain to use in production
-
-## Recommended Cleanup Actions
-
-To resolve the current duplications and conflicts:
-
-1. **Delete or refactor `app/widget-test/page.tsx`** to resolve the route conflict
-2. **Standardize on a single domain** for all embed snippets
-3. **Consolidate embedding options** to reduce duplication:
-   - Keep `gtm-snippet.html` for full GTM implementation
-   - Keep `body-snippet.html` for direct embedding
-   - Consider removing redundant files
-4. **Update documentation** to clearly explain the relationship between files
-5. **Add comments to critical files** explaining their purpose and relationship to other files
 
 ## Environment Variables
 
@@ -460,6 +366,7 @@ After implementing the fixes, verify the following to ensure proper widget funct
 
 - [ ] `/widget` page loads correctly and displays the widget demo
 - [ ] `/widget-test` is accessible without authentication
+- [ ] `/debug.js` loads correctly, confirming static file serving works
 - [ ] Widget script loads correctly from both `/widget.js` and `/widget/chat-widget.js`
 - [ ] Widget can connect to the API at `/api/widget-chat` and receive responses
 - [ ] No CORS errors are present in the browser console

@@ -19,9 +19,11 @@ export async function middleware(request: NextRequest) {
   if (
     pathname.startsWith('/api/widget-chat') || 
     pathname.startsWith('/widget') || 
-    pathname === '/widget.js' || 
-    pathname.includes('widget-test.html') ||
-    pathname.includes('test.html')
+    pathname === '/widget.js' ||
+    pathname === '/debug.js' ||
+    pathname.includes('.html') ||
+    // Additional check for direct file access
+    pathname.includes('/chat-widget.js')
   ) {
     console.log('Bypassing auth middleware for Widget features:', pathname);
     return;
@@ -32,16 +34,9 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except for the ones starting with:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - public assets (icons, images, etc.)
-     * - api routes that don't require auth
-     * - auth routes
-     */
-    '/((?!_next/static|_next/image|favicon.ico|auth/|public/|api/public|widget-test\\.html|test\\.html|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    // Match all paths except specific static assets
+    '/((?!_next/static|_next/image|favicon.ico).*)',
+    
     // Explicitly include API routes that need auth
     '/api/chat/:path*',
     '/api/history/:path*',

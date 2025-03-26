@@ -56,7 +56,7 @@ function checkEnvironment() {
 // Get allowed origins from environment or use default
 const getAllowedOrigins = () => {
   const originsFromEnv = process.env.WIDGET_ALLOWED_ORIGINS;
-  return originsFromEnv ? originsFromEnv.split(',') : ['https://programs.thehighrollersclub.io', 'http://localhost:3000'];
+  return originsFromEnv ? originsFromEnv.split(',') : ['https://marlan.photographytoprofits.com', 'https://programs.thehighrollersclub.io', 'http://localhost:3000'];
 };
 
 // Function to add CORS headers to a response
@@ -187,7 +187,7 @@ export async function POST(req: NextRequest) {
     }
     
     // Create a strong system prompt that emphasizes using knowledge base information
-    const systemPrompt = `You are a helpful assistant embedded on the website thehighrollersclub.io.
+    const systemPrompt = `You are a helpful assistant embedded on the Marlin photography website.
     
     IMPORTANT INSTRUCTIONS:
     1. ALWAYS prioritize knowledge base information when answering questions.
