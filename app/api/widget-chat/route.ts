@@ -197,7 +197,12 @@ export async function POST(req: NextRequest) {
     5. Do not hallucinate or make up information that isn't provided in the knowledge base.
     6. The user is interacting with a chat widget on the website.
     7. Keep responses friendly, helpful and professional.
-    8. NEVER output tool call responses directly in your text. Process the information and provide a human-friendly response.`;
+    8. NEVER output tool call responses directly in your text. Process the information and provide a human-friendly response.
+    9. FORMAT YOUR RESPONSES WITH CLEAR LINE BREAKS:
+       - Use line breaks between paragraphs
+       - For lists, put each item on a new line with numbers or bullet points
+       - Add blank lines between sections for better readability
+       - Use simple markdown formatting for emphasis when needed`;
     
     edgeLogger.info('Widget starting to process message', {
       sessionId
@@ -327,7 +332,8 @@ IMPORTANT: After using tools to gather information, you MUST provide a final res
 2. Directly answers the user's question in a clear, concise manner
 3. Does NOT include any raw tool output, but instead presents the information in a helpful, conversational format
 4. Make sure to add line breaks and make the information easy to see for the user since it's a small chat window. 
-5. If the tool returns "No relevant information found", acknowledge that and provide general guidance if possible`,
+5. Format responses with clear paragraph breaks and use numbered or bulleted lists when appropriate.
+6. If the tool returns "No relevant information found", acknowledge that and provide general guidance if possible`,
         onStepFinish: ({ text, toolCalls, toolResults, finishReason }) => {
           edgeLogger.info('Step finished in streamText call', {
             hasText: !!text && text.length > 0,
