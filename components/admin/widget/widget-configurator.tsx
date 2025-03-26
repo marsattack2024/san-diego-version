@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
@@ -10,11 +10,35 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ChatWidgetConfig, DEFAULT_CONFIG } from '@/components/chat-widget/types'
 import { EmbedSnippet } from '@/components/chat-widget/embed-snippet'
 import { useChatWidget } from '@/components/chat-widget'
+import { getSiteUrl, validateCriticalEnv } from '@/lib/widget/env-validator'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { AlertTriangle } from 'lucide-react'
 
 export function AdminWidgetConfigurator() {
   const { state, setConfig, toggleWidget } = useChatWidget()
   const [activeTab, setActiveTab] = useState('config')
   const [showEmbed, setShowEmbed] = useState(false)
+  const [envWarning, setEnvWarning] = useState<string | null>(null)
+  
+  // More robust URL resolution to prevent hydration issues
+  const [baseUrl, setBaseUrl] = useState(() => {
+    // Safe for SSR - don't access window during render
+    return process.env.NEXT_PUBLIC_SITE_URL || 'https://marlan.photographytoprofits.com'
+  })
+  
+  // Set base URL with fallback to window.location.origin if running in browser
+  useEffect(() => {
+    // Only set URL from window after component mounts
+    if (!process.env.NEXT_PUBLIC_SITE_URL && typeof window !== 'undefined') {
+      setBaseUrl(window.location.origin)
+    }
+    
+    // Validate environment variables
+    const envValidation = validateCriticalEnv();
+    if (!envValidation.isValid) {
+      setEnvWarning(envValidation.message);
+    }
+  }, [])
   
   // Handle input changes
   const handleChange = (key: keyof ChatWidgetConfig, value: any) => {
@@ -23,6 +47,19 @@ export function AdminWidgetConfigurator() {
   
   return (
     <div className="space-y-6">
+      {envWarning && (
+        <Alert variant="destructive" className="mb-4">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Environment Warning</AlertTitle>
+          <AlertDescription>
+            {envWarning}
+            <p className="text-xs mt-1">
+              The widget may not function correctly on production without these variables.
+            </p>
+          </AlertDescription>
+        </Alert>
+      )}
+
       <Tabs defaultValue="config" onValueChange={setActiveTab}>
         <TabsList className="mb-4">
           <TabsTrigger value="config">Configuration</TabsTrigger>
@@ -175,7 +212,7 @@ export function AdminWidgetConfigurator() {
                 <TabsContent value="standard">
                   <EmbedSnippet 
                     config={state.config} 
-                    apiUrl={process.env.NEXT_PUBLIC_SITE_URL || 'https://marlan.photographytoprofits.com'}
+                    apiUrl={baseUrl}
                   />
                 </TabsContent>
                 
@@ -200,15 +237,26 @@ export function AdminWidgetConfigurator() {
     primaryColor: '${state.config.primaryColor}',
     greeting: '${state.config.greeting}',
     placeholder: '${state.config.placeholder}',
-    apiEndpoint: '${process.env.NEXT_PUBLIC_SITE_URL || 'https://marlan.photographytoprofits.com'}/api/widget-chat'
+    apiEndpoint: '${baseUrl}/api/widget-chat'
   };
   
   var script = document.createElement('script');
-  script.src = "${process.env.NEXT_PUBLIC_SITE_URL || 'https://marlan.photographytoprofits.com'}/widget.js";
+  script.src = "${baseUrl}/widget.js";
   script.async = true;
   script.defer = true;
   script.onerror = function() {
     console.error("Failed to load Marlin Chat Widget");
+    
+    // Notify GTM about the error if dataLayer is available
+    if (window.dataLayer) {
+      window.dataLayer.push({
+        'event': 'marlinChatWidgetError',
+        'marlinChat': {
+          'error': true,
+          'timestamp': new Date().toISOString()
+        }
+      });
+    }
   };
   document.head.appendChild(script);
   
@@ -254,14 +302,17 @@ export function AdminWidgetConfigurator() {
     position: '${state.config.position}',
     title: '${state.config.title}',
     primaryColor: '${state.config.primaryColor}',
-    apiEndpoint: '${process.env.NEXT_PUBLIC_SITE_URL || 'https://marlan.photographytoprofits.com'}/api/widget-chat'
+    apiEndpoint: '${baseUrl}/api/widget-chat'
   };
   
   (function() {
     var script = document.createElement('script');
-    script.src = "${process.env.NEXT_PUBLIC_SITE_URL || 'https://marlan.photographytoprofits.com'}/widget.js";
+    script.src = "${baseUrl}/widget.js";
     script.async = true;
     script.defer = true;
+    script.onerror = function() {
+      console.error('Failed to load Marlin chat widget');
+    };
     document.body.appendChild(script);
   })();
 </script>`}

@@ -99,6 +99,16 @@
   "env": {
     "NODE_ENV": "production"
   },
+  "functions": {
+    "app/widget.js/route.ts": {
+      "memory": 1024,
+      "maxDuration": 10
+    },
+    "app/api/widget-chat/route.ts": {
+      "memory": 1024,
+      "maxDuration": 60
+    }
+  },
   "rewrites": [
     { "source": "/widget.js", "destination": "/widget/chat-widget.js" }
   ],

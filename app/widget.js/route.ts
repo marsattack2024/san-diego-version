@@ -4,7 +4,7 @@ import { NextRequest } from 'next/server'
 const getAllowedOrigins = () => {
   const originsFromEnv = process.env.WIDGET_ALLOWED_ORIGINS;
   return originsFromEnv 
-    ? originsFromEnv.split(',') 
+    ? originsFromEnv.split(',').map(origin => origin.trim())
     : ['https://marlan.photographytoprofits.com', 'https://programs.thehighrollersclub.io', 'http://localhost:3000', '*'];
 };
 
@@ -12,12 +12,14 @@ const getAllowedOrigins = () => {
 function addCorsHeaders(response: Response, req: NextRequest): Response {
   const origin = req.headers.get('origin') || '';
   const allowedOrigins = getAllowedOrigins();
-  const isAllowedOrigin = allowedOrigins.includes(origin) || allowedOrigins.includes('*');
+  
+  // If allowedOrigins includes '*' or the specific origin, allow it
+  const isAllowedOrigin = allowedOrigins.includes('*') || allowedOrigins.includes(origin);
   
   const corsHeaders = new Headers(response.headers);
   
   if (isAllowedOrigin) {
-    corsHeaders.set('Access-Control-Allow-Origin', origin);
+    corsHeaders.set('Access-Control-Allow-Origin', origin || '*');
   } else {
     corsHeaders.set('Access-Control-Allow-Origin', allowedOrigins[0]);
   }
@@ -33,49 +35,64 @@ function addCorsHeaders(response: Response, req: NextRequest): Response {
   });
 }
 
+// Get CORS headers as an object for use in error responses
+function getCorsHeaders(req: NextRequest): Record<string, string> {
+  const origin = req.headers.get('origin') || '';
+  const allowedOrigins = getAllowedOrigins();
+  const isAllowedOrigin = allowedOrigins.includes('*') || allowedOrigins.includes(origin);
+  
+  return {
+    'Access-Control-Allow-Origin': isAllowedOrigin ? (origin || '*') : allowedOrigins[0],
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Max-Age': '86400'
+  };
+}
+
 // Handle OPTIONS requests for CORS preflight
 export async function OPTIONS(req: NextRequest) {
-  const response = new Response(null, { status: 204 });
-  return addCorsHeaders(response, req);
+  const response = new Response(null, { 
+    status: 204,
+    headers: getCorsHeaders(req)
+  });
+  return response;
 }
+
+export const runtime = 'edge';
 
 // Serve the widget script file
 export async function GET(req: NextRequest) {
   try {
     // Log for debugging
-    console.log('Widget.js route handler: Serving widget script');
+    console.log('Widget.js route handler: Serving widget script via redirect');
     
-    // Read the actual file content from the filesystem
-    const fs = require('fs');
-    const path = require('path');
-    const filePath = path.join(process.cwd(), 'public/widget/chat-widget.js');
+    // Instead of reading from filesystem, redirect to the static file
+    // This works in edge runtime without requiring fs operations
+    const url = new URL('/widget/chat-widget.js', req.url);
     
-    // Check if file exists
-    if (!fs.existsSync(filePath)) {
-      console.error('Widget.js route: File not found at path:', filePath);
-      throw new Error('Widget script file not found');
-    }
-    
-    const fileContent = fs.readFileSync(filePath, 'utf-8');
-    
-    const response = new Response(fileContent, {
-      headers: {
-        'Content-Type': 'application/javascript; charset=utf-8',
-        'Cache-Control': 'public, max-age=3600', // Shorter cache time for debugging
-        'X-Content-Type-Options': 'nosniff',
-      },
-    });
+    // Create a redirect response with cache headers
+    const response = Response.redirect(url, 307);
+    response.headers.set('Cache-Control', 'public, max-age=3600'); // Cache for 1 hour
     
     // Add CORS headers and return
     return addCorsHeaders(response, req);
   } catch (error) {
-    console.error('Widget.js route: Error serving widget script:', error)
-    const errorResponse = new Response('console.error("Failed to load chat widget script");', {
-      status: 500,
-      headers: {
-        'Content-Type': 'application/javascript; charset=utf-8',
-      },
-    });
-    return addCorsHeaders(errorResponse, req);
+    // Enhanced error handling with detailed logging
+    console.error('Widget.js route: Error serving widget script:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    
+    // Return fallback script that logs the error but still with proper headers
+    const errorResponse = new Response(
+      `console.error("Failed to load chat widget script: ${errorMessage}");`, 
+      {
+        status: 500,
+        headers: {
+          'Content-Type': 'application/javascript; charset=utf-8',
+          ...getCorsHeaders(req)
+        },
+      }
+    );
+    
+    return errorResponse;
   }
 } 

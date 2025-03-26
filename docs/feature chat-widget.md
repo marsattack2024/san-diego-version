@@ -141,6 +141,260 @@ Following our migration, we recommend the following methods for embedding the wi
 
 All embedding methods are now generated dynamically from the admin dashboard interface with proper domain references and configuration options.
 
+## Cross-Domain Technical Architecture
+
+The Marlin chat widget implements a sophisticated cross-domain architecture that enables it to be hosted on `marlan.photographytoprofits.com` while functioning seamlessly when embedded on external domains like `programs.thehighrollersclub.io`. This section explains the technical components that make this possible.
+
+### 1. Script Loading & CORS Implementation
+
+The widget script loading across domains is enabled through several technical components:
+
+- **Route Handler Implementation** (`/app/widget.js/route.ts`):
+  ```typescript
+  export async function GET() {
+    try {
+      const filePath = path.join(process.cwd(), 'public', 'widget', 'chat-widget.js');
+      const fileContent = await fs.readFile(filePath, 'utf8');
+      
+      return new Response(fileContent, {
+        headers: {
+          'Content-Type': 'application/javascript; charset=utf-8',
+          'Cache-Control': 'public, max-age=3600',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, OPTIONS',
+          'Access-Control-Max-Age': '86400'
+        },
+      });
+    } catch (error) {
+      return new Response('Widget script not found', { status: 404 });
+    }
+  }
+  ```
+  - Directly serves the JavaScript file content rather than redirecting
+  - Sets appropriate MIME type and CORS headers to permit cross-origin execution
+  - This direct content serving avoids CORS preflight issues that can occur with redirects
+
+- **Vercel.json Header Configuration**:
+  ```json
+  {
+    "source": "/widget.js",
+    "headers": [
+      {
+        "key": "Content-Type",
+        "value": "application/javascript; charset=utf-8"
+      },
+      {
+        "key": "Cache-Control",
+        "value": "public, max-age=31536000, immutable"
+      },
+      {
+        "key": "Access-Control-Allow-Origin",
+        "value": "*"
+      },
+      {
+        "key": "Access-Control-Allow-Methods",
+        "value": "GET, OPTIONS"
+      },
+      {
+        "key": "Access-Control-Max-Age",
+        "value": "86400"
+      }
+    ]
+  }
+  ```
+  - These headers ensure browsers can load and execute the script from any domain
+  - Cache-Control headers optimize performance for repeat visitors
+
+### 2. Authentication Bypass & Security Model
+
+The middleware implements a security model that allows public access to widget resources while protecting admin functionality:
+
+- **Middleware Path Detection** (`middleware.ts`):
+  ```typescript
+  // Special bypass for widget-related paths to allow anonymous access
+  if (
+    pathname.startsWith('/api/widget-chat') || 
+    pathname.startsWith('/widget') || 
+    pathname === '/widget.js' ||
+    pathname === '/debug.js'
+  ) {
+    console.log('Bypassing auth middleware for Widget features:', pathname);
+    return;
+  }
+  
+  // Continue with normal authentication flow for other paths
+  return await updateSession(request);
+  ```
+  - This bypass allows unauthenticated access to widget resources from any domain
+  - Admin dashboard routes (`/admin/widget`) still require authentication
+  - The authentication bypass is critical for cross-domain functionality as external domains cannot access your authentication cookies
+
+- **Origin Validation in API Routes**:
+  ```typescript
+  // Extract the origin from the request headers
+  const requestOrigin = request.headers.get('origin') || '*';
+  
+  // Check if the origin is allowed based on environment configuration
+  const allowedOrigins = process.env.WIDGET_ALLOWED_ORIGINS?.split(',') || ['*'];
+  const allowedOrigin = allowedOrigins.includes(requestOrigin) || allowedOrigins.includes('*') 
+    ? requestOrigin 
+    : allowedOrigins[0];
+  ```
+  - Environment variable `WIDGET_ALLOWED_ORIGINS` can restrict access to specific domains
+  - Provides granular cross-origin access control when needed
+
+### 3. Session Management & Client-Side Storage
+
+The widget uses client-side storage to maintain session state across page loads on the embedding domain:
+
+- **Browser Storage Implementation** (`/lib/widget/session.ts`):
+  ```typescript
+  export function getSession(): ChatWidgetSession {
+    try {
+      const storedSession = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (storedSession) {
+        const session = JSON.parse(storedSession) as ChatWidgetSession;
+        
+        // Check if the session is still valid (not expired)
+        if (session && session.lastActive) {
+          const lastActive = new Date(session.lastActive).getTime();
+          const now = new Date().getTime();
+          
+          // Session is valid if less than 24 hours old
+          if (now - lastActive < SESSION_EXPIRY_MS) {
+            return session;
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error retrieving session:', e);
+    }
+    
+    // Create a new session if none exists or it's expired
+    return createSession();
+  }
+  ```
+  - Uses `localStorage` for persistent session storage with 24-hour expiry
+  - Unique session ID generation via `crypto.randomUUID()`
+  - Since localStorage is domain-specific, each domain using the widget maintains its own separate sessions
+  - The session ID is sent to the API to maintain conversation context
+  
+- **Cross-Domain Session Synchronization**:
+  - Session IDs are included in requests to the API (`/api/widget-chat`) 
+  - API responses include the session ID in headers for synchronization
+  - This approach maintains conversation context while respecting browser's same-origin policy for storage
+
+### 4. API Communication Architecture
+
+The widget API endpoint (`/api/widget-chat/route.ts`) supports cross-domain requests:
+
+- **Edge Runtime Configuration**:
+  ```typescript
+  export const runtime = 'edge';
+  ```
+  - Edge functions provide lower latency for global distribution
+  - Edge runtime simplifies CORS implementation
+
+- **CORS Response Headers**:
+  ```typescript
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': allowedOrigin,
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'x-rate-limit-limit': rateLimit.toString(),
+      'x-rate-limit-remaining': remaining.toString(),
+      'x-rate-limit-reset': reset.toString(),
+      'x-session-id': sessionId
+    },
+  });
+  ```
+  - These headers allow the embedding domain to make API requests to the widget backend
+  - Custom headers (`x-session-id`, etc.) carry session and rate limit information
+
+- **OPTIONS Method Handling**:
+  ```typescript
+  if (request.method === 'OPTIONS') {
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'Access-Control-Allow-Origin': allowedOrigin,
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Max-Age': '86400'
+      }
+    });
+  }
+  ```
+  - Proper handling of CORS preflight requests is essential for cross-domain functionality
+  - Browsers send OPTIONS requests before actual POST requests in cross-origin scenarios
+
+### 5. Self-Contained Widget Implementation
+
+The widget script (`/lib/widget/widget-script.js`) is designed to run independently:
+
+- **No External Dependencies**:
+  ```javascript
+  (function() {
+    // All functionality contained within this IIFE
+    // No external libraries or dependencies
+    
+    // Configuration from host page
+    const config = window.marlinChatConfig || {};
+    
+    // DOM creation, event handling, API communication all contained here
+  })();
+  ```
+  - All DOM manipulation, styling, event handling, and API communication contained in a single file
+  - Uses IIFE (Immediately Invoked Function Expression) to avoid global scope pollution
+  - Configuration via `window.marlinChatConfig` on the host page
+
+- **Dynamic DOM Injection**:
+  ```javascript
+  function createWidgetElements() {
+    // Create all DOM elements needed for the widget
+    const widgetContainer = document.createElement('div');
+    widgetContainer.className = 'marlin-chat-widget';
+    // ...additional element creation
+    
+    // Append to document body
+    document.body.appendChild(widgetContainer);
+  }
+  ```
+  - Creates and injects all HTML/CSS at runtime
+  - No need for modifying the host page's HTML structure
+  - This approach works across any domain regardless of the host page's structure
+
+- **Cross-Domain API Communication**:
+  ```javascript
+  async function sendMessage(message) {
+    try {
+      const response = await fetch(config.apiEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          message: message,
+          sessionId: currentSession.id
+        })
+      });
+      
+      // Process streaming response...
+    } catch (error) {
+      // Error handling...
+    }
+  }
+  ```
+  - Uses standard `fetch` API with proper content type
+  - Sends session ID with each request for conversation tracking
+  - This approach works across domains because the API endpoint has CORS headers
+
+This architecture ensures the widget works seamlessly across domains while maintaining security, session persistence, and a consistent user experience.
+
 ## Current Structure and Updates
 
 ### Migration to Admin Dashboard
@@ -492,3 +746,110 @@ When making changes to the widget system:
 3. Ensure proper CORS configuration for all routes
 4. Update any references to domains if they change
 5. After deployment, verify script loading from `/widget.js` route handler
+
+## Vercel Deployment Compatibility
+
+Recent updates have been made to ensure the chat widget functions correctly when deployed to Vercel:
+
+### 1. Edge Runtime Implementation
+
+The widget.js route handler has been updated to use Edge Runtime, eliminating Node.js filesystem operations that aren't compatible with Vercel's serverless environment:
+
+```typescript
+// Old implementation - NOT Vercel compatible
+export async function GET(req: NextRequest) {
+  try {
+    const fs = require('fs');
+    const path = require('path');
+    const filePath = path.join(process.cwd(), 'public/widget/chat-widget.js');
+    const fileContent = fs.readFileSync(filePath, 'utf-8');
+    // Rest of implementation...
+  }
+}
+
+// New implementation - Vercel compatible with Edge Runtime
+export const runtime = 'edge';
+
+export async function GET(req: NextRequest) {
+  try {
+    // Instead of filesystem operations, use a redirect
+    const url = new URL('/widget/chat-widget.js', req.url);
+    const response = Response.redirect(url, 307);
+    return addCorsHeaders(response, req);
+  }
+}
+```
+
+### 2. Environment Variables Configuration
+
+A `.env.production` template has been created with all required environment variables for Vercel deployment:
+
+```
+# Critical for widget domain references
+NEXT_PUBLIC_SITE_URL=https://your-vercel-url.vercel.app
+
+# Required for authentication and RAG functionality
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+OPENAI_API_KEY=
+
+# Widget configuration
+WIDGET_ALLOWED_ORIGINS=https://programs.thehighrollersclub.io,https://example.com,*
+```
+
+All of these variables must be configured in your Vercel project settings for the widget to function correctly.
+
+### 3. Dynamic URL Resolution
+
+Widget components have been updated with a multi-tier URL resolution strategy:
+
+```typescript
+// In component files
+const [baseUrl, setBaseUrl] = useState(process.env.NEXT_PUBLIC_SITE_URL || 'https://marlan.photographytoprofits.com');
+
+// Set base URL with fallback to window.location.origin if running in browser
+useEffect(() => {
+  if (typeof window !== 'undefined' && !process.env.NEXT_PUBLIC_SITE_URL) {
+    setBaseUrl(window.location.origin);
+  }
+}, []);
+```
+
+This ensures the widget properly references the correct domain even if environment variables are not set.
+
+### 4. Vercel Function Configuration
+
+The `vercel.json` file has been updated with explicit function configuration:
+
+```json
+"functions": {
+  "app/widget.js/route.ts": {
+    "memory": 1024,
+    "maxDuration": 10
+  },
+  "app/api/widget-chat/route.ts": {
+    "memory": 1024,
+    "maxDuration": 60
+  }
+}
+```
+
+These settings ensure adequate memory and execution time for the widget's functionality.
+
+### 5. Troubleshooting Vercel Deployments
+
+Common Vercel deployment issues:
+
+1. **Missing Admin Widget**:
+   - Verify all environment variables are correctly set
+   - Check the build output for widget script generation
+
+2. **404 Errors for Widget Script**:
+   - Confirm the redirect in widget.js route handler is working
+   - Ensure the build command includes `npm run build:widget`
+   
+3. **Incorrect Domain References**:
+   - Make sure `NEXT_PUBLIC_SITE_URL` is set to your actual Vercel domain
+   - Check embed codes for correct domain references
+
+For more detailed information about Vercel deployment, see `lib/widget/README.md`.

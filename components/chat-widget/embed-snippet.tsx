@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { ChatWidgetConfig, DEFAULT_CONFIG } from './types'
@@ -12,9 +12,20 @@ interface EmbedSnippetProps {
 
 export function EmbedSnippet({ 
   config = {}, 
-  apiUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://your-site.com'
+  apiUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://marlan.photographytoprofits.com'
 }: EmbedSnippetProps) {
   const [copied, setCopied] = useState(false)
+  const [baseUrl, setBaseUrl] = useState(apiUrl)
+  
+  // Set base URL with fallback to window.location.origin if running in browser
+  useEffect(() => {
+    if (typeof window !== 'undefined' && !baseUrl) {
+      setBaseUrl(window.location.origin);
+    }
+  }, [baseUrl]);
+  
+  // Use the determined URL or fallback
+  const finalUrl = baseUrl || 'https://marlan.photographytoprofits.com';
   
   // Merge with default config
   const widgetConfig = { ...DEFAULT_CONFIG, ...config }
@@ -28,7 +39,7 @@ export function EmbedSnippet({
   w[o] = w[o] || function() { (w[o].q = w[o].q || []).push(arguments) };
   js = d.createElement(s), fjs = d.getElementsByTagName(s)[0];
   js.id = o; js.src = f; js.async = 1; fjs.parentNode.insertBefore(js, fjs);
-}(window, document, 'script', 'chatWidget', '${apiUrl}/widget.js'));
+}(window, document, 'script', 'chatWidget', '${finalUrl}/widget.js'));
 
 // Configure widget
 chatWidget('config', ${JSON.stringify(widgetConfig, null, 2)});
