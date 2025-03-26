@@ -6,10 +6,16 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   console.log('[Middleware] Processing request for:', pathname);
 
+  // CRITICAL: Explicitly check for admin/widget path first to ensure proper authentication
+  if (pathname === '/admin/widget') {
+    console.log('[Middleware] Admin widget page accessed, passing through normal auth flow');
+    return await updateSession(request);
+  }
+
   // Special bypass for widget-related paths to allow anonymous access
   if (
     pathname.startsWith('/api/widget-chat') || 
-    pathname.startsWith('/widget') || 
+    pathname.startsWith('/widget/') || // Added trailing slash to prevent matching '/admin/widget'
     pathname === '/widget.js' ||
     pathname === '/debug.js'
   ) {
@@ -17,15 +23,15 @@ export async function middleware(request: NextRequest) {
     return;
   }
 
-  // Explicitly log access to admin widget page path
-  if (pathname === '/admin/widget') {
-    console.log('[Middleware] Processing admin widget page request, continuing with auth check');
+  // Log authentication results for admin pages
+  if (pathname.startsWith('/admin')) {
+    console.log(`[Middleware] Processing admin page ${pathname} with normal auth flow`);
   }
 
   // The session cookie is updated/refreshed in the response
   const response = await updateSession(request);
   
-  // Log authentication results for admin pages
+  // Log authentication results for debugging
   if (pathname.startsWith('/admin')) {
     console.log(`[Middleware] Admin page ${pathname} auth processed with status:`, response?.status || 'No response');
   }
