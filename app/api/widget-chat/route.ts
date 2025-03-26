@@ -112,6 +112,15 @@ export async function POST(req: NextRequest) {
     // Save request body for later use
     const body = await req.json();
     
+    // Add detailed debugging logs
+    edgeLogger.info('Widget chat request body received', { 
+      body: JSON.stringify(body),
+      hasMessage: !!body.message,
+      messageType: typeof body.message,
+      hasSessionId: !!body.sessionId,
+      sessionIdType: typeof body.sessionId
+    });
+    
     // Apply rate limiting
     const rateLimitResponse = await rateLimitMiddleware(
       new NextRequest(req.url, {
@@ -128,6 +137,12 @@ export async function POST(req: NextRequest) {
     
     // Validate the request
     if (!message || typeof message !== 'string') {
+      edgeLogger.error('Invalid message in request', {
+        message: message,
+        messageType: typeof message,
+        body: JSON.stringify(body)
+      });
+      
       return addCorsHeaders(
         new Response(
           JSON.stringify({ error: 'Invalid message' }),

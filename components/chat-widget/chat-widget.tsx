@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react'
-import { useChat } from 'ai/react'
 import { Message } from 'ai'
 import { X, Send, MessageSquare } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -30,52 +29,25 @@ export function ChatWidget({ config = {} }: ChatWidgetProps) {
   // Widget state
   const [isOpen, setIsOpen] = useState(false)
   const [session, setSession] = useState<ChatWidgetSession | null>(null)
+  const [messages, setMessages] = useState<Message[]>([])
+  const [input, setInput] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<Error | null>(null)
+  
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
-  
-  // AI chat hook
-  const { messages, input, handleInputChange, handleSubmit, isLoading, error } = useChat({
-    api: '/api/widget-chat',
-    id: session?.id,
-    body: ({ messages }: { messages: Message[] }) => {
-      // Get the last user message if any
-      const lastMessage = messages[messages.length - 1]?.content || input
-      return {
-        message: lastMessage,
-        sessionId: session?.id
-      }
-    },
-    onResponse: (response) => {
-      // Extract any headers we need
-      const sessionId = response.headers.get('x-session-id')
-      if (sessionId && session) {
-        setSession({
-          ...session,
-          id: sessionId
-        })
-      }
-    },
-    onFinish: (message) => {
-      if (session) {
-        const updatedSession = addMessageToSession(session, message)
-        setSession(updatedSession)
-      }
-    }
-  })
   
   // Initialize session on mount
   useEffect(() => {
     const currentSession = getSession()
     setSession(currentSession)
-  }, [])
-
-  // Update messages from session on mount
-  useEffect(() => {
-    if (session && session.messages.length > 0) {
-      // The useChat hook will handle the messages
+    
+    // Load messages from session
+    if (currentSession?.messages?.length) {
+      setMessages(currentSession.messages)
     }
-  }, [session])
-
+  }, [])
+  
   // Auto scroll to bottom on new messages
   useEffect(() => {
     if (scrollRef.current && isOpen) {
@@ -91,23 +63,146 @@ export function ChatWidget({ config = {} }: ChatWidgetProps) {
       }, 100)
     }
   }, [isOpen])
-
-  // Handle form submission
-  const onSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
+  
+  // Handle input change
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value)
+  }
+  
+  // Send message to API
+  const sendMessage = async (content: string) => {
+    if (!content.trim() || !session) return
     
-    if (!input.trim() || !session) return
-    
+    // Create new user message
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
-      content: input
+      content
     }
     
+    // Update UI immediately
+    setMessages(prev => [...prev, userMessage])
+    setInput('')
+    setIsLoading(true)
+    setError(null)
+    
+    // Update session with user message
     const updatedSession = addMessageToSession(session, userMessage)
     setSession(updatedSession)
     
-    handleSubmit(e)
+    // Log what we're sending (for debugging)
+    console.log('Sending message to API:', {
+      message: content,
+      sessionId: session.id
+    })
+    
+    try {
+      // Direct fetch to API with the format it expects
+      const response = await fetch('/api/widget-chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          message: content,
+          sessionId: session.id
+        })
+      })
+      
+      // Handle non-200 responses
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || `Error ${response.status}: ${response.statusText}`)
+      }
+      
+      // Extract any headers we need
+      const sessionId = response.headers.get('x-session-id')
+      if (sessionId && session) {
+        setSession({
+          ...session,
+          id: sessionId
+        })
+      }
+      
+      // Process the streaming response
+      const reader = response.body?.getReader()
+      const decoder = new TextDecoder()
+      
+      if (!reader) {
+        throw new Error('Failed to get response reader')
+      }
+      
+      let responseText = ''
+      
+      // Create assistant message placeholder
+      const assistantMessage: Message = {
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: ''
+      }
+      
+      // Add initial assistant message
+      setMessages(prev => [...prev, assistantMessage])
+      
+      // Read the stream
+      while (true) {
+        const { done, value } = await reader.read()
+        
+        if (done) {
+          break
+        }
+        
+        // Decode and append the chunk
+        const chunk = decoder.decode(value, { stream: true })
+        
+        if (chunk) {
+          responseText += chunk
+          
+          // Update assistant message with new content
+          setMessages(prev => 
+            prev.map(msg => 
+              msg.id === assistantMessage.id 
+                ? { ...msg, content: responseText } 
+                : msg
+            )
+          )
+        }
+      }
+      
+      // Complete the response with final decode
+      const finalChunk = decoder.decode()
+      if (finalChunk) {
+        responseText += finalChunk
+      }
+      
+      // Final update to the message
+      const finalAssistantMessage: Message = {
+        ...assistantMessage,
+        content: responseText
+      }
+      
+      setMessages(prev => 
+        prev.map(msg => 
+          msg.id === assistantMessage.id ? finalAssistantMessage : msg
+        )
+      )
+      
+      // Update session with assistant message
+      const sessionWithResponse = addMessageToSession(updatedSession, finalAssistantMessage)
+      setSession(sessionWithResponse)
+      
+    } catch (err) {
+      console.error('Error sending message:', err)
+      setError(err instanceof Error ? err : new Error('Unknown error occurred'))
+    } finally {
+      setIsLoading(false)
+    }
+  }
+  
+  // Handle form submission
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    sendMessage(input)
   }
 
   // Reset the chat
@@ -115,6 +210,7 @@ export function ChatWidget({ config = {} }: ChatWidgetProps) {
     clearSession()
     const newSession = getSession()
     setSession(newSession)
+    setMessages([])
   }
 
   // Toggle the widget open/closed
@@ -228,7 +324,7 @@ export function ChatWidget({ config = {} }: ChatWidgetProps) {
           </ScrollArea>
 
           {/* Input area */}
-          <form onSubmit={onSubmit} className="p-4 border-t">
+          <form onSubmit={handleSubmit} className="p-4 border-t">
             <div className="flex gap-2">
               <Textarea
                 ref={inputRef}
