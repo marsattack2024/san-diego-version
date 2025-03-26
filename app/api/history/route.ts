@@ -7,11 +7,6 @@ const historyCache = new Map<string, { data: any, timestamp: number }>();
 const CACHE_TTL = 30 * 1000; // 30 seconds in milliseconds
 const MAX_CACHE_ITEMS = 1000;
 
-function formatError(error: unknown): Error {
-  if (error instanceof Error) return error;
-  return new Error(typeof error === 'string' ? error : JSON.stringify(error));
-}
-
 function getCachedHistory(userId: string) {
   const cacheKey = `history:${userId}`;
   const cachedItem = historyCache.get(cacheKey);

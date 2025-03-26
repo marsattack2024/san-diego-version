@@ -118,7 +118,7 @@ export const urlScrapingMiddleware: LanguageModelV1Middleware = {
       // Try to extract content from either messages or prompt
       let userMessage = '';
       let systemPrompt = '';
-      let enhancedParams = params;
+      const enhancedParams = params;
       let systemMessageIndex = -1;
       let detectedUrls: string[] = [];
       

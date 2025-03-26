@@ -178,7 +178,6 @@ export async function DELETE(
     
     // First, verify if ON DELETE CASCADE is working properly by checking if any tables 
     // don't have the proper constraints
-    const tablesWithoutCascade = [];
     
     // Check sd_user_roles (should cascade from auth.users)
     const { data: userRoles } = await supabase

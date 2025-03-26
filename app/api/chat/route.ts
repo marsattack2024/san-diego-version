@@ -58,6 +58,32 @@ function checkEnvironment() {
 // Define a timeout type to use instead of NodeJS.Timeout
 type TimeoutId = ReturnType<typeof setTimeout>;
 
+// Define the formatScrapedContent function at module level instead of nested
+function formatScrapedContent(content: any): string {
+  if (!content) return 'No content was extracted from the URL.';
+  
+  // Format content into a structured string  
+  let formatted = '';
+  
+  if (content.title) {
+    formatted += `TITLE: ${content.title}\n\n`;
+  }
+  
+  if (content.description) {
+    formatted += `DESCRIPTION: ${content.description}\n\n`;
+  }
+  
+  if (content.mainContent) {
+    formatted += `CONTENT:\n${content.mainContent}\n\n`;
+  }
+  
+  if (content.url) {
+    formatted += `SOURCE: ${content.url}\n`;
+  }
+  
+  return formatted;
+}
+
 export async function POST(req: Request) {
   try {
     const startTime = Date.now(); // Add timestamp for performance tracking
@@ -177,7 +203,7 @@ export async function POST(req: Request) {
       });
       
       // Use the final (potentially routed) agent ID for building the system prompt
-      let systemPrompt = agentRouter.getSystemPrompt(routedAgentId as AgentType, deepSearchEnabled);
+      const systemPrompt = agentRouter.getSystemPrompt(routedAgentId as AgentType, deepSearchEnabled);
       
       // Process resources in the correct priority order (as specified in requirements)
       // Order of importance: 1. System Message 2. RAG 3. Web Scraper 4. Deep Search
@@ -833,25 +859,6 @@ export async function POST(req: Request) {
           // Import the necessary tools for URL scraping
           const { callPuppeteerScraper, validateAndSanitizeUrl } = await import('@/lib/agents/tools/web-scraper-tool');
           const { ensureProtocol } = await import('@/lib/chat/url-utils');
-          
-          // Function to format scraped content in a structured way
-          function formatScrapedContent(content: any): string {
-            const { title, description, content: mainContent, url } = content;
-            
-            return `
-# SCRAPED CONTENT FROM URL: ${url}
-
-## Title: ${title || 'Untitled Page'}
-
-${description ? `## Description:\n${description}\n` : ''}
-
-## Main Content:
-${mainContent}
-
----
-SOURCE: ${url}
-`.trim();
-          }
           
           try {
             // Process the first URL (limit to avoid overwhelming the response)

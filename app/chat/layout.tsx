@@ -1,7 +1,8 @@
+import React from 'react';
 import { AppSidebar } from '@/components/app-sidebar';
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { createClient } from '@/utils/supabase/server';
-import { cookies , headers } from 'next/headers';
+import { cookies } from 'next/headers';
 
 export default async function ChatLayout({
   children,
@@ -14,7 +15,6 @@ export default async function ChatLayout({
     // Get a list of cookies for debugging
     const cookieStore = await cookies();
     const cookieList = cookieStore.getAll();
-    const headersList = headers();
     console.log("Auth Cookies:", cookieList.map(c => c.name)); // Debug log, only log names
     
     // Create Supabase server client with cookies

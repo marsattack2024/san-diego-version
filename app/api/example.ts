@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { withLogging } from '@/lib/logger/api-logger';
+import { withLogging } from '@/lib/logger/api-logger.ts';
 import { logger } from '@/lib/logger';
 
 /**

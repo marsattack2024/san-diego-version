@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createClient } from '@/utils/supabase/server';
-import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
-import { cookies, headers } from 'next/headers';
-import { PostgrestResponse, PostgrestError, PostgrestSingleResponse, User } from '@supabase/supabase-js';
-import { authCache } from '@/utils/auth/auth-cache';
+import { PostgrestResponse, PostgrestSingleResponse } from '@supabase/supabase-js';
 
 // Add after any runtime configuration, or at the top of the file
 export const dynamic = 'force-dynamic';
@@ -51,7 +48,7 @@ async function getAuthenticatedUser(request?: NextRequest) {
 
 // API route to fetch chat messages and handle chat-specific operations
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   // Next.js App Router requires params to be awaited before access to prevent hydration issues
@@ -65,7 +62,7 @@ export async function GET(
     edgeLogger.debug('GET chat by ID request', { chatId: id });
     
     // Get authenticated user using the optimized utility
-    const { user, serverClient, errorResponse } = await getAuthenticatedUser(request);
+    const { user, serverClient, errorResponse } = await getAuthenticatedUser(_request);
     
     // Return error response if authentication failed
     if (errorResponse) {
@@ -167,7 +164,7 @@ export async function GET(
 
 // Update chat details (title, etc.)
 export async function PATCH(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   // Next.js App Router requires params to be awaited before access to prevent hydration issues
@@ -175,7 +172,7 @@ export async function PATCH(
   
   try {
     // Get the request body
-    const body = await request.json();
+    const body = await _request.json();
     const { title } = body;
     
     // Log the title update request
@@ -193,7 +190,7 @@ export async function PATCH(
     }
     
     // Get authenticated user using the optimized utility
-    const { user, serverClient, errorResponse } = await getAuthenticatedUser(request);
+    const { user, serverClient, errorResponse } = await getAuthenticatedUser(_request);
     
     // Return error response if authentication failed
     if (errorResponse) {
@@ -303,7 +300,7 @@ export async function PATCH(
 
 // Save assistant message (called from frontend after streaming completes)
 export async function POST(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: { id: string } }
 ) {
   // Next.js App Router requires params to be awaited before access to prevent hydration issues
@@ -311,7 +308,7 @@ export async function POST(
   
   try {
     // Get the message from the request body
-    const body = await request.json();
+    const body = await _request.json();
     const { message, messageId, updateTimestamp = true } = body;
     
     // Validate the message format
@@ -324,7 +321,7 @@ export async function POST(
     }
     
     // Get authenticated user
-    const { user, serverClient, errorResponse } = await getAuthenticatedUser(request);
+    const { user, serverClient, errorResponse } = await getAuthenticatedUser(_request);
     
     // Return error response if authentication failed
     if (errorResponse) {

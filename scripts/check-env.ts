@@ -1,14 +1,14 @@
 import { config } from 'dotenv';
 import path from 'path';
 
+// Only import logger after environment variables are loaded
+import { logger } from '../lib/logger';
+
 // Load environment variables from .env file FIRST
 config({
   path: path.resolve(process.cwd(), '.env'),
   override: true // Ensure environment variables are overridden
 });
-
-// Only import logger after environment variables are loaded
-import { logger } from '../lib/logger';
 
 const REQUIRED_ENV_VARS = {
   OPENAI_API_KEY: 'Required for generating embeddings',

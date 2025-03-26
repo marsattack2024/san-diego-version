@@ -170,7 +170,7 @@ export async function apiMiddleware(request: NextRequest) {
 /**
  * Helper function to create a middleware that combines our apiMiddleware with additional checks
  */
-export function createApiMiddleware(additionalMiddleware?: (_req: NextRequest) => Promise<NextResponse | null>) {
+export function createApiMiddleware(additionalMiddleware?: (req: NextRequest) => Promise<NextResponse | null>) {
   return async function(request: NextRequest) {
     // First apply our standard API middleware
     const response = await apiMiddleware(request);

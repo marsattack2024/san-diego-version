@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { authCache } from '@/utils/auth/auth-cache';
 import { createClient } from '@/utils/supabase/server';
-import { cookies } from 'next/headers';
 import type { User } from '@supabase/supabase-js';
 
 // Allow dynamic behavior
@@ -215,12 +214,12 @@ async function getAuthenticatedUser(request?: NextRequest) {
   }
 }
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   const requestId = `sess-${Math.random().toString(36).substring(2, 10)}`;
   
   try {
     // Get authenticated user
-    const { user, serverClient, errorResponse } = await getAuthenticatedUser(request);
+    const { user, serverClient, errorResponse } = await getAuthenticatedUser(_request);
     
     // Return error response if authentication failed
     if (errorResponse) {
@@ -233,7 +232,7 @@ export async function GET(request: NextRequest) {
     }
     
     // Get query parameters
-    const { searchParams } = new URL(request.url);
+    const { searchParams } = new URL(_request.url);
     const chatId = searchParams.get('id');
     
     // Return 400 if no chat ID provided

@@ -1,5 +1,8 @@
 // Enhanced URL detection regex pattern - more comprehensive to catch various URL formats
 // This pattern is more precise to avoid false positives like 'e.g.' or 'i.e.'
+// Import logger
+import { edgeLogger } from '@/lib/logger/edge-logger';
+
 const URL_REGEX = /(?:https?:\/\/(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*))|(?:www\.[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*))/gi;
 
 // Common abbreviations and terms that might be falsely detected as URLs
@@ -7,9 +10,6 @@ const COMMON_FALSE_POSITIVES = [
   'e.g.', 'i.e.', 'etc.', 'vs.', 'a.m.', 'p.m.', 
   'fig.', 'ca.', 'et al.', 'n.b.', 'p.s.'
 ];
-
-// Import logger
-import { edgeLogger } from '@/lib/logger/edge-logger';
 
 // Test if a string looks like a domain name (without protocol)
 export function isDomainLike(text: string): boolean {

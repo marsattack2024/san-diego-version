@@ -2,6 +2,9 @@ import { config } from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 
+// Now import the logger after environment variables are set
+import { edgeLogger } from '../../lib/logger/edge-logger';
+
 // Get the directory name of the current module
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -46,9 +49,6 @@ if (missingEnvVars.length > 0) {
     }
   }
 }
-
-// Now import the logger after environment variables are set
-import { edgeLogger } from '../../lib/logger/edge-logger';
 const logger = edgeLogger;
 
 /**

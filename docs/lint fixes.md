@@ -32,7 +32,7 @@ This document tracks lint errors in the San Diego project and our progress fixin
    ```
    Fixed by renaming parameter to `_request`
 
-2. ❌ `/app/api/chat/[id]/route.ts` - Multiple unused imports/variables
+2. ✅ `/app/api/chat/[id]/route.ts` - Multiple unused imports/variables
    ```
    4:32  error  'createSupabaseServerClient' is defined but never used  no-unused-vars
    5:10  error  'cookies' is defined but never used
@@ -44,6 +44,7 @@ This document tracks lint errors in the San Diego project and our progress fixin
    61:9   error  'startTime' is assigned a value but never used
    713:21  error  'insertData' is assigned a value but never used
    ```
+   Fixed by removing unused imports and renaming request parameters to `_request`
 
 3. ✅ `/app/api/chat/route.ts` - Serious code issues
    ```
@@ -57,6 +58,7 @@ This document tracks lint errors in the San Diego project and our progress fixin
    - Moving async functions outside of Promise constructors to fix the Promise executor issue
    - Moving the nested function declarations to the appropriate scope
    - Cleaning up duplicate imports
+   - Changing `let` to `const` for systemPrompt
 
 4. ✅ `/app/api/events/route.ts` - Undefined variable
    ```
@@ -83,32 +85,26 @@ This document tracks lint errors in the San Diego project and our progress fixin
    16:7  error  'ERROR_TIMEOUT' is assigned a value but never used
    18:10  error  'formatError' is defined but never used
    ```
-   Fixed by removing unused imports and circuit breaker pattern variables that weren't being used
+   Fixed by removing unused imports, circuit breaker variables, and formatError function
 
-2. ❌ `/app/api/debug/histories/route.ts` - Import order and unused variables
+2. ✅ `/app/api/chat/session/route.ts` - Unused variables
    ```
-   5:37  error  'request' is defined but never used
-   28:1  error  Import in body of module; reorder to top
-   28:10  error  'cookies' is defined but never used
-   103:36  error  'sessionsError' is assigned a value but never used
+   5:10  error  'cookies' is defined but never used
+   6:15  error  'User' is defined but never used
+   179:37  error  'request' is defined but never used
    ```
+   Fixed by removing unused imports and renaming request parameter to `_request`
 
-3. ✅ `/app/(auth)/layout.tsx` - React undefined and unused import
+3. ✅ `/app/chat/layout.tsx` - React undefined and unused variable
    ```
-   1:10  error  'AuthButton' is defined but never used
    9:13  error  'React' is not defined
+   17:11  error  'headersList' is assigned a value but never used
    ```
-   Fixed by removing the unused AuthButton import and adding React import
+   Fixed by adding React import and removing unused headersList variable
 
-4. ✅ `/app/admin/layout.tsx` - React undefined
+4. ✅ `/app/layout.tsx` - React undefined
    ```
-   12:63  error  'React' is not defined  no-undef
-   ```
-   Fixed by adding React import
-
-5. ✅ `/app/api/auth/layout.tsx` - React undefined
-   ```
-   4:13  error  'React' is not defined  no-undef
+   44:13  error  'React' is not defined  no-undef
    ```
    Fixed by adding React import
 
@@ -166,64 +162,91 @@ This document tracks lint errors in the San Diego project and our progress fixin
    11:27  error  'request' is defined but never used
    ```
 
-10. ❌ `/app/api/example.ts` - Missing extension
+10. ❌ `/app/api/debug/histories/route.ts` - Import order and unused variables
+    ```
+    5:37  error  'request' is defined but never used
+    28:1  error  Import in body of module; reorder to top
+    28:10  error  'cookies' is defined but never used
+    103:36  error  'sessionsError' is assigned a value but never used
+    ```
+
+11. ❌ `/app/api/example.ts` - Missing extension
     ```
     2:29  error  Missing file extension for "@/lib/logger/api-logger"
     ```
 
-11. ❌ `/app/api/profile/notification/route.ts` - Unused variable
+12. ❌ `/app/api/profile/notification/route.ts` - Unused variable
     ```
     39:11  error  'supabase' is assigned a value but never used
     ```
 
+13. ❌ `/app/api/vote/route.ts` - Unused variable
+    ```
+    1:10  error  'NextRequest' is defined but never used
+    ```
+
+14. ❌ `/app/chat/[id]/chat-client.tsx` - Unused variable
+    ```
+    15:50  error  'createConversation' is assigned a value but never used
+    ```
+
+15. ❌ `/app/chat/[id]/page.tsx` - Unused imports
+    ```
+    3:10  error  'Chat' is defined but never used
+    5:10  error  'useEffect' is defined but never used
+    ```
+
+16. ❌ `/app/chat/actions.ts` - Unused variable
+    ```
+    8:3  error  'messageId' is defined but never used
+    ```
+
+17. ❌ `/app/chat/page.tsx` - Unused variable
+    ```
+    61:15  error  'newId' is assigned a value but never used
+    ```
+
+18. ❌ `/app/unauthorized/page.tsx` - Unescaped entities
+    ```
+    13:20  error  `'` can be escaped with `&apos;`, `&lsquo;`, `&#39;`, `&rsquo;`  react/no-unescaped-entities
+    ```
+
 ## Strategy for Fixing
 
-1. **Unused Variables/Imports (294 errors)**:
-   - **Automated Fix**: Create a script to automatically prefix route handler parameters with underscore (e.g., `_request`)
-   - **Manual Fix for Critical Files**: Manually review and fix unused variables in critical files (chat, auth)
-   - **Bulk Fix**: For non-critical files, use eslint's `--fix` option where possible
-   - **Disable Rule Where Appropriate**: Add `/* eslint-disable no-unused-vars */` for temporary development code
+1. **Unused Variables/Imports**:
+   - Prefix route handler parameters with underscore (e.g., `_request`)
+   - Remove unused imports
+   - Remove unused variable declarations
 
-2. **Undefined Variables (20 errors)**:
-   - Add React import for JSX files: `import React from 'react'`
-   - Import other missing dependencies
-   - Define types for globally used interfaces
+2. **Undefined Variables**:
+   - Add React import for JSX files
+   - Define proper types for missing interfaces
 
-3. **Import Issues (18 errors)**:
+3. **Import Issues**:
    - Add file extensions to imports (`.js`, `.ts`)
    - Move imports to the top of the file
-   - Create a script to automatically add extensions to imports
+   - Remove duplicate imports
 
-4. **Code Style Issues (6 errors)**:
+4. **Code Style Issues**:
    - Convert `let` to `const` when variables are not reassigned
-   - Move function declarations to the top level when possible
+   - Move function declarations to the top level
    - Refactor Promise executors to not use async
-
-5. **Phase Approach**:
-   - **Phase 1**: Fix high-impact errors in critical paths (auth, chat, API endpoints)
-   - **Phase 2**: Fix React-related errors (undefined React, JSX issues)
-   - **Phase 3**: Fix import-related errors
-   - **Phase 4**: Fix remaining unused variables with automated scripts
-   - **Phase 5**: Fix code style issues
-
-6. **Prioritization**:
-   - Focus on errors most likely to cause runtime bugs first
-   - Address files with the most usage next
-   - Leave rarely used utilities for last
 
 ## Progress Summary
 
-- Total Files with Errors: 114
-- Total Errors: ~350
-  - Unused Variables/Imports: 294
-  - Undefined Variables: 20
-  - Import Extension Issues: 14
+- Total Files with Errors: 21
+- Total Errors: ~94
+  - Unused Variables/Imports: 68
+  - Undefined Variables: 5
+  - Import Extension Issues: 7
   - Prefer Const Issues: 5
-  - Import Order Issues: 4
+  - Import Order Issues: 3
   - Async Promise Issues: 0 (All fixed)
-  - Other Issues: ~12
-- Fixed: 12
+  - Function Declaration Issues: 2
+  - Unescaped Entities: 1
+  - Other Issues: 3
+- Fixed: 17
 - In Progress: 0
-- Remaining: ~338
+- Remaining: 77
 
 Last Updated: August 25, 2023

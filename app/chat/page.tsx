@@ -58,7 +58,7 @@ export default function ChatPage() {
         });
         
         // Create a new conversation
-        const newId = createConversation();
+        createConversation();
         
         // Remove the query parameter from the URL
         window.history.replaceState({}, '', '/chat');

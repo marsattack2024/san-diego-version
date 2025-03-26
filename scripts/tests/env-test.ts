@@ -32,7 +32,7 @@ async function testEnvironmentVariables(): Promise<void> {
   
   // Test critical API keys
   console.log('\n🔑 API Keys:');
-  console.log(`  • OpenAI API Key: ${!!process.env.OPENAI_API_KEY ? 'Present' : 'Missing'}`);
+  console.log(`  • OpenAI API Key: ${process.env.OPENAI_API_KEY ? 'Present' : 'Missing'}`);
   console.log(`  • Perplexity API Key: ${envVars.hasPerplexityKey ? 'Present' : 'Missing'}`);
   if (envVars.hasPerplexityKey) {
     console.log(`    > Length: ${envVars.keyLength}`);
@@ -41,9 +41,9 @@ async function testEnvironmentVariables(): Promise<void> {
   
   // Test Supabase connection variables
   console.log('\n🗄️ Supabase Configuration:');
-  console.log(`  • Supabase URL: ${!!process.env.NEXT_PUBLIC_SUPABASE_URL ? 'Present' : 'Missing'}`);
-  console.log(`  • Supabase Anon Key: ${!!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? 'Present' : 'Missing'}`);
-  console.log(`  • Supabase Service Role Key: ${!!process.env.SUPABASE_SERVICE_ROLE_KEY ? 'Present' : 'Missing'}`);
+  console.log(`  • Supabase URL: ${process.env.NEXT_PUBLIC_SUPABASE_URL ? 'Present' : 'Missing'}`);
+  console.log(`  • Supabase Anon Key: ${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? 'Present' : 'Missing'}`);
+  console.log(`  • Supabase Service Role Key: ${process.env.SUPABASE_SERVICE_ROLE_KEY ? 'Present' : 'Missing'}`);
   
   // List non-sensitive environment variables
   console.log('\n📚 Other Environment Variables:');

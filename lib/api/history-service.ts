@@ -19,7 +19,7 @@ let lastHistoryRequestTime = 0;
 const MIN_REQUEST_INTERVAL = 2000; // 2 seconds minimum between ANY history requests
 
 // Track last refresh time
-let lastRefreshTime = 0;
+const lastRefreshTime = 0;
 const REFRESH_INTERVAL = 15 * 60 * 1000; // 15 minutes (increased from previous value)
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutes cache TTL
 const CACHE_TTL_ERROR = 10 * 60 * 1000; // 10 minutes cache TTL for error state

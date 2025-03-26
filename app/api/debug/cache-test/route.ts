@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { redisCache } from '../../../../lib/cache/redis-client';
 import { edgeLogger } from '../../../../lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '../../../../lib/logger/constants';
 import { Redis } from '@upstash/redis';
@@ -8,7 +7,7 @@ import { Redis } from '@upstash/redis';
  * API endpoint to test the Redis caching system.
  * Tests setting and getting different data types and checks for serialization issues.
  */
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Use Redis.fromEnv() for consistent initialization across the codebase
     const redis = Redis.fromEnv();

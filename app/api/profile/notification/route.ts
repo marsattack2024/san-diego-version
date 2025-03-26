@@ -35,8 +35,9 @@ export async function POST(request: Request) {
       operation
     });
     
-    // Get authenticated Supabase client
-    const supabase = await createClient();
+    // Get authenticated Supabase client (keeping this for future implementation)
+    // Commented to avoid linter warning until implementation is ready
+    // const supabase = await createClient();
     
     // For future implementation: Store notifications in database here
     

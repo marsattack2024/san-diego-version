@@ -79,7 +79,7 @@ function findCompanyName(profile: any): string {
 }
 
 // GET /api/admin/users - List all users
-export async function GET(request: Request) {
+export async function GET(_request: Request) {
   // Log some debug info
   console.log("Admin users API - Using service role key if available");
   console.log("Admin users API - Using URL:", process.env.NEXT_PUBLIC_SUPABASE_URL);
@@ -129,7 +129,7 @@ export async function GET(request: Request) {
   try {
     // Try to get the table names first to verify connection
     console.log("Admin API - Verifying database connection");
-    const { data: tables, error: tablesError } = await supabase
+    const { data: tableCheck, error: tablesError } = await supabase
       .from('sd_user_profiles')
       .select('user_id')
       .limit(1);

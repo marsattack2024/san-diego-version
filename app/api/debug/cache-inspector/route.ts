@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { redisClientPromise } from '../../../../lib/vector/rag-cache';
 import { edgeLogger } from '../../../../lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '../../../../lib/logger/constants';
 import { Redis } from '@upstash/redis';

@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { Redis } from '@upstash/redis';
-import { redisCache } from '@/lib/vector/rag-cache';
 
 // Initialize Redis client directly using environment variables
 const redis = Redis.fromEnv();

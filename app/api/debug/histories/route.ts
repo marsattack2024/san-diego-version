@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient as createServerClient } from '@/utils/supabase/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+// Removing the unused cookies import
+
 // Implementing getAuthenticatedUser inline since we don't have the auth-utils file
 async function getAuthenticatedUser(request?: NextRequest) {
   try {
@@ -17,7 +19,9 @@ async function getAuthenticatedUser(request?: NextRequest) {
       errorResponse: NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     };
   } catch (error) {
-    edgeLogger.error('Authentication error', { error });
+    edgeLogger.error('Authentication error', { 
+      error: error instanceof Error ? error.message : String(error) 
+    });
     return {
       user: null,
       serverClient: null,
@@ -25,7 +29,6 @@ async function getAuthenticatedUser(request?: NextRequest) {
     };
   }
 }
-import { cookies } from 'next/headers';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,10 +55,10 @@ interface SessionMap {
 }
 
 // Debug endpoint to check chat histories
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     // Get authenticated user
-    const { user, serverClient, errorResponse } = await getAuthenticatedUser(request);
+    const { user, serverClient, errorResponse } = await getAuthenticatedUser(_request);
     
     // Return error response if authentication failed
     if (errorResponse) {
@@ -63,7 +66,7 @@ export async function GET(request: NextRequest) {
     }
     
     // Get the session ID from query params if provided
-    const url = new URL(request.url);
+    const url = new URL(_request.url);
     const sessionId = url.searchParams.get('sessionId');
     const limit = parseInt(url.searchParams.get('limit') || '50');
     
@@ -100,7 +103,7 @@ export async function GET(request: NextRequest) {
     const sessionIds = [...new Set((messages as ChatMessage[])?.map(m => m.session_id) || [])];
     
     // Get session info for these sessions
-    const { data: sessions, error: sessionsError } = await serverClient
+    const { data: sessions } = await serverClient
       .from('sd_chat_sessions')
       .select('id, title, created_at, updated_at')
       .in('id', sessionIds);
@@ -131,7 +134,9 @@ export async function GET(request: NextRequest) {
       }
     });
   } catch (error) {
-    edgeLogger.error('Error in debug/histories endpoint', { error });
+    edgeLogger.error('Error in debug/histories endpoint', { 
+      error: error instanceof Error ? error.message : String(error) 
+    });
     return NextResponse.json({ error: 'Debug check failed', details: String(error) }, { status: 500 });
   }
 } 

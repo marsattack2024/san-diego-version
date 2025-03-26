@@ -5,7 +5,7 @@ import { cookies } from 'next/headers';
 
 export async function deleteTrailingMessages(
   chatId: string,
-  messageId: string
+  _messageId: string
 ): Promise<void> {
   try {
     // For MVP, we're not implementing actual deletion
