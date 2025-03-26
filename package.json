@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node scripts/dev.js",
     "build": "next build",
+    "postbuild": "npm run build:widget",
     "start": "next start",
     "lint": "next lint",
     "update-imports": "node scripts/update-imports.js",

@@ -326,7 +326,8 @@ IMPORTANT: After using tools to gather information, you MUST provide a final res
 1. Synthesizes the information from the knowledge base
 2. Directly answers the user's question in a clear, concise manner
 3. Does NOT include any raw tool output, but instead presents the information in a helpful, conversational format
-4. If the tool returns "No relevant information found", acknowledge that and provide general guidance if possible`,
+4. Make sure to add line breaks and make the information easy to see for the user since it's a small chat window. 
+5. If the tool returns "No relevant information found", acknowledge that and provide general guidance if possible`,
         onStepFinish: ({ text, toolCalls, toolResults, finishReason }) => {
           edgeLogger.info('Step finished in streamText call', {
             hasText: !!text && text.length > 0,
