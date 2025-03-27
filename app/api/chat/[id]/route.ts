@@ -49,10 +49,10 @@ async function getAuthenticatedUser(request?: NextRequest) {
 // API route to fetch chat messages and handle chat-specific operations
 export async function GET(
   _request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ): Promise<Response> {
-  // Access params directly, no need to await in Next.js 15
-  const id = params.id;
+  // Access params with await for Next.js 15
+  const { id } = await params;
   
   // Start performance tracking
   const startTime = performance.now();
@@ -165,10 +165,10 @@ export async function GET(
 // Update chat details (title, etc.)
 export async function PATCH(
   _request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ): Promise<Response> {
-  // Access params directly, no need to await in Next.js 15
-  const id = params.id;
+  // Access params with await for Next.js 15
+  const { id } = await params;
   
   try {
     // Get the request body
@@ -301,10 +301,10 @@ export async function PATCH(
 // Save assistant message (called from frontend after streaming completes)
 export async function POST(
   _request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ): Promise<Response> {
-  // Access params directly, no need to await in Next.js 15
-  const id = params.id;
+  // Access params with await for Next.js 15
+  const { id } = await params;
   
   try {
     // Get the message from the request body
