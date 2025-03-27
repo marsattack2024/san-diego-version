@@ -1,7 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
-import { toast } from '@/components/toast';
+import React from 'react';
 import { AdminWidgetConfigurator } from '@/components/admin/widget/widget-configurator';
 import { ChatWidgetProvider } from '@/components/chat-widget/chat-widget-provider';
 import { ChatWidget } from '@/components/chat-widget/chat-widget';
@@ -10,11 +9,6 @@ import { ChatWidget } from '@/components/chat-widget/chat-widget';
 export const dynamic = "force-dynamic";
 
 export default function AdminWidgetPage() {
-  const [timestamp, setTimestamp] = useState(new Date().toISOString());
-
-  // Remove all admin verification state and API test
-  // The middleware handles admin verification for all admin pages
-
   return (
     <div className="space-y-6 p-6 border rounded-md">
       <div>
@@ -29,24 +23,6 @@ export default function AdminWidgetPage() {
         <AdminWidgetConfigurator />
         <ChatWidget />
       </ChatWidgetProvider>
-
-      <div className="border rounded-md p-4 bg-slate-50">
-        <p><strong>Current Time:</strong> {timestamp}</p>
-        <p><strong>Environment:</strong> {process.env.NODE_ENV}</p>
-        <button
-          className="px-4 py-2 mt-2 bg-blue-500 text-white rounded-md"
-          onClick={() => {
-            console.log('Update timestamp clicked in widget page');
-            setTimestamp(new Date().toISOString());
-            toast({
-              title: "Timestamp updated",
-              description: "Current time has been refreshed."
-            });
-          }}
-        >
-          Update Timestamp
-        </button>
-      </div>
     </div>
   );
 }

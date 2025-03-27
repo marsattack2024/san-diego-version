@@ -1,6 +1,6 @@
 "use strict"; (() => {
   (function () {
-    if (window.marlinChatWidgetLoaded) { console.warn("Marlin Chat Widget already loaded. Skipping initialization."); return } window.marlinChatWidgetLoaded = !0; let w = { position: "bottom-right", title: "Ask Marlan", primaryColor: "#0070f3", bubbleIcon: null, apiEndpoint: "https://marlan.photographytoprofits.com/api/widget-chat", width: "350px", height: "500px", zIndex: 9999 }; function y() {
+    if (window.marlinChatWidgetLoaded) { console.warn("Marlin Chat Widget already loaded. Skipping initialization."); return } window.marlinChatWidgetLoaded = !0; let w = { position: "bottom-right", title: "Ask Marlan", primaryColor: "#0070f3", bubbleIcon: null, greeting: "I'm your Mastermind AI companion! I can answer marketing and tech questions right now! What can I help with?", placeholder: "Type your message...", apiEndpoint: "https://marlan.photographytoprofits.com/api/widget-chat", width: "350px", height: "500px", zIndex: 9999 }; function y() {
       let e = document.createElement("style"); e.id = "marlin-chat-widget-styles", e.innerHTML = `
       .marlin-chat-widget-container {
         position: fixed;
@@ -206,7 +206,7 @@
       <h3 class="marlin-chat-widget-title">${i.title}</h3>
       <button class="marlin-chat-widget-close">&times;</button>
     `; let l = document.createElement("div"); l.className = "marlin-chat-widget-messages"; let o = document.createElement("div"); return o.className = "marlin-chat-widget-input-container", o.innerHTML = `
-      <input type="text" class="marlin-chat-widget-input" placeholder="Type your message...">
+      <input type="text" class="marlin-chat-widget-input" placeholder="${i.placeholder}">
       <button class="marlin-chat-widget-send">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
       </button>

@@ -91,13 +91,16 @@ The admin interface provides three embedding options:
     position: 'bottom-right',
     title: 'Ask Marlan',
     primaryColor: '#0070f3',
-    greeting: 'Hello! How can I help you today?',
+    greeting: "I'm your Mastermind AI companion! I can answer marketing and tech questions right now! What can I help with?",
     placeholder: 'Type your message...',
-    apiEndpoint: 'https://marlan.photographytoprofits.com/api/widget-chat'
+    apiEndpoint: 'https://marlan.photographytoprofits.com/api/widget-chat',
+    width: '350px',
+    height: '500px',
+    zIndex: 9999
   };
   
   var script = document.createElement('script');
-  script.src = 'https://marlan.photographytoprofits.com/widget.js';
+  script.src = 'https://marlan.photographytoprofits.com/widget/chat-widget.js';
   script.async = true;
   script.defer = true;
   document.head.appendChild(script);
@@ -116,13 +119,16 @@ The admin interface provides three embedding options:
     position: 'bottom-right',
     title: 'Ask Marlan',
     primaryColor: '#0070f3',
-    greeting: 'Hello! How can I help you today?',
+    greeting: "I'm your Mastermind AI companion! I can answer marketing and tech questions right now! What can I help with?",
     placeholder: 'Type your message...',
-    apiEndpoint: 'https://marlan.photographytoprofits.com/api/widget-chat'
+    apiEndpoint: 'https://marlan.photographytoprofits.com/api/widget-chat',
+    width: '350px',
+    height: '500px',
+    zIndex: 9999
   };
   
   var script = document.createElement('script');
-  script.src = "https://marlan.photographytoprofits.com/widget.js";
+  script.src = "https://marlan.photographytoprofits.com/widget/chat-widget.js";
   script.async = true;
   script.defer = true;
   script.onerror = function() {
@@ -161,14 +167,17 @@ The admin interface provides three embedding options:
     position: 'bottom-right',
     title: 'Ask Marlan',
     primaryColor: '#0070f3',
-    greeting: 'Hello! How can I help you today?',
+    greeting: "I'm your Mastermind AI companion! I can answer marketing and tech questions right now! What can I help with?",
     placeholder: 'Type your message...',
     apiEndpoint: 'https://marlan.photographytoprofits.com/api/widget-chat',
+    width: '350px',
+    height: '500px',
+    zIndex: 9999,
     container: 'marlin-chat-container'
   };
   
   var script = document.createElement('script');
-  script.src = 'https://marlan.photographytoprofits.com/widget.js';
+  script.src = 'https://marlan.photographytoprofits.com/widget/chat-widget.js';
   script.async = true;
   script.defer = true;
   document.head.appendChild(script);
@@ -181,13 +190,17 @@ The admin interface provides three embedding options:
 The widget configurator provides the following customization options:
 
 ### Basic Settings
-- Widget Title: The title displayed in the widget header
-- Greeting Message: The initial message shown to users
-- Input Placeholder: Placeholder text for the message input field
+- `title`: The title displayed in the widget header
+- `greeting`: The initial message shown to users
+- `placeholder`: Placeholder text for the message input field
+- `width`: Width of the widget (default: '350px')
+- `height`: Height of the widget (default: '500px')
+- `zIndex`: Z-index for the widget (default: 9999)
 
 ### Appearance Settings
-- Position: Choose from bottom-right, bottom-left, top-right, or top-left
-- Primary Color: Custom color picker for widget accent color
+- `position`: Choose from 'bottom-right', 'bottom-left', 'top-right', or 'top-left'
+- `primaryColor`: Custom color picker for widget accent color
+- `bubbleIcon`: Optional URL to a custom icon for the chat bubble
 
 ## Production Verification Checklist
 
