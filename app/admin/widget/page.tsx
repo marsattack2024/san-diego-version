@@ -1,7 +1,9 @@
 'use client';
 
-// Force dynamic rendering for proper authentication
-export const dynamic = "force-dynamic";
+// Remove the server component directives as they don't work with client components
+// export const dynamic = "force-dynamic";
+// export const fetchCache = 'force-no-store';
+// export const revalidate = 0;
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
@@ -12,6 +14,56 @@ export default function SimpleAdminWidgetPage() {
   const router = useRouter();
   const { isAuthenticated, isAdmin, checkAuth, checkAdminRole } = useAuthStore();
   const [isLoading, setIsLoading] = useState(true);
+  const [apiTestResult, setApiTestResult] = useState<any>(null);
+  const [apiTestError, setApiTestError] = useState<string | null>(null);
+
+  // Add a diagnostic API call test
+  useEffect(() => {
+    async function testAdminApi() {
+      try {
+        console.log('[Widget Admin] Testing admin API access...');
+        const response = await fetch('/api/admin/dashboard');
+
+        const headers: Record<string, string> = {};
+        response.headers.forEach((value, key) => {
+          headers[key] = value;
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('[Widget Admin] API test failed:', {
+            status: response.status,
+            statusText: response.statusText,
+            headers,
+            error: errorText
+          });
+          setApiTestError(`${response.status}: ${response.statusText}`);
+          return;
+        }
+
+        const data = await response.json();
+        console.log('[Widget Admin] API test succeeded:', {
+          status: response.status,
+          headers,
+          data: typeof data === 'object' ? 'Data received' : data
+        });
+
+        setApiTestResult({
+          status: response.status,
+          success: true,
+          receivedData: !!data
+        });
+      } catch (error) {
+        console.error('[Widget Admin] API test error:', error);
+        setApiTestError(error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    // Only run test after admin verification
+    if (!isLoading && isAdmin) {
+      testAdminApi();
+    }
+  }, [isLoading, isAdmin]);
 
   // Check admin status
   useEffect(() => {
@@ -87,6 +139,24 @@ export default function SimpleAdminWidgetPage() {
         <p className="text-sm text-red-500 mt-2">
           Rendered at: {new Date().toISOString()}
         </p>
+      </div>
+
+      {/* API Test Results */}
+      <div className="border rounded-md p-4 bg-yellow-50">
+        <h3 className="font-medium mb-2">Admin API Test Results</h3>
+        {apiTestError ? (
+          <div className="text-red-600 text-sm">
+            <p>Error: {apiTestError}</p>
+            <p className="mt-1">This likely indicates the x-is-admin header issue has been fixed but not yet deployed.</p>
+          </div>
+        ) : apiTestResult ? (
+          <div className="text-green-600 text-sm">
+            <p>Success! API responded with status: {apiTestResult.status}</p>
+            <p className="mt-1">The admin API access is working correctly.</p>
+          </div>
+        ) : (
+          <p className="text-gray-500 text-sm">Testing API access...</p>
+        )}
       </div>
 
       <div className="border rounded-md p-4 bg-slate-50">

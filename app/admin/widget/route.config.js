@@ -1,13 +1,11 @@
-// Force dynamic route handling for the admin widget page
-export const dynamic = 'force-dynamic';
+// Route configuration for admin widget page
+// This file is processed by Next.js during build time
+
+// Force dynamic rendering for proper authentication 
+export const dynamic = "force-dynamic";
+
 // Force all requests to revalidate for this route
 export const fetchCache = 'force-no-store';
-// Set revalidation time to 0 to prevent caching
-export const revalidate = 0;
 
-// Export display name for debugging
-module.exports = { 
-  display: 'Admin Widget', 
-  requiresAuth: true,
-  requiresAdmin: true
-};
+// Disable caching for this route
+export const revalidate = 0; 

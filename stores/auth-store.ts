@@ -32,7 +32,7 @@ interface AuthState {
   hasProfile: boolean;
   lastChecked: number | null; // timestamp of last auth check
   authCheckInterval: number; // how often to check auth in ms
-  
+
   // Actions
   login: (email: string, password: string) => Promise<boolean>;
   logout: () => Promise<void>;
@@ -42,7 +42,7 @@ interface AuthState {
   checkAdminRole: () => Promise<boolean>;
   checkProfileStatus: () => Promise<boolean>;
   shouldRefreshAuth: () => boolean;
-  
+
   // Admin Actions
   adminDeleteUser: (userId: string) => Promise<{ success: boolean, error?: string }>;
 }
@@ -57,7 +57,7 @@ export const useAuthStore = create<AuthState>()(
       hasProfile: false,
       lastChecked: null,
       authCheckInterval: 15 * 60 * 1000, // 15 minutes
-      
+
       login: async (email, password) => {
         try {
           const supabase = createClient();
@@ -65,40 +65,40 @@ export const useAuthStore = create<AuthState>()(
             email,
             password,
           });
-          
+
           if (error) {
             console.error('Login error:', error);
             return false;
           }
-          
+
           if (data?.user) {
             const hasProfile = data.user.user_metadata?.has_profile === true;
-            
-            set({ 
-              user: data.user, 
+
+            set({
+              user: data.user,
               isAuthenticated: true,
               hasProfile,
               lastChecked: Date.now()
             });
-            
+
             // Load user profile after successful login
             get().loadUserProfile();
             return true;
           }
-          
+
           return false;
         } catch (error) {
           console.error('Login error:', error);
           return false;
         }
       },
-      
+
       logout: async () => {
         try {
           const supabase = createClient();
           await supabase.auth.signOut();
-          set({ 
-            user: null, 
+          set({
+            user: null,
             profile: null,
             isAuthenticated: false,
             isAdmin: false,
@@ -109,38 +109,38 @@ export const useAuthStore = create<AuthState>()(
           console.error('Logout error:', error);
         }
       },
-      
+
       setUser: (user) => {
-        set({ 
-          user, 
+        set({
+          user,
           isAuthenticated: !!user,
           hasProfile: user?.user_metadata?.has_profile === true,
           lastChecked: user ? Date.now() : null
         });
-        
+
         // Load profile when user is set
         if (user) {
           get().loadUserProfile();
           get().checkProfileStatus();
         }
       },
-      
+
       checkAuth: async () => {
         const state = get();
-        
+
         // Skip check if we checked recently
         if (!state.shouldRefreshAuth()) {
           return state.user;
         }
-        
+
         try {
           const supabase = createClient();
           const { data, error } = await supabase.auth.getUser();
-          
+
           if (error) {
             console.error('Auth check error:', error);
-            set({ 
-              user: null, 
+            set({
+              user: null,
               isAuthenticated: false,
               isAdmin: false,
               hasProfile: false,
@@ -148,45 +148,45 @@ export const useAuthStore = create<AuthState>()(
             });
             return null;
           }
-          
+
           const hasProfile = data?.user?.user_metadata?.has_profile === true;
-          
-          set({ 
+
+          set({
             user: data?.user || null,
             isAuthenticated: !!data?.user,
             hasProfile,
             lastChecked: Date.now()
           });
-          
+
           // Load profile if user exists and we don't have it yet
           if (data?.user && !state.profile) {
             await get().loadUserProfile();
           }
-          
+
           // Check admin status if user exists
           if (data?.user) {
             await get().checkAdminRole();
-            
+
             // Verify profile status if metadata doesn't indicate having a profile
             if (!hasProfile) {
               await get().checkProfileStatus();
             }
           }
-          
+
           return data?.user || null;
         } catch (error) {
           console.error('Auth check error:', error);
           return state.user;
         }
       },
-      
+
       loadUserProfile: async () => {
         const state = get();
-        
+
         if (!state.user?.id) {
           return null;
         }
-        
+
         try {
           const supabase = createClient();
           const { data, error } = await supabase
@@ -194,19 +194,19 @@ export const useAuthStore = create<AuthState>()(
             .select('*')
             .eq('user_id', state.user.id)
             .single();
-            
+
           if (error) {
             console.error('Profile load error:', error);
             set({ hasProfile: false });
             return null;
           }
-          
+
           // Update hasProfile state based on actual profile data
-          set({ 
+          set({
             profile: data as UserProfile,
             hasProfile: !!data
           });
-          
+
           // If we have a profile but metadata doesn't show it, update metadata
           if (data && state.user?.user_metadata?.has_profile !== true) {
             try {
@@ -217,57 +217,123 @@ export const useAuthStore = create<AuthState>()(
               console.error('Error updating profile metadata:', err);
             }
           }
-          
+
           return data as UserProfile;
         } catch (error) {
           console.error('Profile load error:', error);
           return null;
         }
       },
-      
+
       checkAdminRole: async () => {
         const state = get();
-        
+
         if (!state.user?.id) {
           set({ isAdmin: false });
           return false;
         }
-        
+
         try {
           const supabase = createClient();
-          
+
           // First check if the profile has is_admin flag
           if (state.profile?.is_admin) {
+            console.log('Admin check: Using cached profile admin flag');
             set({ isAdmin: true });
             return true;
           }
-          
-          // Then check with the is_admin RPC function
-          const { data, error } = await supabase.rpc('is_admin', { uid: state.user.id });
-          
-          if (error) {
-            console.error('Admin check error:', error);
-            set({ isAdmin: false });
-            return false;
+
+          // Try to check the admin status from the middleware-set header
+          // This is a workaround for RLS issues and only works with fresh page loads
+          try {
+            console.log('Admin check: Trying to check x-is-admin from current headers');
+            const isAdminHeaderAvailable = typeof window !== 'undefined' &&
+              window.document.cookie.includes('x-is-admin');
+
+            if (isAdminHeaderAvailable) {
+              console.log('Admin check: Found potential admin header in cookies');
+            }
+
+            // No reliable way to check this header from client-side without an API call
+          } catch (headerError) {
+            console.warn('Admin header check failed:', headerError);
           }
-          
-          set({ isAdmin: !!data });
-          return !!data;
+
+          // Then check with the is_admin RPC function directly
+          console.log('Admin check: Trying Supabase RPC directly');
+          const { data, error } = await supabase.rpc('is_admin', { uid: state.user.id });
+
+          if (!error && data === true) {
+            console.log('Admin check: Supabase RPC returned true');
+            set({ isAdmin: true });
+            return true;
+          }
+
+          if (error) {
+            console.warn('Admin check: Supabase RPC error:', error);
+
+            // Fallback 1: Try direct profile query if RPC fails (might still fail due to RLS)
+            try {
+              console.log('Admin check: Trying direct profile query');
+              const { data: profileData, error: profileError } = await supabase
+                .from('sd_user_profiles')
+                .select('is_admin')
+                .eq('user_id', state.user.id)
+                .single();
+
+              if (!profileError && profileData?.is_admin === true) {
+                console.log('Admin check: Direct profile query confirmed admin status');
+                set({ isAdmin: true });
+                return true;
+              }
+
+              if (profileError) {
+                console.warn('Admin check: Direct profile query failed:', profileError);
+              }
+            } catch (profileQueryError) {
+              console.warn('Admin check: Profile query exception:', profileQueryError);
+            }
+
+            // Fallback 2: Check with a dedicated API endpoint that uses service role
+            try {
+              console.log('Admin check: Trying API endpoint fallback');
+              const adminCheckResponse = await fetch('/api/admin/debug');
+
+              if (adminCheckResponse.ok) {
+                const adminCheckData = await adminCheckResponse.json();
+                const isAdminFromApi = adminCheckData?.adminAccess?.isAdmin === true;
+
+                console.log('Admin check: API endpoint returned:', isAdminFromApi);
+                set({ isAdmin: isAdminFromApi });
+                return isAdminFromApi;
+              } else {
+                console.warn('Admin check: API endpoint failed with status:', adminCheckResponse.status);
+              }
+            } catch (apiError) {
+              console.error('Admin check: API endpoint exception:', apiError);
+            }
+          } else {
+            console.log('Admin check: Supabase RPC worked but returned false');
+          }
+
+          // If we get here, none of the checks confirmed admin status
+          set({ isAdmin: false });
+          return false;
         } catch (error) {
           console.error('Admin check error:', error);
           set({ isAdmin: false });
           return false;
         }
       },
-      
+
       checkProfileStatus: async () => {
         const state = get();
-        
+
         if (!state.user?.id) {
           set({ hasProfile: false });
           return false;
         }
-        
+
         try {
           // First check user metadata (fastest)
           if (state.user.user_metadata?.has_profile === true) {
@@ -285,7 +351,7 @@ export const useAuthStore = create<AuthState>()(
                   is_admin: summary.is_admin || false,
                   // Other fields will be loaded when full profile is requested
                 };
-                set({ 
+                set({
                   profile: metadataProfile,
                   hasProfile: true
                 });
@@ -294,108 +360,108 @@ export const useAuthStore = create<AuthState>()(
                 get().loadUserProfile();
               }
             }
-            
+
             set({ hasProfile: true });
             return true;
           }
-          
+
           // If not in metadata, check database
           const supabase = createClient();
-          
+
           // First try the more efficient RPC function
           try {
-            const { data, error } = await supabase.rpc('has_profile', { 
-              uid: state.user.id 
+            const { data, error } = await supabase.rpc('has_profile', {
+              uid: state.user.id
             });
-            
+
             if (!error) {
               const hasProfile = !!data;
               set({ hasProfile });
-              
+
               // Update user metadata if profile exists but metadata doesn't reflect it
               if (hasProfile && state.user.user_metadata?.has_profile !== true) {
                 await supabase.auth.updateUser({
                   data: { has_profile: true }
                 });
               }
-              
+
               // Load full profile if needed
               if (hasProfile && !state.profile) {
                 get().loadUserProfile();
               }
-              
+
               return hasProfile;
             }
           } catch (rpcError) {
             console.warn('RPC has_profile failed, falling back to direct query', rpcError);
           }
-          
+
           // Fallback to direct query if RPC fails
           const { data: profile } = await supabase
             .from('sd_user_profiles')
             .select('user_id')
             .eq('user_id', state.user.id)
             .maybeSingle();
-            
+
           const hasProfile = !!profile;
           set({ hasProfile });
-          
+
           // Update user metadata if profile exists
           if (hasProfile) {
             await supabase.auth.updateUser({
               data: { has_profile: true }
             });
-            
+
             // Load full profile if needed
             if (!state.profile) {
               get().loadUserProfile();
             }
           }
-          
+
           return hasProfile;
         } catch (error) {
           console.error('Profile check error:', error);
           return false;
         }
       },
-      
+
       shouldRefreshAuth: () => {
         const state = get();
         const now = Date.now();
-        
+
         // If we haven't checked yet, or it's been longer than the interval
-        return !state.lastChecked || 
+        return !state.lastChecked ||
           (now - state.lastChecked) > state.authCheckInterval;
       },
-      
+
       // Admin function to delete a user
       adminDeleteUser: async (userId: string) => {
         const state = get();
-        
+
         // Check if the current user is an admin
         if (!state.isAdmin) {
           console.error('Attempted to delete user without admin privileges');
           return { success: false, error: 'Unauthorized: Admin privileges required' };
         }
-        
+
         try {
           // Call the admin API to delete the user
           const response = await fetch(`/api/admin/users/${userId}`, {
             method: 'DELETE',
           });
-          
+
           const data = await response.json();
-          
+
           if (!response.ok) {
             console.error('Error deleting user:', data.error);
             return { success: false, error: data.error || 'Failed to delete user' };
           }
-          
+
           return { success: true };
         } catch (error) {
           console.error('Exception deleting user:', error);
-          return { 
-            success: false, 
+          return {
+            success: false,
             error: error instanceof Error ? error.message : 'Unknown error occurred'
           };
         }
