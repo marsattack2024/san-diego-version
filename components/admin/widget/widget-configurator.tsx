@@ -147,7 +147,6 @@ export function AdminWidgetConfigurator() {
         <TabsList>
           <TabsTrigger value="settings">Settings</TabsTrigger>
           <TabsTrigger value="embed">Embed Code</TabsTrigger>
-          <TabsTrigger value="preview">Preview</TabsTrigger>
         </TabsList>
 
         <TabsContent value="settings">
@@ -316,33 +315,6 @@ export function AdminWidgetConfigurator() {
                   </div>
                 </TabsContent>
               </Tabs>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="preview">
-          <Card>
-            <CardHeader>
-              <CardTitle>Live Preview</CardTitle>
-              <CardDescription>
-                See how the widget will appear on your website.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="border rounded-lg p-8 bg-gray-50 min-h-[400px] relative">
-                <p className="text-center text-gray-500 mb-4">
-                  The chat widget should appear in the {(state.config.position || 'bottom-right').replace('-', ' ')} corner.
-                </p>
-                {!state.isOpen && (
-                  <Button
-                    variant="default"
-                    onClick={toggleWidget}
-                    className="mx-auto block"
-                  >
-                    Open Widget
-                  </Button>
-                )}
-              </div>
             </CardContent>
           </Card>
         </TabsContent>
