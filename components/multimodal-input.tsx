@@ -31,6 +31,7 @@ import { SuggestedActions } from './suggested-actions';
 import equal from 'fast-deep-equal';
 import { useChatStore } from '@/stores/chat-store';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
+import { AgentSelector } from './agent-selector';
 
 const PureMultimodalInput = ({
   chatId,
@@ -70,23 +71,23 @@ const PureMultimodalInput = ({
   // Define constants for height values - moved to CSS variables
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
-  
+
   const deepSearchEnabled = useChatStore(state => state.getDeepSearchEnabled());
   const setDeepSearchEnabled = useChatStore(state => state.setDeepSearchEnabled);
 
   // Simplified height adjustment function with useCallback
   const adjustHeight = useCallback(() => {
     if (!textareaRef.current) return;
-    
+
     // Reset height to auto to properly calculate scrollHeight
     textareaRef.current.style.height = 'auto';
-    
+
     // Calculate new height based on content
     const newHeight = Math.min(
       Math.max(textareaRef.current.scrollHeight, 115),
       360
     );
-    
+
     textareaRef.current.style.height = `${newHeight}px`;
   }, []);
 
@@ -104,21 +105,21 @@ const PureMultimodalInput = ({
   // Initialization effect
   useEffect(() => {
     if (!textareaRef.current) return;
-    
+
     // Initial value setup
     const finalValue = textareaRef.current.value || localStorageInput || '';
     setInput(finalValue);
-    
+
     // Initial height setup with slight delay to ensure proper calculation
     requestAnimationFrame(() => {
       adjustHeight();
-      
+
       // Add smooth transition after initial render
       if (textareaRef.current) {
         textareaRef.current.style.transition = 'height 0.1s ease-out';
       }
     });
-    
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -128,7 +129,7 @@ const PureMultimodalInput = ({
       const timeoutId = setTimeout(() => {
         textareaRef.current?.focus();
       }, 100);
-      
+
       return () => clearTimeout(timeoutId);
     }
   }, [width]);
@@ -153,7 +154,7 @@ const PureMultimodalInput = ({
 
   const submitForm = useCallback(() => {
     if (!input.trim() && !attachments.length) return;
-    
+
     window.history.replaceState({}, '', `/chat/${chatId}`);
 
     handleSubmit(undefined, {
@@ -164,10 +165,10 @@ const PureMultimodalInput = ({
     setAttachments([]);
     setInput('');
     setLocalStorageInput('');
-    
+
     // Reset height
     resetHeight();
-    
+
     // Focus the textarea on desktop
     if (width && width >= 768) {
       requestAnimationFrame(() => {
@@ -207,25 +208,25 @@ const PureMultimodalInput = ({
   // Simplified resize observer with debounce
   useEffect(() => {
     if (!textareaRef.current) return;
-    
+
     let timeoutId: ReturnType<typeof setTimeout>;
-    
+
     const resizeObserver = new ResizeObserver(() => {
       clearTimeout(timeoutId);
       timeoutId = setTimeout(() => {
         if (textareaRef.current) {
           const rect = textareaRef.current.getBoundingClientRect();
           const isPartiallyOffscreen = rect.bottom > window.innerHeight;
-          
+
           if (isPartiallyOffscreen) {
             textareaRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
           }
         }
       }, 100); // Debounce resize events
     });
-    
+
     resizeObserver.observe(textareaRef.current);
-    
+
     return () => {
       clearTimeout(timeoutId);
       resizeObserver.disconnect();
@@ -364,21 +365,29 @@ const PureMultimodalInput = ({
 
         {/* Make sure the controls always stay at the bottom of the input area */}
         <div className="absolute bottom-0 left-0 right-0 px-4 py-2 flex justify-between items-center bg-muted rounded-b-2xl">
-          <DeepSearchButton 
-            deepSearchEnabled={deepSearchEnabled} 
-            setDeepSearchEnabled={setDeepSearchEnabled} 
-            isLoading={isLoading} 
-          />
-          
-          {isLoading ? (
-            <StopButton stop={stop} setMessages={setMessages} />
-          ) : (
-            <SendButton
-              input={input}
-              submitForm={submitForm}
-              uploadQueue={uploadQueue}
+          <div className="flex items-center gap-2">
+            <AgentSelector className="h-10" />
+            <DeepSearchButton
+              deepSearchEnabled={deepSearchEnabled}
+              setDeepSearchEnabled={setDeepSearchEnabled}
+              isLoading={isLoading}
             />
-          )}
+          </div>
+
+          <div className="flex">
+            {isLoading ? (
+              <StopButton
+                stop={stop}
+                setMessages={setMessages}
+              />
+            ) : (
+              <SendButton
+                submitForm={submitForm}
+                input={input}
+                uploadQueue={uploadQueue}
+              />
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -410,12 +419,7 @@ function PureDeepSearchButton({
       <TooltipTrigger asChild>
         <Button
           data-testid="deep-search-button"
-          className={cx(
-            "rounded-full h-10 px-4 border dark:border-zinc-700 flex items-center gap-2 transition-all duration-200",
-            deepSearchEnabled 
-              ? "bg-primary text-primary-foreground hover:bg-primary/80" 
-              : "bg-transparent hover:bg-accent hover:text-accent-foreground"
-          )}
+          className={`h-10 ${deepSearchEnabled ? 'bg-primary text-primary-foreground hover:bg-primary/90' : ''}`}
           onClick={(event) => {
             event.preventDefault();
             setDeepSearchEnabled(!deepSearchEnabled);
@@ -424,13 +428,13 @@ function PureDeepSearchButton({
           variant={deepSearchEnabled ? "default" : "outline"}
           size="sm"
         >
-          <MagnifyingGlassIcon size={16} />
+          <MagnifyingGlassIcon size={16} className="mr-1" />
           <span className="text-sm font-medium">Deep Search</span>
         </Button>
       </TooltipTrigger>
       <TooltipContent side="top">
-        {deepSearchEnabled 
-          ? "Disable DeepSearch" 
+        {deepSearchEnabled
+          ? "Disable DeepSearch"
           : "Enable DeepSearch: Get comprehensive research on your queries"}
       </TooltipContent>
     </Tooltip>
@@ -473,16 +477,16 @@ function PureSendButton({
   uploadQueue: Array<string>;
 }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
-  
+
   const handleSubmit = (event: React.MouseEvent) => {
     event.preventDefault();
-    
+
     if (isSubmitting) return;
-    
+
     setIsSubmitting(true);
-    
+
     submitForm();
-    
+
     setTimeout(() => {
       setIsSubmitting(false);
     }, 1000);
