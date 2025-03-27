@@ -1,5 +1,8 @@
 'use client';
 
+// Force dynamic rendering for all admin pages
+export const dynamic = "force-dynamic";
+
 import React, { useState, useEffect } from 'react';
 import { Trash2, UserPlus, Eye } from 'lucide-react';
 import { toast } from '@/components/toast';
@@ -55,7 +58,7 @@ export default function UsersPage() {
   const [viewUser, setViewUser] = useState<User | null>(null);
   const [viewOpen, setViewOpen] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
-  
+
   // State for data fetching
   const [users, setUsers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -70,22 +73,22 @@ export default function UsersPage() {
     try {
       console.log("Admin page - Fetching users");
       const response = await fetch('/api/admin/users');
-      
+
       // Get detailed error information if available
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         console.error("Admin page - Fetch error details:", errorData);
-        
+
         throw new Error(
           `Error ${response.status}: ${response.statusText}${errorData.message ? ' - ' + errorData.message : ''}`
         );
       }
-      
+
       const data = await response.json();
-      
+
       console.log("Admin page - Users data received:", data.users?.length || 0, "users");
       console.log("Admin page - Full raw data:", data);
-      
+
       // Enhanced debug logging to see all users in full detail
       if (data.users && data.users.length > 0) {
         console.log("Admin page - ALL USER DETAILS:", data.users.map((user: User) => ({
@@ -100,7 +103,7 @@ export default function UsersPage() {
       } else {
         console.warn("Admin page - NO USERS RETURNED FROM API");
       }
-      
+
       // Always set users, even if empty
       setUsers(data.users || []);
       setError(null);
@@ -127,17 +130,17 @@ export default function UsersPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || `Error ${response.status}`);
       }
-      
+
       toast({
         title: "User invited",
         description: "The user invitation has been sent.",
       });
-      
+
       setInviteEmail('');
       setInviteOpen(false);
       fetchUsers(); // Refresh user list
@@ -159,17 +162,17 @@ export default function UsersPage() {
       const response = await fetch(`/api/admin/users/${userId}`, {
         method: 'DELETE',
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || `Error ${response.status}`);
       }
-      
+
       toast({
         title: "User deleted",
         description: "The user and all associated data have been removed.",
       });
-      
+
       fetchUsers(); // Refresh user list
     } catch (error) {
       toast({
@@ -181,15 +184,15 @@ export default function UsersPage() {
   };
 
   // Just display all users, no filtering at all (unless search is provided)
-  const filteredUsers = searchQuery.trim() === '' 
-    ? users 
+  const filteredUsers = searchQuery.trim() === ''
+    ? users
     : users?.filter(
-        (user) => 
-          (user.full_name?.toLowerCase() || user.name?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
-          (user.email?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
-          (user.company_name?.toLowerCase() || '').includes(searchQuery.toLowerCase())
-      ) || [];
-  
+      (user) =>
+        (user.full_name?.toLowerCase() || user.name?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+        (user.email?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+        (user.company_name?.toLowerCase() || '').includes(searchQuery.toLowerCase())
+    ) || [];
+
   // Debug info about filteredUsers
   console.log("Admin page - DISPLAYING ALL USERS:", filteredUsers);
 
@@ -208,8 +211,8 @@ export default function UsersPage() {
           <h1 className="text-3xl font-bold tracking-tight">Users</h1>
           <p className="text-sm text-gray-500 mt-1">
             {users.length} user{users.length !== 1 ? 's' : ''} found
-            <Button 
-              variant="link" 
+            <Button
+              variant="link"
               className="text-xs text-gray-500 pl-2"
               onClick={() => setShowDebug(!showDebug)}
             >
@@ -217,7 +220,7 @@ export default function UsersPage() {
             </Button>
           </p>
         </div>
-        
+
         <div className="flex gap-4 items-center">
           {/* Search input */}
           <div className="relative">
@@ -229,7 +232,7 @@ export default function UsersPage() {
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
-          
+
           {/* Invite user button */}
           <Dialog open={inviteOpen} onOpenChange={setInviteOpen}>
             <DialogTrigger asChild>
@@ -272,7 +275,7 @@ export default function UsersPage() {
           </Dialog>
         </div>
       </div>
-      
+
       {/* User table */}
       {isLoading ? (
         <div className="flex justify-center items-center min-h-[400px]">
@@ -280,7 +283,7 @@ export default function UsersPage() {
         </div>
       ) : error ? (
         <div className="p-4 text-red-500 border border-red-200 rounded-md">
-          <h3 className="font-bold">Error loading users:</h3> 
+          <h3 className="font-bold">Error loading users:</h3>
           <p>{error instanceof Error ? error.message : 'Unknown error'}</p>
           <div className="mt-4">
             <Button onClick={fetchUsers} variant="outline" size="sm">
@@ -328,152 +331,152 @@ export default function UsersPage() {
           )}
           <div className="bg-white rounded-lg shadow overflow-hidden">
             <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Name/Company
-                </th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Email
-                </th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  User ID
-                </th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Created At
-                </th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Admin
-                </th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {filteredUsers.length === 0 ? (
+              <thead className="bg-gray-50">
                 <tr>
-                  <td colSpan={6} className="px-6 py-4 text-center text-sm text-gray-500">
-                    No users found
-                  </td>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Name/Company
+                  </th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Email
+                  </th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    User ID
+                  </th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Created At
+                  </th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Admin
+                  </th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
+                  </th>
                 </tr>
-              ) : (
-                filteredUsers.map((user) => (
-                  <tr key={user.user_id}>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">
-                        {user.full_name || user.name || '-'}
-                        {!user.has_profile && (
-                          <span className="ml-2 px-1.5 py-0.5 bg-yellow-100 text-yellow-800 rounded text-xs">
-                            No Profile
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        {user.company || user.company_name || 'No company information'}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-500">
-                        {user.email || '-'}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-xs font-mono text-gray-500 truncate max-w-[120px]">
-                        {user.user_id}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-xs text-gray-500">
-                        {user.created_at ? new Date(user.created_at).toLocaleDateString() : '-'}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      {user.is_admin === true || user.is_admin === 'true' ? 'Yes' : 'No'} 
-                      {showDebug && <span className="text-xs ml-1">({typeof user.is_admin}: {String(user.is_admin)})</span>}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium flex gap-2">
-                      {/* View user details */}
-                      <Button 
-                        variant="ghost" 
-                        size="sm"
-                        onClick={() => {
-                          setViewUser(user);
-                          setViewOpen(true);
-                        }}
-                      >
-                        <Eye className="h-4 w-4" />
-                      </Button>
-
-                      
-                      {/* Create profile button */}
-                      {!user.has_profile && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="text-xs"
-                          onClick={() => {
-                            if (user.email) {
-                              // Create minimal profile for this user
-                              fetch('/api/admin/users/create-profile', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ user_id: user.user_id })
-                              }).then(response => {
-                                if (response.ok) {
-                                  toast({
-                                    title: "Profile created",
-                                    description: `Created profile for ${user.email}`,
-                                  });
-                                  fetchUsers(); // Refresh
-                                } else {
-                                  toast({
-                                    title: "Error",
-                                    description: "Could not create profile",
-                                    variant: "destructive",
-                                  });
-                                }
-                              });
-                            }
-                          }}
-                        >
-                          Create Profile
-                        </Button>
-                      )}
-
-                      {/* Delete user button */}
-                      <AlertDialog>
-                        <AlertDialogTrigger asChild>
-                          <Button variant="ghost" size="sm">
-                            <Trash2 className="h-4 w-4 text-red-500" />
-                          </Button>
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                            <AlertDialogDescription>
-                              This action cannot be undone. This will permanently delete the user
-                              account and remove all associated data.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction 
-                              onClick={() => user.user_id && deleteUser(user.user_id)}
-                              className="bg-red-600 hover:bg-red-700"
-                            >
-                              Delete
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {filteredUsers.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-4 text-center text-sm text-gray-500">
+                      No users found
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                ) : (
+                  filteredUsers.map((user) => (
+                    <tr key={user.user_id}>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm font-medium text-gray-900">
+                          {user.full_name || user.name || '-'}
+                          {!user.has_profile && (
+                            <span className="ml-2 px-1.5 py-0.5 bg-yellow-100 text-yellow-800 rounded text-xs">
+                              No Profile
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {user.company || user.company_name || 'No company information'}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-500">
+                          {user.email || '-'}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-xs font-mono text-gray-500 truncate max-w-[120px]">
+                          {user.user_id}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-xs text-gray-500">
+                          {user.created_at ? new Date(user.created_at).toLocaleDateString() : '-'}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {user.is_admin === true || user.is_admin === 'true' ? 'Yes' : 'No'}
+                        {showDebug && <span className="text-xs ml-1">({typeof user.is_admin}: {String(user.is_admin)})</span>}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium flex gap-2">
+                        {/* View user details */}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setViewUser(user);
+                            setViewOpen(true);
+                          }}
+                        >
+                          <Eye className="h-4 w-4" />
+                        </Button>
+
+
+                        {/* Create profile button */}
+                        {!user.has_profile && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs"
+                            onClick={() => {
+                              if (user.email) {
+                                // Create minimal profile for this user
+                                fetch('/api/admin/users/create-profile', {
+                                  method: 'POST',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ user_id: user.user_id })
+                                }).then(response => {
+                                  if (response.ok) {
+                                    toast({
+                                      title: "Profile created",
+                                      description: `Created profile for ${user.email}`,
+                                    });
+                                    fetchUsers(); // Refresh
+                                  } else {
+                                    toast({
+                                      title: "Error",
+                                      description: "Could not create profile",
+                                      variant: "destructive",
+                                    });
+                                  }
+                                });
+                              }
+                            }}
+                          >
+                            Create Profile
+                          </Button>
+                        )}
+
+                        {/* Delete user button */}
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button variant="ghost" size="sm">
+                              <Trash2 className="h-4 w-4 text-red-500" />
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                This action cannot be undone. This will permanently delete the user
+                                account and remove all associated data.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>Cancel</AlertDialogCancel>
+                              <AlertDialogAction
+                                onClick={() => user.user_id && deleteUser(user.user_id)}
+                                className="bg-red-600 hover:bg-red-700"
+                              >
+                                Delete
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
 
@@ -486,28 +489,28 @@ export default function UsersPage() {
               Complete information about the selected user.
             </DialogDescription>
           </DialogHeader>
-          
+
           {viewUser && (
             <div className="grid gap-4 py-4">
               {/* Consistent styling for all user detail sections */}
               <div className="border-b pb-3 mb-3">
                 <h3 className="font-semibold mb-3 text-base">Account Information</h3>
-                
+
                 <div className="grid grid-cols-4 items-center gap-4 mb-2">
                   <Label className="text-right font-medium text-sm text-gray-600">User ID</Label>
                   <div className="col-span-3 text-sm font-mono">{viewUser.user_id}</div>
                 </div>
-                
+
                 <div className="grid grid-cols-4 items-center gap-4 mb-2">
                   <Label className="text-right font-medium text-sm text-gray-600">Email</Label>
                   <div className="col-span-3 text-sm">{viewUser.email || '-'}</div>
                 </div>
-                
+
                 <div className="grid grid-cols-4 items-center gap-4 mb-2">
                   <Label className="text-right font-medium text-sm text-gray-600">Admin Status</Label>
                   <div className="col-span-3">
-                    {viewUser.is_admin === true || viewUser.is_admin === 'true' ? 
-                      <span className="px-2 py-1 rounded text-xs bg-blue-100 text-blue-800 font-medium">Yes</span> : 
+                    {viewUser.is_admin === true || viewUser.is_admin === 'true' ?
+                      <span className="px-2 py-1 rounded text-xs bg-blue-100 text-blue-800 font-medium">Yes</span> :
                       <span className="px-2 py-1 rounded text-xs bg-gray-100 font-medium">No</span>}
                     {showDebug && (
                       <span className="ml-2 text-xs text-gray-500">
@@ -516,55 +519,55 @@ export default function UsersPage() {
                     )}
                   </div>
                 </div>
-                
+
                 <div className="grid grid-cols-4 items-center gap-4 mb-2">
                   <Label className="text-right font-medium text-sm text-gray-600">Created</Label>
                   <div className="col-span-3 text-sm">
                     {viewUser.created_at ? new Date(viewUser.created_at).toLocaleString() : '-'}
                   </div>
                 </div>
-                
+
                 <div className="grid grid-cols-4 items-center gap-4 mb-2">
                   <Label className="text-right font-medium text-sm text-gray-600">Last Sign In</Label>
                   <div className="col-span-3 text-sm">
-                    {viewUser.last_sign_in_at ? 
-                      new Date(viewUser.last_sign_in_at).toLocaleString() : 
+                    {viewUser.last_sign_in_at ?
+                      new Date(viewUser.last_sign_in_at).toLocaleString() :
                       'Never'}
                   </div>
                 </div>
               </div>
-              
+
               {/* Profile Information with consistent styling */}
               <div>
                 <h3 className="font-semibold mb-3 text-base">Profile Information</h3>
-                
+
                 <div className="grid grid-cols-4 items-center gap-4 mb-2">
                   <Label className="text-right font-medium text-sm text-gray-600">Full Name</Label>
                   <div className="col-span-3 text-sm">{viewUser.full_name || viewUser.name || '-'}</div>
                 </div>
-                
+
                 <div className="grid grid-cols-4 items-center gap-4 mb-2">
                   <Label className="text-right font-medium text-sm text-gray-600">Company</Label>
                   <div className="col-span-3 text-sm">{viewUser.company || viewUser.company_name || '-'}</div>
                 </div>
-                
+
                 <div className="grid grid-cols-4 items-center gap-4 mb-2">
                   <Label className="text-right font-medium text-sm text-gray-600">Website</Label>
                   <div className="col-span-3 text-sm">
                     {viewUser.website_url ? (
-                      <a href={viewUser.website_url} target="_blank" rel="noopener noreferrer" 
-                         className="text-blue-600 hover:underline">
+                      <a href={viewUser.website_url} target="_blank" rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline">
                         {viewUser.website_url}
                       </a>
                     ) : '-'}
                   </div>
                 </div>
-                
+
                 <div className="grid grid-cols-4 items-center gap-4 mb-2">
                   <Label className="text-right font-medium text-sm text-gray-600">Location</Label>
                   <div className="col-span-3 text-sm">{viewUser.location || '-'}</div>
                 </div>
-                
+
                 {(viewUser.company_description) && (
                   <div className="grid grid-cols-4 items-start gap-4 mb-2">
                     <Label className="text-right font-medium text-sm text-gray-600 mt-1">Description</Label>
@@ -576,10 +579,10 @@ export default function UsersPage() {
               </div>
             </div>
           )}
-          
+
           <DialogFooter>
-            <Button 
-              variant="outline" 
+            <Button
+              variant="outline"
               onClick={() => setViewOpen(false)}
               className="text-sm font-medium"
             >

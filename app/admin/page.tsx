@@ -1,5 +1,8 @@
 'use client';
 
+// Force dynamic rendering for all admin pages
+export const dynamic = "force-dynamic";
+
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 
@@ -171,7 +174,7 @@ export default function AdminDashboard() {
           <p className="text-2xl md:text-3xl font-bold">
             {isLoading ? 'Loading...' : stats?.adminCount || 0}
           </p>
-          <p className="text-gray-500 mt-1 text-sm md:text-base">Users with Admin privileges</p>
+          <p className="text-gray-500 mt-1 text-sm md:text-base">Users with Admin Privileges</p>
         </div>
       </div>
 

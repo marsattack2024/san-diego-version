@@ -186,7 +186,7 @@ The admin interface provides several embedding options:
 (function() {
   window.marlinChatConfig = {
     position: 'bottom-right',
-    title: 'Ask Marlin',
+    title: 'Ask Marlan',
     primaryColor: '#0070f3',
     apiEndpoint: 'https://marlan.photographytoprofits.com/api/widget-chat'
   };

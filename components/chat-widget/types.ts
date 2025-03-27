@@ -85,7 +85,7 @@ export const POSITION_STYLES = {
  */
 export const DEFAULT_CONFIG: ChatWidgetConfig = {
   position: 'bottom-right',
-  title: 'Ask Marlin',
+  title: 'Ask Marlan',
   primaryColor: '#0070f3',
   greeting: 'Hello! How can I help you today?',
   placeholder: 'Type your message...',
