@@ -1,83 +1,113 @@
-// Server Component - No 'use client' directive
+'use client';
 
-import { redirect } from 'next/navigation';
-import { createAdminClient } from '@/utils/supabase/server';
+import React, { useState, useEffect } from 'react';
+import { toast } from '@/components/toast';
 
-// These route options work correctly with server components
+// Force dynamic rendering for this admin page
 export const dynamic = "force-dynamic";
-export const fetchCache = 'force-no-store';
-export const revalidate = 0;
 
-export default async function AdminWidgetPage() {
-  console.log('[Server] AdminWidgetPage: Starting server-side authentication check');
+export default function AdminWidgetPage() {
+  const [timestamp, setTimestamp] = useState(new Date().toISOString());
+  const [isLoading, setIsLoading] = useState(true);
+  const [apiTestResult, setApiTestResult] = useState<any>(null);
+  const [apiTestError, setApiTestError] = useState<string | null>(null);
+  const [adminStatus, setAdminStatus] = useState<boolean | null>(null);
 
-  // Server-side auth check using the service role key to bypass RLS
-  try {
-    // Use admin client with service role key (bypasses RLS)
-    const supabase = createAdminClient();
+  // Fetch admin status and test API access
+  useEffect(() => {
+    const fetchAdminData = async () => {
+      setIsLoading(true);
+      try {
+        console.log("Widget page - Testing admin API access");
+        const response = await fetch('/api/admin/dashboard');
 
-    // Check authentication (this still works even with admin client)
-    const { data: { user } } = await supabase.auth.getUser();
+        // Get detailed error information if available
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          console.error("Widget page - API test failed:", errorData);
 
-    if (!user) {
-      console.log('[Server] AdminWidgetPage: User not authenticated, redirecting to login');
-      redirect('/login');
-    }
+          setApiTestError(`Error ${response.status}: ${response.statusText}`);
+          setAdminStatus(false);
+          return;
+        }
 
-    // Direct DB query to check admin status (bypassing RLS with service role)
-    // First check profiles table
-    const { data: profileData } = await supabase
-      .from('sd_user_profiles')
-      .select('is_admin')
-      .eq('user_id', user.id)
-      .single();
+        const data = await response.json();
+        console.log("Widget page - Admin API test successful");
 
-    // Then check roles table as fallback
-    const { data: roleData } = await supabase
-      .from('sd_user_roles')
-      .select('role')
-      .eq('user_id', user.id)
-      .eq('role', 'admin')
-      .maybeSingle();
+        setApiTestResult({
+          status: response.status,
+          success: true
+        });
+        setAdminStatus(true);
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Failed to test admin access';
+        setApiTestError(errorMessage);
+        console.error('Error testing admin access:', errorMessage);
+        setAdminStatus(false);
+      } finally {
+        setIsLoading(false);
+      }
+    };
 
-    const isAdmin = profileData?.is_admin === true || (roleData && roleData.role === 'admin');
+    fetchAdminData();
+  }, []);
 
-    console.log('[Server] AdminWidgetPage: Admin check result:', {
-      isAdmin,
-      profileAdmin: profileData?.is_admin,
-      hasAdminRole: !!roleData
-    });
-
-    if (!isAdmin) {
-      console.log('[Server] AdminWidgetPage: User not an admin, redirecting to unauthorized');
-      redirect('/unauthorized');
-    }
-
-    // User is authenticated and an admin, render the widget admin page
+  if (isLoading) {
     return (
-      <div className="space-y-6 p-6 border rounded-md">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Admin Widget Page</h1>
-          <p className="text-sm text-muted-foreground mt-2">
-            Configure and manage your chat widget
-          </p>
-        </div>
-
-        {/* Static content since we're using a server component */}
-        <div className="border rounded-md p-4 bg-slate-50">
-          <p><strong>Current Time:</strong> {new Date().toISOString()}</p>
-          <p><strong>Environment:</strong> {process.env.NODE_ENV}</p>
-          <p><strong>Server Authentication:</strong> <span className="text-green-600">✓ Verified</span></p>
-          <p><strong>Admin Status:</strong> <span className="text-green-600">✓ Confirmed</span></p>
-          <p className="text-sm text-muted-foreground mt-4">
-            This widget configuration interface is rendered server-side.
-            Interactive elements will be added in the next iteration.
-          </p>
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <p className="text-lg font-medium">Loading admin panel...</p>
+          <p className="text-sm text-muted-foreground">Verifying admin permissions</p>
         </div>
       </div>
     );
-  } catch (error) {
-    console.error('[Server] AdminWidgetPage: Error checking authentication', error);
-    redirect('/error?message=Error+checking+authentication');
   }
+
+  return (
+    <div className="space-y-6 p-6 border rounded-md">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Admin Widget Page</h1>
+        <p className="text-sm text-muted-foreground mt-2">
+          Configure and manage your chat widget
+        </p>
+      </div>
+
+      {/* API Test Results */}
+      <div className="border rounded-md p-4 bg-yellow-50">
+        <h3 className="font-medium mb-2">Admin API Test Results</h3>
+        {apiTestError ? (
+          <div className="text-red-600 text-sm">
+            <p>Error: {apiTestError}</p>
+            <p className="mt-1">This may indicate an issue with admin permissions.</p>
+          </div>
+        ) : apiTestResult ? (
+          <div className="text-green-600 text-sm">
+            <p>Success! API responded with status: {apiTestResult.status}</p>
+            <p className="mt-1">The admin API access is working correctly.</p>
+          </div>
+        ) : (
+          <p className="text-gray-500 text-sm">Testing API access...</p>
+        )}
+      </div>
+
+      <div className="border rounded-md p-4 bg-slate-50">
+        <p><strong>Current Time:</strong> {timestamp}</p>
+        <p><strong>Environment:</strong> {process.env.NODE_ENV}</p>
+        <p><strong>Admin Status:</strong> {adminStatus ? 'Yes' : 'No'}</p>
+        <button
+          className="px-4 py-2 mt-2 bg-blue-500 text-white rounded-md"
+          onClick={() => {
+            console.log('Update timestamp clicked in widget page');
+            setTimestamp(new Date().toISOString());
+            toast({
+              title: "Timestamp updated",
+              description: "Current time has been refreshed."
+            });
+          }}
+        >
+          Update Timestamp
+        </button>
+      </div>
+    </div>
+  );
 } 

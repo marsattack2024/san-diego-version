@@ -1,29 +1,18 @@
-import { Metadata } from 'next'
+/**
+ * Admin Widget Layout
+ * This is a minimal layout that allows the page to render properly
+ * and satisfies Next.js type system requirements.
+ */
 
-// Server component layout that exports route configuration
-
-// Force dynamic rendering for proper authentication 
+// Export configuration matching what Next.js expects
 export const dynamic = "force-dynamic";
-
-// Force all requests to revalidate for this route
-export const fetchCache = 'force-no-store';
-
-// Disable caching for this route
+export const fetchCache = "default-no-store";
 export const revalidate = 0;
 
-export const metadata: Metadata = {
-  title: 'Widget Management',
-  description: 'Configure and manage the embedding of the Marlin chat widget',
-}
-
 export default function AdminWidgetLayout({
-  children,
+    children,
 }: {
-  children: React.ReactNode
+    children: React.ReactNode;
 }) {
-  return (
-    <div className="admin-widget-layout">
-      {children}
-    </div>
-  );
+    return children;
 } 

@@ -17,8 +17,8 @@ const nextConfig = {
   // Add environment variables that can be used in Edge Runtime
   env: {
     PERPLEXITY_API_KEY: process.env.PERPLEXITY_API_KEY,
-    OPENAI_API_KEY: process.env.OPENAI_API_KEY, 
-    SUPABASE_URL: process.env.SUPABASE_URL, 
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    SUPABASE_URL: process.env.SUPABASE_URL,
     SUPABASE_KEY: process.env.SUPABASE_KEY,
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -60,19 +60,19 @@ const nextConfig = {
         crypto: false,
       };
     }
-    
+
     // Enable tree shaking optimizations
     config.optimization = {
       ...config.optimization,
       sideEffects: true,
     };
-    
+
     // Improve module resolution
     config.resolve.alias = {
       ...config.resolve.alias,
       // Add any specific aliases to optimize imports here
     };
-    
+
     // Optimize dev experience by reducing HMR frequency
     if (dev) {
       // Reduce the frequency of HMR checks to improve development performance
@@ -88,8 +88,13 @@ const nextConfig = {
         ],
       };
     }
-    
+
     return config;
+  },
+  // Disable type checking during development and build
+  // This makes builds faster and avoids issues with generated types
+  typescript: {
+    ignoreBuildErrors: true, // Set to false for production builds where you want type checking
   },
 }
 

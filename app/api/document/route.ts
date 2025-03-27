@@ -46,41 +46,15 @@ const mockDocuments = {
   }
 };
 
-export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const id = searchParams.get('id');
-
-  // If no ID is provided, return all documents
-  if (!id) {
-    return NextResponse.json(Object.values(mockDocuments));
-  }
-
-  // If ID is provided, return the specific document
-  const document = mockDocuments[id as keyof typeof mockDocuments];
-  
-  if (!document) {
-    return NextResponse.json([]);
-  }
-
-  return NextResponse.json([document]);
+export async function GET() {
+  return NextResponse.json({
+    message: 'Document API endpoint',
+    status: 'Not implemented'
+  }, { status: 501 });
 }
 
-export async function POST(request: NextRequest) {
-  const body = await request.json();
-  const { title, content, kind } = body;
-
-  // Create a new document
-  const id = generateUUID();
-  const newDocument = {
-    id,
-    title: title || 'Untitled Document',
-    content: content || '',
-    kind: kind || 'text',
-    userId: 'user-1',
-    createdAt: new Date().toISOString(),
-  };
-
-  // In a real app, you would save this to a database
-  // For now, we'll just return the new document
-  return NextResponse.json([newDocument]);
+export async function POST() {
+  return NextResponse.json({
+    error: 'Method not implemented'
+  }, { status: 501 });
 } 

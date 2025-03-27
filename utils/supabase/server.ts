@@ -30,8 +30,10 @@ export const createClient = cache(async () => {
   )
 })
 
-// Admin client for bypassing RLS (server-side only)
-export const createAdminClient = () => {
+// Admin client for bypassing RLS (server-side only) while maintaining user auth
+export const createAdminClient = cache(async () => {
+  const cookieStore = await cookies()
+
   try {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY
@@ -46,16 +48,23 @@ export const createAdminClient = () => {
       throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL environment variable')
     }
 
+    // Create admin client but WITH cookies to maintain session
     return createServerClient(
       supabaseUrl,
       serviceRoleKey,
       {
         cookies: {
-          async getAll() {
-            return []
+          getAll() {
+            return cookieStore.getAll()
           },
-          async setAll(cookiesToSet) {
-            // Admin client doesn't need to set cookies
+          setAll(cookiesToSet) {
+            try {
+              cookiesToSet.forEach(({ name, value, options }) =>
+                cookieStore.set(name, value, options)
+              )
+            } catch {
+              // This can be ignored in Server Components
+            }
           }
         }
       }
@@ -64,4 +73,4 @@ export const createAdminClient = () => {
     console.error('Failed to create admin client', error)
     throw error
   }
-}
+})

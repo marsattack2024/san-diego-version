@@ -8,19 +8,19 @@ async function getAuthenticatedUser(request?: NextRequest) {
   try {
     const supabase = await createServerClient();
     const { data: { user } } = await supabase.auth.getUser();
-    
+
     if (user) {
       return { user, serverClient: supabase, errorResponse: null };
     }
-    
-    return { 
-      user: null, 
+
+    return {
+      user: null,
       serverClient: null,
       errorResponse: NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     };
   } catch (error) {
-    edgeLogger.error('Authentication error', { 
-      error: error instanceof Error ? error.message : String(error) 
+    edgeLogger.error('Authentication error', {
+      error: error instanceof Error ? error.message : String(error)
     });
     return {
       user: null,
@@ -59,23 +59,23 @@ export async function GET(_request: NextRequest) {
   try {
     // Get authenticated user
     const { user, serverClient, errorResponse } = await getAuthenticatedUser(_request);
-    
+
     // Return error response if authentication failed
     if (errorResponse) {
       return errorResponse;
     }
-    
+
     // Get the session ID from query params if provided
     const url = new URL(_request.url);
     const sessionId = url.searchParams.get('sessionId');
     const limit = parseInt(url.searchParams.get('limit') || '50');
-    
+
     edgeLogger.info('Debug checking chat histories', {
       userId: user.id,
       sessionId: sessionId || 'all',
       limit
     });
-    
+
     // Query to get recent histories
     let query = serverClient
       .from('sd_chat_histories')
@@ -83,14 +83,14 @@ export async function GET(_request: NextRequest) {
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
       .limit(limit);
-    
+
     // Filter by session ID if provided
     if (sessionId) {
       query = query.eq('session_id', sessionId);
     }
-    
+
     const { data: messages, error: messagesError } = await query;
-    
+
     if (messagesError) {
       edgeLogger.error('Error fetching chat histories for debug', {
         error: messagesError,
@@ -98,22 +98,22 @@ export async function GET(_request: NextRequest) {
       });
       return NextResponse.json({ error: 'Failed to fetch chat histories' }, { status: 500 });
     }
-    
+
     // Get distinct sessions involved
     const sessionIds = [...new Set((messages as ChatMessage[])?.map(m => m.session_id) || [])];
-    
+
     // Get session info for these sessions
     const { data: sessions } = await serverClient
       .from('sd_chat_sessions')
       .select('id, title, created_at, updated_at')
       .in('id', sessionIds);
-    
+
     // Create session lookup map
     const sessionMap: SessionMap = {};
     (sessions as ChatSession[])?.forEach(s => {
       sessionMap[s.id] = s;
     });
-    
+
     // Build response data
     return NextResponse.json({
       messageCount: messages?.length || 0,
@@ -134,9 +134,15 @@ export async function GET(_request: NextRequest) {
       }
     });
   } catch (error) {
-    edgeLogger.error('Error in debug/histories endpoint', { 
-      error: error instanceof Error ? error.message : String(error) 
+    edgeLogger.error('Error in debug/histories endpoint', {
+      error: error instanceof Error ? error.message : String(error)
     });
     return NextResponse.json({ error: 'Debug check failed', details: String(error) }, { status: 500 });
   }
+}
+
+export async function POST() {
+  return NextResponse.json({
+    error: 'Method not implemented'
+  }, { status: 501 });
 } 
