@@ -105,7 +105,7 @@ export default function Page() {
 | `title` | string | `'Chat with Marlan'` | Title displayed in widget header |
 | `subtitle` | string | `'Get answers to your photography questions'` | Subtitle displayed in widget header |
 | `placeholder` | string | `'Type your message here...'` | Placeholder text for input |
-| `initialMessage` | string | `'Hi there! How can I help you today?'` | First message from assistant |
+| `initialMessage` | string | `'I'm your Mastermind AI companion! I can answer marketing and tech questions right now! What can I help with?'` | First message from assistant |
 | `siteId` | string | `'default'` | Site identifier (for multi-site setups) |
 
 ## Troubleshooting
