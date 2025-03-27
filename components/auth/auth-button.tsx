@@ -16,12 +16,12 @@ export function AuthButton() {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
-  
+
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
-  
+
   useEffect(() => {
     // Check if user is logged in
     const checkUser = async () => {
@@ -34,19 +34,19 @@ export function AuthButton() {
         setLoading(false);
       }
     };
-    
+
     checkUser();
-    
+
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user || null);
     });
-    
+
     return () => {
       subscription.unsubscribe();
     };
   }, [supabase]);
-  
+
   const handleSignIn = () => {
     router.push('/login');
   };
@@ -59,7 +59,7 @@ export function AuthButton() {
       console.error('Error signing out:', error);
     }
   };
-  
+
   if (loading) {
     return (
       <Button variant="ghost" size="sm" disabled>
@@ -67,12 +67,12 @@ export function AuthButton() {
       </Button>
     );
   }
-  
+
   if (!user) {
     return (
-      <Button 
-        onClick={handleSignIn} 
-        variant="default" 
+      <Button
+        onClick={handleSignIn}
+        variant="default"
         size="sm"
         className="gap-2"
       >
@@ -81,12 +81,12 @@ export function AuthButton() {
       </Button>
     );
   }
-  
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button 
-          variant="outline" 
+        <Button
+          variant="outline"
           size="sm"
           className="gap-2"
         >

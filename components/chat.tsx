@@ -660,7 +660,7 @@ export function Chat({
             isLoading={isLoading}
           />
         )}
-        <div ref={chatContainerRef} className="flex-1 overflow-y-auto pb-8 pt-14">
+        <div ref={chatContainerRef} className="flex-1 overflow-y-auto pb-8">
           <Messages
             chatId={id}
             isLoading={isLoading}

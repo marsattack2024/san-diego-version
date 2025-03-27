@@ -34,7 +34,7 @@ export function SidebarUserNav({ user }: { user: User }) {
   const router = useRouter();
   const { profile } = useAuth(); // Use cached profile from auth context
   const logout = useAuthStore(state => state.logout);
-  
+
   // No need to fetch profile, it's already available from auth context
 
   const handleSignOut = async () => {
@@ -62,7 +62,7 @@ export function SidebarUserNav({ user }: { user: User }) {
                 )}
               </div>
               <span className="truncate">
-                {profile?.company_name || user?.email || `User ${user.id.substring(0,8)}`}
+                {profile?.company_name || user?.email || `User ${user.id.substring(0, 8)}`}
               </span>
               <ChevronUp className="ml-auto" />
             </SidebarMenuButton>
@@ -80,7 +80,7 @@ export function SidebarUserNav({ user }: { user: User }) {
                 <DropdownMenuSeparator />
               </>
             )}
-            
+
             <DropdownMenuItem
               className="cursor-pointer"
               onSelect={() => router.push('/profile')}
@@ -97,7 +97,7 @@ export function SidebarUserNav({ user }: { user: User }) {
                 </>
               )}
             </DropdownMenuItem>
-            
+
             <DropdownMenuItem
               className="cursor-pointer"
               onSelect={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
