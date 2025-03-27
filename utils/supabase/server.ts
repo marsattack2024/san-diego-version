@@ -1,8 +1,9 @@
 import { cookies } from 'next/headers'
 import { createServerClient } from '@supabase/ssr'
 import { cache } from 'react'
+import { type SupabaseClient } from '@supabase/supabase-js'
 
-export async function createClient() {
+export const createClient = cache(async () => {
   const cookieStore = await cookies()
 
   return createServerClient(
@@ -27,24 +28,24 @@ export async function createClient() {
       },
     }
   )
-}
+})
 
 // Admin client for bypassing RLS (server-side only)
 export const createAdminClient = () => {
   try {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-    
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY
+
     if (!serviceRoleKey) {
       console.error('Missing Supabase service role key. Admin operations will fail.')
-      throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY environment variable')
+      throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY or SUPABASE_KEY environment variable')
     }
-    
+
     if (!supabaseUrl) {
       console.error('Missing Supabase URL. Admin operations will fail.')
       throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL environment variable')
     }
-    
+
     return createServerClient(
       supabaseUrl,
       serviceRoleKey,
