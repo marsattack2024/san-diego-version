@@ -875,6 +875,110 @@ export const historyService = {
   },
 
   /**
+   * Rename a chat session
+   * @param chatId ID of the chat to rename
+   * @param title New title for the chat
+   * @returns Promise resolving to success status
+   */
+  async renameChat(chatId: string, title: string): Promise<boolean> {
+    const startTime = performance.now();
+    const operationId = Math.random().toString(36).substring(2, 10);
+
+    if (!chatId || !title.trim()) {
+      console.error(`[History:${operationId}] Invalid chat ID or title for rename operation`);
+      return false;
+    }
+
+    console.log(`[History:${operationId}] Renaming chat ${chatId.slice(0, 8)} to "${title.substring(0, 30)}${title.length > 30 ? '...' : ''}"`);
+
+    try {
+      // Check for auth cookies to avoid unnecessary API calls
+      if (!this.checkForAuthCookies()) {
+        console.warn(`[History:${operationId}] No auth cookies found, cannot rename chat`);
+        return false;
+      }
+
+      const response = await fetch(`/api/chat/${chatId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache',
+          'x-operation-id': operationId
+        },
+        credentials: 'include', // Include cookies for auth
+        cache: 'no-store', // Ensure fresh data
+        body: JSON.stringify({ title })
+      });
+
+      if (!response.ok) {
+        const duration = Math.round(performance.now() - startTime);
+
+        // Check for auth issues
+        if (response.status === 401 || response.status === 403) {
+          // Handle auth failure consistently with other methods
+          setAuthFailureState(true);
+          console.warn(`[History:${operationId}] Authentication failed (${response.status}) when renaming chat.`, {
+            chatId: chatId.slice(0, 8),
+            duration
+          });
+        } else {
+          const errorText = await response.text().catch(() => 'Unknown error');
+          console.error(`[History:${operationId}] Failed to rename chat:`, {
+            statusCode: response.status,
+            statusText: response.statusText,
+            errorText,
+            duration,
+            chatId: chatId.slice(0, 8)
+          });
+        }
+        return false;
+      }
+
+      // Reset auth failure state on success
+      setAuthFailureState(false);
+
+      // Invalidate chat history cache
+      this.invalidateCache();
+
+      // Update existing cache to reflect the renamed chat
+      try {
+        const cacheKey = 'chat_history';
+        const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
+
+        if (cachedData) {
+          console.log(`[History:${operationId}] Updating cached chat list after rename`);
+          const updatedChats = cachedData.map((chat: Chat) => {
+            if (chat.id === chatId) {
+              return { ...chat, title };
+            }
+            return chat;
+          });
+          clientCache.set(cacheKey, updatedChats);
+        }
+      } catch (cacheError) {
+        console.warn(`[History:${operationId}] Error updating cache after rename:`, cacheError);
+      }
+
+      const duration = Math.round(performance.now() - startTime);
+      console.log(`[History:${operationId}] Successfully renamed chat`, {
+        chatId: chatId.slice(0, 8),
+        duration
+      });
+
+      return true;
+    } catch (error) {
+      const duration = Math.round(performance.now() - startTime);
+      console.error(`[History:${operationId}] Error renaming chat:`, {
+        error,
+        duration,
+        chatId: chatId.slice(0, 8),
+        message: error instanceof Error ? error.message : String(error)
+      });
+      return false;
+    }
+  },
+
+  /**
    * Invalidate cache and clear any stale pending requests
    */
   invalidateCache(): void {

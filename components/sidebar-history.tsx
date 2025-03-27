@@ -27,6 +27,7 @@ import { User } from '@supabase/supabase-js';
 import {
   MoreHorizontalIcon,
   TrashIcon,
+  PencilEditIcon,
 } from '@/components/icons';
 import {
   AlertDialog,
@@ -48,6 +49,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { createClient } from '@/utils/supabase/client';
 import { cn } from '@/lib/utils';
 import { throttle } from 'lodash';
+import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 
 // Consistent type definition for grouped chats
 type GroupedChats = {
@@ -94,12 +97,14 @@ const PureChatItem = ({
   chat,
   isActive,
   onDelete,
+  onRename,
   setOpenMobile,
   isDeleting = false,
 }: {
   chat: Chat;
   isActive: boolean;
   onDelete: (chatId: string) => void;
+  onRename: (chatId: string, newTitle: string) => void;
   setOpenMobile: (open: boolean) => void;
   isDeleting?: boolean;
 }) => {
@@ -137,13 +142,22 @@ const PureChatItem = ({
             <DropdownMenuItem
               onClick={(e) => {
                 e.preventDefault();
+                onRename(chat.id, chat.title || "");
+              }}
+            >
+              <PencilEditIcon size={16} />
+              <span className="ml-2">Rename</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={(e) => {
+                e.preventDefault();
                 onDelete(chat.id);
               }}
               className="text-red-500 hover:text-red-600 focus:text-red-500"
               disabled={isDeleting}
             >
               <TrashIcon size={16} />
-              <span>{isDeleting ? "Deleting..." : "Delete"}</span>
+              <span className="ml-2">{isDeleting ? "Deleting..." : "Delete"}</span>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -189,6 +203,10 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   const [isMobile, setIsMobile] = useState(false);
   const [isEmpty, setIsEmpty] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isRenaming, setIsRenaming] = useState<Record<string, boolean>>({});
+  const [showRenameDialog, setShowRenameDialog] = useState(false);
+  const [renameId, setRenameId] = useState<string | null>(null);
+  const [renameTitle, setRenameTitle] = useState('');
 
   // Helper functions for polling
   const detectMobile = () => {
@@ -523,6 +541,47 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     }
   }, [router, id]);
 
+  // Function to open rename dialog
+  const handleRenameStart = useCallback((chatId: string, currentTitle: string) => {
+    setRenameId(chatId);
+    setRenameTitle(currentTitle);
+    setShowRenameDialog(true);
+  }, []);
+
+  // Function to handle renaming
+  const handleRename = useCallback(async () => {
+    if (!renameId || !renameTitle.trim()) return;
+
+    try {
+      setIsRenaming(prev => ({ ...prev, [renameId]: true }));
+      const success = await historyService.renameChat(renameId, renameTitle);
+
+      if (success) {
+        // Update the history in memory
+        setHistory(prev => prev.map(chat =>
+          chat.id === renameId ? { ...chat, title: renameTitle } : chat
+        ));
+
+        // Show success toast in development mode
+        if (process.env.NODE_ENV === 'development') {
+          toast.success('Chat renamed successfully', {
+            duration: 2000,
+            position: 'bottom-right'
+          });
+        }
+      } else {
+        toast.error('Failed to rename chat');
+      }
+    } catch (error) {
+      console.error('Error renaming chat:', error);
+      toast.error('Failed to rename chat');
+    } finally {
+      setIsRenaming(prev => ({ ...prev, [renameId]: false }));
+      setShowRenameDialog(false);
+      setRenameId(null);
+    }
+  }, [renameId, renameTitle]);
+
   // Function to handle delete confirmation
   const handleConfirmDelete = useCallback(() => {
     if (deleteId) {
@@ -566,6 +625,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
                   chat={chat}
                   isActive={chat.id === id}
                   onDelete={handleDeleteWithConfirmation}
+                  onRename={handleRenameStart}
                   setOpenMobile={setOpenMobile}
                   isDeleting={isDeleting[chat.id] || false}
                 />
@@ -587,6 +647,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
                   chat={chat}
                   isActive={chat.id === id}
                   onDelete={handleDeleteWithConfirmation}
+                  onRename={handleRenameStart}
                   setOpenMobile={setOpenMobile}
                   isDeleting={isDeleting[chat.id] || false}
                 />
@@ -608,6 +669,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
                   chat={chat}
                   isActive={chat.id === id}
                   onDelete={handleDeleteWithConfirmation}
+                  onRename={handleRenameStart}
                   setOpenMobile={setOpenMobile}
                   isDeleting={isDeleting[chat.id] || false}
                 />
@@ -632,6 +694,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
                       chat={chat}
                       isActive={chat.id === id}
                       onDelete={handleDeleteWithConfirmation}
+                      onRename={handleRenameStart}
                       setOpenMobile={setOpenMobile}
                       isDeleting={isDeleting[chat.id] || false}
                     />
@@ -651,6 +714,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
                     chat={chat}
                     isActive={chat.id === id}
                     onDelete={handleDeleteWithConfirmation}
+                    onRename={handleRenameStart}
                     setOpenMobile={setOpenMobile}
                     isDeleting={isDeleting[chat.id] || false}
                   />
@@ -742,6 +806,38 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <Dialog open={showRenameDialog} onOpenChange={setShowRenameDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rename Chat</DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            <Input
+              value={renameTitle}
+              onChange={(e) => setRenameTitle(e.target.value)}
+              placeholder="Enter a new name for this chat"
+              className="w-full"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handleRename();
+                }
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowRenameDialog(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleRename}
+              disabled={isRenaming[renameId || ''] || !renameTitle.trim()}
+            >
+              {isRenaming[renameId || ''] ? 'Renaming...' : 'Rename'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
