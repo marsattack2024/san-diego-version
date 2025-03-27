@@ -16,6 +16,8 @@ async function testChatTools() {
 
   // Test deep search tool
   console.log('\n--- Testing Deep Search Tool ---');
+  console.log('Deep search functionality has been removed.');
+  /*
   try {
     console.log('Executing deep search...');
     const deepSearchResult = await chatTools.deepSearch.execute({ 
@@ -25,13 +27,14 @@ async function testChatTools() {
   } catch (error) {
     console.error('Deep search test failed:', error);
   }
+  */
 
   // Test web scraper tool
   console.log('\n--- Testing Web Scraper Tool ---');
   try {
     console.log('Executing web scraper...');
-    const webScraperResult = await chatTools.webScraper.execute({ 
-      url: 'https://www.example.com' 
+    const webScraperResult = await chatTools.webScraper.execute({
+      url: 'https://www.example.com'
     }, mockToolOptions);
     console.log('Web scraper result:', webScraperResult);
   } catch (error) {
@@ -42,8 +45,8 @@ async function testChatTools() {
   console.log('\n--- Testing URL Detection Tool ---');
   try {
     console.log('Executing URL detection...');
-    const urlDetectionResult = await chatTools.detectAndScrapeUrls.execute({ 
-      text: 'Check out this website: https://www.example.com and also https://www.mozilla.org' 
+    const urlDetectionResult = await chatTools.detectAndScrapeUrls.execute({
+      text: 'Check out this website: https://www.example.com and also https://www.mozilla.org'
     }, mockToolOptions);
     console.log('URL detection result:', urlDetectionResult);
   } catch (error) {

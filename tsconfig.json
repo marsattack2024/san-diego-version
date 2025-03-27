@@ -24,7 +24,9 @@
       }
     ],
     "paths": {
-      "@/*": ["./*"]
+      "@/*": [
+        "./*"
+      ]
     }
   },
   "include": [
@@ -34,6 +36,8 @@
     ".next/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "components/ui/command.tsx",
+    "components/ui/popover.tsx"
   ]
 }

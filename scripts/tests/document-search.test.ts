@@ -17,21 +17,21 @@ const TEST_QUERIES = [
  */
 async function testFindRelevantContent(): Promise<void> {
   console.log('Testing findRelevantContent function:');
-  
+
   for (const query of TEST_QUERIES) {
     console.log(`\nQuery: "${query}"`);
-    
+
     const startTime = Date.now();
     const results = await findRelevantContent(query);
     const duration = Date.now() - startTime;
-    
+
     if (!results || results.length === 0) {
       console.log(`❌ No relevant documents found (${duration}ms)`);
       continue;
     }
-    
+
     console.log(`✅ Found ${results.length} relevant documents in ${duration}ms`);
-    
+
     // Display the top result
     const topResult = results[0];
     console.log('\nTop result:');
@@ -45,28 +45,32 @@ async function testFindRelevantContent(): Promise<void> {
  */
 async function testFindSimilarDocumentsOptimized(): Promise<void> {
   console.log('\nTesting findSimilarDocumentsOptimized function:');
-  
+
   for (const query of TEST_QUERIES) {
     console.log(`\nQuery: "${query}"`);
-    
+
     const { documents, metrics } = await findSimilarDocumentsOptimized(query);
-    
+
     if (!documents || documents.length === 0) {
       console.log(`❌ No documents found (${metrics.retrievalTimeMs}ms)`);
       continue;
     }
-    
+
     console.log(`✅ Found ${documents.length} documents in ${metrics.retrievalTimeMs}ms`);
     console.log('Performance metrics:');
     console.log(`- Average similarity: ${metrics.averageSimilarity.toFixed(4)}`);
     console.log(`- Highest similarity: ${metrics.highestSimilarity.toFixed(4)}`);
     console.log(`- Retrieval time: ${metrics.retrievalTimeMs}ms`);
-    
+
     // Display the top result
     const topResult = documents[0];
     console.log('\nTop result:');
     console.log(`Content: ${topResult.content.substring(0, 100)}...`);
-    console.log(`Similarity: ${topResult.similarity.toFixed(4)}`);
+    if (topResult.similarity !== undefined) {
+      console.log(`Similarity: ${topResult.similarity.toFixed(4)}`);
+    } else {
+      console.log('Similarity: N/A');
+    }
   }
 }
 

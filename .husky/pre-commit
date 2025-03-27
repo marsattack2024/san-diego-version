@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+# Run TypeScript type checking before commit
+npx tsc --noEmit
+
+# Run lint-staged to run linters on specific staged files
+npx lint-staged

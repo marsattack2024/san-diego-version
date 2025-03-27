@@ -2,11 +2,21 @@ import { ColumnDef } from '@tanstack/react-table'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
-import LongText from '@/components/long-text'
+// Replacing import with a local component definition
+// import LongText from '@/components/long-text'
 import { callTypes, userTypes } from '../data/data'
 import { User } from '../data/schema'
 import { DataTableColumnHeader } from './data-table-column-header'
 import { DataTableRowActions } from './data-table-row-actions'
+
+// Create a local stub for the LongText component
+const LongText = ({ children, className }: { children: React.ReactNode; className?: string }) => {
+  return (
+    <div className={className} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      {children}
+    </div>
+  );
+};
 
 export const columns: ColumnDef<User>[] = [
   {

@@ -22,30 +22,32 @@ export class ResponseTransformer extends TransformStream<Uint8Array, Uint8Array>
     let fullText = '';
     const textDecoder = new TextDecoder();
     const textEncoder = new TextEncoder();
-    
+
     super({
       transform(chunk, controller) {
         try {
           // Decode the chunk and accumulate text
           const decodedChunk = textDecoder.decode(chunk, { stream: true });
           fullText += decodedChunk;
-          
+
           // Pass through the chunk unmodified to allow streaming
           controller.enqueue(chunk);
         } catch (error) {
-          edgeLogger.error('Error transforming chunk', { error });
+          edgeLogger.error('Error transforming chunk', {
+            error: error instanceof Error ? error.message : String(error)
+          });
           controller.error(error);
         }
       },
-      
+
       async flush(controller) {
         try {
           // Make sure we decode any remaining bytes
           fullText += textDecoder.decode();
-          
+
           // Validate the full text
           const validatedText = validateFn(fullText);
-          
+
           // Log validation results
           const wasModified = validatedText !== fullText;
           edgeLogger.info(wasModified ? 'Fixed response with validation function' : 'Response validation completed', {
@@ -53,19 +55,19 @@ export class ResponseTransformer extends TransformStream<Uint8Array, Uint8Array>
             fixedLength: validatedText.length,
             wasModified
           });
-          
+
           // If the validation modified the text, we need to add the difference as a final chunk
           if (wasModified && validatedText.length > fullText.length) {
             // Get the appended text (what was added to the end)
             const appendedText = validatedText.slice(fullText.length);
-            
+
             // Send the difference as a final chunk
             controller.enqueue(textEncoder.encode(appendedText));
           }
-          
+
           // Don't store in database - client side handles this
           // This prevents duplicate message entries
-          
+
           // Log that we're delegating storage to the client
           if (options.userId && options.chatId) {
             edgeLogger.debug('Skipping server-side message storage (delegated to client)', {
@@ -75,7 +77,9 @@ export class ResponseTransformer extends TransformStream<Uint8Array, Uint8Array>
             });
           }
         } catch (error) {
-          edgeLogger.error('Error in response transformer flush', { error });
+          edgeLogger.error('Error in response transformer flush', {
+            error: error instanceof Error ? error.message : String(error)
+          });
         }
       }
     });

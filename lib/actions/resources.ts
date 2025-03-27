@@ -33,14 +33,16 @@ export async function createResource(input: NewResourceParams) {
 
     if (embeddingError) throw embeddingError;
 
-    edgeLogger.info('Resource created successfully', { 
+    edgeLogger.info('Resource created successfully', {
       resourceId: resource.id,
       contentLength: content.length
     });
 
     return 'Resource successfully created and embedded.';
   } catch (error) {
-    edgeLogger.error('Failed to create resource', { error });
+    edgeLogger.error('Failed to create resource', {
+      error: error instanceof Error ? error.message : String(error)
+    });
     if (error instanceof Error) {
       return error.message.length > 0 ? error.message : 'Error creating resource';
     }

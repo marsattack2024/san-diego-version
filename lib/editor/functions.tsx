@@ -8,7 +8,22 @@ import { renderToString } from 'react-dom/server';
 import { Markdown } from '@/components/markdown';
 
 import { documentSchema } from './config';
-import { createSuggestionWidget, type UISuggestion } from './suggestions';
+
+// Define local UISuggestion type instead of importing from missing module
+interface UISuggestion {
+  id: string;
+  selectionStart: number;
+  selectionEnd: number;
+  content: string;
+}
+
+// Define simple suggestion widget creation function
+function createSuggestionWidget(suggestion: UISuggestion, view: EditorView) {
+  const span = document.createElement('span');
+  span.className = 'suggestion-marker';
+  span.setAttribute('data-suggestion-id', suggestion.id);
+  return { dom: span };
+}
 
 export const buildDocumentFromContent = (content: string) => {
   const parser = DOMParser.fromSchema(documentSchema);

@@ -1,5 +1,70 @@
+import { edgeLogger } from '@/lib/logger/edge-logger';
+
+// Define the ReadableStreamController type for server-side event streaming
+type ReadableStreamController<T> = ReadableStreamDefaultController<T>;
+
+// Track active connections on the server side
+const serverClients = new Set<ReadableStreamController<Uint8Array>>();
+
 /**
- * EventSource connection manager to handle reconnections and prevent duplicates
+ * Send an event to all connected event stream clients
+ * Server-side function to broadcast events to all connected clients
+ */
+export function sendEventToClients(event: { type: string; status: string; details?: string }) {
+  const eventData = `data: ${JSON.stringify(event)}\n\n`;
+  
+  // Convert string to Uint8Array
+  const encoder = new TextEncoder();
+  const data = encoder.encode(eventData);
+  
+  // Send to all connected clients
+  serverClients.forEach((client) => {
+    try {
+      client.enqueue(data);
+    } catch (err: unknown) {
+      edgeLogger.error('Error sending event to client', { 
+        error: err instanceof Error ? err.message : String(err) 
+      });
+      // Remove failed clients from the set
+      serverClients.delete(client);
+    }
+  });
+}
+
+/**
+ * Helper function to trigger deep search events
+ */
+export function triggerDeepSearchEvent(status: 'started' | 'completed' | 'failed', details?: string) {
+  sendEventToClients({
+    type: 'deepSearch',
+    status,
+    details
+  });
+}
+
+/**
+ * Add a client controller to the connected clients list
+ */
+export function addEventClient(controller: ReadableStreamController<Uint8Array>) {
+  serverClients.add(controller);
+}
+
+/**
+ * Remove a client controller from the connected clients list
+ */
+export function removeEventClient(controller: ReadableStreamController<Uint8Array>) {
+  serverClients.delete(controller);
+}
+
+/**
+ * Get the current number of connected clients
+ */
+export function getClientCount(): number {
+  return serverClients.size;
+}
+
+/**
+ * Client-side EventSource connection manager to handle reconnections and prevent duplicates
  */
 export class EventsManager {
   private static instance: EventsManager | null = null;

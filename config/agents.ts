@@ -1,4 +1,10 @@
-import { Agent } from '@/types/chat/chat';
+// Define Agent interface locally rather than importing from a missing module
+interface Agent {
+  id: string;
+  name: string;
+  description: string;
+  systemPrompt: string;
+}
 
 export const agents: Agent[] = [
   {

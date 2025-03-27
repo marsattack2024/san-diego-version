@@ -30,22 +30,22 @@ async function handler(request: NextRequest) {
         { status: 405 }
       );
     }
-    
+
     // Parse and validate the request body
     const rawData = await request.json().catch(() => ({}));
-    
+
     // Validate using our utility with Zod schema
     const validationResult = validateWithZod(
       rawData,
       ExampleRequestSchema,
       'Invalid example request data'
     );
-    
+
     // Handle validation errors
     if (!validationResult.success || !validationResult.data) {
       return NextResponse.json(
-        { 
-          error: 'Validation error', 
+        {
+          error: 'Validation error',
           details: validationResult.errors?.errors.map(e => ({
             path: e.path.join('.'),
             message: e.message
@@ -54,23 +54,23 @@ async function handler(request: NextRequest) {
         { status: 400 }
       );
     }
-    
+
     // Extract validated data
     const data = validationResult.data as ExampleRequest;
-    
+
     // Get user ID from header (set by auth middleware)
     const userId = request.headers.get('x-user-id');
-    
+
     // Log successful request (sanitized)
     edgeLogger.info('Example endpoint called', {
-      userId,
+      userId: userId || undefined,
       requestType: data.requestType,
       // Don't log PII like email or full message
     });
-    
+
     // Process the validated data
     // ... your business logic here ...
-    
+
     // Return successful response
     return NextResponse.json({
       success: true,
@@ -83,7 +83,7 @@ async function handler(request: NextRequest) {
       error: error instanceof Error ? error.message : String(error),
       stack: error instanceof Error ? error.stack : undefined
     });
-    
+
     // Return generic error to client
     return NextResponse.json(
       { error: 'Internal server error' },

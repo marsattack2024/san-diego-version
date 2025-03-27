@@ -1,5 +1,6 @@
-import React, { useState } from 'react'
-import useDialogState from '@/hooks/use-dialog-state'
+'use client';
+
+import * as React from 'react';
 import { User } from '../data/schema'
 
 type UsersDialogType = 'invite' | 'add' | 'edit' | 'delete'
@@ -18,8 +19,8 @@ interface Props {
 }
 
 export default function UsersProvider({ children }: Props) {
-  const [open, setOpen] = useDialogState<UsersDialogType>(null)
-  const [currentRow, setCurrentRow] = useState<User | null>(null)
+  const [open, setOpen] = React.useState<UsersDialogType | null>(null)
+  const [currentRow, setCurrentRow] = React.useState<User | null>(null)
 
   return (
     <UsersContext.Provider value={{ open, setOpen, currentRow, setCurrentRow }}>

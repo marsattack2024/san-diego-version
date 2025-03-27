@@ -10,14 +10,14 @@ async function isAdmin(supabase: any, userId: string) {
 }
 
 // POST /api/admin/users/invite - Invite a new user
-export async function POST(request: Request) {
+export async function POST(request: Request): Promise<Response> {
   // Get cookies with pre-fetching (best practice for NextJS)
-  const cookieStore = cookies();
-  const cookieList = await cookieStore.getAll();
-  
+  const cookieStore = await cookies();
+  const cookieList = cookieStore.getAll();
+
   // Try to use service role key if available
   const apiKey = process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-  
+
   const supabase = createSupabaseServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     apiKey,
@@ -40,34 +40,34 @@ export async function POST(request: Request) {
       },
     }
   );
-  
+
   // Verify the user is authenticated and an admin
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  
+
   // Check if user is an admin
   const admin = await isAdmin(supabase, user.id);
   if (!admin) {
     return NextResponse.json({ error: 'Forbidden - You do not have admin privileges' }, { status: 403 });
   }
-  
+
   try {
     const body = await request.json();
     const { email } = body;
-    
+
     if (!email) {
       return NextResponse.json({ error: 'Email is required' }, { status: 400 });
     }
-    
+
     // Invite the user using the admin API
     if (!process.env.SUPABASE_KEY) {
-      return NextResponse.json({ 
-        error: 'Service role key is required for user invitations' 
+      return NextResponse.json({
+        error: 'Service role key is required for user invitations'
       }, { status: 500 });
     }
-    
+
     try {
       // Use the inviteUserByEmail method which:
       // 1. Creates the user record in auth.users
@@ -75,36 +75,36 @@ export async function POST(request: Request) {
       // 3. Sends an invitation email with the link
       // 4. Handles verification when the user clicks the link
       const { data, error } = await supabase.auth.admin.inviteUserByEmail(email);
-      
+
       if (error) {
         // If the user already exists, return a friendly message
-        if (error.message?.includes('already been registered') || 
-            error.message?.includes('already exists')) {
-          return NextResponse.json({ 
+        if (error.message?.includes('already been registered') ||
+          error.message?.includes('already exists')) {
+          return NextResponse.json({
             message: 'User with this email already exists',
             status: 'exists'
           }, { status: 200 }); // Return 200 for this case
         }
-        
+
         console.error('Error inviting user:', error);
         return NextResponse.json({ error: error.message }, { status: 500 });
       }
-      
+
       // Verify we have user data
       if (!data?.user) {
-        return NextResponse.json({ 
-          error: 'Invitation succeeded but no user data returned' 
+        return NextResponse.json({
+          error: 'Invitation succeeded but no user data returned'
         }, { status: 500 });
       }
-      
+
       console.log('User invited successfully:', data.user.id);
-      
+
       // Create a minimal profile record so the user appears in the admin dashboard
       try {
         // Extract name from email for initial profile (e.g., john from john@example.com)
         const emailName = email.split('@')[0];
         const userName = emailName.charAt(0).toUpperCase() + emailName.slice(1);
-        
+
         // Create minimal placeholder profile for the user
         const { error: profileError } = await supabase
           .from('sd_user_profiles')
@@ -116,7 +116,7 @@ export async function POST(request: Request) {
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           }]);
-          
+
         if (profileError) {
           console.warn('Created user but failed to create profile:', profileError);
           // Don't fail the request, just log the warning
@@ -127,15 +127,15 @@ export async function POST(request: Request) {
         console.warn('Error creating placeholder profile:', profileErr);
         // Don't fail the request, just log the warning
       }
-      
+
       // Return success response with the user data
-      return NextResponse.json({ 
+      return NextResponse.json({
         message: 'User invitation email sent successfully',
         user: data.user
       });
     } catch (error) {
       console.error("Exception during user invitation:", error);
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: 'Exception during user invitation',
         details: error instanceof Error ? error.message : String(error)
       }, { status: 500 });

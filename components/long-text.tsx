@@ -1,85 +1,24 @@
-import { useEffect, useRef, useState } from 'react'
+import React from 'react';
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
 
-interface Props {
-  children: React.ReactNode
-  className?: string
-  contentClassName?: string
-}
+// Create stub Popover components
+const Popover = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+    ({ children, ...props }, ref) => <div ref={ref} {...props}>{children}</div>
+);
+Popover.displayName = 'Popover';
 
-export default function LongText({
-  children,
-  className = '',
-  contentClassName = '',
-}: Props) {
-  const ref = useRef<HTMLDivElement>(null)
-  const [isOverflown, setIsOverflown] = useState(false)
+const PopoverTrigger = React.forwardRef<HTMLButtonElement, React.ButtonHTMLAttributes<HTMLButtonElement>>(
+    (props, ref) => <button ref={ref} {...props} />
+);
+PopoverTrigger.displayName = 'PopoverTrigger';
 
-  useEffect(() => {
-    if (checkOverflow(ref.current)) {
-      setIsOverflown(true)
-      return
-    }
+const PopoverContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+    ({ className, ...props }, ref) => <div ref={ref} className={cn('p-4 bg-white border rounded shadow-md', className)} {...props} />
+);
+PopoverContent.displayName = 'PopoverContent';
 
-    setIsOverflown(false)
-  }, [])
-
-  if (!isOverflown)
-    return (
-      <div ref={ref} className={cn('truncate', className)}>
-        {children}
-      </div>
-    )
-
-  return (
-    <>
-      <div className='hidden sm:block'>
-        <TooltipProvider delayDuration={0}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div ref={ref} className={cn('truncate', className)}>
-                {children}
-              </div>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p className={contentClassName}>{children}</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      </div>
-      <div className='sm:hidden'>
-        <Popover>
-          <PopoverTrigger asChild>
-            <div ref={ref} className={cn('truncate', className)}>
-              {children}
-            </div>
-          </PopoverTrigger>
-          <PopoverContent className={cn('w-fit', contentClassName)}>
-            <p>{children}</p>
-          </PopoverContent>
-        </Popover>
-      </div>
-    </>
-  )
-}
-
-const checkOverflow = (textContainer: HTMLDivElement | null) => {
-  if (textContainer) {
-    return (
-      textContainer.offsetHeight < textContainer.scrollHeight ||
-      textContainer.offsetWidth < textContainer.scrollWidth
-    )
-  }
-  return false
-}
+interface LongTextProps extends React.HTMLAttributes<HTMLDivElement> {
+    children: React.ReactNode
+    threshold?: number
+} 

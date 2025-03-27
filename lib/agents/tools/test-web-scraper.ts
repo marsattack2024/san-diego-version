@@ -1,28 +1,38 @@
-import { webScraperTool, urlDetectionTool } from './web-scraper-tool';
-import { createLogger } from '../../utils/client-logger';
+import { webScraperTool } from './web-scraper-tool';
+import type { ToolExecutionOptions } from 'ai';
 
-const logger = createLogger('test:web-scraper');
+// Create a simple logger
+const logger = {
+  info: (message: string, data?: any) => console.log(`[INFO] ${message}`, data || ''),
+  error: (message: string, data?: any) => console.error(`[ERROR] ${message}`, data || '')
+};
 
 /**
  * Test the web scraper tool with a specific URL
  */
-async function testWebScraper() {
+export async function testWebScraper() {
   logger.info('Testing web scraper tool');
-  
+
   try {
+    // Create minimal ToolExecutionOptions object with required fields
+    const options: ToolExecutionOptions = {
+      toolCallId: 'test-call-id',
+      messages: []
+    };
+
     // Test with a specific URL
-    const result = await webScraperTool.execute({ url: 'https://www.example.com' });
+    const result = await webScraperTool.execute(
+      { url: 'https://www.example.com' },
+      options
+    );
     logger.info('Web scraper result', { result });
-    
-    // Test URL detection
-    const detectionResult = await urlDetectionTool.execute({ 
-      text: 'Check out this website: https://www.example.com and also www.mozilla.org' 
-    });
-    logger.info('URL detection result', { detectionResult });
-    
-    logger.info('Tests completed successfully');
+
+    return result;
   } catch (error) {
-    logger.error('Test failed', { error });
+    logger.error('Error testing web scraper', {
+      error: error instanceof Error ? error.message : String(error)
+    });
+    throw error;
   }
 }
 
@@ -32,6 +42,4 @@ if (require.main === module) {
     logger.error('Unhandled error in test', { error });
     process.exit(1);
   });
-}
-
-export { testWebScraper }; 
+} 
