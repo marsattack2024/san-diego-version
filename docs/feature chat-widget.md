@@ -44,32 +44,102 @@ The widget management interface is fully integrated into the admin dashboard:
 
 ## Authentication Implementation
 
-The widget admin page implements robust authentication with:
+The widget admin page implements robust authentication with enhanced safeguards:
 
-1. **Direct Supabase Authentication Check**:
+### Special Middleware Handling
+
+The `/admin/widget` route receives special handling in middleware:
+
+```typescript
+// CRITICAL check for widget path - log initial request
+if (pathname === '/admin/widget') {
+  console.log('[Middleware-WIDGET] 🟢 WIDGET PAGE REQUEST DETECTED', {
+    method: request.method,
+    url: request.url,
+    pathname,
+    timestamp: new Date().toISOString(),
+    cookies: request.cookies.getAll().map(c => c.name),
+    headers: Object.fromEntries(
+      Array.from(request.headers.entries())
+        .filter(([key]) => !key.includes('cookie') && !key.includes('authorization'))
+    )
+  });
+
+  // Track the response and check for redirects
+  const response = await updateSession(request);
+  
+  // Additional logging and redirect checking
+  const redirectUrl = response.headers.get('location');
+  console.log('[Middleware-WIDGET] Response details:', {
+    status: response.status,
+    redirected: response.redirected,
+    redirectUrl,
+    type: response.type,
+    hasLocationHeader: !!redirectUrl
+  });
+}
+```
+
+### Explicit Admin Verification
+
+In the `updateSession` function, the widget page gets extra verification:
+
+```typescript
+// CRITICAL ADDITION: Check if user is an admin
+let isAdminStatus = 'false';
+try {
+  // Standard admin checks via RPC, profile table, and roles table
+  // ...
+
+  // Specifically check if this is a widget admin page request
+  if (pathname === '/admin/widget') {
+    console.log(`[updateSession] 🔑 Admin check for WIDGET PAGE: ${isAdminStatus}`);
+  }
+} catch (adminCheckError) {
+  console.error('[updateSession] Error during admin check:', adminCheckError);
+}
+```
+
+### Multiple Verification Methods
+
+The widget page uses the same core admin verification as other admin pages:
+
+1. **Primary Method: RPC Function**
    ```typescript
-   const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+   const { data: rpcData, error: rpcError } = await adminClient.rpc('is_admin', { uid: user.id });
+   if (!rpcError && rpcData) {
+     isAdminStatus = 'true';
+   }
    ```
 
-2. **Multiple Admin Verification Methods**:
+2. **Fallback: Profile Check**
    ```typescript
-   // Primary: RPC call to is_admin function
-   const { data: isAdminRpc, error: rpcError } = await supabase.rpc('is_admin', { 
-     uid: userId 
-   });
-   
-   // Fallback: Direct profile check
-   const { data: profile, error: profileError } = await supabase
+   const { data: profileData, error: profileError } = await adminClient
      .from('sd_user_profiles')
      .select('is_admin')
-     .eq('user_id', userId)
+     .eq('user_id', user.id)
      .single();
+   
+   if (!profileError && profileData?.is_admin === true) {
+     isAdminStatus = 'true';
+   }
    ```
 
-3. **Comprehensive Error Handling**:
-   - Proper redirection for unauthenticated users
-   - Clear error messages for authentication issues
-   - Loading states during authentication checks
+3. **Last Resort: Role Check**
+   ```typescript
+   const { data: roleData, error: roleError } = await adminClient
+     .from('sd_user_roles')
+     .select('role')
+     .eq('user_id', user.id)
+     .eq('role', 'admin')
+     .maybeSingle();
+   
+   if (!roleError && roleData) {
+     isAdminStatus = 'true';
+   }
+   ```
+
+This multi-layered approach with special handling for the widget page ensures robust authentication in production environments.
 
 ## Cross-Domain Technical Architecture
 

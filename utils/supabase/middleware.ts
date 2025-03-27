@@ -128,11 +128,6 @@ export async function updateSession(request: NextRequest) {
         console.log('[updateSession] User is admin via RPC check');
       }
 
-      // Specifically check if this is a widget admin page request
-      if (pathname === '/admin/widget') {
-        console.log(`[updateSession] 🔑 Admin check for WIDGET PAGE: ${isAdminStatus}`);
-      }
-
     } catch (adminCheckError) {
       console.error('[updateSession] Error during admin check:', adminCheckError);
     }

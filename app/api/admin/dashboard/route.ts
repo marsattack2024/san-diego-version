@@ -7,46 +7,35 @@ async function isAdmin(supabase: any, userId: string) {
   console.log("[Dashboard API] Checking admin status for user:", userId);
 
   try {
-    // Method 1: Use the RPC function that checks sd_user_roles
+    // Use only the RPC function that checks sd_user_roles - simplify admin checks
     const { data: rpcData, error: rpcError } = await supabase.rpc('is_admin', { uid: userId });
 
     if (rpcError) {
       console.error("[Dashboard API] Error checking admin via RPC:", rpcError);
+
+      // Fallback: Check directly in the roles table if RPC fails
+      const { data: roleData, error: roleError } = await supabase
+        .from('sd_user_roles')
+        .select('role')
+        .eq('user_id', userId)
+        .eq('role', 'admin')
+        .maybeSingle();
+
+      if (roleError) {
+        console.error("[Dashboard API] Error checking admin via roles:", roleError);
+        return false;
+      } else if (roleData) {
+        console.log("[Dashboard API] User is admin via roles table");
+        return true;
+      }
+
+      return false;
     } else if (rpcData) {
       console.log("[Dashboard API] User is admin via RPC check");
       return true;
     }
 
-    // Method 2: Check directly in the profiles table
-    const { data: profileData, error: profileError } = await supabase
-      .from('sd_user_profiles')
-      .select('is_admin')
-      .eq('user_id', userId)
-      .single();
-
-    if (profileError) {
-      console.error("[Dashboard API] Error checking admin via profile:", profileError);
-    } else if (profileData?.is_admin === true) {
-      console.log("[Dashboard API] User is admin via profile flag");
-      return true;
-    }
-
-    // Method 3: Check directly in the roles table
-    const { data: roleData, error: roleError } = await supabase
-      .from('sd_user_roles')
-      .select('role')
-      .eq('user_id', userId)
-      .eq('role', 'admin')
-      .maybeSingle();
-
-    if (roleError) {
-      console.error("[Dashboard API] Error checking admin via roles:", roleError);
-    } else if (roleData) {
-      console.log("[Dashboard API] User is admin via roles table");
-      return true;
-    }
-
-    console.log("[Dashboard API] User is not admin by any verification method");
+    console.log("[Dashboard API] User is not admin");
     return false;
   } catch (err) {
     console.error("[Dashboard API] Exception checking admin status:", err);
@@ -133,16 +122,11 @@ export async function GET(_request: Request): Promise<Response> {
       // Don't fail the whole request, just set count to 0
     }
 
-    // Get recent activity
+    // Get recent activity - Fix the query to not rely on foreign key relationships
     const { data: recentActivity, error: activityError } = await supabase
       .from('sd_chat_histories')
       .select(`
-        *,
-        profile:user_id (
-          user_id,
-          company_name,
-          location
-        )
+        id, session_id, role, content, created_at, user_id, tools_used, metadata, vote
       `)
       .order('created_at', { ascending: false })
       .limit(5);
@@ -150,6 +134,27 @@ export async function GET(_request: Request): Promise<Response> {
     if (activityError) {
       console.error('Error fetching recent activity:', activityError);
       // Don't fail the whole request, just set activity to empty array
+    } else if (recentActivity?.length) {
+      // Fetch user information separately and join it manually
+      const userIds = recentActivity.map(item => item.user_id).filter(Boolean);
+
+      if (userIds.length) {
+        // Get user profiles for the relevant users
+        const { data: profiles, error: profilesError } = await supabase
+          .from('sd_user_profiles')
+          .select('user_id, company_name')
+          .in('user_id', userIds);
+
+        if (profilesError) {
+          console.error('Error fetching user profiles:', profilesError);
+        } else {
+          // Join the profile information to the activity data
+          recentActivity.forEach((activity: any) => {
+            const profile = profiles?.find(p => p.user_id === activity.user_id);
+            activity.user = profile ? { id: activity.user_id, profile } : { id: activity.user_id };
+          });
+        }
+      }
     }
 
     // Get admin count from roles table

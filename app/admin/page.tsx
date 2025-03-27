@@ -132,6 +132,22 @@ export default function AdminDashboard() {
         <WidgetDiagnostics />
       </div>
 
+      {/* Direct Widget Access - New Addition */}
+      <div className="bg-green-50 border border-green-300 rounded-lg p-4 mb-6">
+        <h2 className="text-lg font-semibold text-green-800 mb-2">Chat Widget Administration</h2>
+        <p className="text-sm text-green-700 mb-4">
+          Configure and manage your embedded chat widget for external websites:
+        </p>
+        <div className="flex justify-center">
+          <a
+            href="/admin/widget"
+            className="inline-flex items-center justify-center px-6 py-3 bg-green-600 text-white rounded-md font-medium hover:bg-green-700 transition-colors"
+          >
+            Open Widget Admin
+          </a>
+        </div>
+      </div>
+
       {/* Stats Overview - Enhanced responsive grid with better spacing */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 md:gap-6">
         <div className="bg-white rounded-lg shadow p-4 md:p-6">

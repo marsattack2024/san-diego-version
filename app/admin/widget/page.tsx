@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { toast } from '@/components/toast';
+import { AdminWidgetConfigurator } from '@/components/admin/widget/widget-configurator';
+import { ChatWidgetProvider } from '@/components/chat-widget/chat-widget-provider';
 
 // Force dynamic rendering for this admin page
 export const dynamic = "force-dynamic";
@@ -63,6 +65,18 @@ export default function AdminWidgetPage() {
     );
   }
 
+  // Don't render if not admin
+  if (!adminStatus) {
+    return (
+      <div className="p-6 border rounded-md bg-red-50">
+        <h1 className="text-2xl font-bold text-red-700 mb-2">Access Denied</h1>
+        <p className="text-red-600">
+          You do not have permission to access this admin page. Please contact an administrator.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 p-6 border rounded-md">
       <div>
@@ -90,6 +104,11 @@ export default function AdminWidgetPage() {
         )}
       </div>
 
+      {/* Widget Configurator */}
+      <ChatWidgetProvider>
+        <AdminWidgetConfigurator />
+      </ChatWidgetProvider>
+
       <div className="border rounded-md p-4 bg-slate-50">
         <p><strong>Current Time:</strong> {timestamp}</p>
         <p><strong>Environment:</strong> {process.env.NODE_ENV}</p>
@@ -110,4 +129,4 @@ export default function AdminWidgetPage() {
       </div>
     </div>
   );
-} 
+}

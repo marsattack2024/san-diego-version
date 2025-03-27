@@ -1,5 +1,5 @@
 {
-  "buildCommand": "next build && npm run build:widget",
+  "buildCommand": "next build",
   "devCommand": "next dev",
   "installCommand": "npm install",
   "framework": "nextjs",

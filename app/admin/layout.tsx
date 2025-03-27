@@ -108,26 +108,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 <span>Users</span>
               </Link>
 
-              {/* WIDGET LINK - Always visible but with debug logging */}
+              {/* WIDGET LINK - Normal styling like other links */}
               <Link
                 href="/admin/widget"
                 className={cn(
                   "flex items-center gap-2 w-full rounded-md p-2 text-sm font-medium hover:bg-sidebar-accent transition-colors relative",
                   pathname === "/admin/widget" && "bg-sidebar-accent text-sidebar-accent-foreground"
                 )}
-                onClick={(e) => {
-                  console.log('[AdminLayout] Widget link clicked', {
-                    pathname,
-                    href: '/admin/widget',
-                    timestamp: new Date().toISOString(),
-                    event: e.type,
-                    isAdmin
-                  });
-                  // Only close sidebar on mobile
-                  if (isMobile) {
-                    setSidebarOpen(false);
-                  }
-                }}
+                onClick={() => isMobile && setSidebarOpen(false)}
               >
                 <svg
                   className="h-4 w-4"
@@ -143,10 +131,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                   <circle cx="12" cy="12" r="3"></circle>
                 </svg>
                 <span>Widget</span>
-                {/* Visual indicator if path matches */}
-                {pathname === "/admin/widget" && (
-                  <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-green-500"></span>
-                )}
               </Link>
 
               <div className="pt-6">
@@ -184,12 +168,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </header>
           )}
           <main className="flex-1 p-2 sm:p-4 md:p-6 bg-background overflow-x-auto">
-            {pathname === "/admin/widget" && (
-              <div className="mb-4 p-3 bg-yellow-100 border border-yellow-300 rounded-md">
-                <p className="font-medium">Debug: Widget Route Active</p>
-                <p className="text-xs">This box confirms the pathname matches /admin/widget</p>
-              </div>
-            )}
             {children}
           </main>
         </div>

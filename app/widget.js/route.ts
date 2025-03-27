@@ -101,28 +101,14 @@ export const runtime = 'edge';
 export async function GET(req: NextRequest) {
   try {
     // Log for debugging purposes
-    console.log('Widget.js route handler: Serving widget script directly');
+    console.log('Widget.js route handler: Redirecting to static widget script');
     
-    // Get the static file URL
+    // Use Vercel's redirect functionality (configured in vercel.json)
+    // This will redirect to /public/widget/chat-widget.js
     const url = new URL('/widget/chat-widget.js', req.url);
     
-    // Fetch the file content directly
-    const scriptResponse = await fetch(url);
-    
-    if (!scriptResponse.ok) {
-      throw new Error(`Failed to fetch widget script: ${scriptResponse.status} ${scriptResponse.statusText}`);
-    }
-    
-    // Get the script content
-    const scriptContent = await scriptResponse.text();
-    
-    // Create a new response with the script content and proper headers
-    const response = new Response(scriptContent, {
-      headers: {
-        'Content-Type': 'application/javascript; charset=utf-8',
-        'Cache-Control': 'public, max-age=3600' // Cache for 1 hour
-      }
-    });
+    // Create a redirect response (307 = temporary redirect)
+    const response = Response.redirect(url, 307);
     
     // Add CORS headers and return
     return addCorsHeaders(response, req);
