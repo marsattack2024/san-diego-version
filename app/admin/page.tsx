@@ -171,7 +171,7 @@ export default function AdminDashboard() {
           <p className="text-2xl md:text-3xl font-bold">
             {isLoading ? 'Loading...' : stats?.adminCount || 0}
           </p>
-          <p className="text-gray-500 mt-1 text-sm md:text-base">Users with admin privileges</p>
+          <p className="text-gray-500 mt-1 text-sm md:text-base">Users with Admin privileges</p>
         </div>
       </div>
 
