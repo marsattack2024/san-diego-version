@@ -19,7 +19,7 @@ export function AdminWidgetConfigurator() {
   const [activeTab, setActiveTab] = useState('config')
   const [showEmbed, setShowEmbed] = useState(false)
   const [envWarning, setEnvWarning] = useState<string | null>(null)
-  
+
   // More robust URL resolution with immediate client-side fallback
   const [baseUrl, setBaseUrl] = useState(() => {
     // Client-side rendering - use window.location.origin directly if available
@@ -27,7 +27,7 @@ export function AdminWidgetConfigurator() {
       // Browser available - use origin directly
       return window.location.origin;
     }
-    
+
     // Server-side rendering - fall back to getSiteUrl()
     try {
       return getSiteUrl();
@@ -37,7 +37,7 @@ export function AdminWidgetConfigurator() {
       return 'https://marlan.photographytoprofits.com';
     }
   })
-  
+
   // Additional verification and logging after component mounts
   useEffect(() => {
     // Only run on client
@@ -48,7 +48,7 @@ export function AdminWidgetConfigurator() {
         console.log('Updating baseUrl from browser:', browserUrl);
         setBaseUrl(browserUrl);
       }
-      
+
       // Enhanced debug logging 
       if (process.env.NODE_ENV === 'development') {
         console.log('Widget configurator environment:', {
@@ -58,7 +58,7 @@ export function AdminWidgetConfigurator() {
           usingFallback: baseUrl === 'https://marlan.photographytoprofits.com'
         });
       }
-      
+
       // Validate environment variables and update warnings
       const envValidation = validateCriticalEnv();
       if (!envValidation.isValid) {
@@ -70,12 +70,12 @@ export function AdminWidgetConfigurator() {
       }
     }
   }, [baseUrl]);
-  
+
   // Handle input changes
   const handleChange = (key: keyof ChatWidgetConfig, value: any) => {
     setConfig({ [key]: value })
   }
-  
+
   return (
     <div className="space-y-6">
       {envWarning && (
@@ -97,7 +97,7 @@ export function AdminWidgetConfigurator() {
           <TabsTrigger value="embed">Embed Codes</TabsTrigger>
           <TabsTrigger value="docs">Documentation</TabsTrigger>
         </TabsList>
-        
+
         <TabsContent value="config">
           <Card>
             <CardHeader>
@@ -119,7 +119,7 @@ export function AdminWidgetConfigurator() {
                       placeholder="Chat Widget"
                     />
                   </div>
-                  
+
                   <div>
                     <Label htmlFor="greeting">Greeting Message</Label>
                     <Input
@@ -129,7 +129,7 @@ export function AdminWidgetConfigurator() {
                       placeholder="Hello! How can I help you today?"
                     />
                   </div>
-                  
+
                   <div>
                     <Label htmlFor="placeholder">Input Placeholder</Label>
                     <Input
@@ -140,13 +140,13 @@ export function AdminWidgetConfigurator() {
                     />
                   </div>
                 </div>
-                
+
                 {/* Appearance settings */}
                 <div className="space-y-4">
                   <div>
                     <Label htmlFor="position">Widget Position</Label>
-                    <Select 
-                      value={state.config.position} 
+                    <Select
+                      value={state.config.position}
                       onValueChange={(value: any) => handleChange('position', value)}
                     >
                       <SelectTrigger id="position">
@@ -160,7 +160,7 @@ export function AdminWidgetConfigurator() {
                       </SelectContent>
                     </Select>
                   </div>
-                  
+
                   <div>
                     <Label htmlFor="primaryColor">Primary Color</Label>
                     <div className="flex gap-2">
@@ -178,7 +178,7 @@ export function AdminWidgetConfigurator() {
                       />
                     </div>
                   </div>
-                  
+
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <Label htmlFor="width">Width (px)</Label>
@@ -191,7 +191,7 @@ export function AdminWidgetConfigurator() {
                         max={500}
                       />
                     </div>
-                    
+
                     <div>
                       <Label htmlFor="height">Height (px)</Label>
                       <Input
@@ -206,15 +206,15 @@ export function AdminWidgetConfigurator() {
                   </div>
                 </div>
               </div>
-              
+
               {/* Actions */}
               <div className="flex flex-wrap gap-3 pt-4 mt-4 border-t">
                 <Button onClick={toggleWidget}>
                   {state.isOpen ? 'Close Widget' : 'Open Widget'}
                 </Button>
-                
-                <Button 
-                  variant="outline" 
+
+                <Button
+                  variant="outline"
                   onClick={() => setConfig(DEFAULT_CONFIG)}
                 >
                   Reset to Defaults
@@ -223,7 +223,7 @@ export function AdminWidgetConfigurator() {
             </CardContent>
           </Card>
         </TabsContent>
-        
+
         <TabsContent value="embed">
           <Card>
             <CardHeader>
@@ -239,22 +239,22 @@ export function AdminWidgetConfigurator() {
                   <TabsTrigger value="gtm">Google Tag Manager</TabsTrigger>
                   <TabsTrigger value="direct">Direct Body Embed</TabsTrigger>
                 </TabsList>
-                
+
                 <TabsContent value="standard">
-                  <EmbedSnippet 
-                    config={state.config} 
+                  <EmbedSnippet
+                    config={state.config}
                     apiUrl={baseUrl}
                   />
                 </TabsContent>
-                
+
                 <TabsContent value="gtm">
                   <div className="space-y-4">
                     <p className="text-sm text-gray-500">
                       This code is optimized for Google Tag Manager. Add it as a Custom HTML tag.
                     </p>
                     <div className="relative">
-                      <textarea 
-                        className="w-full h-[200px] p-4 font-mono text-sm border rounded-md" 
+                      <textarea
+                        className="w-full h-[200px] p-4 font-mono text-sm border rounded-md"
                         readOnly
                         value={`<!-- Marlin Chat Widget - GTM Version -->
 <script>
@@ -317,15 +317,15 @@ export function AdminWidgetConfigurator() {
                     </div>
                   </div>
                 </TabsContent>
-                
+
                 <TabsContent value="direct">
                   <div className="space-y-4">
                     <p className="text-sm text-gray-500">
-                      Simple version for direct embedding before the closing body tag.
+                      Simple version for for custom placement on your page.
                     </p>
                     <div className="relative">
-                      <textarea 
-                        className="w-full h-[200px] p-4 font-mono text-sm border rounded-md" 
+                      <textarea
+                        className="w-full h-[200px] p-4 font-mono text-sm border rounded-md"
                         readOnly
                         value={`<!-- Marlin Chat Widget - Simple Version -->
 <script>
@@ -365,7 +365,7 @@ export function AdminWidgetConfigurator() {
             </CardContent>
           </Card>
         </TabsContent>
-        
+
         <TabsContent value="docs">
           <Card>
             <CardHeader>
@@ -378,7 +378,7 @@ export function AdminWidgetConfigurator() {
               <div className="prose max-w-none">
                 <h3>Implementation Guide</h3>
                 <p>The Marlin Chat Widget can be embedded on any website to provide AI chat functionality. It leverages the knowledge base system to provide relevant information to users.</p>
-                
+
                 <h4>Key Features</h4>
                 <ul>
                   <li>RAG (Retrieval Augmented Generation) implementation</li>
@@ -386,7 +386,7 @@ export function AdminWidgetConfigurator() {
                   <li>Customizable appearance and behavior</li>
                   <li>Rate limiting to prevent abuse</li>
                 </ul>
-                
+
                 <h4>Implementation Options</h4>
                 <p>Choose the implementation method that works best for your website:</p>
                 <ol>
@@ -394,7 +394,7 @@ export function AdminWidgetConfigurator() {
                   <li><strong>Google Tag Manager:</strong> For websites using GTM</li>
                   <li><strong>Direct Body Embed:</strong> Simplified version for direct embedding</li>
                 </ol>
-                
+
                 <h4>Configuration Options</h4>
                 <p>The widget can be customized using the <code>window.marlinChatConfig</code> object with the following properties:</p>
                 <ul>
@@ -404,7 +404,7 @@ export function AdminWidgetConfigurator() {
                   <li><code>greeting</code>: Initial message shown when the widget opens</li>
                   <li><code>placeholder</code>: Text shown in the input field</li>
                 </ul>
-                
+
                 <h3>Troubleshooting</h3>
                 <p>If you encounter issues with the widget, check the following:</p>
                 <ul>
@@ -418,7 +418,7 @@ export function AdminWidgetConfigurator() {
           </Card>
         </TabsContent>
       </Tabs>
-      
+
       <div className="border-t pt-6">
         <h3 className="text-lg font-medium mb-4">Live Preview</h3>
         <div className="flex items-center justify-center p-4 border rounded-lg bg-gray-50 h-[400px]">
@@ -426,9 +426,9 @@ export function AdminWidgetConfigurator() {
             The chat widget should appear in the corner of this page based on your configuration.
             <br />
             {!state.isOpen && (
-              <Button 
-                variant="default" 
-                className="mt-4" 
+              <Button
+                variant="default"
+                className="mt-4"
                 onClick={toggleWidget}
               >
                 Open Widget
