@@ -2,9 +2,8 @@
 
 import type { Attachment, Message } from 'ai';
 import { useChat } from '@ai-sdk/react';
-import { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
+import { useState, useEffect, useMemo, useRef, useLayoutEffect, useCallback } from 'react';
 import useSWR, { useSWRConfig } from 'swr';
-import { ChatHeader } from '@/components/chat-header';
 import type { Vote } from '@/lib/db/schema';
 import { fetcher, generateUUID } from '@/lib/utils';
 import { MultimodalInput } from './multimodal-input';
@@ -651,15 +650,7 @@ export function Chat({
   // Display the messages with the correct layout
   return (
     <TooltipProvider delayDuration={0}>
-      <div className="flex flex-col bg-primary-foreground h-full">
-        {!isReadonly && (
-          <ChatHeader
-            chatId={id}
-            isReadonly={isReadonly}
-            title={'New chat'}
-            isLoading={isLoading}
-          />
-        )}
+      <div className="flex flex-col bg-primary-foreground h-full pt-14">
         <div ref={chatContainerRef} className="flex-1 overflow-y-auto pb-8">
           <Messages
             chatId={id}

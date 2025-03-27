@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useParams } from 'next/navigation';
 import { useWindowSize } from 'usehooks-ts';
 import { SidebarToggle } from './sidebar-toggle';
 import { Button } from './ui/button';
@@ -18,15 +18,20 @@ export function PureChatHeader({
   title,
   isLoading,
 }: {
-  chatId: string;
-  isReadonly: boolean;
+  chatId?: string;
+  isReadonly?: boolean;
   title?: string;
   isLoading?: boolean;
 }) {
   const router = useRouter();
+  const params = useParams();
+  const urlChatId = params?.id as string;
   const { width } = useWindowSize();
   const isMobile = width < 768;
   const [isCreatingChat, setIsCreatingChat] = useState(false);
+
+  // Use URL param ID if no chatId is explicitly provided (for use in layout)
+  const effectiveChatId = chatId || urlChatId || '';
 
   const handleNewChat = async () => {
     // Prevent multiple clicks
