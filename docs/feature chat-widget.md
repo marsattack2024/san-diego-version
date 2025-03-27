@@ -23,7 +23,7 @@ The chat widget:
 - Maintains conversation history within the current session (24-hour expiry)
 - Provides a streamlined UI matching Marlin's style
 - Includes rate limiting (3 requests per minute)
-- Can be embedded via a simple script tag or Google Tag Manager
+- Can be embedded via a simple script tag, Google Tag Manager, or direct body embed
 - Is managed through the admin dashboard at `/admin/widget`
 
 ## Widget Management
@@ -35,6 +35,7 @@ The widget management interface is fully integrated into the admin dashboard:
 - ✅ Navigation link in admin sidebar
 - ✅ Dynamic generation of embed codes with proper domain references
 - ✅ Live preview always visible in the configured position
+- ✅ Simple copy-to-clipboard functionality for all embed types
 
 ### Implementation Details
 
@@ -42,6 +43,7 @@ The widget management interface is fully integrated into the admin dashboard:
 - Metadata is exported from a server component (layout.tsx)
 - Dynamic rendering is enforced with `export const dynamic = "force-dynamic"`
 - All authentication is handled by middleware, identical to other admin pages
+- Live preview updates in real-time as settings are changed
 
 ## Component Structure
 
@@ -191,7 +193,7 @@ The widget configurator provides the following customization options:
 
 ### Basic Settings
 - `title`: The title displayed in the widget header
-- `greeting`: The initial message shown to users
+- `greeting`: The initial message shown to users (required to customize first message)
 - `placeholder`: Placeholder text for the message input field
 - `width`: Width of the widget (default: '350px')
 - `height`: Height of the widget (default: '500px')
@@ -202,16 +204,29 @@ The widget configurator provides the following customization options:
 - `primaryColor`: Custom color picker for widget accent color
 - `bubbleIcon`: Optional URL to a custom icon for the chat bubble
 
+## Recent Updates
+
+- ✅ Fixed greeting message customization bug
+- ✅ Added proper placeholder text customization
+- ✅ Improved documentation with all available configuration options
+- ✅ Removed environment variable warnings
+- ✅ Simplified admin widget interface
+- ✅ Improved live preview with real-time updates
+- ✅ Fixed script path references in embed codes
+- ✅ Consolidated widget configuration options
+
 ## Production Verification Checklist
 
 After deployment, verify the following to ensure proper widget functionality:
 
 - [ ] `/admin/widget` page loads correctly for authenticated admin users
 - [ ] Authentication works identically to other admin pages
-- [ ] Widget script loads correctly from `/widget.js`
+- [ ] Widget script loads correctly from `/widget/chat-widget.js`
 - [ ] Widget can connect to the API at `/api/widget-chat` and receive responses
 - [ ] CORS headers are correctly set for cross-domain embedding
 - [ ] Rate limiting is functioning correctly (3 requests per minute)
 - [ ] Live preview updates correctly with configuration changes
 - [ ] All three embed code options generate valid code
 - [ ] Copy buttons work correctly for all embed code options
+- [ ] Verify custom greeting message works in all embed types
+- [ ] Verify placeholder text customization works
