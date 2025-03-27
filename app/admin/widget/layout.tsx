@@ -4,10 +4,8 @@
  * and satisfies Next.js type system requirements.
  */
 
-// Export configuration matching what Next.js expects
+// Server component that exports route configuration options
 export const dynamic = "force-dynamic";
-export const fetchCache = "default-no-store";
-export const revalidate = 0;
 
 export default function AdminWidgetLayout({
     children,

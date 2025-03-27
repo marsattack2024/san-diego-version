@@ -138,9 +138,10 @@ export async function GET(_request: Request): Promise<Response> {
       .from('sd_chat_histories')
       .select(`
         *,
-        user:user_id (
-          id,
-          email
+        profile:user_id (
+          user_id,
+          company_name,
+          location
         )
       `)
       .order('created_at', { ascending: false })

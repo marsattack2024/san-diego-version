@@ -19,7 +19,8 @@
     "build:widget": "esbuild lib/widget/widget-script.js --bundle --minify --outfile=public/widget/chat-widget.js --sourcemap",
     "prepare": "husky && husky install",
     "type-check": "tsc --noEmit",
-    "type-check:watch": "node scripts/type-check.js"
+    "type-check:watch": "node scripts/type-check.js",
+    "type-check:ignore": "tsc --noEmit --skipLibCheck --skipDefaultLibCheck"
   },
   "dependencies": {
     "@ai-sdk/fireworks": "^0.1.12",

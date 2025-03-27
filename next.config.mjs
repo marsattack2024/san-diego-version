@@ -90,12 +90,7 @@ const nextConfig = {
     }
 
     return config;
-  },
-  // Disable type checking during development and build
-  // This makes builds faster and avoids issues with generated types
-  typescript: {
-    ignoreBuildErrors: true, // Set to false for production builds where you want type checking
-  },
+  }
 }
 
 // Wrap with bundle analyzer
