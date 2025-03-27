@@ -1,7 +1,15 @@
 import { Metadata } from 'next'
 
-// Force dynamic rendering to ensure proper authentication checks in production
+// Server component layout that exports route configuration
+
+// Force dynamic rendering for proper authentication 
 export const dynamic = "force-dynamic";
+
+// Force all requests to revalidate for this route
+export const fetchCache = 'force-no-store';
+
+// Disable caching for this route
+export const revalidate = 0;
 
 export const metadata: Metadata = {
   title: 'Widget Management',
@@ -13,5 +21,9 @@ export default function AdminWidgetLayout({
 }: {
   children: React.ReactNode
 }) {
-  return children
+  return (
+    <div className="admin-widget-layout">
+      {children}
+    </div>
+  );
 } 
