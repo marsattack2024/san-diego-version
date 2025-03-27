@@ -507,7 +507,7 @@ export function ChatWidget({ config = {} }: ChatWidgetProps) {
             {messages.length === 0 && (
               <div className="text-center py-6">
                 <p className="text-gray-500">
-                  {widgetConfig.greeting || 'Hello! How can I help you today?'}
+                  {widgetConfig.greeting || "I'm your Mastermind AI companion! I can answer marketing and tech questions right now! What can I help with?"}
                 </p>
               </div>
             )}

@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { toast } from '@/components/toast';
 import { AdminWidgetConfigurator } from '@/components/admin/widget/widget-configurator';
 import { ChatWidgetProvider } from '@/components/chat-widget/chat-widget-provider';
+import { ChatWidget } from '@/components/chat-widget/chat-widget';
 
 // Force dynamic rendering for this admin page
 export const dynamic = "force-dynamic";
@@ -23,9 +24,10 @@ export default function AdminWidgetPage() {
         </p>
       </div>
 
-      {/* Widget Configurator */}
+      {/* Widget Configurator with Live Preview */}
       <ChatWidgetProvider>
         <AdminWidgetConfigurator />
+        <ChatWidget />
       </ChatWidgetProvider>
 
       <div className="border rounded-md p-4 bg-slate-50">

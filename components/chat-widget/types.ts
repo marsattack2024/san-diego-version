@@ -87,7 +87,7 @@ export const DEFAULT_CONFIG: ChatWidgetConfig = {
   position: 'bottom-right',
   title: 'Ask Marlan',
   primaryColor: '#0070f3',
-  greeting: 'Hello! How can I help you today?',
+  greeting: "I'm your Mastermind AI companion! I can answer marketing and tech questions right now! What can I help with?",
   placeholder: 'Type your message...',
   width: 360,
   height: 500,
