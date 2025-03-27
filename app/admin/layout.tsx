@@ -15,27 +15,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { isAdmin } = useAuthStore();
-  const [showWidgetDebug, setShowWidgetDebug] = useState(false);
 
-  // Log on initial render and pathname changes
+  // Simplified logging for all admin pages
   useEffect(() => {
-    console.log('[AdminLayout] Rendering with:', {
+    console.log('[AdminLayout] Rendering admin layout:', {
       pathname,
       isAdmin,
       currentTime: new Date().toISOString()
     });
-
-    // Force re-render after a brief delay to see if isAdmin was initially false but updated
-    const timeoutId = setTimeout(() => {
-      setShowWidgetDebug(true);
-      console.log('[AdminLayout] Delayed check:', {
-        pathname,
-        isAdmin,
-        currentTime: new Date().toISOString()
-      });
-    }, 2000);
-
-    return () => clearTimeout(timeoutId);
   }, [pathname, isAdmin]);
 
   const toggleSidebar = () => setSidebarOpen(!sidebarOpen);
@@ -43,16 +30,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   return (
     <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
       <div className="flex flex-col md:flex-row min-h-screen">
-        {/* Debug information - hidden in production */}
-        {showWidgetDebug && process.env.NODE_ENV !== 'production' && (
-          <div className="fixed bottom-4 right-4 p-4 bg-red-100 border border-red-400 rounded-md z-50 text-sm max-w-xs">
-            <p><strong>Admin Debug:</strong></p>
-            <p>Path: {pathname}</p>
-            <p>isAdmin: {String(isAdmin)}</p>
-            <p>Widget Link Should Show: Always</p>
-          </div>
-        )}
-
         {/* Mobile Header - Only visible on mobile */}
         {isMobile && (
           <header className="h-16 bg-background border-b border-border flex items-center justify-between px-4 md:hidden sticky top-0 z-20">

@@ -37,113 +37,81 @@ The widget management interface is fully integrated into the admin dashboard:
 
 ### Implementation Details
 
-- The admin widget page is implemented as a client component with proper authentication
+- The admin widget page is implemented as a client component with standard admin authentication
 - Metadata is exported from a server component (layout.tsx)
 - Dynamic rendering is enforced with `export const dynamic = "force-dynamic"`
-- A comprehensive route.config.js ensures proper caching behavior
+- All authentication is handled by middleware, identical to other admin pages
 
 ## Authentication Implementation
 
-The widget admin page implements robust authentication with enhanced safeguards:
+The widget admin page uses the standard admin authentication pattern, ensuring consistent behavior across all admin pages:
 
-### Special Middleware Handling
+### Standard Middleware Authentication
 
-The `/admin/widget` route receives special handling in middleware:
+All admin pages, including the widget page, use the same middleware-based authentication:
 
 ```typescript
-// CRITICAL check for widget path - log initial request
-if (pathname === '/admin/widget') {
-  console.log('[Middleware-WIDGET] 🟢 WIDGET PAGE REQUEST DETECTED', {
-    method: request.method,
-    url: request.url,
-    pathname,
-    timestamp: new Date().toISOString(),
-    cookies: request.cookies.getAll().map(c => c.name),
-    headers: Object.fromEntries(
-      Array.from(request.headers.entries())
-        .filter(([key]) => !key.includes('cookie') && !key.includes('authorization'))
-    )
-  });
+// Standard authentication flow for all admin routes
+if (pathname.startsWith('/admin')) {
+  console.log(`[Middleware] Processing admin page ${pathname} with normal auth flow`);
+}
 
-  // Track the response and check for redirects
-  const response = await updateSession(request);
+// The session cookie is updated/refreshed in the response
+const response = await updateSession(request);
+
+// Consistent logging for all admin pages
+if (pathname.startsWith('/admin')) {
+  console.log(`[Middleware] Admin page ${pathname} auth processed with status:`, 
+    response?.status || 'No response');
+}
+```
+
+### Clean Admin Page Implementation
+
+The widget page component is now simplified with no redundant authentication checks:
+
+```typescript
+'use client';
+
+import React, { useState } from 'react';
+import { toast } from '@/components/toast';
+import { AdminWidgetConfigurator } from '@/components/admin/widget/widget-configurator';
+import { ChatWidgetProvider } from '@/components/chat-widget/chat-widget-provider';
+
+// Force dynamic rendering for this admin page
+export const dynamic = "force-dynamic";
+
+export default function AdminWidgetPage() {
+  const [timestamp, setTimestamp] = useState(new Date().toISOString());
   
-  // Additional logging and redirect checking
-  const redirectUrl = response.headers.get('location');
-  console.log('[Middleware-WIDGET] Response details:', {
-    status: response.status,
-    redirected: response.redirected,
-    redirectUrl,
-    type: response.type,
-    hasLocationHeader: !!redirectUrl
-  });
+  // No admin verification at component level
+  // All authentication is handled by middleware
+
+  return (
+    <div className="space-y-6 p-6 border rounded-md">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Admin Widget Page</h1>
+        <p className="text-sm text-muted-foreground mt-2">
+          Configure and manage your chat widget
+        </p>
+      </div>
+
+      {/* Widget Configurator */}
+      <ChatWidgetProvider>
+        <AdminWidgetConfigurator />
+      </ChatWidgetProvider>
+      
+      {/* Other component content */}
+    </div>
+  );
 }
 ```
 
-### Explicit Admin Verification
-
-In the `updateSession` function, the widget page gets extra verification:
-
-```typescript
-// CRITICAL ADDITION: Check if user is an admin
-let isAdminStatus = 'false';
-try {
-  // Standard admin checks via RPC, profile table, and roles table
-  // ...
-
-  // Specifically check if this is a widget admin page request
-  if (pathname === '/admin/widget') {
-    console.log(`[updateSession] 🔑 Admin check for WIDGET PAGE: ${isAdminStatus}`);
-  }
-} catch (adminCheckError) {
-  console.error('[updateSession] Error during admin check:', adminCheckError);
-}
-```
-
-### Multiple Verification Methods
-
-The widget page uses the same core admin verification as other admin pages:
-
-1. **Primary Method: RPC Function**
-   ```typescript
-   const { data: rpcData, error: rpcError } = await adminClient.rpc('is_admin', { uid: user.id });
-   if (!rpcError && rpcData) {
-     isAdminStatus = 'true';
-   }
-   ```
-
-2. **Fallback: Profile Check**
-   ```typescript
-   const { data: profileData, error: profileError } = await adminClient
-     .from('sd_user_profiles')
-     .select('is_admin')
-     .eq('user_id', user.id)
-     .single();
-   
-   if (!profileError && profileData?.is_admin === true) {
-     isAdminStatus = 'true';
-   }
-   ```
-
-3. **Last Resort: Role Check**
-   ```typescript
-   const { data: roleData, error: roleError } = await adminClient
-     .from('sd_user_roles')
-     .select('role')
-     .eq('user_id', user.id)
-     .eq('role', 'admin')
-     .maybeSingle();
-   
-   if (!roleError && roleData) {
-     isAdminStatus = 'true';
-   }
-   ```
-
-This multi-layered approach with special handling for the widget page ensures robust authentication in production environments.
+This ensures that admin verification for all admin pages happens exclusively at the middleware level, providing consistent behavior across development and production environments.
 
 ## Cross-Domain Technical Architecture
 
-The widget implements a sophisticated cross-domain architecture enabling it to be hosted on `marlan.photographytoprofits.com` while functioning seamlessly when embedded on external domains.
+The widget implements a cross-domain architecture enabling it to be hosted on `marlan.photographytoprofits.com` while functioning seamlessly when embedded on external domains.
 
 ### CORS Implementation
 
@@ -185,10 +153,10 @@ function addCorsHeaders(response: Response, req: NextRequest): Response {
 
 ### URL Resolution Strategy
 
-Robust URL resolution that works even without environment variables:
+Client-side URL resolution with fallbacks:
 
 ```typescript
-// More robust URL resolution with immediate client-side fallback
+// Client-first URL resolution with fallbacks
 const [baseUrl, setBaseUrl] = useState(() => {
   // Client-side rendering - use window.location.origin directly if available
   if (typeof window !== 'undefined') {
@@ -205,57 +173,6 @@ const [baseUrl, setBaseUrl] = useState(() => {
     return 'https://marlan.photographytoprofits.com';
   }
 })
-```
-
-## Widget Script Route Handler
-
-The route handler at `/widget.js/route.ts` serves as the primary method for accessing the widget script:
-
-```typescript
-export async function GET(req: NextRequest) {
-  try {
-    // Get the static file URL
-    const url = new URL('/widget/chat-widget.js', req.url);
-    
-    // Fetch the file content directly
-    const scriptResponse = await fetch(url);
-    
-    if (!scriptResponse.ok) {
-      throw new Error(`Failed to fetch widget script: ${scriptResponse.status}`);
-    }
-    
-    // Get the script content
-    const scriptContent = await scriptResponse.text();
-    
-    // Create a new response with the script content and proper headers
-    const response = new Response(scriptContent, {
-      headers: {
-        'Content-Type': 'application/javascript; charset=utf-8',
-        'Cache-Control': 'public, max-age=3600' // Cache for 1 hour
-      }
-    });
-    
-    // Add CORS headers and return
-    return addCorsHeaders(response, req);
-  } catch (error) {
-    // Enhanced error handling with detailed logging
-    console.error('Widget.js route: Error serving widget script:', error);
-    
-    // Return fallback script that logs the error but still with proper headers
-    const errorResponse = new Response(
-      `console.error("Failed to load chat widget script: ${errorMessage}");`, 
-      {
-        status: 500,
-        headers: {
-          'Content-Type': 'application/javascript; charset=utf-8',
-          ...getCorsHeaders(req)
-        },
-      }
-    );
-    
-    return errorResponse;
-  }
-}
 ```
 
 ## Embedding Options
@@ -289,7 +206,7 @@ Available through the admin widget interface with copy-to-clipboard functionalit
 ### Direct Body Embed Method
 Available through the admin widget interface with copy-to-clipboard functionality.
 
-## Current Component Structure
+## Component Structure
 
 ```
 /components
@@ -306,7 +223,7 @@ Available through the admin widget interface with copy-to-clipboard functionalit
 /app
   /admin
     /widget
-      /page.tsx                # Admin widget management page
+      /page.tsx                # Admin widget management page (client component)
       /layout.tsx              # Server component for metadata
       /route.config.js         # Dynamic rendering configuration
   /widget.js
@@ -324,19 +241,11 @@ Available through the admin widget interface with copy-to-clipboard functionalit
 
 /public
   /widget
-    /chat-widget.js           # Built and minified widget script - GENERATED
-    /chat-widget.js.map       # Source map for debugging - GENERATED
+    /chat-widget.js           # Built and minified widget script
+    /chat-widget.js.map       # Source map for debugging
 ```
 
-### Removed Legacy Files
-
-The following legacy files have been removed as they're no longer needed:
-
-- ❌ `/app/widget-test/route.ts` - Standalone test page now replaced by the admin widget interface
-
 ## Environment Variables
-
-### Required Variables
 
 ```
 # Widget-specific environment variables
@@ -356,8 +265,6 @@ REDIS_TOKEN=your-redis-token
 
 ## Production Issues and Solutions
 
-The widget implementation addresses several key production issues:
-
 ### 1. Client/Server Component Separation
 
 **Problem**: Mixing client components with metadata exports causes hydration errors.
@@ -370,26 +277,14 @@ The widget implementation addresses several key production issues:
 
 ### 2. Authentication Implementation
 
-**Problem**: Middleware-based admin verification works in development but not production.
+**Problem**: Inconsistent admin page behavior between development and production.
 
 **Solution**:
-- Implement direct Supabase client authentication:
-  ```typescript
-  // Check admin status through RPC call (most reliable method)
-  const { data: isAdminRpc, error: rpcError } = await supabase.rpc('is_admin', { 
-    uid: userId 
-  });
-  
-  // Fallback to profile check if RPC fails
-  if (rpcError) {
-    const { data: profile, error: profileError } = await supabase
-      .from('sd_user_profiles')
-      .select('is_admin')
-      .eq('user_id', userId)
-      .single();
-  }
-  ```
-- Add comprehensive error handling and loading states
+- Standardize authentication handling across all admin pages
+- Remove all component-level admin verification from the widget page
+- Rely exclusively on middleware for access control
+- Ensure no API calls are made to verify admin status within the component
+- Remove all conditional rendering based on admin status checks
 
 ### 3. Dynamic Rendering Configuration
 
@@ -400,10 +295,6 @@ The widget implementation addresses several key production issues:
   ```javascript
   // Force dynamic route handling for the admin widget page
   export const dynamic = 'force-dynamic';
-  // Force all requests to revalidate for this route
-  export const fetchCache = 'force-no-store';
-  // Set revalidation time to 0 to prevent caching
-  export const revalidate = 0;
   ```
 - Implement in both page and layout components
 
@@ -412,14 +303,7 @@ The widget implementation addresses several key production issues:
 **Problem**: Environment variables might not be set correctly in production.
 
 **Solution**:
-- Implement client-first URL resolution with multiple fallbacks:
-  ```typescript
-  // Client-side rendering - use window.location.origin directly if available
-  if (typeof window !== 'undefined') {
-    // Browser available - use origin directly
-    return window.location.origin;
-  }
-  ```
+- Implement client-first URL resolution with multiple fallbacks
 - Enhanced validation that accounts for browser environments
 
 ## Production Verification Checklist
@@ -427,32 +311,26 @@ The widget implementation addresses several key production issues:
 After deployment, verify the following to ensure proper widget functionality:
 
 - [ ] `/admin/widget` page loads correctly for authenticated admin users
-- [ ] Authentication works properly with both RPC and profile-based admin checks
+- [ ] Authentication works identically to other admin pages
 - [ ] Widget script loads correctly from both `/widget.js` and `/widget/chat-widget.js`
 - [ ] Widget can connect to the API at `/api/widget-chat` and receive responses
 - [ ] CORS headers are correctly set for cross-domain embedding
 - [ ] Environment variables are properly validated with appropriate fallbacks
 - [ ] Rate limiting is functioning correctly (3 requests per minute)
-- [ ] Redirects from `/widget-test` and `/widget-embed` to `/admin/widget` work correctly
 
 ## Troubleshooting Guide
 
 ### Admin Widget Page Not Loading
 
 1. **Authentication Issues**:
-   - Check browser console for authentication errors
-   - Verify the user has admin permissions in both tables
-   - Test direct URL access to check for redirect behavior
+   - Check middleware logs for auth failures
+   - Verify the user has admin permissions in the database
+   - Check that `/admin/users` and other admin pages also work properly
 
 2. **Rendering Issues**:
-   - Verify `export const dynamic = "force-dynamic"` is present in both page and layout
+   - Verify `export const dynamic = "force-dynamic"` is present
    - Check that route.config.js includes all necessary configuration
    - Look for client/server component conflicts in browser console
-
-3. **Middleware Conflicts**:
-   - Check middleware logs for path handling order
-   - Ensure specific paths are checked before general patterns
-   - Verify authentication headers are being properly set
 
 ### Widget Script Not Loading
 
