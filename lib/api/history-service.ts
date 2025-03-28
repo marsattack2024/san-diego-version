@@ -7,9 +7,12 @@
  * 4. Global request throttling to reduce API load
  */
 
+import { createClient } from '@/utils/supabase/client';
 import { clientCache } from '@/lib/cache/client-cache';
+import { edgeLogger } from '@/lib/logger/edge-logger';
 import { Chat } from '@/lib/db/schema';
 import { randomUUID } from 'crypto';
+import { Message } from 'ai';
 
 // Keep track of pending requests to deduplicate
 const pendingRequests: Record<string, Promise<Chat[]> | null> = {};
@@ -100,13 +103,13 @@ function setAuthFailureState(failed: boolean) {
       isInAuthFailureCooldown = true;
       clientCache.set(AUTH_FAILURE_KEY, true, authBackoffDuration, true);
 
-      console.log(`Auth failure #${authFailureCount}: Setting cooldown for ${authBackoffDuration / 1000}s (${Math.round(authBackoffDuration / 60000)} minutes)`);
+      edgeLogger.debug(`Auth failure #${authFailureCount}: Setting cooldown for ${authBackoffDuration / 1000}s (${Math.round(authBackoffDuration / 60000)} minutes)`, { category: 'auth' });
 
       // Set a timer to automatically clear the cooldown
       authFailureTimer = setTimeout(() => {
         isInAuthFailureCooldown = false;
         clientCache.set(AUTH_FAILURE_KEY, false, Infinity, true);
-        console.log('Auth failure cooldown period expired');
+        edgeLogger.debug('Auth failure cooldown period expired', { category: 'auth' });
       }, authBackoffDuration);
     } else {
       // If explicitly marking auth as successful, clear the failure state
@@ -120,30 +123,23 @@ function setAuthFailureState(failed: boolean) {
       clientCache.remove(AUTH_FAILURE_LAST_TIME_KEY, true);
       clientCache.set(AUTH_BACKOFF_DURATION_KEY, MIN_AUTH_COOLDOWN, Infinity, true);
 
-      console.log('Auth failure state cleared - auth is now successful');
+      edgeLogger.debug('Auth failure state cleared - auth is now successful', { category: 'auth' });
     }
   } catch (e) {
-    console.warn('Error setting auth failure state:', e);
+    edgeLogger.warn('Error setting auth failure state', {
+      category: 'auth',
+      error: e instanceof Error ? e.message : 'Unknown error'
+    });
   }
 }
 
 // Initialize auth failure state from persistent storage
 try {
-  // Get stored failure state
-  const storedFailureState = clientCache.get(AUTH_FAILURE_KEY, Infinity, true);
-  isInAuthFailureCooldown = !!storedFailureState;
-
-  // Get stored failure count and backoff info
+  // Attempt to restore auth failure state from cache
+  isInAuthFailureCooldown = !!clientCache.get(AUTH_FAILURE_KEY, Infinity, true);
   authFailureCount = clientCache.get(AUTH_FAILURE_COUNT_KEY, Infinity, true) || 0;
   const lastFailureTime = clientCache.get(AUTH_FAILURE_LAST_TIME_KEY, Infinity, true) || 0;
   authBackoffDuration = clientCache.get(AUTH_BACKOFF_DURATION_KEY, Infinity, true) || MIN_AUTH_COOLDOWN;
-
-  // Log auth cookie information if available
-  if (typeof document !== 'undefined') {
-    const cookies = document.cookie.split(';').map(c => c.trim());
-    const authCookies = cookies.filter(c => c.includes('auth-token'));
-    console.log('Auth Cookies:', cookies);
-  }
 
   // Check if we should still be in a cooldown period
   if (isInAuthFailureCooldown) {
@@ -156,24 +152,27 @@ try {
       // Cooldown expired, reset the state
       isInAuthFailureCooldown = false;
       clientCache.set(AUTH_FAILURE_KEY, false, Infinity, true);
-      console.log('Restored auth state: Cooldown already expired');
+      edgeLogger.debug('Restored auth state: Cooldown expired', { category: 'auth' });
     } else {
       // Still in cooldown period, setup a timer for remaining time
       const remainingTime = authBackoffDuration - elapsedTime;
-      console.log(`Restored auth failure state: ${authFailureCount} failures, ${Math.round(remainingTime / 1000)}s remaining in cooldown`);
+      edgeLogger.debug(`Auth failure state: ${authFailureCount} failures, ${Math.round(remainingTime / 1000)}s cooldown remaining`, { category: 'auth' });
 
       authFailureTimer = setTimeout(() => {
         isInAuthFailureCooldown = false;
         clientCache.set(AUTH_FAILURE_KEY, false, Infinity, true);
-        console.log('Auth failure cooldown period expired');
+        edgeLogger.debug('Auth failure cooldown period expired', { category: 'auth' });
       }, remainingTime);
     }
   } else {
-    console.log('Initialized with clean auth state (no active cooldown)');
+    // Don't log anything about auth state initialization
   }
 } catch (e) {
   // Log and ignore cache errors
-  console.warn('Error initializing auth failure state from cache:', e);
+  edgeLogger.warn('Error initializing auth failure state from cache', {
+    category: 'auth',
+    error: e instanceof Error ? e.message : 'Unknown error'
+  });
 }
 
 /**
@@ -191,7 +190,7 @@ export const historyService = {
     if (recentUnauthorizedRequests.length >= UNAUTHORIZED_THRESHOLD) {
       // Activate the circuit breaker if we hit the threshold
       if (!isInAuthFailureCooldown) {
-        console.warn(`Circuit breaker activating from isInAuthFailure check - ${recentUnauthorizedRequests.length} recent 401s`);
+        edgeLogger.warn(`Circuit breaker activating from isInAuthFailure check - ${recentUnauthorizedRequests.length} recent 401s`, { category: 'auth' });
         setAuthFailureState(true);
       }
       return true;
@@ -207,7 +206,7 @@ export const historyService = {
 
         // Log mismatch detection at low frequency
         if (Math.random() < 0.1) {
-          console.log(`Auth failure state updated from storage: ${persistentState}`);
+          edgeLogger.debug(`Auth failure state updated from storage: ${persistentState}`, { category: 'auth' });
         }
       }
 
@@ -248,7 +247,7 @@ export const historyService = {
    */
   resetAuthFailure(): void {
     setAuthFailureState(false);
-    console.log('Auth failure state manually reset');
+    edgeLogger.debug('Auth failure state manually reset', { category: 'auth' });
   },
 
   /**
@@ -265,7 +264,7 @@ export const historyService = {
     // Allow bypass of throttling for mobile sidebar opening
     if (!forceRefresh && !isMobileOpen && timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
       // If any history request was made in the last 2 seconds, use cached data
-      console.log(`Global history request throttling: ${(MIN_REQUEST_INTERVAL - timeSinceLastRequest) / 1000}s throttle`);
+      edgeLogger.debug(`Global history request throttling: ${(MIN_REQUEST_INTERVAL - timeSinceLastRequest) / 1000}s throttle`, { category: 'auth' });
 
       try {
         const cachedData = clientCache.get('chat_history') as Chat[] | undefined;
@@ -290,7 +289,7 @@ export const historyService = {
       if (Math.random() < 0.01) {
         try {
           const failureInfo = this.getAuthFailureInfo();
-          console.warn(`History fetch blocked by circuit breaker. Cooldown: ${Math.round(failureInfo.remainingTime / 1000)}s remaining`);
+          edgeLogger.warn(`History fetch blocked by circuit breaker. Cooldown: ${Math.round(failureInfo.remainingTime / 1000)}s remaining`, { category: 'auth' });
         } catch (e) {
           // Completely suppress errors in failure state logging to ensure absolute fail-fast
         }
@@ -312,7 +311,7 @@ export const historyService = {
 
     // Only allow forced refreshes more often than the minimum interval
     if (!forceRefresh && timeSinceLastFetch < MIN_REFRESH_INTERVAL) {
-      console.log(`Throttling history fetch: ${(MIN_REFRESH_INTERVAL - timeSinceLastFetch) / 1000}s remaining`);
+      edgeLogger.debug(`Throttling history fetch: ${(MIN_REFRESH_INTERVAL - timeSinceLastFetch) / 1000}s remaining`, { category: 'auth' });
       // Return cached data immediately
       try {
         const cachedData = clientCache.get('chat_history') as Chat[] | undefined;
@@ -348,11 +347,14 @@ export const historyService = {
 
       // If already loading, don't start a new request
       if (pendingRequests[cacheKey]) {
-        console.log(`[History:${operationId}] Reusing existing in-flight request`);
+        edgeLogger.debug(`[History:${operationId}] Reusing existing in-flight request`, { category: 'auth' });
         try {
           return await pendingRequests[cacheKey]!;
         } catch (error) {
-          console.error(`[History:${operationId}] Error from in-flight request:`, error);
+          edgeLogger.error(`[History:${operationId}] Error from in-flight request:`, {
+            category: 'auth',
+            error: error instanceof Error ? error.message : String(error)
+          });
           // On error, clear the pending request and continue with a new fetch
           pendingRequests[cacheKey] = null;
         }
@@ -360,7 +362,8 @@ export const historyService = {
 
       // Log fetching attempt at reduced frequency
       if (Math.random() < 0.2 || forceRefresh) {
-        console.log(`[History:${operationId}] Fetching chat history`, {
+        edgeLogger.debug(`[History:${operationId}] Fetching chat history`, {
+          category: 'auth',
           forceRefresh,
           cacheKey,
           hasPendingRequest: !!pendingRequests[cacheKey],
@@ -377,14 +380,14 @@ export const historyService = {
           if (cachedData && cachedData.length > 0) {
             // Only log cache hits at reduced frequency
             if (Math.random() < 0.2) {
-              console.log(`[History:${operationId}] Using cached data with ${cachedData.length} items`);
+              edgeLogger.debug(`[History:${operationId}] Using cached data with ${cachedData.length} items`, { category: 'auth' });
             }
 
             // Check if we need a background refresh (only if not accessed recently)
             const timeSinceLastRefresh = Date.now() - lastRefreshTime;
             if (timeSinceLastRefresh > adaptiveRefreshInterval) {
               if (Math.random() < 0.2) {
-                console.log(`[History:${operationId}] Starting background refresh after using cache (${Math.round(timeSinceLastRefresh / 1000)}s since last refresh)`);
+                edgeLogger.debug(`[History:${operationId}] Starting background refresh after using cache (${Math.round(timeSinceLastRefresh / 1000)}s since last refresh)`, { category: 'auth' });
               }
 
               // Schedule a background refresh after a short delay
@@ -407,7 +410,10 @@ export const historyService = {
                     }
                   })
                   .catch(err => {
-                    console.error('Background refresh failed:', err);
+                    edgeLogger.error('Background refresh failed:', {
+                      category: 'auth',
+                      error: err instanceof Error ? err.message : String(err)
+                    });
                     consecutiveSuccessfulFetches = 0;
                     // Decrease refresh interval on failure
                     adaptiveRefreshInterval = Math.max(
@@ -417,25 +423,28 @@ export const historyService = {
                   });
               }, 100);
             } else if (Math.random() < 0.1) {
-              console.log(`[History:${operationId}] Skipping background refresh (only ${Math.round(timeSinceLastRefresh / 1000)}s since last refresh)`);
+              edgeLogger.debug(`[History:${operationId}] Skipping background refresh (only ${Math.round(timeSinceLastRefresh / 1000)}s since last refresh)`, { category: 'auth' });
             }
 
             return cachedData;
           } else {
-            console.log(`[History:${operationId}] No valid cache data found, fetching from API`);
+            edgeLogger.debug(`[History:${operationId}] No valid cache data found, fetching from API`, { category: 'auth' });
           }
         } catch (cacheError) {
-          console.warn(`[History:${operationId}] Cache error:`, cacheError);
+          edgeLogger.warn(`[History:${operationId}] Cache error:`, {
+            category: 'auth',
+            error: cacheError instanceof Error ? cacheError.message : String(cacheError)
+          });
           // Continue with API fetch
         }
       } else {
         // Force refresh requested, invalidate cache
-        console.log(`[History:${operationId}] Force refresh, invalidating cache`);
+        edgeLogger.debug(`[History:${operationId}] Force refresh, invalidating cache`, { category: 'auth' });
         this.invalidateCache();
       }
 
       // Create and store the API fetch promise
-      console.log(`[History:${operationId}] Fetching from API`);
+      edgeLogger.debug(`[History:${operationId}] Fetching from API`, { category: 'auth' });
       pendingRequests[cacheKey] = this.fetchHistoryFromAPI(cacheKey, operationId);
 
       try {
@@ -449,7 +458,10 @@ export const historyService = {
         }, 500);
       }
     } catch (error) {
-      console.error(`[History:${operationId}] Unexpected error:`, error);
+      edgeLogger.error(`[History:${operationId}] Unexpected error:`, {
+        category: 'auth',
+        error: error instanceof Error ? error.message : String(error)
+      });
       return [];
     }
   },
@@ -474,15 +486,18 @@ export const historyService = {
 
       // Log presence/absence of auth cookies at a reduced rate
       if (Math.random() < 0.01) {
-        console.log(`Auth cookie check: ${hasAuthCookie ? 'Present' : 'Missing'}`);
+        edgeLogger.debug(`Auth cookie check: ${hasAuthCookie ? 'Present' : 'Missing'}`, { category: 'auth' });
         if (!hasAuthCookie) {
-          console.log('Cookie debug:', cookies.map(c => c.split('=')[0]));
+          edgeLogger.debug('Cookie debug:', cookies.map(c => c.split('=')[0]));
         }
       }
 
       return hasAuthCookie;
     } catch (e) {
-      console.warn('Error checking auth cookies:', e);
+      edgeLogger.warn('Error checking auth cookies', {
+        category: 'auth',
+        error: e instanceof Error ? e.message : String(e)
+      });
       return false;
     }
   },
@@ -528,12 +543,15 @@ export const historyService = {
 
       // Log auth state at a reduced rate (1% of the time)
       if (Math.random() < 0.01) {
-        console.log(`Auth readiness check: ${authReady ? 'Ready' : 'Not ready'}, State: ${authState || 'unknown'}`);
+        edgeLogger.debug(`Auth readiness check: ${authReady ? 'Ready' : 'Not ready'}, State: ${authState || 'unknown'}`, { category: 'auth' });
       }
 
       return authReady;
     } catch (e) {
-      console.warn('Error checking auth readiness:', e);
+      edgeLogger.warn('Error checking auth readiness', {
+        category: 'auth',
+        error: e instanceof Error ? e.message : String(e)
+      });
       return false;
     }
   },
@@ -889,7 +907,6 @@ export const historyService = {
       return false;
     }
 
-    console.log(`[History:${operationId}] Renaming chat ${chatId.slice(0, 8)} to "${title.substring(0, 30)}${title.length > 30 ? '...' : ''}"`);
 
     try {
       // Check for auth cookies to avoid unnecessary API calls

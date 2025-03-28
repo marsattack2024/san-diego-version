@@ -306,13 +306,9 @@ export async function POST(req: Request) {
       // 2. RAG (Knowledge Base) - HIGH PRIORITY for queries over 15 characters
       if (lastUserMessage.content.length > 15) {
         const ragStartTime = Date.now();
-        edgeLogger.info('Running RAG for query', {
-          query: lastUserMessage.content.substring(0, 100) + '...',
-          queryLength: lastUserMessage.content.length
-        });
 
         try {
-          // Execute the RAG tool with proper operation tracking
+          // Execute the RAG tool with proper operation tracking - don't include full query in logs
           const ragResult = await edgeLogger.trackOperation(
             'rag_search',
             async () => {
@@ -323,37 +319,62 @@ export async function POST(req: Request) {
             },
             {
               category: LOG_CATEGORIES.TOOLS,
-              query: lastUserMessage.content.substring(0, 100),
-              important: true
+              queryLength: lastUserMessage.content.length,
+              queryPreview: lastUserMessage.content.substring(0, 20) + '...'
             }
           );
 
           // Check if we got valid results
+          const ragDurationMs = Date.now() - ragStartTime;
+          const isSlow = ragDurationMs > 2000; // Use SLOW_OPERATION constant from logger
+          const isImportant = ragDurationMs > 5000; // Use IMPORTANT_THRESHOLD constant from logger
+
           if (typeof ragResult === 'string') {
             if (!ragResult.includes("No relevant information found")) {
               toolManager.registerToolResult('Knowledge Base', ragResult);
-              edgeLogger.info('RAG results found', {
+
+              // Single consolidated RAG completion log per SOP
+              edgeLogger.info('RAG operation completed', {
+                category: LOG_CATEGORIES.TOOLS,
+                durationMs: ragDurationMs,
+                results: 1, // Found content
                 contentLength: ragResult.length,
-                firstChars: ragResult.substring(0, 100) + '...',
-                durationMs: Date.now() - ragStartTime
+                slow: isSlow,
+                important: isImportant,
+                status: 'completed'
               });
             } else {
-              edgeLogger.info('No RAG results found', {
-                durationMs: Date.now() - ragStartTime,
-                reason: 'no matches'
+              // No results case
+              edgeLogger.info('RAG operation completed', {
+                category: LOG_CATEGORIES.TOOLS,
+                durationMs: ragDurationMs,
+                results: 0, // No content found
+                slow: isSlow,
+                important: isImportant,
+                status: 'no_matches'
               });
             }
           } else {
-            // If it's not a string, log the unexpected result type
-            edgeLogger.warn('Unexpected RAG result type', {
-              resultType: typeof ragResult,
-              durationMs: Date.now() - ragStartTime
+            // If it's not a string, log unexpected result type
+            edgeLogger.warn('RAG operation completed', {
+              category: LOG_CATEGORIES.TOOLS,
+              durationMs: ragDurationMs,
+              results: 0,
+              slow: isSlow,
+              important: isImportant,
+              status: 'unexpected_result_type',
+              resultType: typeof ragResult
             });
           }
         } catch (error) {
-          edgeLogger.error('Error running RAG', {
+          const ragDurationMs = Date.now() - ragStartTime;
+          edgeLogger.error('RAG operation failed', {
+            category: LOG_CATEGORIES.TOOLS,
             error: formatError(error),
-            durationMs: Date.now() - ragStartTime
+            durationMs: ragDurationMs,
+            results: 0,
+            status: 'error',
+            important: true
           });
         }
       }
@@ -405,11 +426,12 @@ export async function POST(req: Request) {
           // Create a meaningful operation ID for tracing
           const operationId = `deepsearch-${Date.now().toString(36)}`;
 
-          edgeLogger.info('Running Deep Search for query', {
+          edgeLogger.info('Running Deep Search', {
             operation: 'deep_search_start',
             operationId,
-            query: lastUserMessage.content.substring(0, 100) + '...',
-            queryLength: lastUserMessage.content.length
+            category: LOG_CATEGORIES.TOOLS,
+            queryLength: lastUserMessage.content.length,
+            queryPreview: lastUserMessage.content.substring(0, 20) + '...'
           });
 
           try {
@@ -425,6 +447,7 @@ export async function POST(req: Request) {
             edgeLogger.info('Starting Perplexity DeepSearch call', {
               operation: 'deep_search_api_call',
               operationId,
+              category: LOG_CATEGORIES.TOOLS,
               queryLength: lastUserMessage.content.length
             });
 

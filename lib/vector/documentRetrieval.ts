@@ -51,7 +51,7 @@ async function findSimilarDocuments(
   options: DocumentSearchOptions = {}
 ): Promise<RetrievedDocument[]> {
   const userQueryEmbedded = await createEmbedding(queryText);
-  
+
   const { data: similarDocs, error } = await supabase
     .rpc('match_documents', {
       query_embedding: userQueryEmbedded,
@@ -81,10 +81,10 @@ export async function findSimilarDocumentsWithPerformance(
 ): Promise<{ documents: RetrievedDocument[], metrics: DocumentSearchMetrics }> {
   const startTime = performance.now();
   const sessionId = options.sessionId || Math.random().toString(36).substring(2, 15);
-  
+
   try {
     const documents = await findSimilarDocuments(queryText, options);
-    
+
     const endTime = performance.now();
     const retrievalTimeMs = Math.round(endTime - startTime);
     const count = documents.length;
@@ -100,10 +100,10 @@ export async function findSimilarDocumentsWithPerformance(
       highestSimilarity = Math.max(...similarities);
       lowestSimilarity = Math.min(...similarities);
     }
-    
+
     const isSlowQuery = retrievalTimeMs > 500; // Consider queries taking more than 500ms as slow
     logQueryPerformance(queryText, retrievalTimeMs, count, sessionId);
-    
+
     return {
       documents,
       metrics: {
@@ -118,14 +118,14 @@ export async function findSimilarDocumentsWithPerformance(
   } catch (error) {
     const endTime = performance.now();
     const retrievalTimeMs = Math.round(endTime - startTime);
-    
+
     logger.error('Vector search failed', {
       error,
       queryLength: queryText.length,
       retrievalTimeMs,
       sessionId,
     });
-    
+
     throw error;
   }
 }
@@ -152,7 +152,7 @@ function calculateSearchMetrics(documents: RetrievedDocument[]): DocumentSearchM
   const validScores = documents
     .filter(doc => typeof doc.score === 'number')
     .map(doc => doc.score as number);
-  
+
   return {
     count: documents.length,
     averageSimilarity: calculateAverageSimilarity(documents),
@@ -171,13 +171,13 @@ async function generateConsistentCacheKey(queryText: string, options: DocumentSe
     filter: options.metadataFilter || {},
     limit: options.limit || 10
   };
-  
+
   // Use Web Crypto API for hashing to ensure consistency
   const msgUint8 = new TextEncoder().encode(JSON.stringify(keyContent));
   const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-  
+
   // Return just the first 16 characters of the hash for a shorter key
   return hashHex.slice(0, 16);
 }
@@ -189,65 +189,93 @@ export async function findSimilarDocumentsOptimized(
 ): Promise<{ documents: RetrievedDocument[], metrics: DocumentSearchMetrics }> {
   // Use consistent cache key with await
   const cacheKey = await generateConsistentCacheKey(queryText, options);
-  
+
   try {
     const cachedResults = await redisCache.getRAG('global', cacheKey);
     if (cachedResults) {
       try {
         // Since our get method now handles JSON parsing, this should either be 
         // an already parsed object or a string
-        const parsedResults = typeof cachedResults === 'string' 
-          ? JSON.parse(cachedResults) 
+        const parsedResults = typeof cachedResults === 'string'
+          ? JSON.parse(cachedResults)
           : cachedResults;
-        
+
         // Validate the structure matches our interface
-        if (parsedResults && 
-            typeof parsedResults === 'object' &&
-            Array.isArray(parsedResults.documents) && 
-            parsedResults.documents.every((doc: any) => 
-              doc.id && 
-              doc.content && 
-              (typeof doc.score === 'number' || typeof doc.similarity === 'number')
-            ) &&
-            parsedResults.metrics &&
-            parsedResults.timestamp &&
-            typeof parsedResults.timestamp === 'number'
+        if (parsedResults &&
+          typeof parsedResults === 'object' &&
+          Array.isArray(parsedResults.documents) &&
+          parsedResults.documents.every((doc: any) =>
+            doc.id &&
+            doc.content &&
+            (typeof doc.score === 'number' || typeof doc.similarity === 'number')
+          ) &&
+          parsedResults.metrics &&
+          parsedResults.timestamp &&
+          typeof parsedResults.timestamp === 'number'
         ) {
-          logger.info('Cache hit', {
-            operation: 'cache_hit',
-            queryLength: queryText.length,
-            resultCount: parsedResults.documents.length,
-            age: Date.now() - parsedResults.timestamp
+          logger.info('RAG operation completed', {
+            category: 'tools',
+            operation: 'rag_search',
+            durationMs: parsedResults.metrics.retrievalTimeMs,
+            results: parsedResults.documents.length,
+            slow: parsedResults.metrics.isSlowQuery,
+            important: parsedResults.metrics.isSlowQuery && parsedResults.metrics.retrievalTimeMs > 5000,
+            status: 'completed',
+            fromCache: true,
+            cacheAge: Date.now() - parsedResults.timestamp
           });
-          
+
           return {
             documents: parsedResults.documents,
             metrics: parsedResults.metrics
           };
         } else {
-          logger.warn('Invalid cache structure', {
-            operation: 'cache_invalid',
-            structure: Object.keys(parsedResults)
+          logger.warn('RAG operation completed', {
+            category: 'tools',
+            operation: 'rag_search',
+            status: 'cache_invalid',
+            durationMs: 0,
+            results: 0,
+            slow: false,
+            important: false,
+            fromCache: false,
+            reason: 'invalid_cache_structure'
           });
         }
       } catch (error) {
-        logger.warn('Cache parse error, falling back to search', {
+        logger.warn('RAG operation completed', {
+          category: 'tools',
+          operation: 'rag_search',
+          status: 'cache_parse_error',
+          durationMs: 0,
+          results: 0,
+          slow: false,
+          important: false,
+          fromCache: false,
           error: error instanceof Error ? error.message : String(error)
         });
       }
     }
   } catch (error) {
-    logger.warn('Cache retrieval error, falling back to search', { 
-      error: error instanceof Error ? error.message : String(error) 
+    logger.warn('RAG operation completed', {
+      category: 'tools',
+      operation: 'rag_search',
+      status: 'cache_retrieval_error',
+      durationMs: 0,
+      results: 0,
+      slow: false,
+      important: false,
+      fromCache: false,
+      error: error instanceof Error ? error.message : String(error)
     });
   }
-  
+
   // Perform vector search
   const documents = await findSimilarDocuments(queryText, options);
-  
+
   // Calculate metrics
   const metrics = calculateSearchMetrics(documents);
-  
+
   // Cache results
   try {
     const cacheableResults = {
@@ -255,22 +283,30 @@ export async function findSimilarDocumentsOptimized(
       metrics,
       timestamp: Date.now()
     };
-    
+
     // Serialize to JSON string before caching
     const serializedResults = JSON.stringify(cacheableResults);
     await redisCache.setRAG('global', cacheKey, serializedResults);
-    
-    logger.info('Cached search results', {
+
+    logger.info('RAG operation completed', {
+      category: 'tools',
       operation: 'cache_set',
-      queryLength: queryText.length,
-      resultCount: documents.length
+      durationMs: metrics.retrievalTimeMs,
+      results: documents.length,
+      slow: metrics.isSlowQuery,
+      important: metrics.isSlowQuery && metrics.retrievalTimeMs > 5000,
+      status: 'cache_stored',
+      fromCache: false
     });
   } catch (error) {
-    logger.error('Failed to cache search results', {
-      error: error instanceof Error ? error.message : String(error)
+    logger.error('RAG operation failed', {
+      category: 'tools',
+      operation: 'cache_set',
+      error: error instanceof Error ? error.message : String(error),
+      important: true
     });
   }
-  
+
   return { documents, metrics };
 }
 

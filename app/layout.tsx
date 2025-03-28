@@ -6,6 +6,7 @@ import { ThemeProvider } from '@/components/theme-provider';
 import { DeepSearchTracker } from '@/components/deep-search-tracker';
 import { AuthProvider } from '@/utils/supabase/auth-provider';
 import { AuthHeadersSetup } from '@/components/auth-headers-setup';
+import { logApplicationStartup } from '@/lib/logger/edge-logger';
 
 import './globals.css';
 
@@ -44,6 +45,10 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Log application startup once at root layout initialization
+  // This ensures we only log startup once per instance
+  logApplicationStartup();
+
   return (
     <html
       lang="en"

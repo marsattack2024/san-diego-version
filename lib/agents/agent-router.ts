@@ -1,6 +1,6 @@
-import { type Message , type ToolSet } from 'ai';
+import { type Message, type ToolSet } from 'ai';
 import { buildSystemPrompt, type ToolResults, type AgentType, AGENT_PROMPTS } from './prompts';
-import { edgeLogger , logger } from '@/lib/logger/edge-logger';
+import { edgeLogger } from '@/lib/logger/edge-logger';
 
 // Keywords that trigger specific agents
 const AGENT_KEYWORDS: Record<AgentType, string[]> = {
@@ -13,7 +13,7 @@ const AGENT_KEYWORDS: Record<AgentType, string[]> = {
     'write a website', 'create a website', 'website copy', 'website structure', 'site content',
     'web content', 'web copy', 'website sections', 'about page', 'contact page', 'services page',
     'homepage content', 'write website', 'create website', 'website text', 'full website',
-    'website for', 'site for', 'web page content', 'website','web page copy', 'website creation'
+    'website for', 'site for', 'web page content', 'website', 'web page copy', 'website creation'
   ],
   'google-ads': [
     'google ads', 'google ad', 'google advertising', 'search ads', 'ppc', 'pay per click',
@@ -58,16 +58,12 @@ export class AgentRouter {
    * @returns The agent type to use
    */
   routeMessage(selectedAgentId: AgentType, messages: Message[]): AgentType {
-    edgeLogger.info('Agent router processing message', { 
-      selectedAgentId, 
-      messagesCount: messages.length 
-    });
-    
     // If user has explicitly selected a non-default agent, use that
     if (selectedAgentId !== 'default') {
-      logger.info('Using explicitly selected agent', { 
-        selectedAgentId, 
+      edgeLogger.info('Using explicitly selected agent', {
+        selectedAgentId,
         selectionMethod: 'user-selected',
+        category: 'chat',
         important: true
       });
       return selectedAgentId;
@@ -76,14 +72,28 @@ export class AgentRouter {
     // Auto-routing only happens from the default agent
     const lastMessage = messages[messages.length - 1];
     if (!lastMessage || lastMessage.role !== 'user') {
-      edgeLogger.info('No user message to route, using default agent');
+      edgeLogger.debug('No user message to route, using default agent', {
+        category: 'chat'
+      });
       return 'default';
     }
 
     const content = lastMessage.content.toLowerCase();
-    edgeLogger.info('Routing based on message content', { 
-      contentPreview: content.substring(0, 50) + (content.length > 50 ? '...' : '') 
-    });
+
+    // Skip detailed scoring for very short queries or simple questions
+    if (content.length < 15 ||
+      content.startsWith('what') ||
+      content.startsWith('how') ||
+      content.startsWith('who') ||
+      content.startsWith('when') ||
+      content.startsWith('why')) {
+      edgeLogger.debug('Skipping agent routing for informational query', {
+        category: 'chat',
+        contentLength: content.length,
+        contentPreview: content.substring(0, 30)
+      });
+      return 'default';
+    }
 
     // Create a scoring system for each agent type
     const scores: Record<AgentType, number> = {
@@ -97,7 +107,7 @@ export class AgentRouter {
     // Check for keywords that would trigger a specific agent
     for (const [agentType, keywords] of Object.entries(AGENT_KEYWORDS)) {
       if (agentType === 'default') continue;
-      
+
       for (const keyword of keywords) {
         // Check for exact matches (higher score)
         if (content.includes(keyword.toLowerCase())) {
@@ -105,31 +115,18 @@ export class AgentRouter {
           const wordCount = keyword.split(' ').length;
           const score = wordCount * 2;
           scores[agentType as AgentType] += score;
-          edgeLogger.debug('Keyword match found', { 
-            keyword, 
-            agentType, 
-            score 
-          });
-          
+
           // Bonus points for keywords at the beginning of the message
           if (content.startsWith(keyword.toLowerCase())) {
             const bonusScore = 5;
             scores[agentType as AgentType] += bonusScore;
-            edgeLogger.debug('Keyword at start of message', { 
-              keyword, 
-              bonusScore 
-            });
           }
-          
+
           // Bonus points for exact phrase matches
           const exactPhraseRegex = new RegExp(`\\b${keyword.toLowerCase()}\\b`, 'i');
           if (exactPhraseRegex.test(content)) {
             const exactMatchBonus = 3;
             scores[agentType as AgentType] += exactMatchBonus;
-            edgeLogger.debug('Exact phrase match', { 
-              keyword, 
-              exactMatchBonus 
-            });
           }
         }
       }
@@ -146,42 +143,36 @@ export class AgentRouter {
       }
     }
 
-    // Log all scores for debugging
-    edgeLogger.debug('Agent routing scores', { scores });
+    // Only log scores in development mode
+    if (process.env.NODE_ENV === 'development') {
+      edgeLogger.debug('Agent routing scores', {
+        category: 'chat',
+        scores
+      });
+    }
 
     // Only route to a specialized agent if the score is above a threshold
     const routingThreshold = 5;
     if (highestScore >= routingThreshold) {
-      edgeLogger.info('Auto-routed to specialized agent', { 
-        selectedAgent, 
-        score: highestScore, 
-        threshold: routingThreshold 
-      });
-      
-      logger.info('Auto-routed message to specialized agent', {
-        agentType: selectedAgent,
-        selectionMethod: 'auto-routing',
+      edgeLogger.info('Auto-routed to specialized agent', {
+        category: 'chat',
+        selectedAgent,
         score: highestScore,
         threshold: routingThreshold,
         important: true
       });
-      
+
       return selectedAgent;
     }
 
     // Default to the default agent if no keywords match or score is too low
-    edgeLogger.info('No agent scored above threshold, using default agent', { 
-      highestScore, 
-      threshold: routingThreshold 
-    });
-    
-    logger.info('Using default agent (no specialized agent matched)', {
-      selectionMethod: 'auto-routing',
+    edgeLogger.debug('Using default agent', {
+      category: 'chat',
+      reason: 'No agent scored above threshold',
       highestScore,
-      threshold: routingThreshold,
-      important: true
+      threshold: routingThreshold
     });
-    
+
     return 'default';
   }
 
@@ -193,36 +184,38 @@ export class AgentRouter {
    */
   getSystemPrompt(agentType: AgentType, deepSearchEnabled = false): string {
     // Log agent selection with context
-    logger.info('Agent selected for conversation', {
+    edgeLogger.info('Agent selected for conversation', {
+      category: 'chat',
       agentType,
       selectionMethod: agentType === 'default' ? 'auto-routing' : 'user-selected',
       deepSearchEnabled,
       important: true
     });
-    
+
     // Build the system prompt in a simple, linear fashion
     const systemPrompt = [
       // 1. Start with the base prompt and specialized prompt if applicable
       buildSystemPrompt(agentType),
-      
+
       // 2. Add tool descriptions
       COMMON_TOOL_DESCRIPTION,
-      
+
       // 3. Add DeepSearch-specific instructions
       deepSearchEnabled
         ? "IMPORTANT: DeepSearch is enabled for this conversation. Use the deepSearch tool for research-intensive questions."
         : "NOTE: DeepSearch is NOT enabled for this conversation. Do NOT use the deepSearch tool.",
-      
+
       // 4. Add critical instruction to mention tools used
       "CRITICAL INSTRUCTION: At the end of your response, you MUST include a section that explicitly states which resources you used (Knowledge Base, Web Scraper, or Deep Search). If you didn't use any of these resources, state that you didn't use any specific resources."
     ].join("\n\n");
-    
+
     // Log the system prompt creation
     edgeLogger.debug('System prompt built successfully', {
+      category: 'chat',
       agentType,
       promptLength: systemPrompt.length
     });
-    
+
     return systemPrompt;
   }
 }

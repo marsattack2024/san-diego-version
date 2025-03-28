@@ -4,6 +4,7 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar';
 import { createClient } from '@/utils/supabase/server';
 import { cookies } from 'next/headers';
 import { ChatHeader } from '@/components/chat-header';
+import { edgeLogger } from '@/lib/logger/edge-logger';
 
 // Force dynamic rendering since this layout uses cookies
 export const dynamic = "force-dynamic";
@@ -16,10 +17,8 @@ export default async function ChatLayout({
   // Get the current user from Supabase auth
   let user;
   try {
-    // Get a list of cookies for debugging
+    // Get cookies for auth
     const cookieStore = await cookies();
-    const cookieList = cookieStore.getAll();
-    console.log("Auth Cookies:", cookieList.map(c => c.name)); // Debug log, only log names
 
     // Create Supabase server client with cookies
     const supabase = await createClient();
@@ -30,16 +29,23 @@ export default async function ChatLayout({
 
     // Debug log (protect PII by only showing ID)
     if (user) {
-      console.log("Chat layout retrieved user:", {
-        id: user.id,
+      edgeLogger.debug("Chat layout retrieved user", {
+        category: 'auth',
+        userId: user.id,
         hasEmail: !!user.email,
-        roles: user.app_metadata?.roles || 'none'
+        hasRoles: !!user.app_metadata?.roles
       });
     } else {
-      console.log("No authenticated user found in chat layout");
+      edgeLogger.debug("No authenticated user found in chat layout", {
+        category: 'auth'
+      });
     }
   } catch (error) {
-    console.error('Failed to get user in chat layout:', error);
+    edgeLogger.error('Failed to get user in chat layout', {
+      category: 'auth',
+      error: error instanceof Error ? error : String(error),
+      important: true
+    });
     user = undefined;
   }
 

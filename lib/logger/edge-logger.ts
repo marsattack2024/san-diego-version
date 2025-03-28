@@ -6,6 +6,8 @@
  * - No dependencies on Node.js specific features
  */
 
+import { type Message, type ToolSet } from 'ai';
+
 // Log categories for grouping and sampling
 const LOG_CATEGORIES = {
   AUTH: 'auth',
@@ -26,6 +28,12 @@ const LOG_CACHE = new Map<string, {
   lastLogTime: number,
   expiresAt: number
 }>();
+
+// Singleton pattern to track application startup state - key fix for duplicate logs
+const APPLICATION_STATE = {
+  startupLogged: false,
+  startTime: Date.now()
+};
 
 // Operation groups for related logging
 const logGroups = new Map<string, {
@@ -55,18 +63,18 @@ function formatDevLog(level: string, message: string, data: any = {}): string {
   const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
   // Simplify to three levels
   const emoji = level === 'error' ? '🔴' : level === 'warn' ? '🟠' : '🔵';
-  
+
   // Extract important fields for the primary display
   const { durationMs, operation, sessionId, requestId, category, error, ...restData } = data;
   const primaryContext = [];
-  
+
   if (category) primaryContext.push(category);
   if (durationMs) primaryContext.push(`${durationMs}ms`);
   if (operation) primaryContext.push(operation);
-  
+
   // Format error information if present
   const errorInfo = error ? `\n  error: ${error.message || error}` : '';
-  
+
   // Format remaining data more concisely
   const secondaryContext = Object.entries(restData)
     .filter(([k, v]) => k !== 'timestamp' && v !== undefined)
@@ -82,7 +90,7 @@ function formatDevLog(level: string, message: string, data: any = {}): string {
       return `  ${k}=${v}`;
     })
     .join('\n');
-  
+
   return [
     `${emoji} ${timestamp} ${message}`,
     primaryContext.length ? ` (${primaryContext.join(', ')})` : '',
@@ -97,7 +105,7 @@ function shouldLogMessage(level: string, message: string, data?: LogData): { sho
   if (level === 'error' || data?.important) {
     return { shouldLog: true, count: 1 };
   }
-  
+
   // Apply category-based sampling in production
   if (process.env.NODE_ENV === 'production' && data?.category) {
     const samplingRate = DEDUP_SETTINGS.samplingRates[data.category] || 0.1;
@@ -105,31 +113,31 @@ function shouldLogMessage(level: string, message: string, data?: LogData): { sho
       return { shouldLog: false, count: 0 };
     }
   }
-  
+
   // Skip deduplication in production or for error logs
   if (process.env.NODE_ENV === 'production' || level === 'error') {
     return { shouldLog: true, count: 1 };
   }
-  
+
   // More aggressive filtering in development
   if (process.env.NODE_ENV === 'development' && !data?.important) {
     // Filter out noisy development logs
     if (message.includes('Cookie information') ||
-        message.includes('Chat history fetch') ||
-        message.includes('Middleware request') ||
-        message.includes('Compiled') ||
-        message.includes('Compiling')) {
+      message.includes('Chat history fetch') ||
+      message.includes('Middleware request') ||
+      message.includes('Compiled') ||
+      message.includes('Compiling')) {
       // Only log 1 in 5 Next.js compilation messages
       if (Math.random() > 0.2) {
         return { shouldLog: false, count: 0 };
       }
     }
   }
-  
+
   // Create a cache key from the message and important data fields
   // Don't include timestamps or request IDs which change every time
   const keyParts = [level, message];
-  
+
   if (data) {
     // Include only stable identifying information
     if (data.path) keyParts.push(data.path);
@@ -138,14 +146,14 @@ function shouldLogMessage(level: string, message: string, data?: LogData): { sho
     if (data.userId) keyParts.push(data.userId);
     if (data.sessionId) keyParts.push(data.sessionId);
   }
-  
+
   const cacheKey = keyParts.join('::');
   const now = Date.now();
-  
+
   // Check if we have this log in cache
   if (LOG_CACHE.has(cacheKey)) {
     const entry = LOG_CACHE.get(cacheKey)!;
-    
+
     // Check if enough time has passed to log again
     if (now - entry.lastLogTime < DEDUP_SETTINGS.interval) {
       // Update count and skip logging
@@ -153,27 +161,27 @@ function shouldLogMessage(level: string, message: string, data?: LogData): { sho
       LOG_CACHE.set(cacheKey, entry);
       return { shouldLog: false, count: entry.count };
     }
-    
+
     // Enough time has passed, log it again with count
     const count = entry.count;
-    
+
     // Reset the entry
     LOG_CACHE.set(cacheKey, {
       count: 1,
       lastLogTime: now,
       expiresAt: now + DEDUP_SETTINGS.expiryTime
     });
-    
+
     return { shouldLog: true, count };
   }
-  
+
   // First time seeing this log
   LOG_CACHE.set(cacheKey, {
     count: 1,
     lastLogTime: now,
     expiresAt: now + DEDUP_SETTINGS.expiryTime
   });
-  
+
   return { shouldLog: true, count: 1 };
 }
 
@@ -199,73 +207,66 @@ interface LogContext {
 export const logger = {
   debug: (message: string, context: LogContext = {}) => {
     if (process.env.NODE_ENV === 'development') {
-      console.debug(JSON.stringify({ 
-        level: 'debug', 
-        message, 
-        ...context, 
-        timestamp: new Date().toISOString() 
+      console.debug(JSON.stringify({
+        level: 'debug',
+        message,
+        ...context,
+        timestamp: new Date().toISOString()
       }));
     }
   },
-  
+
   info: (message: string, context: LogContext = {}) => {
     // In production, limit info logs to important operations
     if (process.env.NODE_ENV !== 'production' || context.important) {
-      console.log(JSON.stringify({ 
-        level: 'info', 
-        message, 
-        ...context, 
-        timestamp: new Date().toISOString() 
+      console.log(JSON.stringify({
+        level: 'info',
+        message,
+        ...context,
+        timestamp: new Date().toISOString()
       }));
     }
   },
-  
+
   warn: (message: string, context: LogContext = {}) => {
-    console.warn(JSON.stringify({ 
-      level: 'warn', 
-      message, 
-      ...context, 
-      timestamp: new Date().toISOString() 
+    console.warn(JSON.stringify({
+      level: 'warn',
+      message,
+      ...context,
+      timestamp: new Date().toISOString()
     }));
   },
-  
+
   error: (message: string, context: LogContext = {}) => {
-    console.error(JSON.stringify({ 
-      level: 'error', 
-      message, 
+    console.error(JSON.stringify({
+      level: 'error',
+      message,
       ...(context.error ? {
         errorMessage: context.error instanceof Error ? context.error.message : context.error,
         stack: context.error instanceof Error ? context.error.stack : undefined,
         name: context.error instanceof Error ? context.error.name : undefined
       } : context),
-      timestamp: new Date().toISOString() 
+      timestamp: new Date().toISOString()
     }));
   }
 };
 
-// Log application startup (useful in Vercel logs)
-if (typeof window === 'undefined') {
-  logger.info('Application started', { 
-    important: true,
-    environment: process.env.NODE_ENV,
-    region: process.env.VERCEL_REGION,
-    env: maskEnvironmentVariables(process.env),
-    version: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'dev'
-  });
-}
+// We're now using the APPLICATION_STATE singleton pattern to track startup logging
+// instead of firing logs at module initialization. This prevents duplicate logs
+// that were occurring during serverless cold starts.
 
 /**
  * Cleanup log data to ensure it's serializable and remove sensitive information
  */
 function cleanupLogData(data?: any): Record<string, any> {
   if (!data || typeof data !== 'object') return {};
-  
+
   const cleanData: Record<string, any> = {};
-  
+
   Object.entries(data).forEach(([key, value]) => {
     // Skip functions
     if (typeof value === 'function') return;
-    
+
     // Handle special cases
     if (key === 'error' && value instanceof Error) {
       cleanData[key] = {
@@ -275,48 +276,48 @@ function cleanupLogData(data?: any): Record<string, any> {
       };
       return;
     }
-    
+
     // Handle environment variables
     if (key === 'env' && value && typeof value === 'object') {
       cleanData[key] = maskEnvironmentVariables(value as Record<string, any>);
       return;
     }
-    
+
     // Handle RPC parameters
     if (key === 'params' && value && typeof value === 'object') {
       cleanData[key] = maskRpcParams(value as Record<string, any>);
       return;
     }
-    
+
     // Handle regular values
     if (
-      value === null || 
-      typeof value === 'string' || 
-      typeof value === 'number' || 
+      value === null ||
+      typeof value === 'string' ||
+      typeof value === 'number' ||
       typeof value === 'boolean'
     ) {
       cleanData[key] = value;
       return;
     }
-    
+
     // For arrays, clean each element
     if (Array.isArray(value)) {
-      cleanData[key] = value.map(item => 
+      cleanData[key] = value.map(item =>
         item && typeof item === 'object' ? cleanupLogData(item) : item
       );
       return;
     }
-    
+
     // For objects, clean recursively
     if (typeof value === 'object') {
       try {
         cleanData[key] = cleanupLogData(value);
-    } catch (e) {
+      } catch (e) {
         cleanData[key] = '[Complex Object]';
       }
     }
   });
-  
+
   return cleanData;
 }
 
@@ -343,7 +344,7 @@ interface LogData {
 
 // Helper function to format logs for console output
 function formatForConsole(level: string, message: string, data: any = {}): string {
-  return process.env.NODE_ENV === 'development' 
+  return process.env.NODE_ENV === 'development'
     ? formatDevLog(level, message, data)
     : JSON.stringify({ level, message, ...data, timestamp: new Date().toISOString() });
 }
@@ -351,19 +352,19 @@ function formatForConsole(level: string, message: string, data: any = {}): strin
 // Add user ID masking function
 function maskSensitiveData(data: LogData | undefined): LogData {
   if (!data) return {};
-  
+
   const masked = { ...data };
-  
+
   // Mask user IDs
   if (masked.userId) {
     masked.userId = `${masked.userId.substring(0, 4)}...${masked.userId.slice(-4)}`;
   }
-  
+
   // Mask session IDs
   if (masked.sessionId) {
     masked.sessionId = `${masked.sessionId.substring(0, 4)}...${masked.sessionId.slice(-4)}`;
   }
-  
+
   return masked;
 }
 
@@ -384,7 +385,7 @@ function startTimer(operationId: string): void {
 function endTimer(operationId: string): number {
   const start = startTimes.get(operationId);
   if (!start) return 0;
-  
+
   const duration = Math.round(performance.now() - start);
   startTimes.delete(operationId);
   return duration;
@@ -402,7 +403,7 @@ function logResourceUsage(operation: string, data?: LogData): void {
       timestamp: new Date().toISOString(),
       region: process.env.VERCEL_REGION || 'unknown'
     };
-    
+
     console.log(JSON.stringify({
       level: 'metric',
       message: 'Resource usage sample',
@@ -454,15 +455,16 @@ class LogBatch {
   }
 }
 
-// Define the RAG operation types
+// Define types for operation tracking
 interface RagOperation {
   startTime: number;
-  query: string;
+  queryLength: number;
+  queryPreview: string;
   requestId: string;
   parentId?: string;
   children: Set<string>;
   completed: boolean;
-  status: 'error' | 'completed' | 'running';
+  status: 'running' | 'error' | 'completed';
 }
 
 // Production thresholds
@@ -478,10 +480,12 @@ const activeRagOperations = new Map<string, RagOperation>();
 
 function startRagOperation(query: string, requestId: string, parentId?: string): string {
   const operationId = `rag-${Date.now().toString(36)}`;
-  
+
   activeRagOperations.set(operationId, {
     startTime: performance.now(),
-    query: query.slice(0, 100), // Truncate query for security
+    // Security: Never store full query, only length and short preview
+    queryLength: query.length,
+    queryPreview: query.length > 20 ? query.substring(0, 20) + '...' : query,
     requestId,
     parentId,
     children: new Set(),
@@ -510,8 +514,10 @@ function endRagOperation(operationId: string, status: 'error' | 'completed'): vo
   // Log completion for root operations or slow operations
   if (!operation.parentId || duration > THRESHOLDS.LOG_THRESHOLD) {
     edgeLogger.info('RAG operation completed', {
+      category: LOG_CATEGORIES.TOOLS,
       operationId,
       durationMs: Math.round(duration),
+      results: 0, // We don't have result count here, set default to 0
       status,
       slow: duration > THRESHOLDS.SLOW_OPERATION,
       important: duration > THRESHOLDS.IMPORTANT_THRESHOLD
@@ -526,7 +532,7 @@ function endRagOperation(operationId: string, status: 'error' | 'completed'): vo
 
   if (allChildrenCompleted) {
     activeRagOperations.delete(operationId);
-    
+
     // If this operation has a parent, check if the parent can be cleaned up
     if (operation.parentId) {
       const parent = activeRagOperations.get(operation.parentId);
@@ -542,26 +548,29 @@ function endRagOperation(operationId: string, status: 'error' | 'completed'): vo
 
 function checkStaleRagOperations(): void {
   const now = performance.now();
-  
+
   for (const [operationId, operation] of activeRagOperations.entries()) {
     const duration = now - operation.startTime;
-    
+
     // Only log timeouts for root operations or those without living parents
     const parent = operation.parentId ? activeRagOperations.get(operation.parentId) : null;
     const isOrphan = operation.parentId && !parent;
     const isRoot = !operation.parentId;
-    
+
     if ((isRoot || isOrphan) && duration > THRESHOLDS.RAG_TIMEOUT && operation.status === 'running') {
       edgeLogger.warn('RAG operation timeout', {
+        category: LOG_CATEGORIES.TOOLS,
         operationId,
         durationMs: Math.round(duration),
-        query: operation.query,
+        results: 0,
+        queryLength: operation.queryLength,
         requestId: operation.requestId,
         parentId: operation.parentId,
         childCount: operation.children.size,
-        important: true
+        important: true,
+        status: 'timeout'
       });
-      
+
       endRagOperation(operationId, 'error');
     }
   }
@@ -599,7 +608,7 @@ const startGroup = (groupId: string): void => {
 const addToGroup = (groupId: string, operation: string, data: any = {}): void => {
   const group = logGroups.get(groupId);
   if (!group) return;
-  
+
   group.operations[operation] = {
     ...data,
     durationMs: Math.round(performance.now() - group.startTime)
@@ -609,7 +618,7 @@ const addToGroup = (groupId: string, operation: string, data: any = {}): void =>
 const endGroup = (groupId: string, message: string): void => {
   const group = logGroups.get(groupId);
   if (!group) return;
-  
+
   const totalTime = Math.round(performance.now() - group.startTime);
   if (Object.keys(group.operations).length > 0) {
     const operations: LogOperation[] = Object.entries(group.operations).map(([name, data]) => ({
@@ -617,72 +626,81 @@ const endGroup = (groupId: string, message: string): void => {
       timeMs: data.durationMs,
       ...data
     }));
-    
+
     edgeLogger.info(message, {
       operations,
       totalTimeMs: totalTime,
       important: totalTime > 1000
     });
   }
-  
+
   logGroups.delete(groupId);
 };
 
 const trackOperation = async <T>(
-  name: string, 
-  operation: () => Promise<T>, 
+  name: string,
+  operation: () => Promise<T>,
   data?: LogData
 ): Promise<T> => {
   const operationId = `${name}-${Date.now().toString(36)}`;
   const isRagOperation = name.toLowerCase().includes('rag');
-  
+
   if (isRagOperation && data?.query) {
     const ragOpId = startRagOperation(
-      data.query, 
+      data.query,
       data?.requestId || 'unknown',
       data?.parentOperationId
     );
     data.ragOperationId = ragOpId;
   }
-  
+
   edgeLogger.startTimer(operationId);
-  
+
   try {
     const result = await operation();
     const duration = edgeLogger.endTimer(operationId);
-    
+
     if (isRagOperation && data?.ragOperationId) {
       endRagOperation(data.ragOperationId, 'completed');
-      
+
       // Only log completion for root operations or slow operations
       const op = activeRagOperations.get(data.ragOperationId);
       const isRoot = !op?.parentId;
-      
+
       if (isRoot || duration > 1000) {
-        edgeLogger.info(`Operation completed: ${name}`, {
+        edgeLogger.info('RAG operation completed', {
+          category: LOG_CATEGORIES.TOOLS,
           operation: name,
+          operationId: data?.ragOperationId,
           durationMs: duration,
-          slow: duration > 2000,
-          ...data,
-          important: duration > 5000
+          results: data?.results || 0,
+          slow: duration > THRESHOLDS.SLOW_OPERATION,
+          important: duration > THRESHOLDS.IMPORTANT_THRESHOLD,
+          status: 'completed',
+          ...data
         });
       }
     }
-    
+
     return result;
   } catch (error) {
     const duration = edgeLogger.endTimer(operationId);
-    
+
     if (isRagOperation && data?.ragOperationId) {
       endRagOperation(data.ragOperationId, 'error');
     }
-    
-    edgeLogger.error(`Operation failed: ${name}`, {
+
+    edgeLogger.error('RAG operation failed', {
+      category: LOG_CATEGORIES.TOOLS,
       operation: name,
+      operationId: data?.ragOperationId,
       durationMs: duration,
+      results: 0,
+      slow: duration > THRESHOLDS.SLOW_OPERATION,
+      important: true,
+      status: 'error',
       error: formatError(error),
-      ...data,
-      important: true
+      ...data
     });
     throw error;
   }
@@ -693,16 +711,16 @@ const startBatch = (batchId: string): LogBatch => {
 };
 
 const debug = (message: string, data?: LogData): void => {
-    if (process.env.NODE_ENV === 'production') return;
-    
-    const { shouldLog, count } = shouldLogMessage('debug', message, data);
-    if (!shouldLog) return;
-    
-    let logMessage = message;
-    if (count > 1 && DEDUP_SETTINGS.showCounts) {
-      logMessage = `${message} (repeated ${count} times)`;
-    }
-    
+  if (process.env.NODE_ENV === 'production') return;
+
+  const { shouldLog, count } = shouldLogMessage('debug', message, data);
+  if (!shouldLog) return;
+
+  let logMessage = message;
+  if (count > 1 && DEDUP_SETTINGS.showCounts) {
+    logMessage = `${message} (repeated ${count} times)`;
+  }
+
   if (process.env.NODE_ENV === 'development') {
     console.log(formatDevLog('debug', logMessage, cleanupLogData(maskSensitiveData(data))));
   } else {
@@ -711,25 +729,40 @@ const debug = (message: string, data?: LogData): void => {
 };
 
 const info = (message: string, data?: LogData): void => {
-  if (message === 'Application started' && !hasLoggedStartup) {
-    hasLoggedStartup = true;
+  // Check if this is an application startup log and ensure we only log it once per process
+  if (message === 'Application started') {
+    // Return early if we've already logged startup in this process
+    if (APPLICATION_STATE.startupLogged) return;
+
+    // Mark that we've logged startup
+    APPLICATION_STATE.startupLogged = true;
+
+    // Perform environment check to include in the startup log
+    const envCheck = checkEnvironment();
+
+    // Log a single, well-formatted startup message according to our standards
     console.log(formatForConsole('info', 'Application started', {
-      important: true,
+      level: 'info',
+      category: LOG_CATEGORIES.SYSTEM,
       environment: process.env.NODE_ENV,
-      region: process.env.VERCEL_REGION,
-      version: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'dev'
+      region: process.env.VERCEL_REGION || 'local',
+      version: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'dev',
+      uptime: 0,
+      ...envCheck,
+      // Only mark startup as important if there's an issue with the environment
+      important: !envCheck.valid
     }));
     return;
   }
 
-    const { shouldLog, count } = shouldLogMessage('info', message, data);
-    if (!shouldLog) return;
-    
-    let logMessage = message;
-    if (count > 1 && DEDUP_SETTINGS.showCounts) {
-      logMessage = `${message} (repeated ${count} times)`;
-    }
-    
+  const { shouldLog, count } = shouldLogMessage('info', message, data);
+  if (!shouldLog) return;
+
+  let logMessage = message;
+  if (count > 1 && DEDUP_SETTINGS.showCounts) {
+    logMessage = `${message} (repeated ${count} times)`;
+  }
+
   if (process.env.NODE_ENV === 'development') {
     console.log(formatDevLog('info', logMessage, cleanupLogData(maskSensitiveData(data))));
   } else {
@@ -738,9 +771,9 @@ const info = (message: string, data?: LogData): void => {
 };
 
 const warn = (message: string, data?: LogData): void => {
-    const { shouldLog, count } = shouldLogMessage('warn', message, data);
-    if (!shouldLog) return;
-    
+  const { shouldLog, count } = shouldLogMessage('warn', message, data);
+  if (!shouldLog) return;
+
   let logMessage = message;
   if (count > 1 && DEDUP_SETTINGS.showCounts) {
     logMessage = `${message} (repeated ${count} times)`;
@@ -756,11 +789,11 @@ const warn = (message: string, data?: LogData): void => {
 const error = (message: string, data?: LogData): void => {
   const { count } = shouldLogMessage('error', message, data);
 
-    let logMessage = message;
-    if (count > 1 && DEDUP_SETTINGS.showCounts) {
-      logMessage = `${message} (repeated ${count} times)`;
-    }
-    
+  let logMessage = message;
+  if (count > 1 && DEDUP_SETTINGS.showCounts) {
+    logMessage = `${message} (repeated ${count} times)`;
+  }
+
   if (process.env.NODE_ENV === 'development') {
     console.error(formatDevLog('error', logMessage, cleanupLogData(maskSensitiveData(data))));
   } else {
@@ -789,7 +822,7 @@ export function withRequestTracking(handler: any) {
   return async (req: any, res: any) => {
     const requestId = edgeLogger.generateRequestId();
     req.requestId = requestId;
-    
+
     return edgeLogger.trackOperation(
       'request',
       () => handler(req, res),
@@ -810,13 +843,13 @@ function checkEnvironment(): { valid: boolean; summary: string } {
     'OPENAI_API_KEY',
     'PERPLEXITY_API_KEY'
   ];
-  
+
   const missing = requiredVars.filter(v => !process.env[v]);
   const services = {
     database: process.env.NEXT_PUBLIC_SUPABASE_URL ? 'configured' : 'missing',
     ai: process.env.OPENAI_API_KEY && process.env.PERPLEXITY_API_KEY ? 'configured' : 'missing'
   };
-  
+
   return {
     valid: missing.length === 0,
     summary: `services=${Object.entries(services).map(([k, v]) => `${k}:${v}`).join(',')}`
@@ -825,7 +858,7 @@ function checkEnvironment(): { valid: boolean; summary: string } {
 
 function logEnvironmentCheck() {
   const envCheck = checkEnvironment();
-  
+
   edgeLogger.info('Environment check', {
     category: LOG_CATEGORIES.SYSTEM,
     valid: envCheck.valid,
@@ -834,19 +867,18 @@ function logEnvironmentCheck() {
   });
 }
 
-// Update the startup logging
-if (typeof window === 'undefined' && !hasLoggedStartup) {
-  hasLoggedStartup = true;
-  const envCheck = checkEnvironment();
-  logger.info('Application started', { 
-    category: LOG_CATEGORIES.SYSTEM,
-    environment: process.env.NODE_ENV,
-    region: process.env.VERCEL_REGION || 'local',
-    version: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'dev',
-    ...envCheck,
-    important: true
-  });
+// Add a function to manually log the startup if needed in specific places
+function logApplicationStartup() {
+  // Only proceed if startup hasn't been logged yet
+  if (!APPLICATION_STATE.startupLogged) {
+    edgeLogger.info('Application started', {
+      category: LOG_CATEGORIES.SYSTEM
+    });
+  }
 }
+
+// Export the startup logging function
+export { logApplicationStartup };
 
 function maskEnvironmentVariables(env: Record<string, any>): Record<string, any> {
   // In production, only return service status
@@ -858,7 +890,7 @@ function maskEnvironmentVariables(env: Record<string, any>): Record<string, any>
       }
     };
   }
-  
+
   // In development, show minimal useful information
   return {
     services: {
@@ -876,17 +908,17 @@ function maskEnvironmentVariables(env: Record<string, any>): Record<string, any>
 // Add RPC parameter masking to cleanupLogData
 function maskRpcParams(params: Record<string, any>): Record<string, any> {
   const masked = { ...params };
-  
+
   // Mask user IDs in RPC parameters
   if (masked.user_id) {
     masked.user_id = `${masked.user_id.substring(0, 4)}...${masked.user_id.slice(-4)}`;
   }
-  
+
   // Mask session IDs
   if (masked.session_id) {
     masked.session_id = `${masked.session_id.substring(0, 4)}...${masked.session_id.slice(-4)}`;
   }
-  
+
   return masked;
 }
 
@@ -935,7 +967,7 @@ function addToCategoryBatch(category: LogCategory, message: string, data?: any) 
 function flushCategoryBatch(category: LogCategory) {
   const batch = categoryBatches.get(category);
   if (!batch) return;
-  
+
   const totalTime = Math.round(performance.now() - batch.startTime);
   if (batch.operations.length > 0) {
     const operations: LogOperation[] = batch.operations.map(op => ({
@@ -945,7 +977,7 @@ function flushCategoryBatch(category: LogCategory) {
       data: op.data,
       ...op.data
     }));
-    
+
     logger.info(`${category} operations summary`, {
       category,
       operationCount: batch.operations.length,
@@ -953,6 +985,6 @@ function flushCategoryBatch(category: LogCategory) {
       operations
     });
   }
-  
+
   categoryBatches.delete(category);
 } 

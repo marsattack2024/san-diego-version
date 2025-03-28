@@ -1,5 +1,6 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { edgeLogger } from '@/lib/logger/edge-logger'
 
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({
@@ -81,7 +82,9 @@ export async function updateSession(request: NextRequest) {
       request.nextUrl.pathname === '/api/auth/admin-status';
 
     if (needsAdminCheck) {
-      console.log(`[updateSession] Checking admin status for: ${user.id.substring(0, 8)}...`);
+      edgeLogger.debug(`[updateSession] Checking admin status for: ${user.id.substring(0, 8)}...`, {
+        category: 'auth'
+      });
 
       // Create a service role client if the key is available - this bypasses RLS
       let adminClient = supabase;
@@ -100,9 +103,13 @@ export async function updateSession(request: NextRequest) {
             }
           }
         );
-        console.log('[updateSession] Using service role key for admin check');
+        edgeLogger.debug('[updateSession] Using service role key for admin check', {
+          category: 'auth'
+        });
       } else {
-        console.log('[updateSession] ⚠️ No service role key available, admin check may fail due to RLS');
+        edgeLogger.warn('[updateSession] ⚠️ No service role key available, admin check may fail due to RLS', {
+          category: 'auth'
+        });
       }
 
       // First try checking with RPC function (most reliable)
@@ -111,9 +118,15 @@ export async function updateSession(request: NextRequest) {
       let isAdminStatus = 'false';
       if (!rpcError && rpcData === true) {
         isAdminStatus = 'true';
-        console.log('[updateSession] User is admin via RPC check');
+        edgeLogger.debug('[updateSession] User is admin via RPC check', {
+          category: 'auth',
+          userId: user.id
+        });
       } else if (rpcError) {
-        console.error('[updateSession] RPC admin check error:', rpcError.message);
+        edgeLogger.warn('[updateSession] RPC admin check error', {
+          category: 'auth',
+          error: rpcError.message
+        });
 
         // Fall back to profile table check if RPC fails
         const { data: profileData, error: profileError } = await adminClient
@@ -124,9 +137,15 @@ export async function updateSession(request: NextRequest) {
 
         if (!profileError && profileData?.is_admin === true) {
           isAdminStatus = 'true';
-          console.log('[updateSession] User is admin via profile check');
+          edgeLogger.debug('[updateSession] User is admin via profile check', {
+            category: 'auth',
+            userId: user.id
+          });
         } else if (profileError) {
-          console.error('[updateSession] Profile admin check error:', profileError.message);
+          edgeLogger.warn('[updateSession] Profile admin check error', {
+            category: 'auth',
+            error: profileError.message
+          });
         }
       }
 
@@ -157,7 +176,9 @@ export async function updateSession(request: NextRequest) {
 
       // Only log when status is true to reduce noise
       if (isAdminStatus === 'true') {
-        console.log('[updateSession] Using cached admin status from cookie (true)');
+        edgeLogger.debug('[updateSession] Using cached admin status from cookie (true)', {
+          category: 'auth'
+        });
       }
     }
 
@@ -200,12 +221,11 @@ export async function updateSession(request: NextRequest) {
       request.headers.set('x-has-auth-cookies', hasAuthCookies ? 'true' : 'false');
       supabaseResponse.headers.set('x-has-auth-cookies', hasAuthCookies ? 'true' : 'false');
 
-      // Log at low frequency to reduce noise
-      if (Math.random() < 0.01) {
-        console.log(`Setting explicit unauthenticated headers for ${pathname}`, {
-          hasAuthCookies
-        });
-      }
+      // Log at debug level with proper category
+      edgeLogger.debug(`Setting explicit unauthenticated headers for ${pathname}`, {
+        category: 'auth',
+        hasAuthCookies
+      });
     }
   }
 

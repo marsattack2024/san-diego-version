@@ -51,6 +51,7 @@ import { cn } from '@/lib/utils';
 import { throttle } from 'lodash';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { edgeLogger } from '@/lib/logger/edge-logger';
 
 // Consistent type definition for grouped chats
 type GroupedChats = {
@@ -301,7 +302,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
         // This prevents 401 errors from occurring during initial page load
         const authReady = await historyService.isAuthReady();
         if (!authReady) {
-          console.log('Auth not ready yet, waiting before fetching history...');
+          edgeLogger.info('Auth not ready yet for history fetch, will retry', { category: 'auth' });
 
           // Don't show error message during normal startup
           if (isLoading) {
@@ -310,13 +311,13 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
 
           // Set up retry with exponential backoff
           const retryDelay = Math.min(2000 + Math.random() * 1000, 8000);
-          console.log(`Will retry history fetch in ${Math.round(retryDelay / 1000)}s`);
+          edgeLogger.debug(`Will retry history fetch in ${Math.round(retryDelay / 1000)}s`, { category: 'auth' });
 
           // Schedule retry
           setTimeout(() => {
             // Only retry if we're still in the loading state or this was a forced refresh
             if (isLoading || forceRefresh) {
-              console.log('Retrying history fetch after auth delay');
+              edgeLogger.debug('Retrying history fetch after auth delay', { category: 'auth' });
               fetchChatHistory(forceRefresh);
             }
           }, retryDelay);
@@ -325,7 +326,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
         }
 
         // Auth is ready, proceed with history fetch
-        console.log('Auth is ready, fetching history...');
+        edgeLogger.info('Auth ready, fetching history', { category: 'auth' });
         const historyData = await historyService.fetchHistory(forceRefresh, isMobileOpen);
 
         // Handle empty array as a valid response (not an error)
@@ -368,7 +369,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   useEffect(() => {
     const visibilityHandler = () => {
       if (document.visibilityState === 'visible' && user?.id) {
-        console.log('Tab became visible, refreshing history once');
+        edgeLogger.debug('Tab visible, refreshing history', { category: 'chat' });
         fetchChatHistory(false);
       }
     };
@@ -380,7 +381,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   // Add a new effect to fetch history when mobile sidebar is opened
   useEffect(() => {
     if (isMobile && openMobile && user?.id) {
-      console.log('Mobile sidebar opened, fetching history');
+      edgeLogger.debug('Mobile sidebar opened, fetching history', { category: 'chat' });
       fetchChatHistory(false);
     }
   }, [isMobile, openMobile, fetchChatHistory, user?.id]);
@@ -389,7 +390,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   useEffect(() => {
     if (!user?.id) return;
 
-    console.log('Initial history fetch on component mount');
+    edgeLogger.debug('Initial history fetch on component mount', { category: 'chat' });
     fetchChatHistory(false);
   }, [fetchChatHistory, user?.id]);
 

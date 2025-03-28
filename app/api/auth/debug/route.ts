@@ -14,17 +14,14 @@ export async function GET(request: Request) {
     }
 
     try {
-        // Get auth cookies for debugging
-        const cookies = request.headers.get('cookie') || '';
-        const authCookies = cookies
-            .split(';')
-            .map(c => c.trim())
-            .filter(c => c.startsWith('sb-') || c.includes('-auth-token') || c.startsWith('x-is-admin'));
-
-        // Check if request has headers set by middleware
-        const authReady = request.headers.get('x-auth-ready');
-        const authReadyTime = request.headers.get('x-auth-ready-time');
-        const isAdmin = request.headers.get('x-is-admin');
+        // Check for auth-related headers without logging cookie content
+        const authHeaders = {
+            ready: request.headers.get('x-auth-ready') || 'false',
+            state: request.headers.get('x-auth-state') || 'unknown',
+            adminStatus: request.headers.get('x-is-admin') || 'false',
+            hasProfile: request.headers.get('x-has-profile') || 'false',
+            hasAuthCookies: request.headers.get('x-has-auth-cookies') || 'unknown'
+        };
 
         // Get auth state from Supabase
         const supabase = await createClient();
@@ -49,28 +46,19 @@ export async function GET(request: Request) {
             }
         }
 
-        // Return debugging information
+        // Return debugging information without exposing cookie details
         return NextResponse.json({
             auth: {
                 isAuthenticated: !!user,
                 userId: user?.id,
-                email: user?.email,
+                email: user?.email ? true : false, // Only indicate presence, not value
                 sessionExpiry: session?.expires_at ? new Date(session.expires_at * 1000).toISOString() : null,
-                sessionError: authError?.message,
+                hasError: !!authError,
             },
-            middleware: {
-                authReady,
-                authReadyTime,
-                isAdmin,
-            },
+            middleware: authHeaders,
             admin: {
                 rpcResult: adminRpcResult,
                 rpcError: adminRpcError?.toString(),
-            },
-            cookies: {
-                count: authCookies.length,
-                // Only show cookie existence, not values
-                authCookiesExist: authCookies.map(c => c.split('=')[0])
             },
             headers: Object.fromEntries(
                 Array.from(request.headers.entries())
@@ -81,7 +69,9 @@ export async function GET(request: Request) {
     } catch (error) {
         edgeLogger.error('Error in auth debug endpoint', {
             error: error instanceof Error ? error.message : String(error),
-            stack: error instanceof Error ? error.stack : undefined
+            stack: error instanceof Error ? error.stack : undefined,
+            category: 'auth',
+            important: true
         });
 
         return NextResponse.json({
