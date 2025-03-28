@@ -555,9 +555,14 @@ export async function POST(req: Request) {
                 // Set a 20-second timeout for Deep Search operations
                 const deepSearchPromise = callPerplexityAPI(deepSearchQuery);
 
-                // Create the timeout resolver function outside the Promise constructor
-                const createTimeoutResolver = (resolve: (value: { content: string; model: string; timing: { total: number } }) => void) => {
-                  setTimeout(() => {
+                // Create a properly cancellable timeout using a more robust pattern
+                let timeoutId: NodeJS.Timeout;
+                const timeoutPromise = new Promise<{
+                  content: string;
+                  model: string;
+                  timing: { total: number };
+                }>(resolve => {
+                  timeoutId = setTimeout(() => {
                     edgeLogger.warn('Deep Search operation timed out', {
                       operation: 'deep_search_timeout',
                       operationId,
@@ -571,15 +576,36 @@ export async function POST(req: Request) {
                       timing: { total: Date.now() - deepSearchStartTime }
                     });
                   }, 20000);
-                };
+                });
+
+                // When the real promise resolves, clear the timeout to prevent redundant logs
+                // Use a separate variable to track if timeout already happened
+                let timeoutOccurred = false;
+                let apiCallCompleted = false;
+
+                // Add handlers to track state without affecting the promise chain
+                deepSearchPromise.then(() => {
+                  apiCallCompleted = true;
+                  if (!timeoutOccurred) {
+                    clearTimeout(timeoutId);
+                    edgeLogger.debug('Cleared DeepSearch timeout after successful API call', {
+                      operation: 'deep_search_timeout_cleared',
+                      operationId
+                    });
+                  }
+                }).catch(() => {
+                  // Still clear timeout on error to avoid redundant logs
+                  if (!timeoutOccurred) {
+                    clearTimeout(timeoutId);
+                  }
+                });
 
                 const deepSearchResponse = await Promise.race([
                   deepSearchPromise,
-                  new Promise<{
-                    content: string;
-                    model: string;
-                    timing: { total: number };
-                  }>(resolve => createTimeoutResolver(resolve))
+                  timeoutPromise.then(result => {
+                    timeoutOccurred = true;
+                    return result;
+                  })
                 ]);
 
                 // Extract the content from the response object
