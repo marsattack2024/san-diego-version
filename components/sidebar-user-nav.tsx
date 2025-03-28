@@ -1,5 +1,5 @@
 'use client';
-import { ChevronUp, User as UserIcon, Camera, Pencil } from 'lucide-react';
+import { ChevronUp, User as UserIcon, Camera, Pencil, Shield } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
@@ -32,7 +32,7 @@ export interface User {
 export function SidebarUserNav({ user }: { user: User }) {
   const { setTheme, theme } = useTheme();
   const router = useRouter();
-  const { profile } = useAuth(); // Use cached profile from auth context
+  const { profile, isAdmin } = useAuth(); // Use isAdmin from auth context
   const logout = useAuthStore(state => state.logout);
 
   // No need to fetch profile, it's already available from auth context
@@ -79,6 +79,17 @@ export function SidebarUserNav({ user }: { user: User }) {
                 </div>
                 <DropdownMenuSeparator />
               </>
+            )}
+
+            {/* Admin Panel Button - Only visible for admins */}
+            {isAdmin && (
+              <DropdownMenuItem
+                className="cursor-pointer text-amber-600 hover:text-amber-700 hover:bg-amber-100"
+                onSelect={() => router.push('/admin')}
+              >
+                <Shield className="mr-2 h-4 w-4" />
+                Admin Panel
+              </DropdownMenuItem>
             )}
 
             <DropdownMenuItem

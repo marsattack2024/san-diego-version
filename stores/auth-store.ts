@@ -234,89 +234,45 @@ export const useAuthStore = create<AuthState>()(
         }
 
         try {
-          const supabase = createClient();
+          // 1. Check if we already know the user is an admin from state
+          if (state.isAdmin === true) {
+            console.log('Admin check: Using cached admin state');
+            return true;
+          }
 
-          // First check if the profile has is_admin flag
+          // 2. Check if the profile has is_admin flag (also cached)
           if (state.profile?.is_admin) {
             console.log('Admin check: Using cached profile admin flag');
             set({ isAdmin: true });
             return true;
           }
 
-          // Try to check the admin status from the middleware-set header
-          // This is a workaround for RLS issues and only works with fresh page loads
-          try {
-            console.log('Admin check: Trying to check x-is-admin from current headers');
-            const isAdminHeaderAvailable = typeof window !== 'undefined' &&
-              window.document.cookie.includes('x-is-admin');
+          // 3. Check for the x-is-admin cookie set by middleware
+          // This avoids an API call if the middleware already checked admin status
+          if (typeof window !== 'undefined') {
+            const cookies = document.cookie.split(';');
+            const adminCookie = cookies.find(c => c.trim().startsWith('x-is-admin='));
 
-            if (isAdminHeaderAvailable) {
-              console.log('Admin check: Found potential admin header in cookies');
+            if (adminCookie && adminCookie.includes('true')) {
+              console.log('Admin check: Found admin cookie set by middleware');
+              set({ isAdmin: true });
+              return true;
             }
-
-            // No reliable way to check this header from client-side without an API call
-          } catch (headerError) {
-            console.warn('Admin header check failed:', headerError);
           }
 
-          // Then check with the is_admin RPC function directly
-          console.log('Admin check: Trying Supabase RPC directly');
+          // 4. If we still don't know, make a single Supabase RPC call
+          console.log('Admin check: Making Supabase RPC call');
+          const supabase = createClient();
           const { data, error } = await supabase.rpc('is_admin', { uid: state.user.id });
 
           if (!error && data === true) {
-            console.log('Admin check: Supabase RPC returned true');
+            console.log('Admin check: Supabase RPC confirmed admin status');
             set({ isAdmin: true });
             return true;
           }
 
-          if (error) {
-            console.warn('Admin check: Supabase RPC error:', error);
-
-            // Fallback 1: Try direct profile query if RPC fails (might still fail due to RLS)
-            try {
-              console.log('Admin check: Trying direct profile query');
-              const { data: profileData, error: profileError } = await supabase
-                .from('sd_user_profiles')
-                .select('is_admin')
-                .eq('user_id', state.user.id)
-                .single();
-
-              if (!profileError && profileData?.is_admin === true) {
-                console.log('Admin check: Direct profile query confirmed admin status');
-                set({ isAdmin: true });
-                return true;
-              }
-
-              if (profileError) {
-                console.warn('Admin check: Direct profile query failed:', profileError);
-              }
-            } catch (profileQueryError) {
-              console.warn('Admin check: Profile query exception:', profileQueryError);
-            }
-
-            // Fallback 2: Check with a dedicated API endpoint that uses service role
-            try {
-              console.log('Admin check: Trying API endpoint fallback');
-              const adminCheckResponse = await fetch('/api/admin/debug');
-
-              if (adminCheckResponse.ok) {
-                const adminCheckData = await adminCheckResponse.json();
-                const isAdminFromApi = adminCheckData?.adminAccess?.isAdmin === true;
-
-                console.log('Admin check: API endpoint returned:', isAdminFromApi);
-                set({ isAdmin: isAdminFromApi });
-                return isAdminFromApi;
-              } else {
-                console.warn('Admin check: API endpoint failed with status:', adminCheckResponse.status);
-              }
-            } catch (apiError) {
-              console.error('Admin check: API endpoint exception:', apiError);
-            }
-          } else {
-            console.log('Admin check: Supabase RPC worked but returned false');
-          }
-
-          // If we get here, none of the checks confirmed admin status
+          // 5. If all checks fail, user is not an admin
+          console.log('Admin check: User is not an admin');
           set({ isAdmin: false });
           return false;
         } catch (error) {

@@ -9,6 +9,7 @@ const AuthContext = createContext({
   profile: null as any,
   isLoading: true,
   isAuthenticated: false,
+  isAdmin: false,
 });
 
 // Export hook for accessing auth data
@@ -17,12 +18,14 @@ export const useAuth = () => useContext(AuthContext);
 // Provider component to wrap app with
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
-  const { 
-    user, 
-    profile, 
-    isAuthenticated, 
-    checkAuth, 
-    shouldRefreshAuth 
+  const {
+    user,
+    profile,
+    isAuthenticated,
+    isAdmin,
+    checkAuth,
+    shouldRefreshAuth,
+    checkAdminRole,
   } = useAuthStore();
 
   // Check authentication on component mount
@@ -30,12 +33,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const initAuth = async () => {
       if (shouldRefreshAuth()) {
         await checkAuth();
+        // Check admin status during initial auth
+        await checkAdminRole();
+        console.log('Initial auth complete, admin status:', isAdmin);
       }
       setIsLoading(false);
     };
 
     initAuth();
-  }, [checkAuth, shouldRefreshAuth]);
+  }, [checkAuth, shouldRefreshAuth, checkAdminRole, isAdmin]);
+
+  // Log admin status changes
+  useEffect(() => {
+    console.log('Auth context: Admin status is now', isAdmin);
+  }, [isAdmin]);
 
   // Re-check auth periodically if necessary
   useEffect(() => {
@@ -46,11 +57,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const intervalId = setInterval(() => {
       if (shouldRefreshAuth()) {
         checkAuth();
+        checkAdminRole();
       }
     }, 60 * 60 * 1000);
 
     return () => clearInterval(intervalId);
-  }, [isAuthenticated, checkAuth, shouldRefreshAuth]);
+  }, [isAuthenticated, checkAuth, shouldRefreshAuth, checkAdminRole]);
 
   return (
     <AuthContext.Provider
@@ -59,6 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         profile,
         isLoading,
         isAuthenticated,
+        isAdmin,
       }}
     >
       {children}
