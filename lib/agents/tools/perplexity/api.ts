@@ -2,7 +2,10 @@ import { z } from "zod";
 import { AgentTool } from "../../core/agent-types";
 import { createAgentLogger } from "../../core/agent-logger";
 
-const API_URL = "https://api.perplexity.ai/chat/completions";
+// Ensure we're using the absolute Perplexity API URL
+const PERPLEXITY_API_URL = "https://api.perplexity.ai/chat/completions";
+// Define our internal API endpoint
+const INTERNAL_API_URL = "/api/perplexity";
 
 // Create a tool-specific logger based on the agent logger
 function createToolLogger(toolId: string) {
@@ -98,8 +101,18 @@ export async function callPerplexityAPI(query: string): Promise<{
 
     // Get base URL for API endpoint with enhanced URL construction debugging
     const protocol = process.env.NODE_ENV === 'development' ? 'http' : 'https';
-    const host = process.env.VERCEL_URL || 'localhost:3000';
-    const apiUrl = `${protocol}://${host}/api/perplexity`;
+
+    // For development, use localhost, for production use the actual domain
+    // But never use the VERCEL_URL which causes auth issues
+    let host;
+    if (process.env.NODE_ENV === 'development') {
+      host = 'localhost:3000';
+    } else {
+      // In production, we use the actual host from the request if possible, or a hardcoded value
+      host = process.env.NEXT_PUBLIC_HOST || 'marlan.photographytoprofits.com';
+    }
+
+    const apiUrl = `${protocol}://${host}${INTERNAL_API_URL}`;
 
     logger.info("Perplexity URL construction details", {
       operation: "perplexity_url_construction",
@@ -108,6 +121,7 @@ export async function callPerplexityAPI(query: string): Promise<{
       host,
       fullUrl: apiUrl,
       vercelUrl: process.env.VERCEL_URL,
+      nextPublicHost: process.env.NEXT_PUBLIC_HOST,
       nodeEnv: process.env.NODE_ENV,
       important: true
     });

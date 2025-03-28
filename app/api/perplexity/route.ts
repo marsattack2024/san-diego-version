@@ -197,8 +197,23 @@ export async function POST(req: NextRequest) {
       }
     };
 
-    // Use consistent headers with User-Agent
-    const authorizationHeader = `Bearer ${perplexityApiKey}`;
+    // Fix the authorization header format to strictly follow Perplexity documentation
+    // Ensure there's a single space between "Bearer" and the token
+    const apiKey = perplexityApiKey.trim();
+    const authorizationHeader = `Bearer ${apiKey}`;
+
+    // Log the exact authorization header format (without exposing the actual key)
+    edgeLogger.info('Authorization header format check', {
+      operation: 'perplexity_auth_header_check',
+      operationId,
+      startsWithBearer: authorizationHeader.startsWith('Bearer '),
+      hasSpaceAfterBearer: authorizationHeader.charAt(6) === ' ',
+      headerLength: authorizationHeader.length,
+      bearerPrefix: authorizationHeader.substring(0, 7),
+      keyStartsWithPplx: apiKey.startsWith('pplx-'),
+      important: true
+    });
+
     const headers = {
       'Content-Type': 'application/json',
       'Authorization': authorizationHeader,
