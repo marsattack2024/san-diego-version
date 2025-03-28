@@ -26,6 +26,7 @@ The chat widget:
 - Can be embedded via a simple script tag, Google Tag Manager, or direct body embed
 - Is managed through the admin dashboard at `/admin/widget`
 - Provides consistent behavior between the admin preview and remote website embeds
+- Implements pre-warming to minimize cold start delays
 
 ## Widget Management
 
@@ -45,7 +46,8 @@ The widget management interface is fully integrated into the admin dashboard:
 - Dynamic rendering is enforced with `export const dynamic = "force-dynamic"`
 - All authentication is handled by middleware, identical to other admin pages
 - Live preview updates in real-time as settings are changed
-- The widget JavaScript implementation now matches the behavior of the React component for consistency
+- The widget JavaScript implementation matches the behavior of the React component for consistency
+- Automatic API pre-warming sends a lightweight ping request to wake up the serverless infrastructure when the widget loads (not when clicked), ensuring faster response times for the first user message
 
 ## Component Structure
 
@@ -65,6 +67,8 @@ The widget management interface is fully integrated into the admin dashboard:
       /page.tsx               # Admin widget management page (client component)
       /layout.tsx             # Server component for metadata
       /route.config.js        # Dynamic rendering configuration
+  /api/ping
+    /route.ts                # Lightweight endpoint for pre-warming serverless functions
   /widget.js
     /route.ts                # Route handler for the widget script
   /api/widget-chat
@@ -211,8 +215,9 @@ The widget configurator provides the following customization options:
 - **Greeting Display**: The greeting configured in `window.marlinChatConfig` is displayed as a welcome message when the widget first loads. It's displayed exactly as configured, without any default fallbacks.
 - **Script Path**: Always use the correct path to the widget script: `https://marlan.photographytoprofits.com/widget/chat-widget.js`
 - **API Interaction**: The widget connects to the API endpoint specified in the configuration to send and receive messages. The API handles the actual conversation with the AI model.
-- **Initialization**: The widget now uses the same initialization approach as the admin panel preview to ensure consistent behavior.
+- **Initialization**: The widget uses the same initialization approach as the admin panel preview to ensure consistent behavior.
 - **CORS Configuration**: The server includes proper CORS headers to allow embedding on approved external domains.
+- **Cold Start Prevention**: When the widget loads (not when clicked), it automatically sends a lightweight ping request to pre-warm the serverless infrastructure. This minimizes delays when the user sends their first message, preventing timeouts and login errors that can occur with cold serverless functions.
 
 ## Production Verification Checklist
 
@@ -230,3 +235,5 @@ When deploying or updating the widget, verify the following:
 - Custom greeting message displays correctly in both admin preview and remote embeds
 - Placeholder text customization works properly
 - Widget behavior is consistent between admin preview and remote website embeds
+- Pre-warming functionality sends ping request to `/api/ping` when widget loads
+- First user message receives prompt response without timeout errors

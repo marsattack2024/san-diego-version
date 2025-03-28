@@ -420,14 +420,53 @@
       t.input.addEventListener("keypress", e => { e.key === "Enter" && u(t.input.value) });
       t.resetButton.addEventListener("click", resetConversation);
     } function x(e = {}) {
-      i = { ...w, ...e },
-        y(),
-        t = b(),
-        // Add the welcome message using the React-like component approach
-        addWelcomeMessage(),
-        k(),
-        console.log("Marlin Chat Widget initialized successfully")
-    } window.initChatWidget = x; let i, t; window.marlinChatConfig && x(window.marlinChatConfig)
+      // Initialize config by merging defaults with user provided values
+      i = { ...w, ...e };
+
+      // Initialize styles
+      y();
+
+      // Build widget DOM elements
+      t = b();
+
+      // Add the welcome message using the React-like component approach
+      addWelcomeMessage();
+
+      // Setup event handlers
+      k();
+
+      // Warm up the backend immediately when widget loads
+      warmUpBackend();
+
+      console.log("Marlin Chat Widget initialized successfully");
+    }
+
+    // Warm up the backend to minimize cold start delays
+    function warmUpBackend() {
+      const pingEndpoint = i.apiEndpoint.replace(/\/widget-chat$/, '/ping');
+      console.log("Warming up backend:", pingEndpoint);
+
+      // Use fetch with HEAD method for minimal overhead
+      fetch(pingEndpoint, {
+        method: 'HEAD',
+        cache: 'no-store'
+      })
+        .then(() => console.log("Backend warm-up successful"))
+        .catch(() => {
+          // Silently ignore errors - this is just a warm-up request
+          // Fallback to GET if HEAD fails on some environments
+          fetch(pingEndpoint, {
+            method: 'GET',
+            cache: 'no-store'
+          }).catch(() => { });
+        });
+    }
+
+    window.initChatWidget = x;
+    let i, t;
+
+    // Initialize the widget if config exists
+    window.marlinChatConfig && x(window.marlinChatConfig)
   })();
 })();
 //# sourceMappingURL=chat-widget.js.map
