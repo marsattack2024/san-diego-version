@@ -103,8 +103,20 @@ export function Chat({
     experimental_throttle: 100,
     sendExtraMessageFields: true,
     generateId: generateUUID,
+    // Optimize network traffic by only sending the last message
+    experimental_prepareRequestBody({ messages, id }) {
+      // Get the last message
+      const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+
+      // Return optimized payload
+      return {
+        message: lastMessage,
+        id,
+        deepSearchEnabled,
+        agentId: selectedAgentId
+      };
+    },
     onFinish: async (message) => {
-      // Store assistant message in Supabase after streaming completes
       try {
         // Extract tools used from message content
         let toolsUsed = null;
@@ -131,60 +143,17 @@ export function Chat({
         const previousUserMessage = messages.slice().reverse().find(m => m.role === 'user');
         const requestMessageId = previousUserMessage ? messageIdMap[previousUserMessage.id] : null;
 
-        console.log('Saving assistant message with request ID:', {
+        console.log('Assistant message ready, server already saved it:', {
           requestMessageId,
           hasUserMessage: !!previousUserMessage,
           userMessageId: previousUserMessage?.id
         });
 
-        // Generate a fallback ID if no requestMessageId is found
-        const messageId = requestMessageId || crypto.randomUUID();
-        console.log('Saving assistant message with ID:', messageId);
-
-        // Save the assistant message to Supabase
-        const response = await fetch(`/api/chat/${id}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            message: {
-              role: message.role,
-              content: trimmedContent,
-            },
-            toolsUsed,
-            messageId // Consistent parameter name (was chatId)
-          }),
-        });
-
-        if (response.ok) {
-          // Store the chatId for this message
-          const data = await response.json();
-          const savedMessageId = data.messageId || messageId;
-
-          setMessageIdMap(prev => ({
-            ...prev,
-            [message.id]: savedMessageId
-          }));
-
-          console.log('Successfully saved assistant message:', {
-            messageId: savedMessageId,
-            responseMessageId: message.id
-          });
-        } else {
-          // Get detailed error information from the response
-          response.json().then(data => {
-            console.error('Failed to save assistant message:', data);
-          }).catch(err => {
-            console.error('Failed to save assistant message, could not parse error:', err);
-          });
-        }
+        // Update chat history to reflect the completed conversation
+        historyService.invalidateCache();
       } catch (error) {
-        console.error('Error saving assistant message:', error);
+        console.error('Error processing completed assistant message:', error);
       }
-
-      // Update chat history
-      historyService.invalidateCache();
     },
     onError: (error) => {
       // Only show toast for non-vote related errors
@@ -198,7 +167,7 @@ export function Chat({
     },
   });
 
-  // Wrap the original handleSubmit to save the user message first
+  // Simplified handleSubmit wrapper for UI consistency
   const handleSubmitWithSave = async (event?: { preventDefault?: (() => void) } | undefined, chatRequestOptions?: any) => {
     if (event?.preventDefault) {
       event.preventDefault();
@@ -212,156 +181,35 @@ export function Chat({
     try {
       console.log(`Processing chat for ID: ${id}`);
 
-      // Start AI processing immediately with the current input
-      const currentInput = input; // Capture current input value
-
       // Generate a message ID for tracking
       const messageId = crypto.randomUUID();
       console.log(`Generated message ID for user message: ${messageId}`);
 
-      // Call the AI endpoint immediately to reduce perceived latency
-      try {
-        // Submit to AI immediately to show thinking indicator
-        handleSubmit(undefined, chatRequestOptions);
-      } catch (aiError) {
-        console.error('Error in AI processing:', aiError);
-        toast.error('An error occurred while processing your message.');
-      }
+      // Store this ID for later reference
+      const currentInput = input;
 
-      // Define a reusable function to ensure the user message is saved
-      const saveUserMessage = async (): Promise<boolean> => {
-        try {
-          console.log(`Saving user message with ID: ${messageId}`);
+      // Submit directly to AI with the current input
+      // The server will handle saving both the user message and assistant response
+      await handleSubmit(event, chatRequestOptions);
 
-          // First ensure session exists
-          const sessionResponse = await fetch(`/api/chat/session`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              id,
-              agentId: selectedAgentId,
-              deepSearchEnabled
-            }),
-          });
-
-          if (!sessionResponse.ok) {
-            console.error('Failed to ensure chat session exists:',
-              await sessionResponse.text().catch(() => 'Unknown error'));
-            return false;
-          }
-
-          console.log('Session creation/verification successful');
-
-          // Then save the user message
-          const messageResponse = await fetch(`/api/chat/${id}`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              message: {
-                role: 'user',
-                content: currentInput,
-              },
-              messageId,
-              updateTimestamp: true,
-            }),
-          });
-
-          if (!messageResponse.ok) {
-            console.error('Failed to save user message:',
-              await messageResponse.text().catch(() => 'Unknown error'));
-            return false;
-          }
-
-          const responseData = await messageResponse.json();
-          console.log('User message saved successfully:', responseData);
-
-          // Map the client-side message ID to the server message ID
-          const userMessage = messages.find(m => m.role === 'user' && m.content === currentInput);
-          if (userMessage) {
-            console.log('Found user message in state, updating mapping:', userMessage.id);
-            setMessageIdMap(prev => ({
-              ...prev,
-              [userMessage.id]: messageId
-            }));
-          }
-
-          return true;
-        } catch (error) {
-          console.error('Error saving user message:', error);
-          return false;
+      // After submission succeeds, wait a moment for the local state to update
+      setTimeout(() => {
+        // Find and map the user message ID
+        const userMessage = messages.find(m => m.role === 'user' && m.content === currentInput);
+        if (userMessage) {
+          console.log('Found user message in state, updating mapping:', userMessage.id);
+          setMessageIdMap(prev => ({
+            ...prev,
+            [userMessage.id]: messageId
+          }));
         }
-      };
+      }, 100);
 
-      // Use a web worker if available to ensure reliable execution
-      // or try multiple approaches to maximize chance of success
-
-      // First attempt - immediate try with requestAnimationFrame
-      requestAnimationFrame(() => {
-        saveUserMessage().then(success => {
-          console.log(`Initial save attempt ${success ? 'succeeded' : 'failed'}`);
-          if (success) {
-            historyService.invalidateCache();
-          } else {
-            // Second attempt - use setTimeout with a delay
-            setTimeout(() => {
-              saveUserMessage().then(retrySuccess => {
-                console.log(`Retry save attempt ${retrySuccess ? 'succeeded' : 'failed'}`);
-                if (retrySuccess) {
-                  historyService.invalidateCache();
-                } else {
-                  // Final attempt - use requestIdleCallback with timeout
-                  if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
-                    (window as any).requestIdleCallback(
-                      () => {
-                        saveUserMessage().then(finalSuccess => {
-                          console.log(`Final save attempt ${finalSuccess ? 'succeeded' : 'failed'}`);
-                          historyService.invalidateCache();
-                        });
-                      },
-                      { timeout: 2000 }
-                    );
-                  }
-                }
-              });
-            }, 500);
-          }
-        });
-      });
-
-      return;
     } catch (error) {
       console.error('Error in handleSubmitWithSave:', error);
       toast.error('An error occurred. Please try again.');
     }
   };
-
-  // Remove separate votes SWR request as we'll now get vote data directly from chat messages
-  /* 
-  const { data: votes, error: voteError } = useSWR<Array<Vote>>(
-    id ? `/api/vote?chatId=${id}` : null, // Only fetch if we have an ID
-    fetcher,
-    {
-      // Add additional options for SWR
-      revalidateOnFocus: false,
-      shouldRetryOnError: false,
-      refreshInterval: 30000, // Only poll every 30 seconds instead of continuously
-      dedupingInterval: 30000, // Dedupe calls within 30 seconds
-      onError: (err) => {
-        console.warn('Failed to load votes:', err);
-        // Don't show toast for this error as it's not critical
-      }
-    }
-  );
-  
-  // If we had a vote error, log it but continue with empty votes
-  useEffect(() => {
-    if (voteError) {
-      console.warn('Vote loading error:', voteError);
-    }
-  }, [voteError]);
-  */
 
   // Process votes from message data instead of separate API calls
   const processedVotes = useMemo(() => {

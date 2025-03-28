@@ -13,7 +13,7 @@ import { OpenAI } from 'openai';
 // Import only validation & utility modules at the top level
 import { extractUrls } from '@/lib/chat/url-utils';
 import { ToolManager } from '@/lib/chat/tool-manager';
-import { streamText } from 'ai';
+import { streamText, appendClientMessage, appendResponseMessages } from 'ai';
 
 // Allow streaming responses up to 120 seconds instead of 60
 export const maxDuration = 120;
@@ -122,7 +122,7 @@ export async function POST(req: Request) {
 
       // Regular request processing starts here
       const body = await req.json();
-      const { messages, id, agentId = 'default', deepSearchEnabled = false } = validateChatRequest(body);
+      const { message, id, agentId = 'default', deepSearchEnabled = false } = body;
       const modelName = 'gpt-4o';
 
       // Create Supabase client for auth
@@ -135,7 +135,7 @@ export async function POST(req: Request) {
 
       edgeLogger.info('Processing chat request', {
         chatId: id,
-        messageCount: messages.length,
+        messageId: message?.id,
         agentId: agentId,
         deepSearchEnabled,
         userAuthenticated: !!userId
@@ -147,13 +147,103 @@ export async function POST(req: Request) {
         return resolve(new Response('Unauthorized', { status: 401 }));
       }
 
-      // Get the last user message
-      const lastUserMessage = messages.filter(m => m.role === 'user').pop();
-      if (!lastUserMessage) {
+      // Validate the message format
+      if (!message || !message.role || !message.content) {
         clearTimeout(operationTimeoutId);
         operationTimeoutId = undefined;
-        return resolve(new Response('No user message found', { status: 400 }));
+        return resolve(new Response('Invalid message format', { status: 400 }));
       }
+
+      // Fetch previous messages from the database for this chat
+      const { data: previousMessages, error: messagesError } = await authClient
+        .from('sd_chat_histories')
+        .select('role, content, id, created_at')
+        .eq('session_id', id)
+        .order('created_at', { ascending: true });
+
+      if (messagesError) {
+        edgeLogger.error('Error fetching previous messages', {
+          error: formatError(messagesError),
+          chatId: id
+        });
+      }
+
+      // Convert previous messages to AI SDK format
+      const previousAIMessages = (previousMessages || []).map(msg => ({
+        id: msg.id,
+        role: msg.role as 'user' | 'assistant' | 'system',
+        content: msg.content,
+        createdAt: new Date(msg.created_at)
+      }));
+
+      // Append the new client message to previous messages
+      const messages = appendClientMessage({
+        messages: previousAIMessages,
+        message
+      });
+
+      // Save the user message immediately to ensure it's persisted
+      try {
+        // First ensure the session exists
+        const { data: sessionData, error: sessionError } = await authClient
+          .from('sd_chat_sessions')
+          .select('id')
+          .eq('id', id)
+          .maybeSingle();
+
+        if (!sessionData || sessionError) {
+          // Create the session if it doesn't exist
+          const { error: createError } = await authClient
+            .from('sd_chat_sessions')
+            .insert({
+              id,
+              user_id: userId,
+              title: message.content.substring(0, 50),
+              agent_id: agentId
+            });
+
+          if (createError) {
+            edgeLogger.error('Failed to create chat session', {
+              error: formatError(createError),
+              chatId: id
+            });
+          } else {
+            edgeLogger.info('Created new chat session', { chatId: id });
+          }
+        }
+
+        // Save the user message
+        const { error: saveError } = await authClient
+          .from('sd_chat_histories')
+          .insert({
+            id: message.id,
+            session_id: id,
+            role: message.role,
+            content: message.content,
+            user_id: userId
+          });
+
+        if (saveError) {
+          edgeLogger.error('Failed to save user message', {
+            error: formatError(saveError),
+            chatId: id,
+            messageId: message.id
+          });
+        } else {
+          edgeLogger.info('Saved user message', {
+            chatId: id,
+            messageId: message.id
+          });
+        }
+      } catch (error) {
+        edgeLogger.error('Error in user message saving process', {
+          error: formatError(error),
+          chatId: id
+        });
+      }
+
+      // Now continue with extracting last user message for processing
+      const lastUserMessage = message;
 
       // Extract URLs from the user message
       const urls = extractUrls(lastUserMessage.content);
@@ -1091,8 +1181,7 @@ export async function POST(req: Request) {
                     .eq('id', id)
                     .maybeSingle();
 
-                  // Only store/update the session record, not messages
-                  // Messages are saved by the client-side onFinish callback
+                  // Only store/update the session record
                   const sessionResponse = await authClient
                     .from('sd_chat_sessions')
                     .upsert({
@@ -1108,18 +1197,55 @@ export async function POST(req: Request) {
                     throw new Error(`Failed to store session: ${sessionResponse.error.message}`);
                   }
 
-                  edgeLogger.info('Chat session updated successfully', {
+                  // Create a complete message set using the AI SDK helper
+                  // The completion object structure depends on the model and response format
+                  // Extract response messages or create a new message with the validated text
+                  const assistantMessage = {
+                    role: 'assistant' as const,
+                    content: validatedText,
+                    id: crypto.randomUUID()
+                  };
+
+                  const updatedMessages = appendResponseMessages({
+                    messages,
+                    responseMessages: [assistantMessage]
+                  });
+
+                  // Save the assistant message
+                  const lastAssistantMessage = updatedMessages.filter(m => m.role === 'assistant').pop();
+                  if (lastAssistantMessage) {
+                    const { error: saveError } = await authClient
+                      .from('sd_chat_histories')
+                      .insert({
+                        id: lastAssistantMessage.id,
+                        session_id: id,
+                        role: lastAssistantMessage.role,
+                        content: lastAssistantMessage.content,
+                        user_id: userId
+                      });
+
+                    if (saveError) {
+                      edgeLogger.error('Failed to save assistant message', {
+                        error: formatError(saveError),
+                        chatId: id,
+                        messageId: lastAssistantMessage.id
+                      });
+                    } else {
+                      edgeLogger.info('Saved assistant message', {
+                        chatId: id,
+                        messageId: lastAssistantMessage.id
+                      });
+                    }
+                  }
+
+                  edgeLogger.info('Chat session and message saved successfully', {
                     id,
-                    note: 'Message storage handled by client side to prevent duplication',
                     titleSource: existingSession?.title ? 'preserved existing' : 'set from user message'
                   });
                 } catch (error) {
-                  edgeLogger.error('Error storing chat session', { error: formatError(error) });
+                  edgeLogger.error('Error storing chat messages', { error: formatError(error) });
                 }
               }
-
-              // We no longer store messages server-side to avoid duplicates
-              // The client-side onFinish callback in chat.tsx will handle storage
 
               // Just log that we completed response generation
               edgeLogger.info('Generated assistant response', {
@@ -1140,6 +1266,9 @@ export async function POST(req: Request) {
             }
           }
         });
+
+        // Consume the stream to ensure onFinish runs even if client disconnects
+        result.consumeStream();
 
         // Return the stream as a response using the SDK's helper
         clearTimeout(operationTimeoutId);
