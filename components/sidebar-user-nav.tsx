@@ -3,7 +3,7 @@ import { ChevronUp, User as UserIcon, Camera, Pencil, Shield } from 'lucide-reac
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import {
   DropdownMenu,
@@ -35,37 +35,95 @@ export function SidebarUserNav({ user }: { user: User }) {
   const router = useRouter();
   const { profile, isAdmin, refreshAdminStatus } = useAuth(); // Use the unified auth hook
   const logout = useAuthStore(state => state.logout);
-  const initialRefreshDone = useRef(false);
+  const [adminStatus, setAdminStatus] = useState<boolean>(isAdmin);
+  const refreshAttempted = useRef(false);
+  const previousAdminCookieRef = useRef<boolean | null>(null);
 
-  // Do a background refresh of admin status once 
-  // but don't block rendering on it
+  // Check for admin cookie directly - but without causing an infinite loop
   useEffect(() => {
-    // Only refresh admin status if we haven't already done so
-    // in this component's lifecycle
-    if (!initialRefreshDone.current) {
-      initialRefreshDone.current = true;
+    const checkAdminCookie = () => {
+      const cookies = document.cookie.split(';');
+      const adminCookie = cookies.find(cookie => cookie.trim().startsWith('x-is-admin='));
 
-      // Execute admin status refresh in the background
-      (async () => {
-        try {
-          console.log('SidebarUserNav: Refreshing admin status in background');
-          await refreshAdminStatus();
-        } catch (error) {
-          console.error('Error refreshing admin status:', error);
+      if (adminCookie) {
+        const isAdminFromCookie = adminCookie.split('=')[1].trim() === 'true';
+
+        // Only update state and log if the value changed from previous check
+        if (previousAdminCookieRef.current !== isAdminFromCookie) {
+          console.log('SidebarUserNav: Admin cookie found, value =', isAdminFromCookie);
+          previousAdminCookieRef.current = isAdminFromCookie;
+          setAdminStatus(isAdminFromCookie);
         }
-      })();
+      } else if (previousAdminCookieRef.current !== null) {
+        console.log('SidebarUserNav: No admin cookie found');
+        previousAdminCookieRef.current = null;
+        setAdminStatus(false);
+      }
+    };
+
+    // Check cookie immediately
+    checkAdminCookie();
+
+    // Also check on focus as the cookie may have been updated in another tab/window
+    const handleFocus = () => {
+      console.log('SidebarUserNav: Window focused, checking admin cookie');
+      checkAdminCookie();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, []); // Removed adminStatus from dependencies to avoid infinite loop
+
+  // Aggressively refresh admin status on mount, but only once
+  useEffect(() => {
+    const refreshAdmin = async () => {
+      if (!refreshAttempted.current) {
+        refreshAttempted.current = true;
+        console.log('SidebarUserNav: Initial admin status refresh attempt');
+
+        try {
+          const result = await refreshAdminStatus();
+          console.log('SidebarUserNav: Admin status refresh result =', result);
+          if (result !== adminStatus) {
+            setAdminStatus(result);
+          }
+        } catch (error) {
+          console.error('SidebarUserNav: Error refreshing admin status:', error);
+        }
+      }
+    };
+
+    refreshAdmin();
+  }, [refreshAdminStatus]); // Removed adminStatus to avoid loop
+
+  // Update local state when the isAdmin prop changes, but only if it's different
+  // This prevents unnecessary re-renders
+  useEffect(() => {
+    if (isAdmin !== adminStatus) {
+      console.log('SidebarUserNav: isAdmin prop changed to', isAdmin);
+      setAdminStatus(isAdmin);
     }
-  }, []);
+  }, [isAdmin]); // Only depend on isAdmin, not adminStatus
 
   // Log when admin status changes, but without causing a refresh loop
   useEffect(() => {
-    console.log('SidebarUserNav: Rendering with admin status =', isAdmin);
-  }, [isAdmin]);
+    console.log('SidebarUserNav: Current admin status =', adminStatus);
+  }, [adminStatus]);
 
   const handleSignOut = async () => {
     await logout(); // Use the logout function from auth store
     router.push('/login');
     router.refresh();
+  };
+
+  const handleAdminClick = () => {
+    if (adminStatus) {
+      console.log('SidebarUserNav: Navigating to admin panel');
+      router.push('/admin');
+    } else {
+      console.error('SidebarUserNav: Admin access denied - not an admin');
+      // Could add a toast notification here to inform the user
+    }
   };
 
   return (
@@ -107,10 +165,10 @@ export function SidebarUserNav({ user }: { user: User }) {
             )}
 
             {/* Admin Panel Button - Only visible for admins */}
-            {isAdmin && (
+            {adminStatus && (
               <DropdownMenuItem
                 className="cursor-pointer text-amber-600 hover:text-amber-700 hover:bg-amber-100"
-                onSelect={() => router.push('/admin')}
+                onClick={handleAdminClick}
               >
                 <Shield className="mr-2 h-4 w-4" />
                 Admin Panel

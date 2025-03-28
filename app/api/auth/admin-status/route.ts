@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerClient } from '@supabase/ssr';
+import { edgeLogger } from '@/lib/logger/edge-logger';
 
 /**
  * GET route to check if the current user has admin status
- * This endpoint uses a cached check to avoid repeated RPC calls
+ * This endpoint directly checks the profile table as the single source of truth
  */
 export async function GET(request: Request) {
     try {
@@ -43,15 +44,19 @@ export async function GET(request: Request) {
             }, { status: 401 });
         }
 
-        // Call the is_admin RPC function to check admin status
-        const { data: isAdmin, error } = await supabaseAdmin.rpc('is_admin', {
-            user_id: user.id
-        });
+        // Check profile table directly - single source of truth for admin status
+        const { data: profileData, error: profileError } = await supabaseAdmin
+            .from('sd_user_profiles')
+            .select('is_admin')
+            .eq('user_id', user.id)
+            .single();
 
-        if (error) {
-            console.error('Error checking admin status', {
+        if (profileError) {
+            edgeLogger.error('Error checking admin status in profile', {
+                category: 'auth',
                 userId: user.id,
-                error: error.message,
+                error: profileError.message,
+                level: 'error',
                 important: true
             });
 
@@ -62,26 +67,33 @@ export async function GET(request: Request) {
             }, { status: 500 });
         }
 
+        const isAdmin = profileData?.is_admin === true;
+
         // Set a longer cache time for this response to avoid repeated checks
         const response = NextResponse.json({
-            admin: !!isAdmin,
+            admin: isAdmin,
             authenticated: true,
             userId: user.id
         });
 
-        // Cache for 5 minutes (300 seconds)
-        response.headers.set('Cache-Control', 'private, max-age=300');
+        // Cache for 30 minutes (1800 seconds) - increased from previous 5 minutes
+        response.headers.set('Cache-Control', 'private, max-age=1800');
 
-        console.log('Admin status check', {
-            userId: user.id,
-            isAdmin: !!isAdmin
+        edgeLogger.info('Admin status check', {
+            category: 'auth',
+            userId: user.id.substring(0, 8) + '...',
+            isAdmin: isAdmin,
+            level: 'info'
         });
 
         return response;
     } catch (error) {
-        console.error('Unexpected error in admin status check', {
+        edgeLogger.error('Unexpected error in admin status check', {
+            category: 'auth',
             error: error instanceof Error ? error.message : String(error),
-            stack: error instanceof Error ? error.stack : undefined
+            stack: error instanceof Error ? error.stack : undefined,
+            level: 'error',
+            important: true
         });
 
         return NextResponse.json({

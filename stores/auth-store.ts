@@ -234,33 +234,29 @@ export const useAuthStore = create<AuthState>()(
         }
 
         try {
-          // 1. Check if we already know the user is an admin from state
-          if (state.isAdmin === true) {
-            console.log('Admin check: Using cached admin state');
-            return true;
+          // 1. Check the cookie first (most efficient)
+          if (typeof window !== 'undefined') {
+            const cookies = document.cookie.split(';');
+            const adminCookie = cookies.find(c => c.trim().startsWith('x-is-admin='));
+
+            if (adminCookie) {
+              const isAdmin = adminCookie.includes('true');
+              console.log('Admin check: Using admin cookie value:', isAdmin);
+              set({ isAdmin });
+              return isAdmin;
+            }
           }
 
-          // 2. Check if the profile has is_admin flag (also cached)
+          // 2. Check if the profile has is_admin flag (already cached in state)
           if (state.profile?.is_admin) {
             console.log('Admin check: Using cached profile admin flag');
             set({ isAdmin: true });
             return true;
           }
 
-          // 3. Check for the x-is-admin cookie (set by middleware)
-          if (typeof window !== 'undefined') {
-            const cookies = document.cookie.split(';');
-            const adminCookie = cookies.find(c => c.trim().startsWith('x-is-admin='));
-
-            if (adminCookie && adminCookie.includes('true')) {
-              console.log('Admin check: Found admin cookie set by middleware');
-              set({ isAdmin: true });
-              return true;
-            }
-          }
-
-          // 4. Use the dedicated admin-status API endpoint (most efficient RPC check)
+          // 3. If no cookie or profile in state, use the admin-status API
           try {
+            console.log('Admin check: Calling admin-status API');
             const response = await fetch('/api/auth/admin-status', {
               method: 'GET',
               credentials: 'include',
@@ -272,38 +268,17 @@ export const useAuthStore = create<AuthState>()(
 
             if (response.ok) {
               const data = await response.json();
-
-              if (data && data.admin === true) {
-                console.log('Admin check: API confirmed admin status');
-                set({ isAdmin: true });
-                return true;
-              }
-
-              // If API confirms user is not admin, don't try other methods
-              if (data && data.admin === false) {
-                console.log('Admin check: API confirmed non-admin status');
-                set({ isAdmin: false });
-                return false;
-              }
+              const isAdmin = !!data.admin;
+              console.log('Admin check: API result:', isAdmin);
+              set({ isAdmin });
+              return isAdmin;
             }
           } catch (apiError) {
-            // If API fails, fall through to other methods
-            console.warn('Admin API check failed, falling back', apiError);
+            console.error('Admin API check error:', apiError);
           }
 
-          // 5. If we still don't know, make a Supabase RPC call (fallback)
-          console.log('Admin check: Making Supabase RPC call');
-          const supabase = createClient();
-          const { data, error } = await supabase.rpc('is_admin', { user_id: state.user.id });
-
-          if (!error && data === true) {
-            console.log('Admin check: Supabase RPC confirmed admin status');
-            set({ isAdmin: true });
-            return true;
-          }
-
-          // 6. If all checks fail, user is not an admin
-          console.log('Admin check: User is not an admin');
+          // 4. Default to non-admin if all checks fail
+          console.log('Admin check: All checks failed, defaulting to non-admin');
           set({ isAdmin: false });
           return false;
         } catch (error) {

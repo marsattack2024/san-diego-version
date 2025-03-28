@@ -63,18 +63,17 @@ export async function updateSession(request: NextRequest) {
       supabaseResponse.headers.set(key, value);
     });
 
-    // CRITICAL ADDITION: Check if user is an admin - but only if needed
-    // Check if we already have a valid admin status cookie to avoid redundant checks
+    // ADMIN CHECK SIMPLIFIED: Check if user is an admin using profile table as single source of truth
+    // Only check if:
+    // 1. No admin cookie exists, or
+    // 2. Admin cookie is older than cache time, or
+    // 3. Path indicates it's an admin page or admin-related API
     const adminCookie = request.cookies.get('x-is-admin');
     const adminCookieTimestamp = request.cookies.get('x-is-admin-time');
     const now = Date.now();
     const adminCookieAge = adminCookieTimestamp ? now - parseInt(adminCookieTimestamp.value || '0') : Infinity;
-    const adminCacheTime = 5 * 60 * 1000; // 5 minutes cache
+    const adminCacheTime = 30 * 60 * 1000; // 30 minutes cache (extended from 5 minutes)
 
-    // Only check admin status if:
-    // 1. No admin cookie exists, or
-    // 2. Admin cookie is older than cache time, or
-    // 3. Path indicates it's an admin page or admin-related API
     const needsAdminCheck = !adminCookie ||
       adminCookieAge > adminCacheTime ||
       request.nextUrl.pathname.startsWith('/admin') ||
@@ -83,11 +82,12 @@ export async function updateSession(request: NextRequest) {
 
     if (needsAdminCheck) {
       edgeLogger.debug(`[updateSession] Checking admin status for: ${user.id.substring(0, 8)}...`, {
-        category: 'auth'
+        category: 'auth',
+        level: 'debug'
       });
 
-      // Create a service role client if the key is available - this bypasses RLS
-      let adminClient = supabase;
+      // Create a service role client to bypass RLS
+      let adminClient;
       const hasServiceKey = !!process.env.SUPABASE_KEY;
 
       if (hasServiceKey) {
@@ -104,49 +104,46 @@ export async function updateSession(request: NextRequest) {
           }
         );
         edgeLogger.debug('[updateSession] Using service role key for admin check', {
-          category: 'auth'
+          category: 'auth',
+          level: 'debug'
         });
       } else {
+        adminClient = supabase;
         edgeLogger.warn('[updateSession] ⚠️ No service role key available, admin check may fail due to RLS', {
-          category: 'auth'
+          category: 'auth',
+          level: 'warn'
         });
       }
 
-      // First try checking with RPC function (most reliable)
-      const { data: rpcData, error: rpcError } = await adminClient.rpc('is_admin', { user_id: user.id });
+      // Check admin status directly in profile table - single source of truth
+      const { data: profileData, error: profileError } = await adminClient
+        .from('sd_user_profiles')
+        .select('is_admin')
+        .eq('user_id', user.id)
+        .single();
 
+      // Set admin status based on profile table result
       let isAdminStatus = 'false';
-      if (!rpcError && rpcData === true) {
+
+      if (!profileError && profileData?.is_admin === true) {
         isAdminStatus = 'true';
-        edgeLogger.debug('[updateSession] User is admin via RPC check', {
+        edgeLogger.debug('[updateSession] User is admin via profile check', {
           category: 'auth',
-          userId: user.id
+          userId: user.id,
+          level: 'debug'
         });
-      } else if (rpcError) {
-        edgeLogger.warn('[updateSession] RPC admin check error', {
+      } else if (profileError) {
+        edgeLogger.warn('[updateSession] Profile admin check error', {
           category: 'auth',
-          error: rpcError.message
+          error: profileError.message,
+          level: 'warn'
         });
-
-        // Fall back to profile table check if RPC fails
-        const { data: profileData, error: profileError } = await adminClient
-          .from('sd_user_profiles')
-          .select('is_admin')
-          .eq('user_id', user.id)
-          .single();
-
-        if (!profileError && profileData?.is_admin === true) {
-          isAdminStatus = 'true';
-          edgeLogger.debug('[updateSession] User is admin via profile check', {
-            category: 'auth',
-            userId: user.id
-          });
-        } else if (profileError) {
-          edgeLogger.warn('[updateSession] Profile admin check error', {
-            category: 'auth',
-            error: profileError.message
-          });
-        }
+      } else {
+        edgeLogger.debug('[updateSession] User is not an admin', {
+          category: 'auth',
+          userId: user.id,
+          level: 'debug'
+        });
       }
 
       // Set admin status in cookies with timestamp - for both request and response
@@ -177,7 +174,8 @@ export async function updateSession(request: NextRequest) {
       // Only log when status is true to reduce noise
       if (isAdminStatus === 'true') {
         edgeLogger.debug('[updateSession] Using cached admin status from cookie (true)', {
-          category: 'auth'
+          category: 'auth',
+          level: 'debug'
         });
       }
     }
@@ -224,7 +222,8 @@ export async function updateSession(request: NextRequest) {
       // Log at debug level with proper category
       edgeLogger.debug(`Setting explicit unauthenticated headers for ${pathname}`, {
         category: 'auth',
-        hasAuthCookies
+        hasAuthCookies,
+        level: 'debug'
       });
     }
   }

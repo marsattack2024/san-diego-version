@@ -20,6 +20,9 @@ export default async function ChatLayout({
     // Get cookies for auth
     const cookieStore = await cookies();
 
+    // Check for admin cookie
+    const isAdmin = cookieStore.get('x-is-admin')?.value === 'true';
+
     // Create Supabase server client with cookies
     const supabase = await createClient();
 
@@ -33,18 +36,21 @@ export default async function ChatLayout({
         category: 'auth',
         userId: user.id,
         hasEmail: !!user.email,
-        hasRoles: !!user.app_metadata?.roles
+        isAdmin: isAdmin,
+        level: 'debug'
       });
     } else {
       edgeLogger.debug("No authenticated user found in chat layout", {
-        category: 'auth'
+        category: 'auth',
+        level: 'debug'
       });
     }
   } catch (error) {
     edgeLogger.error('Failed to get user in chat layout', {
       category: 'auth',
       error: error instanceof Error ? error : String(error),
-      important: true
+      important: true,
+      level: 'error'
     });
     user = undefined;
   }
