@@ -486,7 +486,7 @@ interface RagOperation {
 }
 
 // Production thresholds
-const THRESHOLDS = {
+export const THRESHOLDS = {
   RAG_TIMEOUT: 10000,      // 10 seconds
   SLOW_OPERATION: 2000,    // 2 seconds
   LOG_THRESHOLD: 1000,     // Only log operations > 1s in production

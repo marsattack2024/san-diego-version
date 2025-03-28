@@ -3,6 +3,7 @@ import type { RetrievedDocument } from './types';
 import { supabase } from '../db';
 import { createEmbedding } from './embeddings';
 import { redisCache } from './rag-cache';
+import { THRESHOLDS } from '../logger/edge-logger';
 
 // Cache statistics for monitoring
 const cacheStats = {
@@ -187,6 +188,9 @@ export async function findSimilarDocumentsOptimized(
   queryText: string,
   options: DocumentSearchOptions = {}
 ): Promise<{ documents: RetrievedDocument[], metrics: DocumentSearchMetrics }> {
+  const ragOperationId = `rag-${Date.now().toString(36)}`;
+  const startTime = performance.now();
+
   // Use consistent cache key with await
   const cacheKey = await generateConsistentCacheKey(queryText, options);
 
@@ -210,43 +214,37 @@ export async function findSimilarDocumentsOptimized(
             (typeof doc.score === 'number' || typeof doc.similarity === 'number')
           ) &&
           parsedResults.metrics &&
-          parsedResults.timestamp &&
-          typeof parsedResults.timestamp === 'number'
+          parsedResults.timestamp
         ) {
-          logger.debug('Using cached RAG results', {
-            category: 'tools',
-            operation: 'rag_search',
-            durationMs: parsedResults.metrics.retrievalTimeMs,
-            cacheAge: Date.now() - parsedResults.timestamp
-          });
+          const durationMs = Math.round(performance.now() - startTime);
+          const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
+          const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
 
-          // Add a proper RAG completion log for cache hits with correct status
+          // Single consolidated log for cache hit
           logger.info('RAG operation completed', {
             category: 'tools',
             operation: 'rag_search',
-            durationMs: parsedResults.metrics.retrievalTimeMs,
+            ragOperationId,
+            durationMs,
             resultsCount: parsedResults.documents.length,
-            slow: false, // Cache hits are fast
-            important: false,
+            slow: isSlow,
+            important: isImportant,
             status: 'completed_from_cache',
             fromCache: true,
-            level: 'info',
-            ragOperationId: `rag-${Date.now().toString(36)}`
+            level: 'info'
           });
 
           return {
             documents: parsedResults.documents,
-            metrics: parsedResults.metrics
+            metrics: {
+              ...parsedResults.metrics,
+              retrievalTimeMs: durationMs,
+              fromCache: true
+            }
           };
-        } else {
-          logger.debug('Cache structure invalid for RAG results', {
-            category: 'tools',
-            operation: 'rag_search',
-            reason: 'invalid_cache_structure'
-          });
         }
       } catch (error) {
-        logger.debug('Error parsing cached RAG results', {
+        logger.debug('Cache structure invalid or parse error', {
           category: 'tools',
           operation: 'rag_search',
           error: error instanceof Error ? error.message : String(error)
@@ -261,11 +259,18 @@ export async function findSimilarDocumentsOptimized(
     });
   }
 
-  // Perform vector search
+  // Perform vector search for cache miss
   const documents = await findSimilarDocuments(queryText, options);
+  const durationMs = Math.round(performance.now() - startTime);
+  const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
+  const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
 
   // Calculate metrics
-  const metrics = calculateSearchMetrics(documents);
+  const metrics = {
+    ...calculateSearchMetrics(documents),
+    retrievalTimeMs: durationMs,
+    fromCache: false
+  };
 
   // Cache results
   try {
@@ -278,8 +283,23 @@ export async function findSimilarDocumentsOptimized(
     // Serialize to JSON string before caching
     const serializedResults = JSON.stringify(cacheableResults);
     await redisCache.setRAG('global', cacheKey, serializedResults);
+
+    // Single consolidated log for cache miss
+    logger.info('RAG operation completed', {
+      category: 'tools',
+      operation: 'rag_search',
+      ragOperationId,
+      durationMs,
+      resultsCount: documents.length,
+      slow: isSlow,
+      important: isImportant,
+      status: documents.length > 0 ? 'completed' : 'no_matches',
+      fromCache: false,
+      level: isSlow ? 'warn' : 'info'
+    });
+
   } catch (error) {
-    logger.error('RAG operation failed', {
+    logger.error('RAG cache set failed', {
       category: 'tools',
       operation: 'cache_set',
       error: error instanceof Error ? error.message : String(error),
