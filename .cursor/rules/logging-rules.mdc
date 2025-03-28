@@ -3,33 +3,12 @@ description: Logging rules for app. Read this anytime working on logging issues.
 globs: 
 alwaysApply: false
 ---
-Okay, I've updated your "Logging Rules for Cursor" document based on our recent discussions and the latest refined SOP.
-
-Here are the key changes incorporated:
-
-Added level field consistently to all examples (e.g., level=info).
-Added Emojis (🔵🟡🔴) to examples for visual consistency.
-Corrected Prod RAG Example: Fixed the "Slow operation" example to correctly show slow=true / level=warn without important=true, and added an "Important operation" example for >5s.
-Clarified LOG_THRESHOLD Comment: Updated the comment.
-Corrected Sampling Rule: Fixed the rule about always logging based on thresholds (now errors & important threshold).
-Refined API Request Logging: Added slow flag logic.
-Added CACHE Category and basic examples.
-Explicitly Forbid Cookie Logging in Security and Migration sections.
-Addressed Redundancy: Added principle and migration point about avoiding redundant logs.
-Clarified debug Level: Added explicit mention of debug for dev-only verbose logs.
-Incorporated Specific Learnings: Added notes/examples for Agent Routing logs, logging prompt size, and tracking external API calls.
-Here's the updated document:
-
-Logging Rules for Cursor (AI Agent)
-Overview
-These logging rules are designed for a lightweight, efficient logging system tailored to a small team (~250 users). The system focuses on critical operational data, reduces noise, adapts to development and production needs, and aligns with our latest Standard Operating Procedures (SOP).
-
 Core Principles
 Minimalist Design: Log only essential metrics and events for production. Use debug level for verbose tracing only in development.
 Structured & Categorized: Use consistent fields (level, category, durationMs, IDs) and defined categories.
 Category-Based Sampling: Apply defined sampling rates in production, but always keep critical logs.
 Performance Focus: Track operation durations, flag slow/important/timeout cases based on thresholds.
-Security First: Avoid logging sensitive data (no full queries/inputs in prod, no cookies, no credentials, mask IDs).
+Security First: Avoid logging sensitive data (no full queries/inputs in prod, no cookies/credentials, mask IDs).
 Consolidated Logs: Aim for one clear log entry per logical operation completion (e.g., one log for RAG completion).
 Environment-Specific: debug logs are filtered out in production. Log more detail (e.g., non-sensitive params, truncated intermediate results) in development only.
 Log Categories and Sampling (Production)
@@ -38,7 +17,7 @@ TypeScript
 const categories = {
   AUTH: 'auth',     // Authentication events (20% sampling)
   CHAT: 'chat',     // Chat interactions, routing (10% sampling)
-  TOOLS: 'tools',   // RAG, Deep Search, other tool operations (10% sampling)
+  TOOLS: 'tools',   // RAG, Deep Search, Scraping, other tool ops (10% sampling)
   LLM: 'llm',       // Language model interactions (10% sampling)
   CACHE: 'cache',   // Cache operations (Hits: 10% sampling, Misses/Errors: 100%)
   SYSTEM: 'system'  // Critical system events, startup (100% sampling)
@@ -72,9 +51,23 @@ TypeScript
   category=tools
   ragOperationId=rag-abc
   durationMs=850
-  results=3
+  resultsCount=3
   slow=false
   important=false
+  status=completed // Or e.g., no_matches
+  fromCache=false
+
+// Cache Hit
+🔵 RAG operation completed
+  level=info
+  category=tools
+  ragOperationId=rag-xyz
+  durationMs=50 // Typically very fast
+  resultsCount=3 // Count from cache
+  slow=false
+  important=false
+  status=completed_from_cache // Specific status
+  fromCache=true
 
 // Slow operation (> SLOW_OPERATION, < IMPORTANT_THRESHOLD)
 🟡 RAG operation completed // Yellow for Warning
@@ -82,9 +75,11 @@ TypeScript
   category=tools
   ragOperationId=rag-def
   durationMs=2150
-  results=5
+  resultsCount=5
   slow=true // Marked as slow
   important=false // Not important yet
+  status=completed
+  fromCache=false
 
 // Important operation (> IMPORTANT_THRESHOLD)
 🟠 RAG operation completed // Orange for Important Warning
@@ -92,9 +87,11 @@ TypeScript
   category=tools
   ragOperationId=rag-ghi
   durationMs=5150
-  results=2
+  resultsCount=2
   slow=true
   important=true // Marked as important
+  status=completed
+  fromCache=false
 
 // Timeout (> RAG_TIMEOUT)
 🔴 RAG operation timed out
@@ -145,15 +142,15 @@ TypeScript
 
 // Cache Hit (Sampled 10%)
 🔵 Cache get
-  level=info
+  level=info // Or debug if too noisy
   category=cache
   key=global:rag:abc
   hit=true
   durationMs=45
 
 // Cache Miss (Logged 100%)
-🟡 Cache get
-  level=warn // Warn encourages checking cache effectiveness
+🟡 Cache get // Warn encourages checking cache effectiveness
+  level=warn
   category=cache
   key=global:rag:def
   hit=false
@@ -173,7 +170,7 @@ Chat/LLM Operations
 TypeScript
 
 🔵 Starting LLM request
-  level=debug // Verbose step
+  level=debug // Details for tracing
   category=llm
   model=gpt-4o
   chatId=abc
@@ -196,8 +193,8 @@ TypeScript
   highestScore=2
   threshold=5
 
-🔵 Using default agent // Info if final decision, debug if intermediate
-  level=info // Assuming final decision log
+🔵 Using default agent // Info for final decision
+  level=info
   category=chat
   reason="No agent scored above threshold"
   finalAgentId=default
@@ -210,18 +207,20 @@ TypeScript
   category=tools
   ragOperationId=rag-xyz
   durationMs=850
-  results=3
+  resultsCount=3
   slow=false
   important=false
+  status=completed
+  fromCache=false
   query="How can I reduce my cost per lead?" // Full query OK in dev
   // resultPreview="Document #1 snippet..." // Optional truncated results
 Best Practices
-1. RAG & External API Monitoring
-Assign unique IDs (ragOperationId, deepSearchId, etc.) to track operations.
-Log durationMs, outcome (success/fail/timeout), slow status, important status.
-For failures/timeouts, log level=error, important=true, and include a truncated query/input preview (queryPreview).
-Consolidate logs: Aim for one completion log per operation.
-2. Performance Thresholds
+RAG & External API Monitoring:
+Assign unique IDs (ragOperationId, deepSearchId, etc.).
+Log durationMs, outcome (status field like 'completed', 'completed_from_cache', 'no_matches', 'timeout', 'failed'), slow status, important status.
+For failures/timeouts, log level=error, important=true, include truncated queryPreview.
+Consolidate: Aim for ONE completion log per operation.
+Performance Thresholds:
 TypeScript
 
 const THRESHOLDS = {
@@ -231,10 +230,9 @@ const THRESHOLDS = {
   LOG_THRESHOLD: 1000,
   IMPORTANT_THRESHOLD: 5000 // Mark important=true if durationMs > 5000 (and level=warn)
 };
-3. Error Handling
-Use try/catch for fallible operations (API calls, DB queries, etc.).
-Log errors at level=error with important=true.
-Include relevant context: category, operation (e.g., 'vector_search', 'db_insert'), error message (error.message), relevant IDs.
+Error Handling:
+Use try/catch. Log errors at level=error with important=true.
+Include category, operation, error.message, relevant IDs.
 TypeScript
 
 // Example
@@ -242,69 +240,49 @@ try {
   await someOperation();
 } catch (error) {
   logger.error('Operation failed', {
-    // level=error is implicit
-    category: 'tools', // Or relevant category
-    operation: 'specific_task',
-    error: error.message, // Stack in debug if needed
-    important: true,
-    // relevantId: 'id-123'
+    category: 'tools', operation: 'specific_task', error: error.message, important: true, /* relevantId: '...' */
   });
 }
-4. Security
-Never log full user queries or inputs in production. Use truncated previews (queryPreview, max ~50 chars) ONLY in error/timeout logs.
-Never log authentication cookies or headers.
-Mask sensitive IDs (User IDs, Session IDs) if they must be logged (e.g., userId=5c80...20e9).
-Exclude credentials, API keys, and full environment variables from logs.
-5. Sampling & Filtering
+Security:
+Never log full user queries/inputs in production. Use truncated queryPreview (max ~50 chars) ONLY on error/timeout.
+Never log authentication cookies or sensitive headers.
+Mask sensitive IDs (userId, sessionId).
+Exclude credentials, API keys, full environment variables.
+Sampling & Filtering:
 Apply category sampling rates in production.
 Always log all ERROR level events and all events marked important: true, regardless of category sampling.
 Configure production environments to filter out and discard debug level logs.
-6. Use debug Level Appropriately
-Use level=debug for verbose, fine-grained tracing useful only during development (e.g., intermediate steps, detailed parameters, variable dumps, repeated status checks).
-Do not use debug for events that signal operational status, warnings, or errors.
+Use debug Level Appropriately:
+Use level=debug for verbose tracing useful ONLY during development (intermediate steps, params, variable dumps, repeated checks).
+Apply this especially to internal helper functions or wrappers around external tools (e.g., detailed steps within Perplexity/Deep Search API handlers).
+Do not use debug for operational status, warnings, or errors.
+Logging Sub-Processes (e.g., Web Scraping):
+Log the start, completion (with durationMs, outcome/status), and errors of distinct sub-processes like web scraping initiated during a request.
+Use appropriate categories (e.g., 'tools') and levels (info for start/complete, error for failures).
+Logging Data Validation/Correction:
+Use level=warn (🟡/🟠) to log significant data validation issues or automatic corrections applied to responses (e.g., missing required sections).
+Logging Long-Lived Connections (SSE):
+Avoid Misleading Durations: Standard framework request logs for SSE show total connection time, not latency. Document this in the route handler code.
+Recommended Logging: Use custom logs (level=info) to mark SSE connection established (with connectionId) and SSE connection closed (with connectionId and clear connectionDurationMs). Log SSE-specific errors at level=error.
 Implementation Patterns
-1. API Endpoint Logging (Example using edgeLogger concept)
+1. API Endpoint Logging (Example)
 TypeScript
 
 // Assume edgeLogger exists and handles levels, structure, etc.
 export async function POST(req: Request) {
-  const requestId = crypto.randomUUID();
-  const startTime = performance.now();
-  const path = '/api/chat'; // Or derive from req.url
-  const category = 'chat'; // Or derive dynamically
-
-  // Log basic request received at debug level (optional)
+  const requestId = crypto.randomUUID(); startTime = performance.now(); path = '/api/chat'; category = 'chat';
   edgeLogger.debug('API request received', { category, path, method: 'POST', requestId });
-
   try {
-    const result = await processRequest(req); // Your core logic
-    const durationMs = Math.round(performance.now() - startTime);
-    const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
-    const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
-
+    const result = await processRequest(req); durationMs = Math.round(performance.now() - startTime);
+    isSlow = durationMs > THRESHOLDS.SLOW_OPERATION; isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
     edgeLogger.log(isSlow ? 'warn' : 'info', 'API request completed', {
-      category,
-      path,
-      method: 'POST',
-      requestId,
-      durationMs,
-      status: 200,
-      slow: isSlow,
-      important: isImportant // Mark if exceeds important threshold
+      category, path, method: 'POST', requestId, durationMs, status: 200, slow: isSlow, important: isImportant
     });
-
     return Response.json(result);
   } catch (error) {
-    const durationMs = Math.round(performance.now() - startTime);
+    durationMs = Math.round(performance.now() - startTime);
     edgeLogger.error('API request failed', {
-      category,
-      path,
-      method: 'POST',
-      requestId,
-      error: error.message, // Log error message
-      durationMs,
-      status: 500, // Example status
-      important: true // Errors are always important
+      category, path, method: 'POST', requestId, error: error.message, durationMs, status: 500, important: true
     });
     return Response.json({ error: 'Internal server error' }, { status: 500 });
   }
@@ -312,54 +290,57 @@ export async function POST(req: Request) {
 2. RAG Operation Logging (Example)
 TypeScript
 
-// Assume logger exists
+// Assume logger exists and handles levels, structure, etc.
 async function performRAG(query: string, userId: string): Promise<RagResult[]> {
-  const ragOperationId = `rag-${crypto.randomUUID().substring(0, 8)}`;
-  const startTime = performance.now();
-  const category = 'tools';
-
-  // Log start at debug level (optional)
+  const ragOperationId = `rag-${crypto.randomUUID().substring(0, 8)}`; startTime = performance.now(); category = 'tools';
   logger.debug('Starting RAG operation', { category, ragOperationId, userId: maskUserId(userId) });
-
   try {
-    const results = await vectorSearch(query); // Your RAG logic
-    const durationMs = Math.round(performance.now() - startTime);
-    const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
-    const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
+    // !!! Add Cache Check Logic Here First !!!
+    // const cached = tryGetFromCache(query);
+    // if (cached) {
+    //   logger.info('RAG operation completed', { category, ragOperationId, /* ... cache hit fields ... */ status: 'completed_from_cache', fromCache: true });
+    //   return cached.documents;
+    // }
 
+    const results = await vectorSearch(query); // Actual RAG logic if cache miss
+    durationMs = Math.round(performance.now() - startTime); isSlow = durationMs > THRESHOLDS.SLOW_OPERATION; isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
+    status = results.length > 0 ? 'completed' : 'no_matches'; // Determine status
+
+    // Log single completion event
     logger.log(isSlow ? 'warn' : 'info', 'RAG operation completed', {
-      category,
-      ragOperationId,
-      durationMs,
-      resultsCount: results.length, // Log count, not full results
-      slow: isSlow,
-      important: isImportant,
-      userId: maskUserId(userId)
+      category, ragOperationId, durationMs, resultsCount: results.length, slow: isSlow, important: isImportant, status, fromCache: false, userId: maskUserId(userId)
     });
-
+    // Cache results if needed: cacheResults(query, results, { durationMs });
     return results;
   } catch (error) {
-    const durationMs = Math.round(performance.now() - startTime);
-    const isTimeout = durationMs > THRESHOLDS.RAG_TIMEOUT;
-
+    durationMs = Math.round(performance.now() - startTime); isTimeout = durationMs > THRESHOLDS.RAG_TIMEOUT;
     logger.error(isTimeout ? 'RAG operation timed out' : 'RAG operation failed', {
-      category,
-      ragOperationId,
-      durationMs,
-      error: error.message,
-      // Include truncated query ONLY on timeout/error
-      queryPreview: query.substring(0, 50) + '...',
-      important: true, // Errors/Timeouts always important
-      userId: maskUserId(userId)
+      category, ragOperationId, durationMs, error: error.message, queryPreview: query.substring(0, 50) + '...', important: true, userId: maskUserId(userId)
     });
     throw error; // Re-throw error after logging
   }
 }
+// Note: Separate logic/logging needed for cache hits ('completed_from_cache').
+// Ensure only ONE completion log (cache hit OR actual search) is emitted per call.
 
-flags based on thresholds.
+Keep / Refine
+✅ RAG/Tool operation metrics (durationMs, result counts, status).
+✅ API performance metrics (status, durationMs).
+✅ Error conditions with structured context.
+✅ Slow/Important operation warnings (slow=true, important=true based on thresholds).
+✅ Masked User/Session IDs where necessary for context.
+Add / Emphasize
+✅ Consistent level field (info, warn, error, debug).
+✅ Consistent category field for filtering and sampling.
+✅ Unique operation IDs (ragOperationId, requestId, etc.).
+✅ Timeout tracking and specific logging.
+✅ Use of debug level for dev-only verbose tracing.
+✅ Clear distinction between slow (warning) and important (needs attention) flags based on thresholds.
+✅ Specific guidance for SSE logging.
+✅ Guidance on logging sub-processes and validation steps.
 Monitoring Guidelines
 Errors: Monitor level=error logs. Group by category and operation to identify hotspots.
 Performance: Monitor level=warn logs. Track logs where slow=true or important=true. Analyze durationMs trends by category/operation.
-RAG/Tool Health: Filter by category=tools. Monitor ragOperationId (or similar) for high durationMs, timeouts (level=error), or low resultsCount.
+RAG/Tool Health: Filter by category=tools. Monitor ragOperationId (or similar) for high durationMs, timeouts (level=error), or low resultsCount. Check status field.
 API Usage: Analyze API request logs (requestId, path, status, durationMs) for patterns, errors, and performance.
-Cache Effectiveness: Monitor category=cache logs. Calculate hit ratios (hit=true vs hit=false counts). Investigate high miss rates (level=warn).
+Cache Effectiveness: Monitor category=cache logs. Calculate hit ratios (hit=true vs hit=false counts). Investigate high miss rates (level=warn on misses). Monitor RAG logs for status=completed_from_cache.

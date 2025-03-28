@@ -220,6 +220,20 @@ export async function findSimilarDocumentsOptimized(
             cacheAge: Date.now() - parsedResults.timestamp
           });
 
+          // Add a proper RAG completion log for cache hits with correct status
+          logger.info('RAG operation completed', {
+            category: 'tools',
+            operation: 'rag_search',
+            durationMs: parsedResults.metrics.retrievalTimeMs,
+            resultsCount: parsedResults.documents.length,
+            slow: false, // Cache hits are fast
+            important: false,
+            status: 'completed_from_cache',
+            fromCache: true,
+            level: 'info',
+            ragOperationId: `rag-${Date.now().toString(36)}`
+          });
+
           return {
             documents: parsedResults.documents,
             metrics: parsedResults.metrics

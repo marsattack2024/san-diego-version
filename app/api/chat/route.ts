@@ -709,7 +709,7 @@ export async function POST(req: Request) {
                   operationId,
                   contentLength: deepSearchContent.length,
                   firstChars: deepSearchContent.substring(0, 100) + '...',
-                  fromCache: deepSearchResponse ? deepSearchContent !== deepSearchResponse.content : true,
+                  fromCache: !deepSearchResponse || deepSearchResponse.timing.total < 100, // If response is missing or timing is very low, it was from cache
                   durationMs: Date.now() - deepSearchStartTime
                 });
 

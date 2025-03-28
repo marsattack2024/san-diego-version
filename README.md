@@ -24,6 +24,33 @@ Marlan is a specialized AI assistant that helps photographers with marketing str
 - 📜 Conversation history persistence
 - 🔌 Embeddable chat widget for external websites
 
+## Recent Improvements
+
+### Enhanced Logging System
+
+We've implemented a comprehensive structured logging system designed for clarity and performance:
+
+- 🏷️ **Categorized Logs**: All logs are properly categorized (AUTH, CHAT, TOOLS, LLM, SYSTEM, CACHE)
+- 📊 **Smart Sampling**: Production logs use intelligent sampling based on categories (10-20% for routine logs, 100% for errors)
+- ⚡ **Performance Metrics**: Automatic tracking of slow operations with threshold-based flagging
+- 🔒 **Security-Focused**: Sensitive data is automatically redacted from logs
+- 🔍 **Debug Mode**: Verbose development logs with detailed context (filtered in production)
+- 📈 **Operation Tracking**: Unique operation IDs for complete request tracing
+
+### Optimized Perplexity Integration
+
+- 🔄 **Efficient Caching**: Redis-based caching system for DeepSearch results with 1-hour TTL
+- 🚦 **Timeout Handling**: Improved handling of API timeouts with graceful fallbacks
+- 📱 **Real-time Progress**: Enhanced client progress indicators using Server-Sent Events
+- 🔍 **Smart Triggers**: Context-aware DeepSearch that runs only when necessary
+
+### Performance Improvements
+
+- 🚀 **Reduced API Load**: Better caching strategy for RAG operations and web scraping
+- ⏱️ **Timeout Management**: Proper cancellation of timeouts to prevent redundant operations
+- 🧠 **Memory Optimization**: Improved memory usage through cleanup of completed operations
+- 📦 **Consolidated Imports**: Dynamic imports to reduce initial load time
+
 ## Getting Started
 
 ### Prerequisites
@@ -85,9 +112,10 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 # Optional environment variables
 PERPLEXITY_API_KEY=your_perplexity_api_key
+PERPLEXITY_MODEL=sonar  # Default model, 'sonar-pro' is available for premium accounts
 WIDGET_ALLOWED_ORIGINS=https://yoursite.com,https://example.com,*
 NEXT_PUBLIC_MAX_TOKENS=600
-LOG_LEVEL=info
+LOG_LEVEL=info  # Options: debug, info, warn, error
 ```
 
 #### 5. Run the Development Server
@@ -213,11 +241,19 @@ Use one of these solutions:
 - Verify document embeddings exist in the database
 - Check OpenAI API key is correct for embedding generation
 
+### Perplexity DeepSearch Troubleshooting
+
+- Verify your Perplexity API key is valid and properly configured
+- Check that the internal authentication bypass is working correctly in middleware
+- For timeout issues, verify the 20-second timeout is configured properly
+- If DeepSearch appears to hang, check Server-Sent Events (SSE) connectivity
+
 ### Performance Optimization
 
 - Set a reasonable `NEXT_PUBLIC_MAX_TOKENS` value (recommended: 600-800)
 - Enable caching for web scraping and embeddings
 - Configure rate limiting based on your expected traffic
+- Adjust the LOG_LEVEL environment variable to reduce logging in production
 
 ## Environment Variables Reference
 
@@ -228,9 +264,18 @@ Use one of these solutions:
 | `OPENAI_API_KEY` | OpenAI API key | Yes | - |
 | `NEXT_PUBLIC_APP_URL` | Application URL | Yes | - |
 | `PERPLEXITY_API_KEY` | Perplexity API key | No | - |
+| `PERPLEXITY_MODEL` | Perplexity model name | No | `sonar` |
 | `WIDGET_ALLOWED_ORIGINS` | Comma-separated list of domains allowed to embed widget | No | `*` |
 | `NEXT_PUBLIC_MAX_TOKENS` | Maximum tokens for AI responses | No | `600` |
 | `LOG_LEVEL` | Logging level (debug, info, warn, error) | No | `info` |
+
+## Additional Documentation
+
+For more detailed information on specific features, see the documentation in the `/docs` directory:
+
+- [Logging System](./docs/logging.md) - Detailed documentation on the logging system
+- [DeepSearch Integration](./docs/deepsearch.perplexity.md) - How Perplexity DeepSearch is integrated
+- [Chat Widget Documentation](./docs/feature%20chat-widget.md) - How to use the embeddable chat widget
 
 ## Contributing
 
@@ -238,8 +283,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Additional Documentation
-
-For more detailed information on specific features, see the documentation in the `/docs` directory. 
+This project is licensed under the MIT License - see the LICENSE file for details. 
