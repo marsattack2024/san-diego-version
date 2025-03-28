@@ -9,16 +9,14 @@ export class ToolManager {
   private toolResults: Record<string, string> = {};
   private toolsUsed: Set<string> = new Set();
   private toolCallIds: Record<string, boolean> = {};
-  
+
   /**
    * Create a new ToolManager instance
    */
   constructor() {
-    edgeLogger.debug('Tool manager initialized', {
-      operation: 'tool_manager_init'
-    });
+    // Initialize silently - no logging needed
   }
-  
+
   /**
    * Register a tool being used by ID
    */
@@ -30,20 +28,20 @@ export class ToolManager {
       toolsUsed: this.toolsUsed.size
     });
   }
-  
+
   /**
    * Register a result from a tool
    */
   registerToolResult(toolName: string, content: string | { content: string }, options?: { fromExplicitToolCall?: boolean }): void {
     // Handle both string and object with content property
     const finalContent = typeof content === 'object' && content.content ? content.content : content;
-    
+
     if (typeof finalContent === 'string' && finalContent.trim()) {
       this.toolResults[toolName] = finalContent;
-      
+
       // Only add to toolsUsed if it's from an explicit tool call or specified in options
       const isExplicitToolCall = options?.fromExplicitToolCall !== false;
-      
+
       if (isExplicitToolCall) {
         this.toolsUsed.add(toolName);
         edgeLogger.debug(`Tool registered with result: ${toolName}`, {
@@ -61,21 +59,21 @@ export class ToolManager {
       }
     }
   }
-  
+
   /**
    * Check if a specific tool has been used
    */
   hasToolBeenUsed(toolName: string): boolean {
     return this.toolsUsed.has(toolName);
   }
-  
+
   /**
    * Get all tools that have been used
    */
   getToolsUsed(): string[] {
     return Array.from(this.toolsUsed);
   }
-  
+
   /**
    * Get the results from all tools
    */
@@ -86,7 +84,7 @@ export class ToolManager {
       deepSearch: this.toolResults['Deep Search']
     };
   }
-  
+
   /**
    * Get a specific tool result by name
    */
@@ -100,14 +98,14 @@ export class ToolManager {
   registerToolCallId(toolCallId: string): void {
     this.toolCallIds[toolCallId] = true;
   }
-  
+
   /**
    * Check if a tool call ID has been processed
    */
   hasToolCallIdBeenProcessed(toolCallId: string): boolean {
     return !!this.toolCallIds[toolCallId];
   }
-  
+
   /**
    * Summarize the current tools and their results
    */
@@ -116,7 +114,7 @@ export class ToolManager {
       const result = this.getToolResult(toolName);
       return `${toolName}: ${result ? `${result.length} chars` : 'No content'}`;
     }).join(', ');
-    
+
     return `Tools used: [${summary}]`;
   }
 }

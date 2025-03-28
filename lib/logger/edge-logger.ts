@@ -29,9 +29,28 @@ const LOG_CACHE = new Map<string, {
   expiresAt: number
 }>();
 
+// Create a more robust singleton pattern using a global marker that survives reinitializations
+// Define a unique key unlikely to collide with other properties
+const STARTUP_LOG_KEY = '__APP_STARTUP_LOGGED_FLAG__';
+
+// Detect globalThis across all environments
+const globalObj: any = typeof globalThis !== 'undefined' ? globalThis :
+  typeof global !== 'undefined' ? global :
+    typeof window !== 'undefined' ? window : {};
+
+// Initialize startup tracking flag
+let hasLoggedStartup = false;
+
+// Check if we've already logged startup in this or a previous instance
+try {
+  hasLoggedStartup = !!globalObj[STARTUP_LOG_KEY];
+} catch (e) {
+  // Ignore errors in case we're in a restricted environment
+}
+
 // Singleton pattern to track application startup state - key fix for duplicate logs
 const APPLICATION_STATE = {
-  startupLogged: false,
+  startupLogged: hasLoggedStartup,
   startTime: Date.now()
 };
 
@@ -369,7 +388,6 @@ function maskSensitiveData(data: LogData | undefined): LogData {
 }
 
 // Module-level flags and counters
-let hasLoggedStartup = false;
 let requestCounter = 0;
 
 // Performance monitoring
@@ -511,19 +529,6 @@ function endRagOperation(operationId: string, status: 'error' | 'completed'): vo
   operation.completed = true;
   operation.status = status;
 
-  // Log completion for root operations or slow operations
-  if (!operation.parentId || duration > THRESHOLDS.LOG_THRESHOLD) {
-    edgeLogger.info('RAG operation completed', {
-      category: LOG_CATEGORIES.TOOLS,
-      operationId,
-      durationMs: Math.round(duration),
-      results: 0, // We don't have result count here, set default to 0
-      status,
-      slow: duration > THRESHOLDS.SLOW_OPERATION,
-      important: duration > THRESHOLDS.IMPORTANT_THRESHOLD
-    });
-  }
-
   // Only remove the operation if it has no children or all children are completed
   const allChildrenCompleted = Array.from(operation.children).every(childId => {
     const child = activeRagOperations.get(childId);
@@ -562,13 +567,14 @@ function checkStaleRagOperations(): void {
         category: LOG_CATEGORIES.TOOLS,
         operationId,
         durationMs: Math.round(duration),
-        results: 0,
+        resultsCount: 0,
         queryLength: operation.queryLength,
         requestId: operation.requestId,
         parentId: operation.parentId,
         childCount: operation.children.size,
         important: true,
-        status: 'timeout'
+        status: 'timeout',
+        level: 'warn'
       });
 
       endRagOperation(operationId, 'error');
@@ -662,24 +668,6 @@ const trackOperation = async <T>(
 
     if (isRagOperation && data?.ragOperationId) {
       endRagOperation(data.ragOperationId, 'completed');
-
-      // Only log completion for root operations or slow operations
-      const op = activeRagOperations.get(data.ragOperationId);
-      const isRoot = !op?.parentId;
-
-      if (isRoot || duration > 1000) {
-        edgeLogger.info('RAG operation completed', {
-          category: LOG_CATEGORIES.TOOLS,
-          operation: name,
-          operationId: data?.ragOperationId,
-          durationMs: duration,
-          results: data?.results || 0,
-          slow: duration > THRESHOLDS.SLOW_OPERATION,
-          important: duration > THRESHOLDS.IMPORTANT_THRESHOLD,
-          status: 'completed',
-          ...data
-        });
-      }
     }
 
     return result;
@@ -695,10 +683,11 @@ const trackOperation = async <T>(
       operation: name,
       operationId: data?.ragOperationId,
       durationMs: duration,
-      results: 0,
+      resultsCount: 0,
       slow: duration > THRESHOLDS.SLOW_OPERATION,
       important: true,
       status: 'error',
+      level: 'error',
       error: formatError(error),
       ...data
     });
@@ -721,10 +710,16 @@ const debug = (message: string, data?: LogData): void => {
     logMessage = `${message} (repeated ${count} times)`;
   }
 
+  // Add level field to data
+  const enhancedData = {
+    ...(data || {}),
+    level: 'debug'
+  };
+
   if (process.env.NODE_ENV === 'development') {
-    console.log(formatDevLog('debug', logMessage, cleanupLogData(maskSensitiveData(data))));
+    console.log(formatDevLog('debug', logMessage, cleanupLogData(maskSensitiveData(enhancedData))));
   } else {
-    console.log(formatForConsole('debug', logMessage, cleanupLogData(maskSensitiveData(data))));
+    console.log(formatForConsole('debug', logMessage, cleanupLogData(maskSensitiveData(enhancedData))));
   }
 };
 
@@ -734,8 +729,15 @@ const info = (message: string, data?: LogData): void => {
     // Return early if we've already logged startup in this process
     if (APPLICATION_STATE.startupLogged) return;
 
-    // Mark that we've logged startup
+    // Set both local and global markers
     APPLICATION_STATE.startupLogged = true;
+
+    // Set global marker to prevent logging in future instances
+    try {
+      globalObj[STARTUP_LOG_KEY] = true;
+    } catch (e) {
+      // Ignore errors in restricted environments
+    }
 
     // Perform environment check to include in the startup log
     const envCheck = checkEnvironment();
@@ -763,10 +765,16 @@ const info = (message: string, data?: LogData): void => {
     logMessage = `${message} (repeated ${count} times)`;
   }
 
+  // Add level field to data
+  const enhancedData = {
+    ...(data || {}),
+    level: 'info'
+  };
+
   if (process.env.NODE_ENV === 'development') {
-    console.log(formatDevLog('info', logMessage, cleanupLogData(maskSensitiveData(data))));
+    console.log(formatDevLog('info', logMessage, cleanupLogData(maskSensitiveData(enhancedData))));
   } else {
-    console.log(formatForConsole('info', logMessage, cleanupLogData(maskSensitiveData(data))));
+    console.log(formatForConsole('info', logMessage, cleanupLogData(maskSensitiveData(enhancedData))));
   }
 };
 
@@ -779,10 +787,16 @@ const warn = (message: string, data?: LogData): void => {
     logMessage = `${message} (repeated ${count} times)`;
   }
 
+  // Add level field to data
+  const enhancedData = {
+    ...(data || {}),
+    level: 'warn'
+  };
+
   if (process.env.NODE_ENV === 'development') {
-    console.warn(formatDevLog('warn', logMessage, cleanupLogData(maskSensitiveData(data))));
+    console.warn(formatDevLog('warn', logMessage, cleanupLogData(maskSensitiveData(enhancedData))));
   } else {
-    console.warn(formatForConsole('warn', logMessage, cleanupLogData(maskSensitiveData(data))));
+    console.warn(formatForConsole('warn', logMessage, cleanupLogData(maskSensitiveData(enhancedData))));
   }
 };
 
@@ -794,10 +808,16 @@ const error = (message: string, data?: LogData): void => {
     logMessage = `${message} (repeated ${count} times)`;
   }
 
+  // Add level field to data
+  const enhancedData = {
+    ...(data || {}),
+    level: 'error'
+  };
+
   if (process.env.NODE_ENV === 'development') {
-    console.error(formatDevLog('error', logMessage, cleanupLogData(maskSensitiveData(data))));
+    console.error(formatDevLog('error', logMessage, cleanupLogData(maskSensitiveData(enhancedData))));
   } else {
-    console.error(formatForConsole('error', logMessage, cleanupLogData(maskSensitiveData(data))));
+    console.error(formatForConsole('error', logMessage, cleanupLogData(maskSensitiveData(enhancedData))));
   }
 };
 
@@ -871,9 +891,31 @@ function logEnvironmentCheck() {
 function logApplicationStartup() {
   // Only proceed if startup hasn't been logged yet
   if (!APPLICATION_STATE.startupLogged) {
-    edgeLogger.info('Application started', {
-      category: LOG_CATEGORIES.SYSTEM
-    });
+    // Set both local and global markers
+    APPLICATION_STATE.startupLogged = true;
+
+    // Set global marker to prevent logging in future instances
+    try {
+      globalObj[STARTUP_LOG_KEY] = true;
+    } catch (e) {
+      // Ignore errors in restricted environments
+    }
+
+    // Perform environment check to include in the startup log
+    const envCheck = checkEnvironment();
+
+    // Log a single, well-formatted startup message according to our standards
+    console.log(formatForConsole('info', 'Application started', {
+      level: 'info',
+      category: LOG_CATEGORIES.SYSTEM,
+      environment: process.env.NODE_ENV,
+      region: process.env.VERCEL_REGION || 'local',
+      version: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7) || 'dev',
+      uptime: 0,
+      ...envCheck,
+      // Only mark startup as important if there's an issue with the environment
+      important: !envCheck.valid
+    }));
   }
 }
 

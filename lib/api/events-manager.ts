@@ -1,4 +1,5 @@
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
 // Define the ReadableStreamController type for server-side event streaming
 type ReadableStreamController<T> = ReadableStreamDefaultController<T>;
@@ -12,18 +13,18 @@ const serverClients = new Set<ReadableStreamController<Uint8Array>>();
  */
 export function sendEventToClients(event: { type: string; status: string; details?: string }) {
   const eventData = `data: ${JSON.stringify(event)}\n\n`;
-  
+
   // Convert string to Uint8Array
   const encoder = new TextEncoder();
   const data = encoder.encode(eventData);
-  
+
   // Send to all connected clients
   serverClients.forEach((client) => {
     try {
       client.enqueue(data);
     } catch (err: unknown) {
-      edgeLogger.error('Error sending event to client', { 
-        error: err instanceof Error ? err.message : String(err) 
+      edgeLogger.error('Error sending event to client', {
+        error: err instanceof Error ? err.message : String(err)
       });
       // Remove failed clients from the set
       serverClients.delete(client);
@@ -73,7 +74,9 @@ export class EventsManager {
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 5;
   private baseReconnectDelay: number = 1000; // 1 second
-  
+  private isConnected: boolean = false;
+  private connectionListeners: ((isConnected: boolean) => void)[] = [];
+
   /**
    * Get singleton instance
    */
@@ -83,7 +86,7 @@ export class EventsManager {
     }
     return this.instance;
   }
-  
+
   /**
    * Connect to events endpoint for a specific chat
    */
@@ -92,68 +95,90 @@ export class EventsManager {
     if (this.eventSource && this.chatId !== chatId) {
       this.close();
     }
-    
+
     // Already connected to this chat
     if (this.eventSource && this.chatId === chatId) {
       return;
     }
-    
+
     this.chatId = chatId;
     this.reconnectAttempts = 0;
-    
+
     // Only create EventSource in browser environment
     if (typeof window !== 'undefined') {
       // Create new connection
       this.eventSource = new EventSource(`/api/events?chatId=${chatId}`);
-      
+
       // Set up event handlers
       this.eventSource.onmessage = onMessage;
-      
+
       this.eventSource.onerror = (error) => {
         console.error('EventSource error', error);
         this.reconnect();
       };
-      
-      console.log(`EventSource connected for chat ${chatId}`);
+
+      this.eventSource.addEventListener('open', () => {
+        edgeLogger.debug('EventSource connected', {
+          category: LOG_CATEGORIES.CHAT,
+          chatId: this.chatId
+        });
+        this.isConnected = true;
+        this.reconnectAttempts = 0;
+
+        // Notify connection listeners
+        this.connectionListeners.forEach(listener => listener(true));
+      });
     }
   }
-  
+
   /**
    * Close the current connection
    */
   public close(): void {
     if (this.eventSource) {
-      console.log(`Closing EventSource for chat ${this.chatId}`);
+      edgeLogger.debug('Closing EventSource', {
+        category: LOG_CATEGORIES.CHAT,
+        chatId: this.chatId
+      });
       this.eventSource.close();
       this.eventSource = null;
     }
     this.chatId = null;
     this.reconnectAttempts = 0;
   }
-  
+
   /**
    * Attempt to reconnect with exponential backoff
    */
   private reconnect(): void {
     if (!this.chatId || this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.log(`Max reconnect attempts (${this.maxReconnectAttempts}) reached or no chatId`);
+      edgeLogger.debug('Max reconnect attempts reached', {
+        category: LOG_CATEGORIES.CHAT,
+        attempts: this.maxReconnectAttempts,
+        chatId: this.chatId || 'none'
+      });
       this.close();
       return;
     }
-    
+
     const delay = this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts);
     this.reconnectAttempts++;
-    
-    console.log(`Reconnecting EventSource in ${delay}ms (attempt ${this.reconnectAttempts})`);
-    
+
+    edgeLogger.debug('Reconnecting EventSource', {
+      category: LOG_CATEGORIES.CHAT,
+      delayMs: delay,
+      attempt: this.reconnectAttempts,
+      chatId: this.chatId
+    });
+
     setTimeout(() => {
       if (this.chatId) {
         // Preserve the chatId and try reconnecting
         const chatIdToReconnect = this.chatId;
         const currentOnMessage = this.eventSource?.onmessage as ((event: MessageEvent) => void) | null;
-        
+
         this.close();
-        
+
         if (currentOnMessage) {
           this.connect(chatIdToReconnect, currentOnMessage);
         } else {

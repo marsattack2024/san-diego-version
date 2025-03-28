@@ -52,6 +52,7 @@ import { throttle } from 'lodash';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
 // Consistent type definition for grouped chats
 type GroupedChats = {
@@ -251,14 +252,15 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
 
   // Log render cycle for debugging - FIXED to avoid infinite loop
   useEffect(() => {
-    console.log(`SidebarHistory rendered`, {
-      historyLength: history.length,
-      isLoading,
-      isRefreshing,
-      userId: user?.id?.slice(0, 8)
-    });
-    // Completely removed the renderCount increment to avoid the infinite loop
-  }, [history.length, isLoading, isRefreshing, user?.id]);
+    // Only log on a small percentage of renders to avoid spam
+    if (Math.random() < 0.05) {
+      edgeLogger.debug('SidebarHistory rendered', {
+        category: LOG_CATEGORIES.CHAT,
+        chatCount: history.length || 0,
+        currentChatId: id
+      });
+    }
+  }, [history.length, id]);
 
   // Add this at the right scope level
   const getSupabase = () => createClient();
@@ -277,7 +279,12 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     // If not forcing and a recent request was made, use existing data
     // But make an exception for mobile sidebar open events
     if (!forceRefresh && !isMobileOpen && timeSinceLastRequest < 60000 && pendingHistoryRequests.promise) {
-      console.log(`Using existing history data from ${Math.round(timeSinceLastRequest / 1000)}s ago`);
+      if (timeSinceLastRequest < 60000) {
+        edgeLogger.debug('Using existing history data', {
+          category: LOG_CATEGORIES.CHAT,
+          ageSeconds: Math.round(timeSinceLastRequest / 1000)
+        });
+      }
       return pendingHistoryRequests.promise;
     }
 
@@ -413,14 +420,20 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     const jitter = Math.floor(Math.random() * 45000); // 0-45s jitter (increased from 15s)
     const effectiveInterval = pollingInterval + jitter;
 
-    console.log(`Setting up history polling: ${Math.round(effectiveInterval / 1000)}s`);
+    edgeLogger.debug('Setting up history polling', {
+      category: LOG_CATEGORIES.CHAT,
+      intervalSeconds: Math.round(effectiveInterval / 1000)
+    });
 
     // Initial delayed fetch after component mount
     // This helps prevent all components from fetching simultaneously on page load
     const initialDelay = Math.floor(Math.random() * 5000); // 0-5s initial delay
     const initialFetchTimeout = setTimeout(() => {
       if (isPageVisible() && !isRefreshing && !historyService.isInAuthFailure()) {
-        console.log('Running initial delayed history fetch');
+        edgeLogger.debug('Running initial delayed history fetch', {
+          category: LOG_CATEGORIES.CHAT,
+          delayMs: initialDelay
+        });
         throttledFetchChatHistory(false);
       }
     }, initialDelay);
@@ -429,12 +442,17 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     const intervalId = setInterval(() => {
       // Only fetch if page is visible, not already refreshing, and no auth failure
       if (isPageVisible() && !isRefreshing && !historyService.isInAuthFailure()) {
-        console.log('Running scheduled history check');
+        edgeLogger.debug('Running scheduled history check', {
+          category: LOG_CATEGORIES.CHAT
+        });
         throttledFetchChatHistory(false);
       } else {
         if (Math.random() < 0.3) { // Only log 30% of skips to reduce console noise
-          console.log('Skipping history poll: ' +
-            (!isPageVisible() ? 'page not visible' : isRefreshing ? 'already refreshing' : 'auth failure'));
+          const skipReason = !isPageVisible() ? 'page not visible' : isRefreshing ? 'already refreshing' : 'auth failure';
+          edgeLogger.debug('Skipping history poll', {
+            category: LOG_CATEGORIES.CHAT,
+            reason: skipReason
+          });
         }
       }
     }, effectiveInterval);
@@ -448,7 +466,10 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
 
   // Manual refresh function for the refresh button
   const refreshHistory = useCallback(async () => {
-    console.log('Manually refreshing chat history (button click)');
+    edgeLogger.debug('Manually refreshing chat history', {
+      category: LOG_CATEGORIES.CHAT,
+      source: 'button_click'
+    });
     await fetchChatHistory(true); // Force refresh AND manual (show toast)
   }, [fetchChatHistory]);
 
@@ -461,7 +482,9 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
 
       // Only refresh if we haven't updated in the last minute
       if (!lastUpdateTime || now - parseInt(lastUpdateTime) > 60000) {
-        console.log('Refreshing history after returning to chat main page');
+        edgeLogger.debug('Refreshing history after returning to chat main page', {
+          category: LOG_CATEGORIES.CHAT
+        });
         fetchChatHistory(true);
         localStorage.setItem('lastHistoryUpdate', now.toString());
       }
@@ -473,12 +496,17 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     if (error) {
       // Don't retry if we're in auth failure state
       if (historyService.isInAuthFailure()) {
-        console.log('Skipping auto-retry due to auth failure state');
+        edgeLogger.debug('Skipping auto-retry due to auth failure state', {
+          category: LOG_CATEGORIES.AUTH
+        });
         return;
       }
 
       const timer = setTimeout(() => {
-        console.log('Auto-retrying after error');
+        edgeLogger.debug('Auto-retrying after error', {
+          category: LOG_CATEGORIES.CHAT,
+          retryCount: 1
+        });
         fetchChatHistory(true);
       }, 5000);
 
@@ -493,7 +521,10 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
       const chatExists = history.some(chat => chat.id === id);
 
       if (!chatExists) {
-        console.warn('Current chat ID not found in history:', id);
+        edgeLogger.debug('Current chat ID not found in history', {
+          category: LOG_CATEGORIES.CHAT,
+          chatId: id
+        });
         setChatWarning(`Chat ${id.slice(0, 8)}... not found in your history`);
 
         // Automatically refresh to see if it appears
@@ -528,11 +559,16 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
           if (updatedHistory.length > 0) {
             // Find the most recent chat and navigate to it
             const nextChat = updatedHistory[0]; // History is already sorted by date
-            console.log(`Navigating to next available chat: ${nextChat.id}`);
+            edgeLogger.debug('Navigating to next available chat', {
+              category: LOG_CATEGORIES.CHAT,
+              chatId: nextChat.id
+            });
             router.push(`/chat/${nextChat.id}`);
           } else {
             // If no chats left, go to main chat page
-            console.log('No chats left, navigating to main chat page');
+            edgeLogger.debug('No chats left, navigating to main chat page', {
+              category: LOG_CATEGORIES.CHAT
+            });
             router.push('/chat');
           }
         }

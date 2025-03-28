@@ -213,15 +213,10 @@ export async function findSimilarDocumentsOptimized(
           parsedResults.timestamp &&
           typeof parsedResults.timestamp === 'number'
         ) {
-          logger.info('RAG operation completed', {
+          logger.debug('Using cached RAG results', {
             category: 'tools',
             operation: 'rag_search',
             durationMs: parsedResults.metrics.retrievalTimeMs,
-            results: parsedResults.documents.length,
-            slow: parsedResults.metrics.isSlowQuery,
-            important: parsedResults.metrics.isSlowQuery && parsedResults.metrics.retrievalTimeMs > 5000,
-            status: 'completed',
-            fromCache: true,
             cacheAge: Date.now() - parsedResults.timestamp
           });
 
@@ -230,42 +225,24 @@ export async function findSimilarDocumentsOptimized(
             metrics: parsedResults.metrics
           };
         } else {
-          logger.warn('RAG operation completed', {
+          logger.debug('Cache structure invalid for RAG results', {
             category: 'tools',
             operation: 'rag_search',
-            status: 'cache_invalid',
-            durationMs: 0,
-            results: 0,
-            slow: false,
-            important: false,
-            fromCache: false,
             reason: 'invalid_cache_structure'
           });
         }
       } catch (error) {
-        logger.warn('RAG operation completed', {
+        logger.debug('Error parsing cached RAG results', {
           category: 'tools',
           operation: 'rag_search',
-          status: 'cache_parse_error',
-          durationMs: 0,
-          results: 0,
-          slow: false,
-          important: false,
-          fromCache: false,
           error: error instanceof Error ? error.message : String(error)
         });
       }
     }
   } catch (error) {
-    logger.warn('RAG operation completed', {
+    logger.debug('Error retrieving from RAG cache', {
       category: 'tools',
       operation: 'rag_search',
-      status: 'cache_retrieval_error',
-      durationMs: 0,
-      results: 0,
-      slow: false,
-      important: false,
-      fromCache: false,
       error: error instanceof Error ? error.message : String(error)
     });
   }
@@ -290,20 +267,23 @@ export async function findSimilarDocumentsOptimized(
 
     logger.info('RAG operation completed', {
       category: 'tools',
-      operation: 'cache_set',
+      operation: 'rag_search',
       durationMs: metrics.retrievalTimeMs,
-      results: documents.length,
+      resultsCount: documents.length,
       slow: metrics.isSlowQuery,
       important: metrics.isSlowQuery && metrics.retrievalTimeMs > 5000,
-      status: 'cache_stored',
-      fromCache: false
+      status: 'completed',
+      fromCache: false,
+      level: metrics.isSlowQuery ? 'warn' : 'info',
+      ragOperationId: `rag-${Date.now().toString(36)}`
     });
   } catch (error) {
     logger.error('RAG operation failed', {
       category: 'tools',
       operation: 'cache_set',
       error: error instanceof Error ? error.message : String(error),
-      important: true
+      important: true,
+      level: 'error'
     });
   }
 

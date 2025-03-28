@@ -10,6 +10,7 @@
 import { createClient } from '@/utils/supabase/client';
 import { clientCache } from '@/lib/cache/client-cache';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { Chat } from '@/lib/db/schema';
 import { randomUUID } from 'crypto';
 import { Message } from 'ai';
@@ -567,7 +568,7 @@ export const historyService = {
       // CRITICAL FIX #1: Check for cookies before making the request
       const hasCookies = this.checkForAuthCookies();
       if (!hasCookies) {
-        console.warn(`No auth cookies found, skipping history fetch to avoid 401`, { operationId });
+        edgeLogger.debug(`No auth cookies found, skipping history fetch to avoid 401`, { operationId });
         setAuthFailureState(true);
         return [];
       }
@@ -576,7 +577,7 @@ export const historyService = {
       // This prevents the 401 errors that happen when the auth token is present but not yet valid
       const authReady = await this.isAuthReady();
       if (!authReady) {
-        console.warn(`Auth not ready yet, skipping history fetch to avoid 401`, { operationId });
+        edgeLogger.debug(`Auth not ready yet, skipping history fetch to avoid 401`, { operationId });
         // Don't set failure state here, this is a normal condition during app initialization
         return [];
       }
@@ -610,11 +611,10 @@ export const historyService = {
 
       // Log request at low frequency to help debug auth issues
       if (Math.random() < 0.05) {
-        console.log(`Fetching history with cookies and timestamp: ${hasCookies ? 'Yes' : 'No'}`, {
-          operationId,
-          timestamp,
-          authReady,
-          withTimestamp: true
+        edgeLogger.debug('Fetching history with cookies', {
+          category: LOG_CATEGORIES.CHAT,
+          hasCookies: hasCookies ? 'Yes' : 'No',
+          timestamp: Date.now().toString() // Convert timestamp to string
         });
       }
 
@@ -635,11 +635,10 @@ export const historyService = {
       if (response.status === 401 || response.status === 403 || response.status === 409) {
         // Special handling for 409 Conflict - authentication pending
         if (response.status === 409) {
-          // This is a special case where auth cookies are present but auth is still pending
-          // We'll retry after a short delay instead of triggering circuit breaker
-          console.log(`Authentication pending for history API (409). Will retry shortly.`, {
-            operationId,
-            retryAfter: response.headers.get('Retry-After') || '1'
+          edgeLogger.debug('Authentication pending for history API', {
+            category: 'auth',
+            message: 'Will retry shortly',
+            status: response.status
           });
 
           // Don't count this toward unauthorized requests since it's just a timing issue
@@ -702,7 +701,7 @@ export const historyService = {
           // Don't clear tracking array - we'll use it for duration of the cooldown
           // to catch any further requests during the initial delay
 
-          console.warn(`AUTH FLOOD DETECTED: ${unauthorizedCount} unauthorized responses in the last ${UNAUTHORIZED_WINDOW / 1000}s. Circuit breaker activated for ${Math.round(authBackoffDuration / 1000)}s.`, {
+          edgeLogger.warn(`AUTH FLOOD DETECTED: ${unauthorizedCount} unauthorized responses in the last ${UNAUTHORIZED_WINDOW / 1000}s. Circuit breaker activated for ${Math.round(authBackoffDuration / 1000)}s.`, {
             operationId,
             url,
             responseStatus: response.status
@@ -710,7 +709,7 @@ export const historyService = {
         } else {
           // Log at reduced frequency
           if (unauthorizedCount < 3 || Math.random() < 0.2) {
-            console.warn(`Authentication failed (${response.status}) when fetching history. Monitoring for flood (${unauthorizedCount}/${UNAUTHORIZED_THRESHOLD}).`, {
+            edgeLogger.warn(`Authentication failed (${response.status}) when fetching history. Monitoring for flood (${unauthorizedCount}/${UNAUTHORIZED_THRESHOLD}).`, {
               operationId,
               url,
               hasAuthCookies
@@ -734,7 +733,7 @@ export const historyService = {
 
       // If we get an object with an error property, handle it gracefully
       if (data && typeof data === 'object' && 'error' in data) {
-        console.error('API returned an error response', {
+        edgeLogger.error('API returned an error response', {
           error: data.error,
           operationId,
           url
@@ -751,7 +750,7 @@ export const historyService = {
 
       // Validate response format - expect an array of chat objects
       if (!Array.isArray(data)) {
-        console.error('Invalid history API response format', {
+        edgeLogger.error('Invalid history API response format', {
           data,
           type: typeof data,
           operationId
@@ -771,7 +770,7 @@ export const historyService = {
       return data as Chat[];
     } catch (error) {
       // API request error - but NOT auth failure (that's handled above)
-      console.error('Error fetching history from API', {
+      edgeLogger.error('Error fetching history from API', {
         error: error instanceof Error ? error.message : String(error),
         operationId
       });
@@ -797,11 +796,16 @@ export const historyService = {
     const operationId = Math.random().toString(36).substring(2, 10);
 
     if (!id) {
-      console.error(`[History:${operationId}] Invalid chat ID for deletion`);
+      edgeLogger.error(`[History:${operationId}] Invalid chat ID for deletion`);
       return false;
     }
 
-    console.log(`[History:${operationId}] Deleting chat`, { chatId: id });
+    edgeLogger.debug('Deleting chat', {
+      category: LOG_CATEGORIES.CHAT,
+      operation: 'delete_chat',
+      operationId,
+      chatId: id
+    });
 
     try {
       // Add timestamp for consistency with fetchHistory pattern
@@ -828,13 +832,13 @@ export const historyService = {
         if (response.status === 401 || response.status === 403) {
           // Handle auth failure consistently with fetchHistory
           setAuthFailureState(true);
-          console.warn(`[History:${operationId}] Authentication failed (${response.status}) when deleting chat.`, {
+          edgeLogger.warn(`[History:${operationId}] Authentication failed (${response.status}) when deleting chat.`, {
             chatId: id,
             url,
             withTimestamp: true
           });
         } else {
-          console.error(`[History:${operationId}] Failed to delete chat:`, {
+          edgeLogger.error(`[History:${operationId}] Failed to delete chat:`, {
             statusCode: response.status,
             statusText: response.statusText,
             errorData,
@@ -851,14 +855,20 @@ export const historyService = {
       setAuthFailureState(false);
 
       const duration = Math.round(performance.now() - startTime);
-      console.log(`[History:${operationId}] Successfully deleted chat`, {
+      edgeLogger.debug('Successfully deleted chat', {
+        category: LOG_CATEGORIES.CHAT,
+        operation: 'delete_chat',
+        operationId,
         chatId: id,
-        duration,
-        url
+        status: response.status
       });
 
       // Invalidate chat history cache immediately after successful deletion
-      console.log(`[History:${operationId}] Invalidating cache after chat deletion`);
+      edgeLogger.debug('Invalidating cache after chat deletion', {
+        category: LOG_CATEGORIES.SYSTEM, // Using SYSTEM for cache operations
+        operation: 'invalidate_cache',
+        operationId
+      });
       this.invalidateCache();
 
       // Update existing cache to filter out the deleted chat
@@ -867,23 +877,31 @@ export const historyService = {
         const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
 
         if (cachedData) {
-          console.log(`[History:${operationId}] Updating cached chat list after deletion`);
+          edgeLogger.debug('Updating cached chat list after deletion', {
+            category: LOG_CATEGORIES.SYSTEM, // Using SYSTEM for cache operations
+            operation: 'update_cache',
+            operationId
+          });
           const updatedChats = cachedData.filter((chat: Chat) => chat.id !== id);
           clientCache.set(cacheKey, updatedChats);
-          console.log(`[History:${operationId}] Chat removed from cache successfully`, {
-            originalCount: cachedData.length,
-            newCount: updatedChats.length
+          edgeLogger.debug('Chat removed from cache successfully', {
+            category: LOG_CATEGORIES.SYSTEM, // Using SYSTEM for cache operations
+            operation: 'update_cache',
+            operationId,
+            chatId: id
           });
         }
       } catch (cacheError) {
-        console.warn(`[History:${operationId}] Error updating cache after deletion:`, cacheError);
+        edgeLogger.warn(`[History:${operationId}] Error updating cache after deletion:`, {
+          error: cacheError instanceof Error ? cacheError.message : String(cacheError)
+        });
       }
 
       return true;
     } catch (error) {
       const duration = Math.round(performance.now() - startTime);
-      console.error(`[History:${operationId}] Error deleting chat:`, {
-        error,
+      edgeLogger.error(`[History:${operationId}] Error deleting chat:`, {
+        error: error instanceof Error ? error.message : String(error),
         duration,
         chatId: id,
         message: error instanceof Error ? error.message : String(error)
@@ -903,7 +921,7 @@ export const historyService = {
     const operationId = Math.random().toString(36).substring(2, 10);
 
     if (!chatId || !title.trim()) {
-      console.error(`[History:${operationId}] Invalid chat ID or title for rename operation`);
+      edgeLogger.error(`[History:${operationId}] Invalid chat ID or title for rename operation`);
       return false;
     }
 
@@ -911,7 +929,7 @@ export const historyService = {
     try {
       // Check for auth cookies to avoid unnecessary API calls
       if (!this.checkForAuthCookies()) {
-        console.warn(`[History:${operationId}] No auth cookies found, cannot rename chat`);
+        edgeLogger.warn(`[History:${operationId}] No auth cookies found, cannot rename chat`);
         return false;
       }
 
@@ -934,13 +952,13 @@ export const historyService = {
         if (response.status === 401 || response.status === 403) {
           // Handle auth failure consistently with other methods
           setAuthFailureState(true);
-          console.warn(`[History:${operationId}] Authentication failed (${response.status}) when renaming chat.`, {
+          edgeLogger.warn(`[History:${operationId}] Authentication failed (${response.status}) when renaming chat.`, {
             chatId: chatId.slice(0, 8),
             duration
           });
         } else {
           const errorText = await response.text().catch(() => 'Unknown error');
-          console.error(`[History:${operationId}] Failed to rename chat:`, {
+          edgeLogger.error(`[History:${operationId}] Failed to rename chat:`, {
             statusCode: response.status,
             statusText: response.statusText,
             errorText,
@@ -963,7 +981,7 @@ export const historyService = {
         const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
 
         if (cachedData) {
-          console.log(`[History:${operationId}] Updating cached chat list after rename`);
+          edgeLogger.debug(`[History:${operationId}] Updating cached chat list after rename`);
           const updatedChats = cachedData.map((chat: Chat) => {
             if (chat.id === chatId) {
               return { ...chat, title };
@@ -973,11 +991,13 @@ export const historyService = {
           clientCache.set(cacheKey, updatedChats);
         }
       } catch (cacheError) {
-        console.warn(`[History:${operationId}] Error updating cache after rename:`, cacheError);
+        edgeLogger.warn(`[History:${operationId}] Error updating cache after rename:`, {
+          error: cacheError instanceof Error ? cacheError.message : String(cacheError)
+        });
       }
 
       const duration = Math.round(performance.now() - startTime);
-      console.log(`[History:${operationId}] Successfully renamed chat`, {
+      edgeLogger.debug(`[History:${operationId}] Successfully renamed chat`, {
         chatId: chatId.slice(0, 8),
         duration
       });
@@ -985,8 +1005,8 @@ export const historyService = {
       return true;
     } catch (error) {
       const duration = Math.round(performance.now() - startTime);
-      console.error(`[History:${operationId}] Error renaming chat:`, {
-        error,
+      edgeLogger.error(`[History:${operationId}] Error renaming chat:`, {
+        error: error instanceof Error ? error.message : String(error),
         duration,
         chatId: chatId.slice(0, 8),
         message: error instanceof Error ? error.message : String(error)
@@ -1000,7 +1020,7 @@ export const historyService = {
    */
   invalidateCache(): void {
     const operationId = Math.random().toString(36).substring(2, 10);
-    console.log(`[History:${operationId}] Invalidating chat history cache`);
+    edgeLogger.debug(`[History:${operationId}] Invalidating chat history cache`);
 
     const cacheKey = 'chat_history';
 
@@ -1008,13 +1028,13 @@ export const historyService = {
     try {
       clientCache.remove(cacheKey);
     } catch (error: any) {
-      console.warn(`[History:${operationId}] Error clearing history cache:`, error);
+      edgeLogger.warn(`[History:${operationId}] Error clearing history cache:`, error);
     }
 
     // Clean up any stale pending requests
     pendingRequests[cacheKey] = null;
 
-    console.log(`[History:${operationId}] Chat history cache invalidated`);
+    edgeLogger.debug(`[History:${operationId}] Chat history cache invalidated`);
   },
 
   /**
@@ -1023,7 +1043,7 @@ export const historyService = {
    */
   async refreshHistory(): Promise<Chat[]> {
     const operationId = Math.random().toString(36).substring(2, 10);
-    console.log(`[History:${operationId}] Manually refreshing chat history`);
+    edgeLogger.debug(`[History:${operationId}] Manually refreshing chat history`);
     return await this.fetchHistory(true);
   },
 
@@ -1043,7 +1063,7 @@ export const historyService = {
       let chats = await this.fetchHistory(false);
       let exists = chats.some(chat => chat.id === chatId);
 
-      console.log(`[History:${operationId}] Chat existence check`, {
+      edgeLogger.debug(`[History:${operationId}] Chat existence check`, {
         chatId: chatId.slice(0, 8),
         exists,
         totalChats: chats.length
@@ -1051,24 +1071,24 @@ export const historyService = {
 
       // If not found and autoRefresh is true, try refreshing
       if (!exists && autoRefresh) {
-        console.log(`[History:${operationId}] Chat ${chatId.slice(0, 8)} not found in history, refreshing`);
+        edgeLogger.debug(`[History:${operationId}] Chat ${chatId.slice(0, 8)} not found in history, refreshing`);
         chats = await this.refreshHistory();
         exists = chats.some(chat => chat.id === chatId);
 
         if (!exists) {
-          console.warn(`[History:${operationId}] Chat ${chatId.slice(0, 8)} still not found after refresh`, {
+          edgeLogger.warn(`[History:${operationId}] Chat ${chatId.slice(0, 8)} still not found after refresh`, {
             chatCount: chats.length,
             existingIds: chats.slice(0, 3).map(c => c.id.slice(0, 8))
           });
         } else {
-          console.log(`[History:${operationId}] Chat ${chatId.slice(0, 8)} found after refresh`);
+          edgeLogger.debug(`[History:${operationId}] Chat ${chatId.slice(0, 8)} found after refresh`);
         }
       }
 
       return exists;
     } catch (error) {
-      console.error(`[History:${operationId}] Error checking if chat exists:`, {
-        error,
+      edgeLogger.error(`[History:${operationId}] Error checking if chat exists:`, {
+        error: error instanceof Error ? error.message : String(error),
         chatId: chatId.slice(0, 8),
         message: error instanceof Error ? error.message : String(error)
       });
@@ -1089,11 +1109,11 @@ export const historyService = {
 
     // Check if there's already a request in flight for this session
     if (typeof window !== 'undefined' && (window as any)[pendingKey]) {
-      console.log(`[History:${operationId}] Reusing existing session creation request for ${sessionId}`);
+      edgeLogger.debug(`[History:${operationId}] Reusing existing session creation request for ${sessionId}`);
       return (window as any)[pendingKey];
     }
 
-    console.log(`[History:${operationId}] Creating new chat session`, { sessionId });
+    edgeLogger.debug(`[History:${operationId}] Creating new chat session`, { sessionId });
 
     try {
       // Store the promise for potential reuse
@@ -1121,7 +1141,7 @@ export const historyService = {
             if (!response.ok) {
               const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
 
-              console.error(`[History:${operationId}] Failed to create chat session:`, {
+              edgeLogger.error(`[History:${operationId}] Failed to create chat session:`, {
                 statusCode: response.status,
                 statusText: response.statusText,
                 errorData,
@@ -1137,7 +1157,7 @@ export const historyService = {
 
             const data = await response.json();
 
-            console.log(`[History:${operationId}] Successfully created chat session`, {
+            edgeLogger.debug(`[History:${operationId}] Successfully created chat session`, {
               sessionId,
               responseData: data
             });
@@ -1147,8 +1167,8 @@ export const historyService = {
 
             return { id: sessionId, success: true };
           } catch (error) {
-            console.error(`[History:${operationId}] Error creating new chat session:`, {
-              error,
+            edgeLogger.error(`[History:${operationId}] Error creating new chat session:`, {
+              error: error instanceof Error ? error.message : String(error),
               sessionId,
               message: error instanceof Error ? error.message : String(error)
             });
@@ -1192,7 +1212,7 @@ export const historyService = {
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
 
-          console.error(`[History:${operationId}] Failed to create chat session:`, {
+          edgeLogger.error(`[History:${operationId}] Failed to create chat session:`, {
             statusCode: response.status,
             statusText: response.statusText,
             errorData,
@@ -1208,7 +1228,7 @@ export const historyService = {
 
         const data = await response.json();
 
-        console.log(`[History:${operationId}] Successfully created chat session`, {
+        edgeLogger.debug(`[History:${operationId}] Successfully created chat session`, {
           sessionId,
           responseData: data
         });
@@ -1219,8 +1239,8 @@ export const historyService = {
         return { id: sessionId, success: true };
       }
     } catch (error) {
-      console.error(`[History:${operationId}] Error creating new chat session:`, {
-        error,
+      edgeLogger.error(`[History:${operationId}] Error creating new chat session:`, {
+        error: error instanceof Error ? error.message : String(error),
         sessionId,
         message: error instanceof Error ? error.message : String(error)
       });

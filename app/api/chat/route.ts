@@ -12,7 +12,7 @@ import { OpenAI } from 'openai';
 
 // Import only validation & utility modules at the top level
 import { extractUrls } from '@/lib/chat/url-utils';
-import { ToolManager } from '@/lib/chat/tool-manager';
+import { toolManager } from '@/lib/chat/tool-manager';
 import { streamText, appendClientMessage, appendResponseMessages } from 'ai';
 
 // Allow streaming responses up to 120 seconds instead of 60
@@ -95,8 +95,7 @@ export async function POST(req: Request) {
     edgeLogger.info('Environment check', {
       category: LOG_CATEGORIES.SYSTEM,
       valid: envCheck.valid,
-      summary: envCheck.summary,
-      important: true
+      summary: envCheck.summary
     });
 
     // Set up a timeout for the entire operation
@@ -248,9 +247,6 @@ export async function POST(req: Request) {
       // Extract URLs from the user message
       const urls = extractUrls(lastUserMessage.content);
 
-      // Initialize the tool manager for this request
-      const toolManager = new ToolManager();
-
       // Dynamically import dependencies only when needed
       const [
         { AgentRouter },
@@ -312,10 +308,20 @@ export async function POST(req: Request) {
           const ragResult = await edgeLogger.trackOperation(
             'rag_search',
             async () => {
-              return await chatTools.getInformation.execute(
+              const result = await chatTools.getInformation.execute(
                 { query: lastUserMessage.content },
                 { toolCallId: 'rag-search', messages: [] }
               );
+
+              // Parse document count from the result for accurate logging
+              // For format: "Found X most relevant documents (out of Y retrieved,..."
+              const docCountMatch = result.match(/Found (\d+) most relevant documents \(out of (\d+) retrieved/);
+              const retrievedCount = docCountMatch ? parseInt(docCountMatch[2], 10) : 0;
+
+              return {
+                content: result,
+                retrievedCount
+              };
             },
             {
               category: LOG_CATEGORIES.TOOLS,
@@ -329,29 +335,37 @@ export async function POST(req: Request) {
           const isSlow = ragDurationMs > 2000; // Use SLOW_OPERATION constant from logger
           const isImportant = ragDurationMs > 5000; // Use IMPORTANT_THRESHOLD constant from logger
 
-          if (typeof ragResult === 'string') {
-            if (!ragResult.includes("No relevant information found")) {
-              toolManager.registerToolResult('Knowledge Base', ragResult);
+          // Handle the updated result format
+          const ragContent = typeof ragResult === 'object' && ragResult?.content ? ragResult.content : ragResult;
+          const retrievedCount = typeof ragResult === 'object' && ragResult?.retrievedCount ? ragResult.retrievedCount : 0;
+
+          if (typeof ragContent === 'string') {
+            if (!ragContent.includes("No relevant information found")) {
+              toolManager.registerToolResult('Knowledge Base', ragContent);
 
               // Single consolidated RAG completion log per SOP
               edgeLogger.info('RAG operation completed', {
                 category: LOG_CATEGORIES.TOOLS,
                 durationMs: ragDurationMs,
-                results: 1, // Found content
-                contentLength: ragResult.length,
+                resultsCount: retrievedCount, // Use actual retrieved count
+                contentLength: ragContent.length,
                 slow: isSlow,
                 important: isImportant,
-                status: 'completed'
+                status: 'completed',
+                level: isSlow ? 'warn' : 'info',
+                ragOperationId: `rag-${Date.now().toString(36)}`
               });
             } else {
               // No results case
               edgeLogger.info('RAG operation completed', {
                 category: LOG_CATEGORIES.TOOLS,
                 durationMs: ragDurationMs,
-                results: 0, // No content found
+                resultsCount: 0, // No content found
                 slow: isSlow,
                 important: isImportant,
-                status: 'no_matches'
+                status: 'no_matches',
+                level: isSlow ? 'warn' : 'info',
+                ragOperationId: `rag-${Date.now().toString(36)}`
               });
             }
           } else {
@@ -359,11 +373,13 @@ export async function POST(req: Request) {
             edgeLogger.warn('RAG operation completed', {
               category: LOG_CATEGORIES.TOOLS,
               durationMs: ragDurationMs,
-              results: 0,
+              resultsCount: 0,
               slow: isSlow,
               important: isImportant,
               status: 'unexpected_result_type',
-              resultType: typeof ragResult
+              resultType: typeof ragContent,
+              level: 'warn',
+              ragOperationId: `rag-${Date.now().toString(36)}`
             });
           }
         } catch (error) {
@@ -372,8 +388,10 @@ export async function POST(req: Request) {
             category: LOG_CATEGORIES.TOOLS,
             error: formatError(error),
             durationMs: ragDurationMs,
-            results: 0,
+            resultsCount: 0,
             status: 'error',
+            level: 'error',
+            ragOperationId: `rag-${Date.now().toString(36)}`,
             important: true
           });
         }
@@ -415,7 +433,6 @@ export async function POST(req: Request) {
         if (hasExtensiveRAG && hasExtensiveWebContent) {
           edgeLogger.info('Skipping Deep Search due to sufficient existing context', {
             operation: 'deep_search_skipped',
-            important: true,
             ragContentLength,
             webScraperLength,
             reason: 'sufficient_context'
@@ -456,7 +473,6 @@ export async function POST(req: Request) {
               edgeLogger.error('PERPLEXITY_API_KEY not found in environment', {
                 operation: 'deep_search_error',
                 operationId,
-                important: true,
                 reason: 'missing_api_key'
               });
 
@@ -590,8 +606,7 @@ export async function POST(req: Request) {
                       operation: 'deep_search_timeout',
                       operationId,
                       durationMs: Date.now() - deepSearchStartTime,
-                      threshold: 20000,
-                      important: true
+                      threshold: 20000
                     });
                     resolve({
                       content: "Deep Search timed out after 20 seconds. The AI will continue without these results and use only internal knowledge and any other available sources.",
@@ -694,8 +709,7 @@ export async function POST(req: Request) {
                   contentLength: deepSearchContent.length,
                   firstChars: deepSearchContent.substring(0, 100) + '...',
                   fromCache: deepSearchResponse ? deepSearchContent !== deepSearchResponse.content : true,
-                  durationMs: Date.now() - deepSearchStartTime,
-                  important: true
+                  durationMs: Date.now() - deepSearchStartTime
                 });
 
                 // Send event to client that DeepSearch has completed
@@ -722,8 +736,7 @@ export async function POST(req: Request) {
               operation: 'deep_search_error',
               operationId,
               error: formatError(error),
-              durationMs: Date.now() - deepSearchStartTime,
-              important: true
+              durationMs: Date.now() - deepSearchStartTime
             });
 
             // Send event to client that DeepSearch has failed
@@ -751,16 +764,15 @@ export async function POST(req: Request) {
       });
 
       /**
-       * Generate a detailed preprocessing summary of all tools used
+       * Generate a summary of preprocessing operations
        * This helps with logging and debugging what happened before AI response generation
        */
-      function generatePreprocessingSummary(toolManager: ToolManager) {
-        const toolResults = toolManager.getToolResults();
-        const toolsUsed = toolManager.getToolsUsed();
+      function generatePreprocessingSummary(toolMgr: any) {
+        const toolResults = toolMgr.getToolResults();
+        const toolsUsed = toolMgr.getToolsUsed();
 
         const summary = {
           operation: 'preprocessing_summary',
-          important: true,
           toolsCount: toolsUsed.length,
           toolsUsed,
           contentSizes: {
@@ -842,6 +854,8 @@ export async function POST(req: Request) {
                   resultLength: typeof result === 'string' ? result.length : 0
                 });
 
+                // Just return the string result from the tools layer
+                // The AI only cares about the content, not the metadata
                 return result;
               } catch (error) {
                 const duration = Math.round(performance.now() - startTime);

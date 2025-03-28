@@ -1,3 +1,4 @@
+import { edgeLogger } from './lib/logger/edge-logger';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { updateSession } from '@/utils/supabase/middleware';
@@ -11,7 +12,10 @@ export async function middleware(request: NextRequest) {
     pathname.includes('.svg');
 
   if (!isCommonPath) {
-    console.log('[Middleware] Processing request for:', pathname);
+    edgeLogger.debug('[Middleware] Processing request', {
+      category: 'auth',
+      path: pathname
+    });
   }
 
   // Special bypass for internal API endpoints that handle their own auth
@@ -20,7 +24,10 @@ export async function middleware(request: NextRequest) {
     pathname.startsWith('/api/auth/admin-status')
   ) {
     if (!isCommonPath) {
-      console.log(`Bypassing auth middleware for internal API: ${pathname}`);
+      edgeLogger.debug('Bypassing auth middleware for internal API', {
+        category: 'auth',
+        path: pathname
+      });
     }
     return;
   }
@@ -33,14 +40,20 @@ export async function middleware(request: NextRequest) {
     pathname === '/debug.js'
   ) {
     if (!isCommonPath) {
-      console.log('Bypassing auth middleware for Widget features:', pathname);
+      edgeLogger.debug('Bypassing auth middleware for Widget features', {
+        category: 'auth',
+        path: pathname
+      });
     }
     return;
   }
 
   // Only log admin page processing for debugging purposes
   if (pathname.startsWith('/admin')) {
-    console.log(`[Middleware] Processing admin page ${pathname} with normal auth flow`);
+    edgeLogger.debug('Processing admin page with normal auth flow', {
+      category: 'auth',
+      path: pathname
+    });
   }
 
   // The session cookie is updated/refreshed in the response
@@ -48,12 +61,18 @@ export async function middleware(request: NextRequest) {
 
   // Log authentication results for debugging
   if (pathname.startsWith('/admin')) {
-    console.log(`[Middleware] Admin page ${pathname} auth processed with status:`, response?.status || 'No response');
+    edgeLogger.debug('Admin page auth processed', {
+      category: 'auth',
+      path: pathname,
+      status: response?.status || 'No response'
+    });
 
     // Generic debug info for all admin routes
     const redirectUrl = response?.headers?.get('location');
     if (response?.redirected || redirectUrl) {
-      console.log(`[Middleware] ⚠️ Admin route ${pathname} is being redirected`, {
+      edgeLogger.debug('Admin route is being redirected', {
+        category: 'auth',
+        path: pathname,
         redirectUrl: redirectUrl || 'unknown',
         responseStatus: response?.status
       });
