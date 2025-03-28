@@ -108,6 +108,14 @@ export function Chat({
       // Get the last message
       const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
 
+      // Log the request body before sending
+      console.info('[Chat] Preparing request body with Deep Search settings', {
+        deepSearchEnabled,
+        agentId: selectedAgentId,
+        messageLength: lastMessage?.content?.length || 0,
+        timestamp: new Date().toISOString()
+      });
+
       // Return optimized payload
       return {
         message: lastMessage,

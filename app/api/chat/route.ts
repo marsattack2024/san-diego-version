@@ -84,9 +84,50 @@ function formatScrapedContent(content: any): string {
   return formatted;
 }
 
+// Add this helper function near the top of the file, after imports
+function maskUserId(userId: string): string {
+  if (!userId) return 'unknown';
+  if (userId.length <= 8) return userId;
+  return `${userId.substring(0, 4)}...${userId.substring(userId.length - 4)}`;
+}
+
 export async function POST(req: Request) {
   try {
-    const startTime = Date.now(); // Add timestamp for performance tracking
+    const startTime = Date.now();
+    const body = await req.json();
+
+    // Add detailed logging to track the deepSearchEnabled flag state
+    edgeLogger.info('Chat API received request with Deep Search settings', {
+      category: 'tools',
+      operation: 'deep_search_request_received',
+      deepSearchEnabled: !!body.deepSearchEnabled,
+      deepSearchEnabledType: typeof body.deepSearchEnabled,
+      bodyKeys: Object.keys(body),
+      hasMessage: !!body.message,
+      requestId: crypto.randomUUID().substring(0, 8)
+    });
+
+    // Use the validated chat request which now handles both formats
+    const { messages: chatMessages, id, deepSearchEnabled = false, agentId = 'default' } = validateChatRequest(body);
+
+    // Get the last message (which is the one we need to process)
+    const lastUserMessage = chatMessages[chatMessages.length - 1];
+
+    // Additional logging after validation to see if the flag changed
+    edgeLogger.debug('Request validated with Deep Search settings', {
+      category: 'tools',
+      operation: 'deep_search_request_validated',
+      deepSearchEnabled,
+      validatedDeepSearchEnabled: !!deepSearchEnabled,
+      chatId: id || 'new-chat'
+    });
+
+    // Check required environment variables
+    if (!process.env.OPENAI_API_KEY) {
+      edgeLogger.error('Missing OpenAI API key', { category: 'system' });
+      return new Response('Missing OpenAI API key', { status: 500 });
+    }
+
     const timeoutThreshold = 110000; // 110 seconds (just under our maxDuration)
     let operationTimeoutId: TimeoutId | undefined = undefined;
 
@@ -120,8 +161,7 @@ export async function POST(req: Request) {
       }, timeoutThreshold);
 
       // Regular request processing starts here
-      const body = await req.json();
-      const { message, id, agentId = 'default', deepSearchEnabled = false } = body;
+      // Use the validated data instead of re-extracting from body
       const modelName = 'gpt-4o';
 
       // Create Supabase client for auth
@@ -134,7 +174,7 @@ export async function POST(req: Request) {
 
       edgeLogger.info('Processing chat request', {
         chatId: id,
-        messageId: message?.id,
+        messageId: lastUserMessage?.id,
         agentId: agentId,
         deepSearchEnabled,
         userAuthenticated: !!userId
@@ -147,7 +187,7 @@ export async function POST(req: Request) {
       }
 
       // Validate the message format
-      if (!message || !message.role || !message.content) {
+      if (!lastUserMessage || !lastUserMessage.role || !lastUserMessage.content) {
         clearTimeout(operationTimeoutId);
         operationTimeoutId = undefined;
         return resolve(new Response('Invalid message format', { status: 400 }));
@@ -178,7 +218,7 @@ export async function POST(req: Request) {
       // Append the new client message to previous messages
       const messages = appendClientMessage({
         messages: previousAIMessages,
-        message
+        message: lastUserMessage
       });
 
       // Save the user message immediately to ensure it's persisted
@@ -197,7 +237,7 @@ export async function POST(req: Request) {
             .insert({
               id,
               user_id: userId,
-              title: message.content.substring(0, 50), // Always use the current message content as title for new sessions
+              title: lastUserMessage.content.substring(0, 50), // Always use the current message content as title for new sessions
               agent_id: agentId
             });
 
@@ -215,10 +255,10 @@ export async function POST(req: Request) {
         const { error: saveError } = await authClient
           .from('sd_chat_histories')
           .insert({
-            id: message.id,
+            id: lastUserMessage.id,
             session_id: id,
-            role: message.role,
-            content: message.content,
+            role: lastUserMessage.role,
+            content: lastUserMessage.content,
             user_id: userId
           });
 
@@ -226,12 +266,12 @@ export async function POST(req: Request) {
           edgeLogger.error('Failed to save user message', {
             error: formatError(saveError),
             chatId: id,
-            messageId: message.id
+            messageId: lastUserMessage.id
           });
         } else {
           edgeLogger.info('Saved user message', {
             chatId: id,
-            messageId: message.id
+            messageId: lastUserMessage.id
           });
         }
       } catch (error) {
@@ -240,9 +280,6 @@ export async function POST(req: Request) {
           chatId: id
         });
       }
-
-      // Now continue with extracting last user message for processing
-      const lastUserMessage = message;
 
       // Extract URLs from the user message
       const urls = extractUrls(lastUserMessage.content);
@@ -424,6 +461,15 @@ export async function POST(req: Request) {
 
       // 4. Deep Search - LOWEST PRIORITY (if enabled)
       if (deepSearchEnabled) {
+        edgeLogger.info('Deep Search is enabled, preparing to run', {
+          category: 'tools',
+          operation: 'deep_search_entering_block',
+          deepSearchEnabled: true,
+          userId: user?.id ? maskUserId(user.id) : 'anonymous',
+          chatId: id || 'new-chat',
+          messageCount: chatMessages.length
+        });
+
         // Skip Deep Search if we already have a substantial amount of context
         const toolResults = toolManager.getToolResults();
         const ragContentLength = toolResults.ragContent?.length || 0;
@@ -436,7 +482,9 @@ export async function POST(req: Request) {
             operation: 'deep_search_skipped',
             ragContentLength,
             webScraperLength,
-            reason: 'sufficient_context'
+            reason: 'sufficient_context',
+            category: 'tools',
+            deepSearchEnabled: true
           });
         } else {
           const deepSearchStartTime = Date.now();
@@ -449,7 +497,8 @@ export async function POST(req: Request) {
             operationId,
             category: LOG_CATEGORIES.TOOLS,
             queryLength: lastUserMessage.content.length,
-            queryPreview: lastUserMessage.content.substring(0, 20) + '...'
+            queryPreview: lastUserMessage.content.substring(0, 20) + '...',
+            deepSearchEnabled: true
           });
 
           try {
@@ -754,7 +803,12 @@ export async function POST(req: Request) {
         }
       } else {
         edgeLogger.info('Deep Search skipped (UI toggle disabled)', {
-          operation: 'deep_search_disabled'
+          operation: 'deep_search_disabled',
+          category: 'tools',
+          deepSearchEnabled: false,
+          deepSearchEnabledType: typeof deepSearchEnabled,
+          rawDeepSearchValue: deepSearchEnabled,
+          chatId: id || 'new-chat'
         });
       }
 

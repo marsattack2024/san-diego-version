@@ -25,9 +25,17 @@ export function DeepSearchTracker() {
     eventSource.addEventListener('message', (event) => {
       try {
         const data = JSON.parse(event.data) as DeepSearchEvent;
-        
+
         // Only process deep search events
         if (data.type === 'deepSearch') {
+          // Log all Deep Search events for debugging
+          console.info(`[DeepSearchTracker] Event received: ${data.status}`, {
+            status: data.status,
+            details: data.details,
+            timestamp: new Date().toISOString(),
+            deepSearchEnabled: useChatStore.getState().deepSearchEnabled
+          });
+
           if (data.status === 'started') {
             // Deep search has started
             setDeepSearchInProgress(true);

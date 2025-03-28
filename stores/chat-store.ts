@@ -335,6 +335,15 @@ export const useChatStore = create<ChatState>()(
       },
 
       setDeepSearchEnabled: (enabled) => {
+        // Log the toggle state change for debugging
+        console.info(`[ChatStore] DeepSearch toggle changed to: ${enabled}`, {
+          timestamp: new Date().toISOString(),
+          oldState: get().deepSearchEnabled,
+          newState: enabled,
+          environment: process.env.NODE_ENV || 'unknown',
+          currentConversationId: get().currentConversationId
+        });
+
         set({ deepSearchEnabled: enabled });
 
         // Update current conversation if it exists
