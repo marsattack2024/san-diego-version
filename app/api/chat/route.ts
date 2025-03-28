@@ -198,7 +198,7 @@ export async function POST(req: Request) {
             .insert({
               id,
               user_id: userId,
-              title: message.content.substring(0, 50),
+              title: message.content.substring(0, 50), // Always use the current message content as title for new sessions
               agent_id: agentId
             });
 
@@ -1181,14 +1181,20 @@ export async function POST(req: Request) {
                     .eq('id', id)
                     .maybeSingle();
 
+                  // Check if this is the first message in the conversation
+                  const isFirstMessage = messages.length <= 1;
+
                   // Only store/update the session record
                   const sessionResponse = await authClient
                     .from('sd_chat_sessions')
                     .upsert({
                       id,
                       user_id: userId,
-                      // Only use lastUserMessage for title if the session doesn't exist or has no title
-                      title: existingSession?.title || lastUserMessage.content.substring(0, 50),
+                      // Use the first message as title if this is the first message
+                      // Otherwise preserve the existing title
+                      title: isFirstMessage
+                        ? lastUserMessage.content.substring(0, 50)
+                        : (existingSession?.title || lastUserMessage.content.substring(0, 50)),
                       updated_at: new Date().toISOString(),
                       agent_id: routedAgentId  // Use the routed agent ID
                     });

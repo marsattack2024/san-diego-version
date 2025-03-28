@@ -519,12 +519,25 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
       await historyService.deleteChat(chatId);
 
       // Update the history in memory
-      setHistory(prev => prev.filter(chat => chat.id !== chatId));
+      setHistory(prev => {
+        const updatedHistory = prev.filter(chat => chat.id !== chatId);
 
-      // If we delete the current chat, navigate to main chat page
-      if (id === chatId) {
-        router.push('/chat');
-      }
+        // If we delete the current chat, navigate to the next available chat
+        if (id === chatId) {
+          if (updatedHistory.length > 0) {
+            // Find the most recent chat and navigate to it
+            const nextChat = updatedHistory[0]; // History is already sorted by date
+            console.log(`Navigating to next available chat: ${nextChat.id}`);
+            router.push(`/chat/${nextChat.id}`);
+          } else {
+            // If no chats left, go to main chat page
+            console.log('No chats left, navigating to main chat page');
+            router.push('/chat');
+          }
+        }
+
+        return updatedHistory;
+      });
 
       // Show success toast in development mode
       if (process.env.NODE_ENV === 'development') {

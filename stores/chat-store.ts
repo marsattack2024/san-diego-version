@@ -34,7 +34,7 @@ interface ChatState {
   selectedAgentId: AgentType;
   deepSearchEnabled: boolean;
   isDeepSearchInProgress: boolean; // Track when deep search is actively running
-  
+
   // Actions
   createConversation: () => string;
   setCurrentConversation: (id: string) => void;
@@ -56,7 +56,7 @@ interface ChatState {
 // Custom storage with debug logging
 const createDebugStorage = (options?: { enabled?: boolean }): StateStorage => {
   const isDebugEnabled = options?.enabled ?? process.env.NODE_ENV !== 'production';
-  
+
   return {
     getItem: (name: string): string | null => {
       const value = localStorage.getItem(name);
@@ -88,13 +88,13 @@ export const useChatStore = create<ChatState>()(
       selectedAgentId: 'default' as AgentType,
       deepSearchEnabled: false,
       isDeepSearchInProgress: false,
-      
+
       createConversation: () => {
         const id = uuidv4();
         const timestamp = new Date().toISOString();
         const selectedAgentId = get().selectedAgentId;
         const deepSearchEnabled = get().deepSearchEnabled;
-        
+
         // Update local state
         set((state) => ({
           conversations: {
@@ -110,7 +110,7 @@ export const useChatStore = create<ChatState>()(
           },
           currentConversationId: id
         }));
-        
+
         // Create session in the database
         if (typeof window !== 'undefined') {
           // Use setTimeout to not block the UI while creating the session
@@ -120,8 +120,9 @@ export const useChatStore = create<ChatState>()(
               await fetch('/api/chat/session', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                  id, 
+                body: JSON.stringify({
+                  id,
+                  title: 'Untitled Conversation',
                   agentId: selectedAgentId,
                   deepSearchEnabled
                 })
@@ -131,26 +132,26 @@ export const useChatStore = create<ChatState>()(
             }
           }, 0);
         }
-        
+
         return id;
       },
-      
+
       setCurrentConversation: (id) => {
         set({ currentConversationId: id });
       },
-      
+
       getConversation: (id) => {
         const { conversations } = get();
         return conversations[id];
       },
-      
+
       addMessage: (message) => {
         const { currentConversationId, conversations } = get();
         if (!currentConversationId) return;
-        
+
         const messageWithId = message.id ? message : { ...message, id: uuidv4() };
         const timestamp = new Date().toISOString();
-        
+
         set({
           conversations: {
             ...conversations,
@@ -159,34 +160,34 @@ export const useChatStore = create<ChatState>()(
               messages: [...conversations[currentConversationId].messages, messageWithId],
               updatedAt: timestamp,
               // Auto-generate a title from the first user message if none exists
-              title: !conversations[currentConversationId].title && 
-                     message.role === 'user' && 
-                     conversations[currentConversationId].messages.length === 0
+              title: !conversations[currentConversationId].title &&
+                message.role === 'user' &&
+                conversations[currentConversationId].messages.length === 0
                 ? message.content.substring(0, 30) + (message.content.length > 30 ? '...' : '')
                 : conversations[currentConversationId].title
             }
           }
         });
       },
-      
+
       updateMessages: (conversationId, messages) => {
         const { conversations } = get();
         if (!conversations[conversationId]) return;
-        
+
         const timestamp = new Date().toISOString();
-        
+
         // Get existing messages to preserve any enhanced properties
         const existingMessages = conversations[conversationId].messages;
         const existingMessageMap = new Map();
         existingMessages.forEach(msg => {
           existingMessageMap.set(msg.id, msg);
         });
-        
+
         // Merge new messages with existing ones, preserving status if available
         const mergedMessages = messages.map(msg => {
           const existingMsg = existingMessageMap.get(msg.id);
           const messageWithId = msg.id ? msg : { ...msg, id: uuidv4() };
-          
+
           // If this message exists and has status info, preserve it
           if (existingMsg && (existingMsg as any).status) {
             return {
@@ -195,10 +196,10 @@ export const useChatStore = create<ChatState>()(
               serverConfirmed: true
             };
           }
-          
+
           return messageWithId;
         });
-        
+
         set({
           conversations: {
             ...conversations,
@@ -210,11 +211,11 @@ export const useChatStore = create<ChatState>()(
           }
         });
       },
-      
+
       clearConversation: () => {
         const id = uuidv4();
         const timestamp = new Date().toISOString();
-        
+
         // Create a new conversation without clearing localStorage history
         set((state) => ({
           conversations: {
@@ -233,10 +234,10 @@ export const useChatStore = create<ChatState>()(
           },
           currentConversationId: id
         }));
-        
+
         return id;
       },
-      
+
       ensureMessageIds: (messages) => {
         return messages.map(msg => {
           if (!msg.id) {
@@ -248,11 +249,11 @@ export const useChatStore = create<ChatState>()(
           return msg;
         });
       },
-      
+
       updateConversationMetadata: (conversationId, metadata) => {
         const { conversations } = get();
         if (!conversations[conversationId]) return;
-        
+
         set({
           conversations: {
             ...conversations,
@@ -264,39 +265,55 @@ export const useChatStore = create<ChatState>()(
           }
         });
       },
-      
+
       deleteConversation: (conversationId) => {
         const { conversations, currentConversationId } = get();
         const newConversations = { ...conversations };
-        
+
         delete newConversations[conversationId];
-        
-        // If we're deleting the current conversation, set current to the most recent one
+
+        // If we're deleting the current conversation, find the most recent one
         let newCurrentId = currentConversationId;
-        
+
         if (currentConversationId === conversationId) {
           // Find the most recent conversation
           const remainingConversations = Object.values(newConversations);
           if (remainingConversations.length > 0) {
             // Sort by updatedAt in descending order
-            remainingConversations.sort((a, b) => 
+            remainingConversations.sort((a, b) =>
               new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
             );
             newCurrentId = remainingConversations[0].id;
+
+            // Navigate to the new conversation if we're in the browser
+            if (typeof window !== 'undefined') {
+              // Use setTimeout to avoid state update conflicts
+              setTimeout(() => {
+                // Use client-side navigation to the new chat
+                window.location.href = `/chat/${newCurrentId}`;
+              }, 0);
+            }
           } else {
             newCurrentId = null;
+
+            // Navigate to the main chat page if no conversations left
+            if (typeof window !== 'undefined') {
+              setTimeout(() => {
+                window.location.href = '/chat';
+              }, 0);
+            }
           }
         }
-        
+
         set({
           conversations: newConversations,
           currentConversationId: newCurrentId
         });
       },
-      
+
       setSelectedAgent: (agentId: AgentType) => {
         set({ selectedAgentId: agentId });
-        
+
         // Update current conversation if it exists
         const { currentConversationId, conversations } = get();
         if (currentConversationId && conversations[currentConversationId]) {
@@ -312,14 +329,14 @@ export const useChatStore = create<ChatState>()(
           });
         }
       },
-      
+
       getSelectedAgent: () => {
         return get().selectedAgentId;
       },
-      
+
       setDeepSearchEnabled: (enabled) => {
         set({ deepSearchEnabled: enabled });
-        
+
         // Update current conversation if it exists
         const { currentConversationId, conversations } = get();
         if (currentConversationId && conversations[currentConversationId]) {
@@ -335,15 +352,15 @@ export const useChatStore = create<ChatState>()(
           });
         }
       },
-      
+
       getDeepSearchEnabled: () => {
         return get().deepSearchEnabled;
       },
-      
+
       setDeepSearchInProgress: (inProgress) => {
         set({ isDeepSearchInProgress: inProgress });
       },
-      
+
       isAnySearchInProgress: () => {
         // This function can be used to check if either regular loading or deep search is happening
         // Will be used by the UI to determine when to show the loading indicator
