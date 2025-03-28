@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 
 export default function AdminWidgetPage() {
   return (
-    <div className="space-y-6 p-6 border rounded-md">
+    <div className="space-y-6 p-6 border rounded-md w-full max-w-full overflow-hidden">
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Admin Widget Page</h1>
         <p className="text-sm text-muted-foreground mt-2">
@@ -20,8 +20,10 @@ export default function AdminWidgetPage() {
 
       {/* Widget Configurator with Live Preview */}
       <ChatWidgetProvider>
-        <AdminWidgetConfigurator />
-        <ChatWidget />
+        <div className="w-full max-w-full overflow-hidden">
+          <AdminWidgetConfigurator />
+          <ChatWidget />
+        </div>
       </ChatWidgetProvider>
     </div>
   );

@@ -142,15 +142,15 @@ export function AdminWidgetConfigurator() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 w-full max-w-full overflow-hidden">
       <Tabs defaultValue="settings">
         <TabsList>
           <TabsTrigger value="settings">Settings</TabsTrigger>
           <TabsTrigger value="embed">Embed Code</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="settings">
-          <Card>
+        <TabsContent value="settings" className="w-full max-w-full overflow-hidden">
+          <Card className="w-full max-w-full">
             <CardHeader>
               <CardTitle>Widget Settings</CardTitle>
               <CardDescription>
@@ -227,15 +227,15 @@ export function AdminWidgetConfigurator() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="embed">
-          <Card>
+        <TabsContent value="embed" className="w-full max-w-full overflow-hidden">
+          <Card className="w-full max-w-full">
             <CardHeader>
               <CardTitle>Embed Code Generator</CardTitle>
               <CardDescription>
                 Copy these code snippets to add the chat widget to your website.
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="w-full max-w-full overflow-hidden">
               <Tabs defaultValue="standard">
                 <TabsList className="mb-4">
                   <TabsTrigger value="standard">Standard</TabsTrigger>
@@ -249,8 +249,8 @@ export function AdminWidgetConfigurator() {
                       Add this code to your website's <code>&lt;head&gt;</code> or <code>&lt;body&gt;</code> section.
                     </p>
                     <div className="relative">
-                      <pre className="p-4 bg-gray-50 rounded-lg overflow-x-auto">
-                        <code className="text-sm">{standardEmbed}</code>
+                      <pre className="p-4 bg-gray-50 rounded-lg overflow-x-auto max-w-full">
+                        <code className="text-sm whitespace-pre-wrap break-all">{standardEmbed}</code>
                       </pre>
                       <Button
                         className="absolute top-2 right-2"
@@ -273,8 +273,8 @@ export function AdminWidgetConfigurator() {
                       Add this code as a Custom HTML tag in Google Tag Manager.
                     </p>
                     <div className="relative">
-                      <pre className="p-4 bg-gray-50 rounded-lg overflow-x-auto">
-                        <code className="text-sm">{gtmEmbed}</code>
+                      <pre className="p-4 bg-gray-50 rounded-lg overflow-x-auto max-w-full">
+                        <code className="text-sm whitespace-pre-wrap break-all">{gtmEmbed}</code>
                       </pre>
                       <Button
                         className="absolute top-2 right-2"
@@ -297,8 +297,8 @@ export function AdminWidgetConfigurator() {
                       Add this code where you want the chat widget to appear in your page.
                     </p>
                     <div className="relative">
-                      <pre className="p-4 bg-gray-50 rounded-lg overflow-x-auto">
-                        <code className="text-sm">{directEmbed}</code>
+                      <pre className="p-4 bg-gray-50 rounded-lg overflow-x-auto max-w-full">
+                        <code className="text-sm whitespace-pre-wrap break-all">{directEmbed}</code>
                       </pre>
                       <Button
                         className="absolute top-2 right-2"
