@@ -25,17 +25,18 @@ The chat widget:
 - Includes rate limiting (3 requests per minute)
 - Can be embedded via a simple script tag, Google Tag Manager, or direct body embed
 - Is managed through the admin dashboard at `/admin/widget`
+- Provides consistent behavior between the admin preview and remote website embeds
 
 ## Widget Management
 
 The widget management interface is fully integrated into the admin dashboard:
 
-- ✅ Dedicated admin widget page at `/admin/widget`
-- ✅ Enhanced widget configurator with settings and embed code tabs
-- ✅ Navigation link in admin sidebar
-- ✅ Dynamic generation of embed codes with proper domain references
-- ✅ Live preview always visible in the configured position
-- ✅ Simple copy-to-clipboard functionality for all embed types
+- Dedicated admin widget page at `/admin/widget`
+- Enhanced widget configurator with settings and embed code tabs
+- Navigation link in admin sidebar
+- Dynamic generation of embed codes with proper domain references
+- Live preview always visible in the configured position
+- Simple copy-to-clipboard functionality for all embed types
 
 ### Implementation Details
 
@@ -44,6 +45,7 @@ The widget management interface is fully integrated into the admin dashboard:
 - Dynamic rendering is enforced with `export const dynamic = "force-dynamic"`
 - All authentication is handled by middleware, identical to other admin pages
 - Live preview updates in real-time as settings are changed
+- The widget JavaScript implementation now matches the behavior of the React component for consistency
 
 ## Component Structure
 
@@ -193,7 +195,7 @@ The widget configurator provides the following customization options:
 
 ### Basic Settings
 - `title`: The title displayed in the widget header
-- `greeting`: The initial message shown to users (required to customize first message)
+- `greeting`: The initial message shown to users before any interaction begins
 - `placeholder`: Placeholder text for the message input field
 - `width`: Width of the widget (default: '350px')
 - `height`: Height of the widget (default: '500px')
@@ -204,29 +206,27 @@ The widget configurator provides the following customization options:
 - `primaryColor`: Custom color picker for widget accent color
 - `bubbleIcon`: Optional URL to a custom icon for the chat bubble
 
-## Recent Updates
+## Important Technical Notes
 
-- ✅ Fixed greeting message customization bug
-- ✅ Added proper placeholder text customization
-- ✅ Improved documentation with all available configuration options
-- ✅ Removed environment variable warnings
-- ✅ Simplified admin widget interface
-- ✅ Improved live preview with real-time updates
-- ✅ Fixed script path references in embed codes
-- ✅ Consolidated widget configuration options
+- **Greeting Display**: The greeting configured in `window.marlinChatConfig` is displayed as a welcome message when the widget first loads. It's displayed exactly as configured, without any default fallbacks.
+- **Script Path**: Always use the correct path to the widget script: `https://marlan.photographytoprofits.com/widget/chat-widget.js`
+- **API Interaction**: The widget connects to the API endpoint specified in the configuration to send and receive messages. The API handles the actual conversation with the AI model.
+- **Initialization**: The widget now uses the same initialization approach as the admin panel preview to ensure consistent behavior.
+- **CORS Configuration**: The server includes proper CORS headers to allow embedding on approved external domains.
 
 ## Production Verification Checklist
 
-After deployment, verify the following to ensure proper widget functionality:
+When deploying or updating the widget, verify the following:
 
-- [ ] `/admin/widget` page loads correctly for authenticated admin users
-- [ ] Authentication works identically to other admin pages
-- [ ] Widget script loads correctly from `/widget/chat-widget.js`
-- [ ] Widget can connect to the API at `/api/widget-chat` and receive responses
-- [ ] CORS headers are correctly set for cross-domain embedding
-- [ ] Rate limiting is functioning correctly (3 requests per minute)
-- [ ] Live preview updates correctly with configuration changes
-- [ ] All three embed code options generate valid code
-- [ ] Copy buttons work correctly for all embed code options
-- [ ] Verify custom greeting message works in all embed types
-- [ ] Verify placeholder text customization works
+- `/admin/widget` page loads correctly for authenticated admin users
+- Authentication works identically to other admin pages
+- Widget script loads correctly from `/widget/chat-widget.js`
+- Widget can connect to the API at `/api/widget-chat` and receive responses
+- CORS headers are correctly set for cross-domain embedding
+- Rate limiting is functioning correctly (3 requests per minute)
+- Live preview updates correctly as settings are changed
+- All three embed code options generate valid code
+- Copy buttons work correctly for all embed code options
+- Custom greeting message displays correctly in both admin preview and remote embeds
+- Placeholder text customization works properly
+- Widget behavior is consistent between admin preview and remote website embeds

@@ -202,14 +202,14 @@ export async function POST(req: NextRequest) {
     }
 
     // Simplified system prompt for faster responses
-    const systemPrompt = `You are a helpful assistant embedded on the Marlin photography website.
+    const systemPrompt = `You are a helpful assistant embedded on the High Rollers Club Mastermind Education Website.
     
     KEEP RESPONSES CONCISE AND DIRECT. Be brief.
     
     IMPORTANT INSTRUCTIONS:
     1. Prioritize knowledge base information when answering questions.
     2. If no relevant information is found, say "I don't have specific information about that in my knowledge base."
-    3. Keep responses under 100 words whenever possible.
+    3. Keep responses under 300 words whenever possible.
     4. Format with simple line breaks for readability.
     5. The user is using a chat widget. Be friendly but brief.`;
 

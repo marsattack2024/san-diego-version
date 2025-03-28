@@ -59,6 +59,11 @@
         padding: 12px;
         border-top: 1px solid #e5e7eb;
         display: flex;
+        flex-direction: column;
+      }
+      
+      .marlin-chat-widget-input-row {
+        display: flex;
         align-items: center;
       }
 
@@ -79,6 +84,25 @@
         cursor: pointer;
         padding: 8px 12px;
         margin-left: 8px;
+      }
+
+      .marlin-chat-widget-reset-container {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 8px;
+      }
+
+      .marlin-chat-widget-reset {
+        background: none;
+        border: none;
+        color: #6B7280;
+        font-size: 12px;
+        cursor: pointer;
+        padding: 0;
+      }
+
+      .marlin-chat-widget-reset:hover {
+        color: #374151;
       }
 
       .marlin-chat-widget-bubble {
@@ -137,6 +161,22 @@
         background-color: #f3f4f6;
         color: #111827;
         border-bottom-left-radius: 4px;
+      }
+      
+      /* Text center class matching React component */
+      .text-center {
+        text-align: center;
+      }
+      
+      /* Padding Y axis class matching React component */
+      .py-6 {
+        padding-top: 1.5rem;
+        padding-bottom: 1.5rem;
+      }
+      
+      /* Text gray color matching React component */
+      .text-gray-500 {
+        color: #6b7280;
       }
 
       /* Position variations */
@@ -205,23 +245,186 @@
       let e = document.createElement("div"); e.className = `marlin-chat-widget-bubble ${i.position}`, e.innerHTML = i.bubbleIcon ? `<img src="${i.bubbleIcon}" alt="Chat" width="30" height="30">` : '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" color="#ffffff"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>', document.body.appendChild(e); let a = document.createElement("div"); a.className = `marlin-chat-widget-container ${i.position}`, a.style.display = "none"; let n = document.createElement("div"); n.className = "marlin-chat-widget-header", n.innerHTML = `
       <h3 class="marlin-chat-widget-title">${i.title}</h3>
       <button class="marlin-chat-widget-close">&times;</button>
-    `; let l = document.createElement("div"); l.className = "marlin-chat-widget-messages"; let o = document.createElement("div"); return o.className = "marlin-chat-widget-input-container", o.innerHTML = `
-      <input type="text" class="marlin-chat-widget-input" placeholder="${i.placeholder}">
-      <button class="marlin-chat-widget-send">
-        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
-      </button>
-    `, a.appendChild(n), a.appendChild(l), a.appendChild(o), document.body.appendChild(a), { bubble: e, container: a, messagesContainer: l, closeButton: n.querySelector(".marlin-chat-widget-close"), input: o.querySelector(".marlin-chat-widget-input"), sendButton: o.querySelector(".marlin-chat-widget-send") }
+    `; let l = document.createElement("div"); l.className = "marlin-chat-widget-messages"; let o = document.createElement("div"); o.className = "marlin-chat-widget-input-container";
+
+      // Create input row
+      let inputRow = document.createElement("div");
+      inputRow.className = "marlin-chat-widget-input-row";
+      inputRow.innerHTML = `
+        <input type="text" class="marlin-chat-widget-input" placeholder="${i.placeholder}">
+        <button class="marlin-chat-widget-send">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+        </button>
+      `;
+
+      // Create reset button container
+      let resetContainer = document.createElement("div");
+      resetContainer.className = "marlin-chat-widget-reset-container";
+      resetContainer.innerHTML = `
+        <button class="marlin-chat-widget-reset">Reset conversation</button>
+      `;
+
+      // Append input row and reset button to input container
+      o.appendChild(inputRow);
+      o.appendChild(resetContainer);
+
+      a.appendChild(n);
+      a.appendChild(l);
+      a.appendChild(o);
+      document.body.appendChild(a);
+
+      return {
+        bubble: e,
+        container: a,
+        messagesContainer: l,
+        closeButton: n.querySelector(".marlin-chat-widget-close"),
+        input: o.querySelector(".marlin-chat-widget-input"),
+        sendButton: o.querySelector(".marlin-chat-widget-send"),
+        resetButton: o.querySelector(".marlin-chat-widget-reset")
+      }
     } function g(e, a = "assistant") { let n = document.createElement("div"); n.className = `marlin-chat-widget-message ${a}`, n.innerHTML = e.replace(/\n/g, "<br>"), t.messagesContainer.appendChild(n), t.messagesContainer.scrollTop = t.messagesContainer.scrollHeight } function v() {
       let e = document.createElement("div"); e.className = "marlin-chat-widget-typing", e.innerHTML = `
       <div class="marlin-chat-widget-typing-dot"></div>
       <div class="marlin-chat-widget-typing-dot"></div>
       <div class="marlin-chat-widget-typing-dot"></div>
     `, e.id = "marlin-chat-widget-typing", t.messagesContainer.appendChild(e), t.messagesContainer.scrollTop = t.messagesContainer.scrollHeight
-    } function p() { let e = document.getElementById("marlin-chat-widget-typing"); e && e.remove() } function f() { t.container.style.display !== "none" ? (t.container.classList.remove("open"), setTimeout(() => { t.container.style.display = "none" }, 300)) : (t.container.style.display = "flex", setTimeout(() => { t.container.classList.add("open"), t.input.focus() }, 10)) } function C() { let e = localStorage.getItem("marlin-chat-session-id"); return e || (e = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (a) { let n = Math.random() * 16 | 0; return (a === "x" ? n : n & 3 | 8).toString(16) }), localStorage.setItem("marlin-chat-session-id", e)), e } async function u(e) { if (e.trim()) { g(e, "user"), t.input.value = "", v(); try { let a = C(); console.log("Widget sending message to API:", { message: e, messageLength: e.length, messageType: typeof e, sessionId: a, endpoint: i.apiEndpoint }); let n = await fetch(i.apiEndpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: e, sessionId: a }) }); if (console.log("Response status:", n.status), console.log("Response content-type:", n.headers.get("content-type")), !n.ok) { let r = await n.text(); console.error("API error response:", r); try { let s = JSON.parse(r); console.error("API error parsed:", s), p(); let m = s.message || s.error || `Error: ${n.status} ${n.statusText}`; g(`Sorry, there was a problem: ${m}. Please try again later.`, "assistant") } catch (s) { console.error("Failed to parse error response:", s), p(), g(`Sorry, there was an error (${n.status}). Please try again later.`, "assistant") } return } let l = n.body.getReader(), o = new TextDecoder; p(); let d = document.createElement("div"); d.className = "marlin-chat-widget-message assistant", t.messagesContainer.appendChild(d); let c = ""; try { for (; ;) { let { done: s, value: m } = await l.read(); if (s) { console.log("Stream complete"); break } let h = o.decode(m, { stream: !0 }); console.log("Received chunk:", JSON.stringify(h)), h.trim() && (c += h, d.innerHTML = c.replace(/\n/g, "<br>"), t.messagesContainer.scrollTop = t.messagesContainer.scrollHeight) } let r = o.decode(); r.trim() && (console.log("Final chunk:", JSON.stringify(r)), c += r, d.innerHTML = c.replace(/\n/g, "<br>")), c.trim() || (console.warn("Empty response received from streaming API"), d.innerHTML = "I'm sorry, I couldn't find specific information about that in my knowledge base. Please try asking in a different way or about another topic."), console.log("Final response text:", c) } catch (r) { console.error("Error processing stream:", r), d.innerHTML = "Sorry, there was an error processing the response stream. Please try again." } } catch (a) { console.error("Error sending message:", a), p(), g("Sorry, there was an error connecting to the server. Please check your connection and try again later.", "assistant") } } } function k() { t.bubble.addEventListener("click", f), t.closeButton.addEventListener("click", f), t.sendButton.addEventListener("click", () => { u(t.input.value) }), t.input.addEventListener("keypress", e => { e.key === "Enter" && u(t.input.value) }) } function x(e = {}) {
+    } function p() { let e = document.getElementById("marlin-chat-widget-typing"); e && e.remove() } function f() { t.container.style.display !== "none" ? (t.container.classList.remove("open"), setTimeout(() => { t.container.style.display = "none" }, 300)) : (t.container.style.display = "flex", setTimeout(() => { t.container.classList.add("open"), t.input.focus() }, 10)) } function C() { let e = localStorage.getItem("marlin-chat-session-id"); return e || (e = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (a) { let n = Math.random() * 16 | 0; return (a === "x" ? n : n & 3 | 8).toString(16) }), localStorage.setItem("marlin-chat-session-id", e)), e }
+
+    // Function to show the welcome message (initial greeting)
+    // This matches the React component's implementation
+    function addWelcomeMessage() {
+      // First, clear any existing messages to avoid duplication
+      t.messagesContainer.innerHTML = '';
+
+      // Create a welcome div to match the React component's structure
+      const welcomeDiv = document.createElement('div');
+      welcomeDiv.className = 'text-center py-6';
+      welcomeDiv.id = 'marlin-chat-welcome-message';
+
+      // Set the greeting text from config
+      const greetingText = document.createElement('p');
+      greetingText.className = 'text-gray-500';
+      greetingText.textContent = i.greeting;
+
+      // Log for debugging
+      console.log("Setting greeting message:", {
+        configuredGreeting: i.greeting,
+        defaultGreeting: w.greeting
+      });
+
+      // Append elements
+      welcomeDiv.appendChild(greetingText);
+      t.messagesContainer.appendChild(welcomeDiv);
+    }
+
+    // Function to reset the conversation
+    function resetConversation() {
+      console.log("Resetting conversation");
+      // Clear session ID to start fresh
+      localStorage.removeItem("marlin-chat-session-id");
+      // Clear messages container
+      t.messagesContainer.innerHTML = '';
+      // Add welcome message back
+      addWelcomeMessage();
+    }
+
+    async function u(e) {
+      if (e.trim()) {
+        // Clear the welcome message if it exists when sending first message
+        const welcomeMessage = document.getElementById('marlin-chat-welcome-message');
+        if (welcomeMessage) {
+          t.messagesContainer.innerHTML = '';
+        }
+
+        // Add the user message to the chat
+        g(e, "user");
+        t.input.value = "";
+        v();
+
+        try {
+          let a = C();
+          console.log("Widget sending message to API:", {
+            message: e,
+            messageLength: e.length,
+            messageType: typeof e,
+            sessionId: a,
+            endpoint: i.apiEndpoint
+          });
+
+          // Make API request
+          let n = await fetch(i.apiEndpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: e, sessionId: a })
+          });
+
+          console.log("Response status:", n.status);
+          console.log("Response content-type:", n.headers.get("content-type"));
+
+          // Handle API errors
+          if (!n.ok) {
+            let r = await n.text();
+            console.error("API error response:", r);
+            try {
+              let s = JSON.parse(r);
+              console.error("API error parsed:", s);
+              p();
+              let m = s.message || s.error || `Error: ${n.status} ${n.statusText}`;
+              g(`Sorry, there was a problem: ${m}. Please try again later.`, "assistant")
+            } catch (s) {
+              console.error("Failed to parse error response:", s);
+              p();
+              g(`Sorry, there was an error (${n.status}). Please try again later.`, "assistant")
+            }
+            return
+          }
+
+          // Process streaming response
+          let l = n.body.getReader(), o = new TextDecoder;
+          p();
+          let d = document.createElement("div");
+          d.className = "marlin-chat-widget-message assistant";
+          t.messagesContainer.appendChild(d);
+          let c = "";
+
+          try {
+            for (; ;) {
+              let { done: s, value: m } = await l.read();
+              if (s) {
+                console.log("Stream complete");
+                break
+              }
+              let h = o.decode(m, { stream: !0 });
+              console.log("Received chunk:", JSON.stringify(h));
+              h.trim() && (c += h, d.innerHTML = c.replace(/\n/g, "<br>"), t.messagesContainer.scrollTop = t.messagesContainer.scrollHeight)
+            }
+
+            let r = o.decode();
+            r.trim() && (console.log("Final chunk:", JSON.stringify(r)), c += r, d.innerHTML = c.replace(/\n/g, "<br>"));
+            c.trim() || (console.warn("Empty response received from streaming API"), d.innerHTML = "I'm sorry, I couldn't find specific information about that in my knowledge base. Please try asking in a different way or about another topic.");
+            console.log("Final response text:", c)
+          } catch (r) {
+            console.error("Error processing stream:", r);
+            d.innerHTML = "Sorry, there was an error processing the response stream. Please try again."
+          }
+        } catch (a) {
+          console.error("Error sending message:", a);
+          p();
+          g("Sorry, there was an error connecting to the server. Please check your connection and try again later.", "assistant")
+        }
+      }
+    } function k() {
+      t.bubble.addEventListener("click", f);
+      t.closeButton.addEventListener("click", f);
+      t.sendButton.addEventListener("click", () => { u(t.input.value) });
+      t.input.addEventListener("keypress", e => { e.key === "Enter" && u(t.input.value) });
+      t.resetButton.addEventListener("click", resetConversation);
+    } function x(e = {}) {
       i = { ...w, ...e },
         y(),
         t = b(),
-        g(i.greeting),
+        // Add the welcome message using the React-like component approach
+        addWelcomeMessage(),
         k(),
         console.log("Marlin Chat Widget initialized successfully")
     } window.initChatWidget = x; let i, t; window.marlinChatConfig && x(window.marlinChatConfig)
