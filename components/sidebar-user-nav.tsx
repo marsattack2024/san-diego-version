@@ -3,6 +3,7 @@ import { ChevronUp, User as UserIcon, Camera, Pencil, Shield } from 'lucide-reac
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
+import { useEffect, useRef } from 'react';
 
 import {
   DropdownMenu,
@@ -32,10 +33,34 @@ export interface User {
 export function SidebarUserNav({ user }: { user: User }) {
   const { setTheme, theme } = useTheme();
   const router = useRouter();
-  const { profile, isAdmin } = useAuth(); // Use isAdmin from auth context
+  const { profile, isAdmin, refreshAdminStatus } = useAuth(); // Use the unified auth hook
   const logout = useAuthStore(state => state.logout);
+  const initialRefreshDone = useRef(false);
 
-  // No need to fetch profile, it's already available from auth context
+  // Do a background refresh of admin status once 
+  // but don't block rendering on it
+  useEffect(() => {
+    // Only refresh admin status if we haven't already done so
+    // in this component's lifecycle
+    if (!initialRefreshDone.current) {
+      initialRefreshDone.current = true;
+
+      // Execute admin status refresh in the background
+      (async () => {
+        try {
+          console.log('SidebarUserNav: Refreshing admin status in background');
+          await refreshAdminStatus();
+        } catch (error) {
+          console.error('Error refreshing admin status:', error);
+        }
+      })();
+    }
+  }, []);
+
+  // Log when admin status changes, but without causing a refresh loop
+  useEffect(() => {
+    console.log('SidebarUserNav: Rendering with admin status =', isAdmin);
+  }, [isAdmin]);
 
   const handleSignOut = async () => {
     await logout(); // Use the logout function from auth store

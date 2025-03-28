@@ -4,11 +4,24 @@ import { updateSession } from '@/utils/supabase/middleware';
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  console.log('[Middleware] Processing request for:', pathname);
 
-  // Special bypass for Perplexity API to allow internal server-to-server communication
-  if (pathname.startsWith('/api/perplexity')) {
-    console.log('Bypassing auth middleware for Perplexity API');
+  // Skip excessive logging for common paths
+  const isCommonPath = pathname.includes('favicon') ||
+    pathname.startsWith('/_next/') ||
+    pathname.includes('.svg');
+
+  if (!isCommonPath) {
+    console.log('[Middleware] Processing request for:', pathname);
+  }
+
+  // Special bypass for internal API endpoints that handle their own auth
+  if (
+    pathname.startsWith('/api/perplexity') ||
+    pathname.startsWith('/api/auth/admin-status')
+  ) {
+    if (!isCommonPath) {
+      console.log(`Bypassing auth middleware for internal API: ${pathname}`);
+    }
     return;
   }
 
@@ -19,11 +32,13 @@ export async function middleware(request: NextRequest) {
     pathname === '/widget.js' ||
     pathname === '/debug.js'
   ) {
-    console.log('Bypassing auth middleware for Widget features:', pathname);
+    if (!isCommonPath) {
+      console.log('Bypassing auth middleware for Widget features:', pathname);
+    }
     return;
   }
 
-  // Log authentication results for admin pages
+  // Only log admin page processing for debugging purposes
   if (pathname.startsWith('/admin')) {
     console.log(`[Middleware] Processing admin page ${pathname} with normal auth flow`);
   }

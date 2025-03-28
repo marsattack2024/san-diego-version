@@ -247,8 +247,7 @@ export const useAuthStore = create<AuthState>()(
             return true;
           }
 
-          // 3. Check for the x-is-admin cookie set by middleware
-          // This avoids an API call if the middleware already checked admin status
+          // 3. Check for the x-is-admin cookie (set by middleware)
           if (typeof window !== 'undefined') {
             const cookies = document.cookie.split(';');
             const adminCookie = cookies.find(c => c.trim().startsWith('x-is-admin='));
@@ -260,10 +259,42 @@ export const useAuthStore = create<AuthState>()(
             }
           }
 
-          // 4. If we still don't know, make a single Supabase RPC call
+          // 4. Use the dedicated admin-status API endpoint (most efficient RPC check)
+          try {
+            const response = await fetch('/api/auth/admin-status', {
+              method: 'GET',
+              credentials: 'include',
+              cache: 'no-store', // Force fresh check
+              headers: {
+                'Content-Type': 'application/json',
+              }
+            });
+
+            if (response.ok) {
+              const data = await response.json();
+
+              if (data && data.admin === true) {
+                console.log('Admin check: API confirmed admin status');
+                set({ isAdmin: true });
+                return true;
+              }
+
+              // If API confirms user is not admin, don't try other methods
+              if (data && data.admin === false) {
+                console.log('Admin check: API confirmed non-admin status');
+                set({ isAdmin: false });
+                return false;
+              }
+            }
+          } catch (apiError) {
+            // If API fails, fall through to other methods
+            console.warn('Admin API check failed, falling back', apiError);
+          }
+
+          // 5. If we still don't know, make a Supabase RPC call (fallback)
           console.log('Admin check: Making Supabase RPC call');
           const supabase = createClient();
-          const { data, error } = await supabase.rpc('is_admin', { uid: state.user.id });
+          const { data, error } = await supabase.rpc('is_admin', { user_id: state.user.id });
 
           if (!error && data === true) {
             console.log('Admin check: Supabase RPC confirmed admin status');
@@ -271,7 +302,7 @@ export const useAuthStore = create<AuthState>()(
             return true;
           }
 
-          // 5. If all checks fail, user is not an admin
+          // 6. If all checks fail, user is not an admin
           console.log('Admin check: User is not an admin');
           set({ isAdmin: false });
           return false;

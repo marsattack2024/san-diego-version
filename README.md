@@ -55,8 +55,10 @@ cd marlan
 #### 2. Install Dependencies
 
 ```bash
-npm install
+npm install --legacy-peer-deps
 ```
+
+> **Important**: The `--legacy-peer-deps` flag is required due to a dependency conflict between React 18 and React-Data-Grid which expects React 19. This flag allows npm to complete the installation despite the conflicting requirements.
 
 Note: Some peer dependency warnings may appear but can be safely ignored as they're compatibility notices between Next.js 15 and some packages.
 
@@ -128,7 +130,7 @@ The pgvector extension must be enabled to support vector search capabilities.
 5. Configure the project settings:
    - Framework preset: Next.js
    - Build command: `next build`
-   - Install command: `npm install`
+   - Install command: `npm install --legacy-peer-deps` (important to include the flag here too)
    - Output directory: `.next`
 6. Add all environment variables from your `.env.local` file
 7. Deploy the project
@@ -169,6 +171,35 @@ Marlan includes an embeddable chat widget that can be integrated into any websit
 For detailed widget documentation, see [Chat Widget Documentation](./docs/feature%20chat-widget.md).
 
 ## Common Issues and Troubleshooting
+
+### Dependency Conflicts
+
+If you encounter dependency errors during installation, particularly with React versions:
+
+```
+Could not resolve dependency:
+peer react@"^19.0" from react-data-grid@7.0.0-beta.51
+node_modules/react-data-grid
+  react-data-grid@"^7.0.0-beta.48" from the root project
+```
+
+Use one of these solutions:
+
+1. **Recommended**: Install with legacy peer deps flag:
+   ```bash
+   npm install --legacy-peer-deps
+   ```
+
+2. **Alternative**: Downgrade react-data-grid to a version compatible with React 18:
+   ```bash
+   npm uninstall react-data-grid
+   npm install react-data-grid@7.0.0-beta.47 --save
+   ```
+
+3. **Last resort**: Force installation (may cause runtime issues):
+   ```bash
+   npm install --force
+   ```
 
 ### Authentication Issues
 

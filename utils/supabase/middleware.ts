@@ -62,9 +62,25 @@ export async function updateSession(request: NextRequest) {
       supabaseResponse.headers.set(key, value);
     });
 
-    // CRITICAL ADDITION: Check if user is an admin
-    let isAdminStatus = 'false';
-    try {
+    // CRITICAL ADDITION: Check if user is an admin - but only if needed
+    // Check if we already have a valid admin status cookie to avoid redundant checks
+    const adminCookie = request.cookies.get('x-is-admin');
+    const adminCookieTimestamp = request.cookies.get('x-is-admin-time');
+    const now = Date.now();
+    const adminCookieAge = adminCookieTimestamp ? now - parseInt(adminCookieTimestamp.value || '0') : Infinity;
+    const adminCacheTime = 5 * 60 * 1000; // 5 minutes cache
+
+    // Only check admin status if:
+    // 1. No admin cookie exists, or
+    // 2. Admin cookie is older than cache time, or
+    // 3. Path indicates it's an admin page or admin-related API
+    const needsAdminCheck = !adminCookie ||
+      adminCookieAge > adminCacheTime ||
+      request.nextUrl.pathname.startsWith('/admin') ||
+      request.nextUrl.pathname.startsWith('/api/admin') ||
+      request.nextUrl.pathname === '/api/auth/admin-status';
+
+    if (needsAdminCheck) {
       console.log(`[updateSession] Checking admin status for: ${user.id.substring(0, 8)}...`);
 
       // Create a service role client if the key is available - this bypasses RLS
@@ -90,51 +106,60 @@ export async function updateSession(request: NextRequest) {
       }
 
       // First try checking with RPC function (most reliable)
-      const { data: rpcData, error: rpcError } = await adminClient.rpc('is_admin', { uid: user.id });
+      const { data: rpcData, error: rpcError } = await adminClient.rpc('is_admin', { user_id: user.id });
 
-      if (rpcError) {
-        console.error('[updateSession] RPC admin check failed:', rpcError.message);
+      let isAdminStatus = 'false';
+      if (!rpcError && rpcData === true) {
+        isAdminStatus = 'true';
+        console.log('[updateSession] User is admin via RPC check');
+      } else if (rpcError) {
+        console.error('[updateSession] RPC admin check error:', rpcError.message);
 
-        // Fallback to checking profiles table directly
+        // Fall back to profile table check if RPC fails
         const { data: profileData, error: profileError } = await adminClient
           .from('sd_user_profiles')
           .select('is_admin')
           .eq('user_id', user.id)
           .single();
 
-        if (profileError) {
-          console.error('[updateSession] Profile admin check failed:', profileError.message);
-
-          // Last resort: check roles table directly
-          const { data: roleData, error: roleError } = await adminClient
-            .from('sd_user_roles')
-            .select('role')
-            .eq('user_id', user.id)
-            .eq('role', 'admin')
-            .maybeSingle();
-
-          if (roleError) {
-            console.error('[updateSession] Role admin check failed:', roleError.message);
-          } else if (roleData) {
-            isAdminStatus = 'true';
-            console.log('[updateSession] User is admin via role check');
-          }
-        } else if (profileData?.is_admin === true) {
+        if (!profileError && profileData?.is_admin === true) {
           isAdminStatus = 'true';
           console.log('[updateSession] User is admin via profile check');
+        } else if (profileError) {
+          console.error('[updateSession] Profile admin check error:', profileError.message);
         }
-      } else if (rpcData) {
-        isAdminStatus = 'true';
-        console.log('[updateSession] User is admin via RPC check');
       }
 
-    } catch (adminCheckError) {
-      console.error('[updateSession] Error during admin check:', adminCheckError);
-    }
+      // Set admin status in cookies with timestamp - for both request and response
+      request.cookies.set('x-is-admin', isAdminStatus);
+      request.cookies.set('x-is-admin-time', now.toString());
+      supabaseResponse.cookies.set('x-is-admin', isAdminStatus, {
+        path: '/',
+        maxAge: 60 * 60 * 24, // Cookie lasts 24 hours, though we'll refresh it earlier
+        sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production'
+      });
+      supabaseResponse.cookies.set('x-is-admin-time', now.toString(), {
+        path: '/',
+        maxAge: 60 * 60 * 24,
+        sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production'
+      });
 
-    // Set admin status header on both request and response
-    request.headers.set('x-is-admin', isAdminStatus);
-    supabaseResponse.headers.set('x-is-admin', isAdminStatus);
+      // Also set in headers for immediate use
+      request.headers.set('x-is-admin', isAdminStatus);
+      supabaseResponse.headers.set('x-is-admin', isAdminStatus);
+    } else {
+      // Reuse existing admin status from cookie
+      const isAdminStatus = adminCookie?.value || 'false';
+      request.headers.set('x-is-admin', isAdminStatus);
+      supabaseResponse.headers.set('x-is-admin', isAdminStatus);
+
+      // Only log when status is true to reduce noise
+      if (isAdminStatus === 'true') {
+        console.log('[updateSession] Using cached admin status from cookie (true)');
+      }
+    }
 
     // Check if user has a profile
     const { data: profile } = await supabase

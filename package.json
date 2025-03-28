@@ -103,7 +103,7 @@
     "prosemirror-state": "^1.4.3",
     "prosemirror-view": "^1.38.1",
     "react": "^18",
-    "react-data-grid": "^7.0.0-beta.48",
+    "react-data-grid": "^7.0.0-beta.47",
     "react-day-picker": "^9.5.1",
     "react-dom": "^18",
     "react-hook-form": "^7.54.2",
