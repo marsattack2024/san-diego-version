@@ -10,6 +10,31 @@ interface ChatRequest {
   agentId?: AgentType;
 }
 
+/**
+ * Helper to safely convert various representations of boolean values
+ * Handles true/false, "true"/"false", 1/0, "1"/"0" and similar variations
+ */
+function parseBooleanValue(value: any): boolean {
+  // Handle direct boolean values
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  // Handle string representations ("true", "false", "1", "0")
+  if (typeof value === 'string') {
+    const lowercaseValue = value.toLowerCase().trim();
+    return lowercaseValue === 'true' || lowercaseValue === '1' || lowercaseValue === 'yes';
+  }
+
+  // Handle numeric values (1, 0)
+  if (typeof value === 'number') {
+    return value === 1;
+  }
+
+  // Default to false for null, undefined, or any other type
+  return false;
+}
+
 export function validateChatRequest(body: any): ChatRequest {
   // Log full request structure for debugging
   edgeLogger.debug('Validating chat request', {
@@ -18,6 +43,7 @@ export function validateChatRequest(body: any): ChatRequest {
     deepSearchEnabled: !!body.deepSearchEnabled,
     rawDeepSearchEnabled: body.deepSearchEnabled,
     deepSearchEnabledType: typeof body.deepSearchEnabled,
+    deepSearchEnabledValue: String(body.deepSearchEnabled),
     hasId: !!body.id,
     bodyHasDeepSearchKey: 'deepSearchEnabled' in body,
     hasMessage: !!body.message,
@@ -62,11 +88,14 @@ export function validateChatRequest(body: any): ChatRequest {
     }
   }
 
+  // Parse the deepSearchEnabled flag to handle both boolean and string representations
+  const deepSearchEnabled = parseBooleanValue(body.deepSearchEnabled);
+
   const validatedRequest = {
     messages,
     id: body.id,
     useDeepSearch: body.useDeepSearch || false,
-    deepSearchEnabled: body.deepSearchEnabled || false,
+    deepSearchEnabled,
     agentId: body.agentId || 'default'
   };
 
@@ -74,6 +103,8 @@ export function validateChatRequest(body: any): ChatRequest {
   edgeLogger.debug('Chat request validated', {
     category: 'tools',
     operation: 'chat_request_validated',
+    originalDeepSearchEnabled: body.deepSearchEnabled,
+    originalDeepSearchEnabledType: typeof body.deepSearchEnabled,
     validatedDeepSearchEnabled: validatedRequest.deepSearchEnabled,
     validatedAgentId: validatedRequest.agentId,
     messageCount: messages.length

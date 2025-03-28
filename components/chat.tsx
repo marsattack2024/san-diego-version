@@ -111,16 +111,17 @@ export function Chat({
       // Log the request body before sending
       console.info('[Chat] Preparing request body with Deep Search settings', {
         deepSearchEnabled,
+        deepSearchEnabledType: typeof deepSearchEnabled,
         agentId: selectedAgentId,
         messageLength: lastMessage?.content?.length || 0,
         timestamp: new Date().toISOString()
       });
 
-      // Return optimized payload
+      // Return optimized payload with explicit boolean conversion
       return {
         message: lastMessage,
         id,
-        deepSearchEnabled,
+        deepSearchEnabled: deepSearchEnabled === true, // Force to boolean true/false
         agentId: selectedAgentId
       };
     },

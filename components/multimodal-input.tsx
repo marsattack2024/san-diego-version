@@ -422,7 +422,15 @@ function PureDeepSearchButton({
           className={`h-10 ${deepSearchEnabled ? 'bg-primary text-primary-foreground hover:bg-primary/90' : ''}`}
           onClick={(event) => {
             event.preventDefault();
-            setDeepSearchEnabled(!deepSearchEnabled);
+            // Explicitly cast to boolean to ensure proper type
+            const newValue = !deepSearchEnabled;
+            console.info('[DeepSearchButton] Setting new toggle state:', {
+              oldValue: deepSearchEnabled,
+              newValue: newValue,
+              oldValueType: typeof deepSearchEnabled,
+              newValueType: typeof newValue
+            });
+            setDeepSearchEnabled(Boolean(newValue));
           }}
           disabled={isLoading}
           variant={deepSearchEnabled ? "default" : "outline"}

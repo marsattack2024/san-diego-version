@@ -460,11 +460,13 @@ export async function POST(req: Request) {
       });
 
       // 4. Deep Search - LOWEST PRIORITY (if enabled)
-      if (deepSearchEnabled) {
+      if (deepSearchEnabled === true) {
         edgeLogger.info('Deep Search is enabled, preparing to run', {
           category: 'tools',
           operation: 'deep_search_entering_block',
           deepSearchEnabled: true,
+          deepSearchEnabledType: typeof deepSearchEnabled,
+          deepSearchEnabledValue: String(deepSearchEnabled),
           userId: user?.id ? maskUserId(user.id) : 'anonymous',
           chatId: id || 'new-chat',
           messageCount: chatMessages.length
@@ -808,6 +810,9 @@ export async function POST(req: Request) {
           deepSearchEnabled: false,
           deepSearchEnabledType: typeof deepSearchEnabled,
           rawDeepSearchValue: deepSearchEnabled,
+          deepSearchEnabledStringValue: String(deepSearchEnabled),
+          bodyDeepSearchEnabledType: typeof body.deepSearchEnabled,
+          bodyDeepSearchEnabledValue: String(body.deepSearchEnabled),
           chatId: id || 'new-chat'
         });
       }
