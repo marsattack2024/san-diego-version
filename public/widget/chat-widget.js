@@ -221,7 +221,7 @@
       i = { ...w, ...e },
         y(),
         t = b(),
-        g(i.greeting || "I'm your Mastermind AI companion! I can answer marketing and tech questions right now! What can I help with?"),
+        g(i.greeting),
         k(),
         console.log("Marlin Chat Widget initialized successfully")
     } window.initChatWidget = x; let i, t; window.marlinChatConfig && x(window.marlinChatConfig)

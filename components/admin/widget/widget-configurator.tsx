@@ -34,7 +34,7 @@ export function AdminWidgetConfigurator() {
   };
   
   var script = document.createElement('script');
-  script.src = '${baseUrl}/widget.js';
+  script.src = '${baseUrl}/widget/chat-widget.js';
   script.async = true;
   script.defer = true;
   document.head.appendChild(script);
@@ -58,7 +58,7 @@ export function AdminWidgetConfigurator() {
   };
   
   var script = document.createElement('script');
-  script.src = "${baseUrl}/widget.js";
+  script.src = "${baseUrl}/widget/chat-widget.js";
   script.async = true;
   script.defer = true;
   script.onerror = function() {
@@ -106,7 +106,7 @@ export function AdminWidgetConfigurator() {
   };
   
   var script = document.createElement('script');
-  script.src = '${baseUrl}/widget.js';
+  script.src = '${baseUrl}/widget/chat-widget.js';
   script.async = true;
   script.defer = true;
   document.head.appendChild(script);
