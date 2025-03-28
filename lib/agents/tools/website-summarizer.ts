@@ -1,246 +1,221 @@
-import { myProvider } from '@/lib/ai/providers';
-import { logger } from '@/lib/logger';
-import { chatTools } from '@/lib/chat/tools';
+/**
+ * Website Summarizer Tool
+ * Scrapes a website and generates a summary using AI
+ * Uses the Puppeteer scraper directly rather than using the existing tool
+ */
+
+import { z } from 'zod';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { formatScrapedContent } from '@/lib/chat/tools';
 import { generateText } from 'ai';
 import { openai } from '@ai-sdk/openai';
 
-export const maxDuration = 60; // Maximum allowed duration for Hobby plan (60 seconds)
+// Max duration setting for Hobby plan
+const MAX_DURATION_MS = 15000;
+
+// Schema for website summarization
+export const websiteSummarySchema = z.object({
+  url: z.string().describe('The URL of the website to summarize'),
+  maxWords: z.number().optional().describe('Maximum word count for the summary (default: 600)')
+});
 
 /**
- * Scrapes a website and generates a concise summary using AI
- * @param url The website URL to scrape and summarize
- * @param maxWords Maximum word count for the summary (default: 200)
- * @param userId Optional user ID for logging purposes only
- * @returns A summary of the website content with prefix "Website Summary: "
+ * Generate a summary of a website
+ * @param url The URL to summarize
+ * @param options Optional parameters like maximum word count
+ * @returns The summary of the website
  */
 export async function generateWebsiteSummary(
   url: string,
-  maxWords: number = 600,
-  userId?: string
-): Promise<string> {
-  const operation = 'website_summary';
-  const startTime = Date.now();
+  options: {
+    maxWords?: number;
+  } = {}
+): Promise<{
+  summary: string;
+  url: string;
+  title: string;
+  timeTaken: number;
+  wordCount: number;
+  error?: string;
+}> {
+  const startTime = performance.now();
+  let title = '';
 
   try {
-    if (!url || !url.startsWith('http')) {
-      logger.warn('Invalid URL provided for website summarization', {
-        url,
-        operation
+    // Validate the URL
+    // We'll import these dynamically to avoid increasing the edge bundle size
+    const { validateAndSanitizeUrl } = await import('./web-scraper-tool');
+    const { ensureProtocol } = await import('@/lib/chat/url-utils');
+
+    // Process the URL to ensure it has protocol and validate it
+    const fullUrl = ensureProtocol(url);
+    let validUrl: string;
+
+    try {
+      validUrl = validateAndSanitizeUrl(fullUrl);
+    } catch (error) {
+      edgeLogger.warn('Invalid URL for summarization', {
+        url: fullUrl,
+        error: error instanceof Error ? error.message : String(error)
       });
-      return '';
+
+      return {
+        summary: `The URL ${url} appears to be invalid or unsafe. Please provide a valid website URL.`,
+        url: url,
+        title: 'Invalid URL',
+        timeTaken: Math.round(performance.now() - startTime),
+        wordCount: 0,
+        error: 'Invalid URL'
+      };
     }
 
-    logger.info('Starting website summarization process', {
-      url,
-      maxWords,
-      operation,
-      userId: userId || 'anonymous'
+    edgeLogger.info('Starting website summarization', {
+      url: validUrl,
+      maxWords: options.maxWords
     });
 
-    // Step 1: Scrape the website using the existing tool
-    const scrapeStartTime = Date.now();
-    const scrapeResult = await chatTools.webScraper.execute({ url }, {
-      toolCallId: 'internal-website-summarizer',
-      messages: []
-    });
+    // Call the Puppeteer scraper directly
+    const { callPuppeteerScraper } = await import('./web-scraper-tool');
 
-    const scrapeTime = Date.now() - scrapeStartTime;
+    // Set up a timeout for the scraping operation
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), MAX_DURATION_MS);
 
-    // Handle different response formats from the webScraper tool
-    let content = '';
-    let title = 'Unknown';
+    try {
+      // Perform the scraping
+      const scraperResult = await callPuppeteerScraper(validUrl);
+      clearTimeout(timeoutId);
 
-    // Define a type for the possible object structure
-    interface ScraperResult {
-      content?: string | any;
-      title?: string;
-      url?: string;
+      // Check if the result is valid
+      if (!scraperResult || typeof scraperResult !== 'object') {
+        throw new Error('Invalid scraper result');
+      }
+
+      // Extract content and title from the result
+      const content = scraperResult.content || '';
+      title = scraperResult.title || 'Unknown Title';
+
+      // Log successful scraping
+      edgeLogger.info('Website scraped successfully for summary', {
+        url: validUrl,
+        contentLength: content.length,
+        title,
+        timeTaken: Math.round(performance.now() - startTime)
+      });
+
+      // Format the content for the AI
+      const formattedContent = formatScrapedContent(scraperResult);
+
+      // Generate the summary
+      const summary = await generateSummary(
+        formattedContent,
+        title,
+        validUrl,
+        options.maxWords || 600,
+        startTime
+      );
+
+      return summary;
+    } finally {
+      clearTimeout(timeoutId);
     }
-
-    if (typeof scrapeResult === 'string') {
-      // If scrapeResult is a string, use it directly as content
-      content = scrapeResult;
-    } else if (scrapeResult && typeof scrapeResult === 'object') {
-      // If scrapeResult is an object, extract content and title properties
-      // Use type assertion to inform TypeScript about the structure
-      const typedResult = scrapeResult as ScraperResult;
-
-      content = typeof typedResult.content === 'string' ? typedResult.content :
-        (typedResult.content ? JSON.stringify(typedResult.content) : '');
-      title = typedResult.title || 'Unknown';
-    }
-
-    if (!content || content.trim() === '') {
-      logger.warn('Failed to scrape website content', { url, operation });
-      return 'Website Summary: [Error: Failed to scrape website content]';
-    }
-
-    logger.info('Website scraped successfully', {
-      url,
-      contentLength: content.length,
-      title: title,
-      scrapeTimeMs: scrapeTime,
-      operation
-    });
-
-    // Step 2: Generate the summary
-    const summary = await generateSummary(
-      content,
-      title,
-      url,
-      maxWords,
-      startTime
-    );
-
-    // Log total processing time
-    const totalTime = Date.now() - startTime;
-    logger.info('Total website summarization process completed', {
-      url,
-      totalProcessingTimeMs: totalTime,
-      operation
-    });
-
-    return summary;
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.error('Error in website summarization process', {
+    const timeTaken = Math.round(performance.now() - startTime);
+
+    edgeLogger.error('Website summarization failed', {
       url,
-      error: errorMessage,
-      operation,
-      totalTimeMs: Date.now() - startTime,
-      stack: error instanceof Error ? error.stack : 'No stack trace'
+      error: error instanceof Error ? error.message : String(error),
+      timeTaken
     });
-    return 'Website Summary: [Error generating summary]';
+
+    return {
+      summary: `Sorry, I encountered an error while trying to summarize the website at ${url}. ${error instanceof Error ? error.message : String(error)}`,
+      url,
+      title: title || 'Error',
+      timeTaken,
+      wordCount: 0,
+      error: error instanceof Error ? error.message : String(error)
+    };
   }
 }
 
 /**
- * Generates a summary of website content using AI
- * @param content The scraped content
- * @param title The website title
- * @param url The website URL
- * @param maxWords Maximum word count for summary
- * @param processStartTime Start time of the entire process for timing
- * @returns The generated summary with "Website Summary: " prefix
+ * Generate a summary using AI
  */
 async function generateSummary(
   content: string,
   title: string,
   url: string,
   maxWords: number,
-  processStartTime: number = Date.now()
-): Promise<string> {
-  const operation = 'website_summary';
-  const summaryStartTime = Date.now();
-
+  startTime: number
+): Promise<{
+  summary: string;
+  url: string;
+  title: string;
+  timeTaken: number;
+  wordCount: number;
+}> {
   try {
-    // Truncate content for faster processing - using 25,000 characters as requested
-    const truncatedContent = content.substring(0, 25000);
-    const truncated = truncatedContent.length < content.length;
-
-    logger.info('Preparing content for summarization', {
-      url,
+    edgeLogger.info('Starting summary generation', {
       contentLength: content.length,
-      truncatedLength: truncatedContent.length,
-      truncationPercentage: Math.round((truncatedContent.length / content.length) * 100),
-      operation
+      targetWordCount: maxWords
     });
 
-    // Enhanced prompt for more structured, comprehensive summary with testimonials
-    const systemPrompt = "You are a professional content researcher for photography businesses. Your task is to extract and organize key business information into a structured, comprehensive writeup. Focus on extracting the most important information efficiently.";
-    const userPrompt = `
-Extract and summarize the key features, benefits, and unique selling propositions (USPs) from the following photography business website content using EXACTLY ${maxWords} words.
+    // Prepare the prompt for the AI
+    const prompt = `You are a professional summarization assistant. Summarize the following website content in approximately ${maxWords} words.
+      Focus on the main offerings, value proposition, and key information a photography business owner would find valuable.
+      Make the summary clear, informative, and easy to understand. Don't mention that you're summarizing the content.
+      
+      Website: ${title} (${url})
+      
+      Content:
+      ${content}
+      
+      Summary (approximately ${maxWords} words):`;
 
-Focus on extracting these specific details:
-1. The primary value proposition and what makes this photography business unique
-2. Key features of their photography services and how they directly benefit customers
-3. The specific problems they solve for their target audience
-4. Pricing information, packages, and any special offers available
-5. Guarantees, satisfaction policies, or risk-reversals they offer
-6. Their credentials, experience, awards, or other trust factors
-7. The emotional and practical transformation clients can expect
-8. The booking process and what clients can expect at each stage
-9. Contact information and call-to-action details
-10. IMPORTANT: Find and include 2-3 DIRECT QUOTES from client testimonials with the client's name/attribution
-
-Format your summary into these clear sections:
-- Overview (2-3 sentences capturing the essence of the photography business)
-- Core Offerings (bullet points of main photography services)
-- Pricing & Packages (summary of pricing structure)
-- Key Benefits & Differentiators (what sets them apart)
-- Client Testimonials (include direct quotes with attribution)
-- Booking Process & Contact Information (how to get started)
-
-Website information:
-Title: ${title}
-URL: ${url}
-Content:
-${truncatedContent}${truncated ? ' ... (content truncated for brevity)' : ''}
-
-Keep the language benefit-focused and persuasive while maintaining the brand's voice.
-`;
-
-    // Log prompt preparation time
-    const promptPrepTime = Date.now() - summaryStartTime;
-    logger.info('Prompt preparation completed', {
-      url,
-      promptPrepTimeMs: promptPrepTime,
-      operation
-    });
-
-    // Generate the summary using a faster model for better performance
-    const aiStartTime = Date.now();
-    const { text: aiSummary } = await generateText({
-      model: openai('gpt-3.5-turbo'), // Using a faster model for better performance
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
+    // Generate the summary using AI SDK directly
+    const completion = await generateText({
+      model: openai('gpt-3.5-turbo'),
+      messages: [{ role: 'user', content: prompt }],
       temperature: 0.3,
-      maxTokens: 1500, // Adjusted for the faster model
+      maxTokens: 800,
     });
 
-    const aiProcessingTime = Date.now() - aiStartTime;
-    const summaryTime = Date.now() - summaryStartTime;
-    const wordCount = aiSummary.split(/\s+/).filter(Boolean).length;
+    // Get the summary text
+    const summary = completion.text.trim();
 
-    // Format the summary with a consistent prefix
-    const formattedSummary = `Website Summary: ${aiSummary}`;
+    // Calculate word count
+    const wordCount = countWords(summary);
 
-    // Log word count percentage of target
-    const wordCountPercentage = Math.floor((wordCount / maxWords) * 100);
-
-    logger.info('Summary generated successfully', {
+    // Log results
+    const timeTaken = Math.round(performance.now() - startTime);
+    edgeLogger.info('Summary generation completed', {
       url,
+      timeTaken,
+      summaryLength: summary.length,
       wordCount,
-      wordCountPercentage: `${wordCountPercentage}% of target`,
-      summaryLength: formattedSummary.length,
-      aiProcessingTimeMs: aiProcessingTime,
-      totalSummaryTimeMs: summaryTime,
-      operation
+      targetWordCount: maxWords
     });
 
-    // If word count is significantly below target, log a warning
-    if (wordCount < maxWords * 0.85) {
-      logger.warn('Summary word count below 85% of target', {
-        url,
-        targetWords: maxWords,
-        actualWords: wordCount,
-        percentOfTarget: wordCountPercentage
-      });
-    }
-
-    return formattedSummary;
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-
-    logger.error('Error generating website summary', {
+    return {
+      summary,
       url,
-      error: errorMessage,
-      operation,
-      stack: error instanceof Error ? error.stack : 'No stack trace'
+      title,
+      timeTaken,
+      wordCount
+    };
+  } catch (error) {
+    edgeLogger.error('Summary generation failed', {
+      error: error instanceof Error ? error.message : String(error)
     });
 
-    return `Website Summary: [Error summarizing ${url}]`;
+    throw error;
   }
+}
+
+/**
+ * Count words in a string
+ */
+function countWords(text: string): number {
+  return text.split(/\s+/).filter(w => w.length > 0).length;
 }

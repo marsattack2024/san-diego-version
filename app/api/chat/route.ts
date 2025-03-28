@@ -13,7 +13,8 @@ import { OpenAI } from 'openai';
 // Import only validation & utility modules at the top level
 import { extractUrls } from '@/lib/chat/url-utils';
 import { toolManager } from '@/lib/chat/tool-manager';
-import { streamText, appendClientMessage, appendResponseMessages } from 'ai';
+import { streamText, appendClientMessage, appendResponseMessages, tool } from 'ai';
+import { chatTools } from '@/lib/chat/tools';
 
 // Import schema types
 import { getInformationSchema, webScraperSchema, detectAndScrapeUrlsSchema } from '@/lib/chat/tool-schemas';
@@ -52,32 +53,6 @@ function checkEnvironment() {
 
 // Define a timeout type to use instead of NodeJS.Timeout
 type TimeoutId = ReturnType<typeof setTimeout>;
-
-// Define the formatScrapedContent function at module level instead of nested
-function formatScrapedContent(content: any): string {
-  if (!content) return 'No content was extracted from the URL.';
-
-  // Format content into a structured string  
-  let formatted = '';
-
-  if (content.title) {
-    formatted += `TITLE: ${content.title}\n\n`;
-  }
-
-  if (content.description) {
-    formatted += `DESCRIPTION: ${content.description}\n\n`;
-  }
-
-  if (content.mainContent) {
-    formatted += `CONTENT:\n${content.mainContent}\n\n`;
-  }
-
-  if (content.url) {
-    formatted += `SOURCE: ${content.url}\n`;
-  }
-
-  return formatted;
-}
 
 // Add this helper function near the top of the file, after imports
 function maskUserId(userId: string): string {
@@ -742,47 +717,50 @@ export async function POST(req: Request) {
         toolsUsed: toolManager.getToolsUsed()
       });
 
-      // Add tools to the AI using the AI SDK
-      // Initialize an empty collection of tools
+      // Will hold our AI SDK tools
       let aiSdkTools = {};
 
+      // Initialize AI SDK tools
       try {
-        // Dynamically import AI SDK tool utilities
-        const { tool } = await import('ai');
+        // Import tool schemas
+        const { webScraperSchema, detectAndScrapeUrlsSchema, getInformationSchema } = await import('@/lib/chat/tool-schemas');
+        const { formatScrapedContent } = await import('@/lib/chat/tools');
 
-        // Dynamically import the tools
-        const { chatTools } = await import('@/lib/chat/tools');
+        // Import the toolManager singleton
+        const { toolManager } = await import('@/lib/chat/tool-manager');
 
-        // Convert our tools to AI SDK format
+        // Define AI SDK tools
         aiSdkTools = {
           getInformation: tool({
-            description: 'Search the internal knowledge base for relevant information about photography business topics',
+            description: 'Search the photography knowledge base for relevant information on marketing and business topics',
             parameters: getInformationSchema,
             execute: async ({ query }) => {
               const startTime = performance.now();
 
               try {
                 const result = await chatTools.getInformation.execute({ query }, {
-                  toolCallId: 'ai-initiated-search',
+                  toolCallId: 'ai-initiated-kb-search',
                   messages: []
                 });
 
                 const duration = Math.round(performance.now() - startTime);
                 edgeLogger.info('Knowledge base search completed', {
-                  query,
+                  queryLength: query.length,
                   durationMs: duration,
                   resultLength: typeof result === 'string' ? result.length : 0
                 });
 
-                // Register the tool as used for validation purposes
+                // Register the tool usage for validation
                 toolManager.registerToolUsage('Knowledge Base');
+                if (typeof result === 'string') {
+                  toolManager.registerToolResult('Knowledge Base', result);
+                }
 
-                // Just return the string result from the tools layer
                 return result;
               } catch (error) {
                 const duration = Math.round(performance.now() - startTime);
                 edgeLogger.error('Knowledge base search failed', {
-                  query,
+                  queryLength: query.length,
                   durationMs: duration,
                   error: formatError(error)
                 });
@@ -793,7 +771,7 @@ export async function POST(req: Request) {
           }),
 
           webScraper: tool({
-            description: 'Analyze web content from a URL to extract detailed information about the photography website',
+            description: 'Scrape and extract content from a webpage to get detailed information from the specified URL. Use this tool when a URL is mentioned and you need to access its content.',
             parameters: webScraperSchema,
             execute: async ({ url }) => {
               const startTime = performance.now();
@@ -807,14 +785,62 @@ export async function POST(req: Request) {
                 const fullUrl = ensureProtocol(url);
                 const validUrl = validateAndSanitizeUrl(fullUrl);
 
-                // Call the scraper
-                const result = await callPuppeteerScraper(validUrl);
+                // Check the Redis cache first
+                const cacheKey = `scrape:${validUrl}`;
+                let scraperResult = null;
 
-                // Format the content
-                const formattedContent = formatScrapedContent(result);
+                try {
+                  const redis = Redis.fromEnv();
+                  const cachedContent = await redis.get(cacheKey);
+                  if (cachedContent && typeof cachedContent === 'string') {
+                    try {
+                      const parsedContent = JSON.parse(cachedContent);
+                      if (parsedContent && typeof parsedContent.content === 'string') {
+                        scraperResult = parsedContent;
+                        edgeLogger.info('Redis cache hit for scraper tool', {
+                          url: validUrl,
+                          contentLength: parsedContent.content.length,
+                          cacheSource: 'redis'
+                        });
+                      }
+                    } catch (parseError) {
+                      edgeLogger.error('Error parsing cached content in tool', {
+                        error: formatError(parseError)
+                      });
+                    }
+                  }
+                } catch (cacheError) {
+                  edgeLogger.error('Error checking Redis cache in tool', {
+                    error: formatError(cacheError)
+                  });
+                }
+
+                // If not in cache, call the scraper
+                if (!scraperResult) {
+                  // Call the scraper
+                  scraperResult = await callPuppeteerScraper(validUrl);
+
+                  // Store in Redis cache
+                  try {
+                    const redis = Redis.fromEnv();
+                    const jsonString = JSON.stringify(scraperResult);
+                    await redis.set(cacheKey, jsonString, { ex: 60 * 60 * 6 }); // 6 hours TTL
+                    edgeLogger.info('Stored scraped content in Redis from tool', {
+                      url: validUrl,
+                      contentLength: typeof scraperResult.content === 'string' ? scraperResult.content.length : 0
+                    });
+                  } catch (storageError) {
+                    edgeLogger.error('Error storing in Redis cache from tool', {
+                      error: formatError(storageError)
+                    });
+                  }
+                }
+
+                // Format the content for the AI
+                const formattedContent = formatScrapedContent(scraperResult);
 
                 const duration = Math.round(performance.now() - startTime);
-                edgeLogger.info('Web scraper completed', {
+                edgeLogger.info('Web scraper tool completed', {
                   url: validUrl,
                   durationMs: duration,
                   contentLength: formattedContent.length
@@ -822,11 +848,12 @@ export async function POST(req: Request) {
 
                 // Register the tool as used for validation purposes
                 toolManager.registerToolUsage('Web Scraper');
+                toolManager.registerToolResult('Web Scraper', formattedContent);
 
                 return formattedContent;
               } catch (error) {
                 const duration = Math.round(performance.now() - startTime);
-                edgeLogger.error('Web scraper failed', {
+                edgeLogger.error('Web scraper tool failed', {
                   url,
                   durationMs: duration,
                   error: formatError(error)
@@ -890,7 +917,7 @@ export async function POST(req: Request) {
       edgeLogger.info('Final AI messages prepared', {
         messageCount: aiMessages.length,
         toolsUsed: toolManager.getToolsUsed(),
-        toolsCount: toolManager.getToolsUsed().length,
+        toolsCount: Object.keys(aiSdkTools).length,
         includesUserProfile: !!userId,
         elapsedTimeMs: Date.now() - startTime
       });
@@ -914,172 +941,28 @@ export async function POST(req: Request) {
           systemPromptSize: aiMessages[0]?.content?.length || 0
         });
 
-        // Process detected URLs directly
+        // Instead of preprocessing URLs directly, we'll use the AI SDK tools approach
+        // Remove the "Processing detected URLs directly" section and let the AI model decide when to use the tools
+
+        // If there are detected URLs, add a hint to the system prompt about them but don't scrape them yet
         if (urls.length > 0) {
-          edgeLogger.info('Processing detected URLs directly', {
+          edgeLogger.info('URLs detected in user message', {
             urlCount: urls.length,
             urls: urls.slice(0, 3) // Log up to 3 URLs
           });
 
-          // Import the necessary tools for URL scraping
-          const { callPuppeteerScraper, validateAndSanitizeUrl } = await import('@/lib/agents/tools/web-scraper-tool');
-          const { ensureProtocol } = await import('@/lib/chat/url-utils');
+          // If there's a system message, add a note about the URLs but don't include content
+          if (aiMessages.length > 0 && aiMessages[0].role === 'system' && typeof aiMessages[0].content === 'string') {
+            aiMessages[0].content += `\n\n${'='.repeat(80)}\n` +
+              `## NOTE: URLS DETECTED IN USER MESSAGE\n` +
+              `The user message contains the following URLs that may be relevant to their query:\n` +
+              urls.map(url => `- ${url}`).join('\n') + `\n` +
+              `You can use the webScraper tool to get content from these URLs if needed for your response.\n` +
+              `${'='.repeat(80)}\n\n`;
 
-          try {
-            // Process the first URL (limit to avoid overwhelming the response)
-            const fullUrl = ensureProtocol(urls[0]);
-            const validUrl = validateAndSanitizeUrl(fullUrl);
-
-            // Check cache first - Redis requires explicit JSON serialization
-            const cacheKey = `scrape:${validUrl}`;
-            const redis = Redis.fromEnv();
-            let result;
-
-            try {
-              const cachedContentStr = await redis.get(cacheKey);
-              if (cachedContentStr) {
-                // Parse cached content with error handling
-                try {
-                  // Ensure we're working with a string before parsing
-                  const parsedContent = typeof cachedContentStr === 'string'
-                    ? JSON.parse(cachedContentStr)
-                    : cachedContentStr; // If it's already an object, use it directly
-
-                  // Validate the parsed content has the required fields
-                  if (parsedContent && typeof parsedContent === 'object' &&
-                    typeof parsedContent.content === 'string' &&
-                    typeof parsedContent.title === 'string' &&
-                    typeof parsedContent.url === 'string') {
-                    result = parsedContent;
-                    edgeLogger.info('Redis cache hit for URL', {
-                      url: validUrl,
-                      cacheHit: true,
-                      contentLength: result.content.length,
-                      cacheSource: 'redis',
-                      durationMs: Date.now() - startTime
-                    });
-                  } else {
-                    throw new Error('Missing required fields in cached content');
-                  }
-                } catch (parseError: unknown) {
-                  edgeLogger.error('Error parsing cached content', {
-                    url: validUrl,
-                    error: parseError instanceof Error ? parseError.message : String(parseError),
-                    cachedContentSample: typeof cachedContentStr === 'string'
-                      ? cachedContentStr.substring(0, 100) + '...'
-                      : `type: ${typeof cachedContentStr}`
-                  });
-                  // Continue with scraping since parsing failed
-                }
-              }
-            } catch (cacheError) {
-              edgeLogger.error('Error checking Redis cache', {
-                url: validUrl,
-                error: cacheError instanceof Error ? cacheError.message : String(cacheError)
-              });
-            }
-
-            // If not in cache or parsing failed, perform scraping
-            if (!result) {
-              // Call the puppeteer scraper with timeout protection
-              edgeLogger.info('No Redis cache hit - calling puppeteer scraper', { url: validUrl });
-
-              const scrapingPromise = callPuppeteerScraper(validUrl);
-              const timeoutPromise = new Promise<never>((_, reject) => {
-                setTimeout(() => reject(new Error('Scraping timed out')), 15000);
-              });
-
-              const scraperResult = await Promise.race([scrapingPromise, timeoutPromise]);
-
-              // Handle potential string responses from the scraper
-              // This ensures we always have a proper object before stringifying
-              try {
-                if (typeof scraperResult === 'string') {
-                  // If it's a JSON string, parse it
-                  result = JSON.parse(scraperResult);
-                  edgeLogger.info('Parsed string result from scraper', {
-                    resultType: 'json-string',
-                    parsed: true
-                  });
-                } else if (scraperResult && typeof scraperResult === 'object') {
-                  // If it's already an object, use it directly
-                  result = scraperResult;
-                  edgeLogger.info('Using object result from scraper', {
-                    resultType: 'object'
-                  });
-                } else {
-                  throw new Error(`Invalid scraper result: ${typeof scraperResult}`);
-                }
-
-                // Validate the result has the required fields
-                if (!result.content || !result.title || !result.url) {
-                  throw new Error('Missing required fields in scraper result');
-                }
-
-                // Create a cache-friendly structure that matches what we always expect
-                const cacheableResult = {
-                  url: result.url,
-                  title: result.title,
-                  description: result.description || '',
-                  content: result.content,
-                  timestamp: Date.now()
-                };
-
-                // Store in Redis cache with explicit JSON stringification
-                try {
-                  const jsonString = JSON.stringify(cacheableResult);
-                  await redis.set(cacheKey, jsonString, { ex: 60 * 60 * 6 }); // 6 hours TTL
-                  edgeLogger.info('Stored scraped content in Redis cache', {
-                    url: validUrl,
-                    contentLength: result.content.length,
-                    jsonStringLength: jsonString.length,
-                    storedAt: new Date().toISOString()
-                  });
-                } catch (storageError) {
-                  edgeLogger.error('Error storing in Redis cache', {
-                    url: validUrl,
-                    error: storageError instanceof Error ? storageError.message : String(storageError)
-                  });
-                }
-              } catch (processingError) {
-                edgeLogger.error('Error processing scraper result', {
-                  url: validUrl,
-                  error: processingError instanceof Error ? processingError.message : String(processingError),
-                  resultType: typeof scraperResult,
-                  resultSample: typeof scraperResult === 'string'
-                    ? (scraperResult as string).substring(0, 100) + '...'
-                    : `type: ${typeof scraperResult}`
-                });
-
-                // Use the original result as fallback
-                result = scraperResult;
-              }
-            }
-
-            // Format the scraped content
-            const formattedContent = formatScrapedContent(result);
-
-            // Enhance the system message with the scraped content
-            if (aiMessages.length > 0 && aiMessages[0].role === 'system' && typeof aiMessages[0].content === 'string') {
-              aiMessages[0].content += `\n\n${'='.repeat(80)}\n` +
-                `## IMPORTANT: SCRAPED WEB CONTENT FROM USER'S URLS\n` +
-                `The following content has been automatically extracted from URLs in the user's message.\n` +
-                `You MUST use this information as your primary source when answering questions about these URLs.\n` +
-                `Do not claim you cannot access the content - it is provided below and you must use it.\n` +
-                `${'='.repeat(80)}\n\n` +
-                formattedContent +
-                `\n\n${'='.repeat(80)}\n`;
-
-              edgeLogger.info('Enhanced system message with scraped content', {
-                urlsScraped: 1,
-                contentLength: formattedContent.length,
-                enhancedPromptLength: aiMessages[0].content.length
-              });
-            }
-          } catch (error) {
-            edgeLogger.error('Error scraping URL', {
-              url: urls[0],
-              error: formatError(error)
+            edgeLogger.info('Added URL hint to system prompt', {
+              urlCount: urls.length,
+              hintedPromptLength: aiMessages[0].content.length
             });
           }
         }

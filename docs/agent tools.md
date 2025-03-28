@@ -1,239 +1,144 @@
-# Agent Tools Architecture
+# Agent Tools Implementation
 
-This document describes the implementation of AI tools in the San Diego application, including both AI SDK tools and preprocessing features.
+This document provides a comprehensive overview of how tools are implemented in the San Diego application, with a focus on the AI SDK integration and tool calling capabilities.
 
-## Overview
+## Architecture Overview
 
-The San Diego application employs a hybrid approach to AI tooling:
+Our application uses a hybrid approach for tools:
 
-1. **AI SDK Tools**: Knowledge Base and Web Scraper are implemented as AI SDK tools, allowing the model to actively decide when to use these tools during conversation.
+1. **AI SDK Tools**: Implemented using Vercel AI SDK's tool framework, allowing the model to call tools dynamically based on user queries.
+2. **Deep Search**: Implemented as a preprocessing step controlled by user toggles.
 
-2. **Preprocessing Features**: Deep Search operates as a preprocessing step controlled by user toggles, with results embedded directly in the system prompt.
-
-This hybrid approach combines the best of both worlds: giving the AI model the ability to proactively use tools when needed while ensuring high-quality context is always available through preprocessing.
+This hybrid architecture provides the optimal balance between model autonomy and controlled preprocessing.
 
 ## AI SDK Tools
 
-The application implements two primary AI SDK tools:
-
 ### Knowledge Base Tool
+
+The Knowledge Base tool allows the model to search our vector database for relevant information about photography business topics.
 
 ```typescript
 getInformation: tool({
-  description: 'Search the internal knowledge base for relevant information about photography business topics',
+  description: 'Search the photography knowledge base for relevant information on marketing and business topics',
   parameters: getInformationSchema,
   execute: async ({ query }) => {
-    // Implementation that searches vector database
-    const result = await findSimilarDocumentsOptimized(query, {
-      limit: 5,
-      similarityThreshold: 0.65
+    // Implementation that searches the vector database
+    const result = await chatTools.getInformation.execute({ query }, {
+      toolCallId: 'ai-initiated-kb-search',
+      messages: []
     });
     
-    // Format and return results
-    return formattedResults;
+    return result;
   }
 })
 ```
-
-The Knowledge Base tool:
-- Provides access to internal knowledge about photography business topics
-- Uses vector search to find relevant content based on semantic similarity
-- Formats results with similarity scores for transparency
-- Includes proper attribution prompting for the model
 
 ### Web Scraper Tool
 
+The Web Scraper tool allows the model to extract content from URLs mentioned by the user.
+
 ```typescript
 webScraper: tool({
-  description: 'Analyze web content from a URL to extract detailed information about the photography website',
+  description: 'Scrape and extract content from a webpage to get detailed information from the specified URL',
   parameters: webScraperSchema,
   execute: async ({ url }) => {
-    // Call the puppeteer scraper
-    const result = await callPuppeteerScraper(url);
+    // Implementation that calls the Puppeteer scraper
+    const { callPuppeteerScraper, validateAndSanitizeUrl } = await import('@/lib/agents/tools/web-scraper-tool');
+    const { ensureProtocol } = await import('@/lib/chat/url-utils');
     
-    // Format and return the content
-    return formatScrapedContent(result);
+    const fullUrl = ensureProtocol(url);
+    const validUrl = validateAndSanitizeUrl(fullUrl);
+    
+    // Check Redis cache first
+    // If not in cache, call the Puppeteer scraper
+    const scraperResult = await callPuppeteerScraper(validUrl);
+    
+    // Format the result for the AI
+    const formattedContent = formatScrapedContent(scraperResult);
+    
+    return formattedContent;
   }
 })
 ```
-
-The Web Scraper tool:
-- Extracts content from photography websites for analysis
-- Handles URL validation and protocol enforcement
-- Uses Puppeteer for robust content extraction
-- Formats results in a consistent, readable format
-
-### URL Detection Helper
-
-```typescript
-detectAndScrapeUrls: tool({
-  description: 'Automatically detects URLs in text and scrapes their content',
-  parameters: detectAndScrapeUrlsSchema,
-  execute: async ({ text }) => {
-    // Extract URLs
-    const urls = extractUrls(text);
-    
-    // Process and return content
-    // ...
-  }
-})
-```
-
-This helper tool:
-- Finds URLs mentioned in user text
-- Validates and processes them automatically
-- Returns both the URLs found and their scraped content
 
 ## Preprocessing Features
 
 ### Deep Search
 
-Deep Search operates as a preprocessing step rather than an AI SDK tool:
+Deep Search is implemented as a preprocessing step rather than an AI SDK tool. This is because:
 
-1. It's activated based on user toggle in the UI
-2. When enabled, it runs before the conversation is sent to the AI
-3. Results are embedded directly in the system prompt
-4. The AI is made aware of these results but doesn't need to call the tool directly
+1. It's controlled by explicit user toggles
+2. It requires substantial preprocessing time
+3. Results are better embedded directly in the system prompt
 
-Benefits of this approach:
-- Ensures high-quality information is always available
-- Preserves user control over when to use external sources
-- Reduces token consumption by avoiding multiple tool calls
-- Improves response speed since data is already present
+```typescript
+// Deep Search preprocessing
+if (deepSearchEnabled) {
+  const deepSearchResults = await performDeepSearch(query);
+  enhancedPrompt += deepSearchResults;
+}
+```
 
 ## Tool Selection Strategy
 
-The AI model is instructed to use tools in the following order:
+The model follows a specific strategy for tool selection:
 
-1. First, utilize any preprocessed context (Deep Search results)
-2. For photography business questions, use the Knowledge Base tool
-3. For website analysis, use the Web Scraper tool
-4. When encountering URLs in text, use the URL detection helper
+1. Use the **Knowledge Base** tool for general photography business questions
+2. Use the **Web Scraper** tool when URLs are mentioned in the query or when information about specific websites is needed
+3. Use **Deep Search** results (when enabled) for broader web research questions
 
-## Tool Registration
+## URL Detection and Hinting
 
-Tools are registered in the chat route using the AI SDK pattern:
-
-```typescript
-// Add tools to the AI using the AI SDK
-let aiSdkTools = {};
-
-try {
-  // Dynamically import AI SDK tool utilities
-  const { tool } = await import('ai');
-
-  // Convert our tools to AI SDK format
-  aiSdkTools = {
-    getInformation: tool({ /* ... */ }),
-    webScraper: tool({ /* ... */ }),
-    detectAndScrapeUrls: tool({ /* ... */ })
-  };
-} catch (error) {
-  edgeLogger.error('Error initializing tools', { error: formatError(error) });
-}
-
-// Pass tools to the streamText function
-const response = await streamText({
-  model: selectedModel,
-  messages: aiMessages,
-  temperature: 0.7,
-  maxTokens: 25000,
-  tools: Object.keys(aiSdkTools).length > 0 ? aiSdkTools : undefined
-})
-```
-
-## Response Validation
-
-To ensure proper attribution, the application validates AI responses to confirm tools are properly acknowledged:
+Rather than preprocessing URLs by default, we now hint to the model that URLs were detected:
 
 ```typescript
-const validateResponse = createResponseValidator(toolManager.getToolsUsed());
-
-// Apply validation to ensure tool attribution
-const validatedContent = validateResponse(text);
-```
-
-The validator:
-1. Checks if tool usage is properly attributed in responses
-2. Adds appropriate attribution if missing
-3. Ensures transparency in how responses are generated
-
-## Benefits of This Approach
-
-1. **Intelligent Tool Selection**: The AI model can dynamically choose which tools to use based on the conversation context.
-
-2. **User Control**: Users maintain control over Deep Search usage through UI toggles.
-
-3. **Optimized Token Usage**: Preprocessing steps reduce unnecessary tool calls, preserving token budget for more complex reasoning.
-
-4. **Enhanced Response Accuracy**: The combination of preprocessed context and on-demand tools provides comprehensive information access.
-
-5. **Flexible Architecture**: The hybrid approach allows for adding new tools or preprocessing steps without major architectural changes.
-
-## Token Limits and Truncation Strategy
-
-The application maximizes the use of GPT-4o's 25K token context window through carefully configured token limits and intelligent content truncation:
-
-### Model Token Configuration
-
-```typescript
-// In lib/ai/models.ts
-{
-  id: 'gpt-4o',
-  name: 'GPT-4o',
-  description: 'Most capable model for complex tasks',
-  maxTokens: 25000,  // Increased from 8192 to utilize full context window
-  provider: 'openai'
+if (urls.length > 0) {
+  aiMessages[0].content += `\n\n${'='.repeat(80)}\n` +
+    `## NOTE: URLS DETECTED IN USER MESSAGE\n` +
+    `The user message contains the following URLs that may be relevant to their query:\n` +
+    urls.map(url => `- ${url}`).join('\n') + `\n` +
+    `You can use the webScraper tool to get content from these URLs if needed for your response.\n` +
+    `${'='.repeat(80)}\n\n`;
 }
 ```
 
-### API Request Configuration
+This approach gives the model more flexibility to decide when scraping is necessary.
+
+## Tool Registration in Chat Route
+
+Tools are registered in the chat route:
 
 ```typescript
-// In app/api/chat/route.ts
+const aiSdkTools = {
+  getInformation: tool({ /* ... */ }),
+  webScraper: tool({ /* ... */ }),
+  detectAndScrapeUrls: tool({ /* ... */ })
+};
+
+// Use the tools in AI SDK
 const result = await streamText({
   model: openai('gpt-4o'),
   messages: aiMessages,
-  temperature: 0.4,
-  maxTokens: 25000,  // Increased to match model capacity
   tools: aiSdkTools,
   maxSteps: 10,
-  toolChoice: 'auto'
+  toolChoice: 'auto',
+  // ...
 });
 ```
 
-### Content Truncation Limits
+## Benefits of This Approach
 
-The system implements intelligent truncation to ensure content fits within token limits while preserving the most important information:
+1. **Intelligent Tool Selection**: The model decides when to use tools based on the query's needs
+2. **User Control**: Deep Search remains explicitly controlled by user toggles
+3. **Optimized Token Usage**: URLs are only scraped when necessary, saving tokens for complex queries
+4. **Enhanced Response Accuracy**: The model can choose to scrape specific URLs rather than all detected ones
 
-```typescript
-// In lib/chat/prompt-builder.ts
-const DEFAULT_TRUNCATION_LIMITS: TruncationConfig = {
-  ragMaxLength: 15000,       // Increased from 6000 to 15000
-  deepSearchMaxLength: 15000, // Increased from 3000 to 15000
-  webScraperMaxLength: 20000  // Increased from 5000 to 20000
-};
-```
+## Cross-Application Tool Sharing
 
-These increased limits allow for much more comprehensive context from each source while still ensuring the total content fits within the model's context window. For optimal content preservation, the system uses intelligent extraction rather than simple truncation when possible:
+The same tool implementations are used across:
 
-```typescript
-// Tool content is intelligently truncated to preserve most relevant parts
-if (formattedResult.content.length > 20000) {
-  const originalLength = formattedResult.content.length;
-  formattedResult.content = truncateContent(formattedResult.content, 20000, 'Web Scraper');
-}
-```
+1. Main chat interface
+2. Website summarizer
+3. Widget chat
 
-## Implementation Details
-
-The implementation spans several files:
-
-- `lib/chat/tool-schemas.ts`: Defines the Zod schemas for tool parameters
-- `lib/chat/tools.ts`: Implements the tool functionality
-- `app/api/chat/route.ts`: Integrates tools within the chat API route
-- `lib/chat/response-validator.ts`: Ensures proper tool attribution
-
-## Conclusion
-
-The hybrid approach to AI tooling in the San Diego application combines the flexibility of AI SDK tools with the reliability of preprocessing steps. This architecture ensures that the AI has access to the information it needs while giving it the agency to proactively seek additional information when required.
+This ensures consistent behavior and simplifies maintenance.

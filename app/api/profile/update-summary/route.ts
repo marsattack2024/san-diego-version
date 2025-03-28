@@ -15,7 +15,7 @@ const SAFETY_TIMEOUT_MS = 55000; // 55 seconds
 export async function POST(request: Request) {
   const startTime = Date.now();
   const operation = 'update_website_summary';
-  
+
   // Create a timeout promise that resolves after SAFETY_TIMEOUT_MS
   const timeoutPromise = new Promise((resolve) => {
     setTimeout(() => {
@@ -25,18 +25,18 @@ export async function POST(request: Request) {
       });
     }, SAFETY_TIMEOUT_MS);
   });
-  
+
   try {
     // Get request data
     const { url, userId } = await request.json();
-    
+
     if (!userId || !url) {
       return NextResponse.json(
         { error: 'User ID and URL are required' },
         { status: 400 }
       );
     }
-    
+
     // Validate URL starts with https://
     if (!url.startsWith('https://')) {
       return NextResponse.json(
@@ -44,36 +44,36 @@ export async function POST(request: Request) {
         { status: 400 }
       );
     }
-    
+
     logger.info('Starting website summary generation and profile update', {
       userId,
       urlDomain: new URL(url).hostname,
       operation
     });
-    
+
     // Get authenticated Supabase client
     const supabase = await createClient();
-    
+
     // Verify user exists
     const { data: user, error: userError } = await supabase
       .from('sd_user_profiles')
       .select('user_id')
       .eq('user_id', userId)
       .maybeSingle();
-      
+
     if (userError) {
       logger.error('Error checking user profile', {
         userId,
         error: userError.message,
         operation
       });
-      
+
       return NextResponse.json(
         { error: 'Error checking user profile', details: userError.message },
         { status: 500 }
       );
     }
-    
+
     if (!user) {
       logger.warn('User profile not found', { userId, operation });
       return NextResponse.json(
@@ -81,7 +81,7 @@ export async function POST(request: Request) {
         { status: 404 }
       );
     }
-    
+
     // Generate the summary and update the profile with timeout safety
     try {
       logger.info('Starting website summary generation', {
@@ -89,16 +89,17 @@ export async function POST(request: Request) {
         urlDomain: new URL(url).hostname,
         operation
       });
-      
+
       // Create the processing promise
       const processingPromise = async () => {
         // Generate the summary
-        const summary = await generateWebsiteSummary(url, 1000, userId);
-        
-        if (!summary) {
+        const summaryResult = await generateWebsiteSummary(url, { maxWords: 1000 });
+
+        if (!summaryResult || summaryResult.error) {
           logger.error('Failed to generate website summary', {
             userId,
             url,
+            error: summaryResult?.error,
             operation
           });
           return {
@@ -106,25 +107,27 @@ export async function POST(request: Request) {
             message: 'Failed to generate website summary'
           };
         }
-        
+
         logger.info('Website summary generated successfully', {
           userId,
-          summaryLength: summary.length,
+          summaryLength: summaryResult.summary.length,
+          wordCount: summaryResult.wordCount,
+          title: summaryResult.title,
           operation
         });
-        
+
         // Get a fresh Supabase client for the update
         const updateSupabase = await createClient();
-        
+
         // Update the profile with the generated summary
         const { error } = await updateSupabase
           .from('sd_user_profiles')
           .update({
-            website_summary: summary,
+            website_summary: summaryResult.summary,
             updated_at: new Date().toISOString()
           })
           .eq('user_id', userId);
-          
+
         if (error) {
           logger.error('Error updating website summary in profile', {
             userId,
@@ -136,23 +139,23 @@ export async function POST(request: Request) {
             message: 'Error updating profile with website summary'
           };
         }
-        
+
         logger.info('Profile updated with website summary', {
           userId,
           processingTimeMs: Date.now() - startTime,
           operation
         });
-        
+
         return {
           success: true,
           message: 'Website summary generated and saved',
-          summary
+          summary: summaryResult.summary
         };
       };
-      
+
       // Race the processing promise against the timeout
       const result = await Promise.race([processingPromise(), timeoutPromise]) as any;
-      
+
       // Check if timeout was reached
       if (result.timeoutReached) {
         logger.warn('Website summary generation timed out', {
@@ -161,21 +164,21 @@ export async function POST(request: Request) {
           timeoutMs: SAFETY_TIMEOUT_MS,
           operation
         });
-        
+
         return NextResponse.json({
           success: false,
           message: result.message,
           timedOut: true
         }, { status: 408 }); // 408 Request Timeout
       }
-      
+
       // Return the result from processing
-      return NextResponse.json(result, { 
-        status: result.success ? 200 : 500 
+      return NextResponse.json(result, {
+        status: result.success ? 200 : 500
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      
+
       logger.error('Error in website summary generation', {
         userId,
         url,
@@ -183,22 +186,22 @@ export async function POST(request: Request) {
         stack: error instanceof Error ? error.stack : 'No stack trace',
         operation
       });
-      
+
       return NextResponse.json({
         success: false,
         message: 'Error generating website summary'
       }, { status: 500 });
     }
-    
+
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    
+
     logger.error('Unexpected error in website summary API', {
       error: errorMessage,
       stack: error instanceof Error ? error.stack : undefined,
       operation
     });
-    
+
     return NextResponse.json(
       { error: 'Internal server error', details: errorMessage },
       { status: 500 }
