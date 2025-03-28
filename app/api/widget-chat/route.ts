@@ -209,7 +209,7 @@ export async function POST(req: NextRequest) {
     IMPORTANT INSTRUCTIONS:
     1. Prioritize knowledge base information when answering questions.
     2. If no relevant information is found, say "I don't have specific information about that in my knowledge base."
-    3. Keep responses under 300 words whenever possible.
+    3. Keep responses under 400 words whenever possible.
     4. Format with simple line breaks for readability.
     5. The user is using a chat widget. Be friendly but brief.`;
 
@@ -344,14 +344,14 @@ export async function POST(req: NextRequest) {
         messages,
         temperature: 0.5,
         // Increased token count for more detailed responses while still being mindful of timeouts
-        maxTokens: 600,
+        maxTokens: 800,
         tools: {
           knowledgeBase: knowledgeBaseTool
         },
         // Reduced multi-step tool calling to speed up responses
         maxSteps: 2,
         // Simplified system prompt that focuses on RAG prioritization
-        system: `You are a helpful assistant on a photography website. Be CONCISE. Prioritize knowledge base information. If no relevant information is found, say "I don't have specific information about that." Keep responses under 100 words. Format with line breaks for readability.`,
+        system: `You are a helpful assistant on a photography website. Be CONCISE. Prioritize knowledge base information. If no relevant information is found, say "I don't have specific information about that." Keep responses under 400 words. Format with line breaks for readability.`,
         onStepFinish: ({ text, toolCalls, toolResults, finishReason }) => {
           edgeLogger.info('Step finished in streamText call', {
             hasText: !!text && text.length > 0,

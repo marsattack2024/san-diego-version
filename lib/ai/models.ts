@@ -1,17 +1,11 @@
-export interface ChatModel {
-  id: string;
-  name: string;
-  description: string;
-  maxTokens: number;
-  provider: 'openai' | 'anthropic' | 'google';
-}
+import { ChatModel } from "./types";
 
 export const chatModels: ChatModel[] = [
   {
     id: 'gpt-4o',
     name: 'GPT-4o',
     description: 'Most capable model for complex tasks',
-    maxTokens: 8192,
+    maxTokens: 25000,
     provider: 'openai'
   },
   {

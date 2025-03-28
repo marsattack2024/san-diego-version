@@ -1209,7 +1209,7 @@ export async function POST(req: Request) {
           model: openai('gpt-4o'),
           messages: aiMessages,
           temperature: 0.4,
-          maxTokens: 4000,
+          maxTokens: 15000,
           tools: aiSdkTools,
           maxSteps: 10,
           toolChoice: 'auto',

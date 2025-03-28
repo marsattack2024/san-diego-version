@@ -190,7 +190,7 @@ export async function POST(req: NextRequest) {
       model,
       messages: [{ role: 'user', content: query }],
       temperature: 0.5,
-      max_tokens: 1000,
+      max_tokens: 5000,
       stream: false,
       web_search_options: {
         search_context_size: 'high'
