@@ -264,19 +264,6 @@ export async function findSimilarDocumentsOptimized(
     // Serialize to JSON string before caching
     const serializedResults = JSON.stringify(cacheableResults);
     await redisCache.setRAG('global', cacheKey, serializedResults);
-
-    logger.info('RAG operation completed', {
-      category: 'tools',
-      operation: 'rag_search',
-      durationMs: metrics.retrievalTimeMs,
-      resultsCount: documents.length,
-      slow: metrics.isSlowQuery,
-      important: metrics.isSlowQuery && metrics.retrievalTimeMs > 5000,
-      status: 'completed',
-      fromCache: false,
-      level: metrics.isSlowQuery ? 'warn' : 'info',
-      ragOperationId: `rag-${Date.now().toString(36)}`
-    });
   } catch (error) {
     logger.error('RAG operation failed', {
       category: 'tools',

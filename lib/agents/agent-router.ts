@@ -189,7 +189,7 @@ export class AgentRouter {
       agentType,
       selectionMethod: agentType === 'default' ? 'auto-routing' : 'user-selected',
       deepSearchEnabled,
-      important: true
+      important: false
     });
 
     // Build the system prompt in a simple, linear fashion

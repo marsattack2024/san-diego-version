@@ -338,13 +338,14 @@ export async function POST(req: Request) {
           // Handle the updated result format
           const ragContent = typeof ragResult === 'object' && ragResult?.content ? ragResult.content : ragResult;
           const retrievedCount = typeof ragResult === 'object' && ragResult?.retrievedCount ? ragResult.retrievedCount : 0;
+          const ragOperationId = `rag-${Date.now().toString(36)}`;
 
           if (typeof ragContent === 'string') {
             if (!ragContent.includes("No relevant information found")) {
               toolManager.registerToolResult('Knowledge Base', ragContent);
 
               // Single consolidated RAG completion log per SOP
-              edgeLogger.info('RAG operation completed', {
+              edgeLogger[isSlow ? 'warn' : 'info']('RAG operation completed', {
                 category: LOG_CATEGORIES.TOOLS,
                 durationMs: ragDurationMs,
                 resultsCount: retrievedCount, // Use actual retrieved count
@@ -353,11 +354,11 @@ export async function POST(req: Request) {
                 important: isImportant,
                 status: 'completed',
                 level: isSlow ? 'warn' : 'info',
-                ragOperationId: `rag-${Date.now().toString(36)}`
+                ragOperationId
               });
             } else {
               // No results case
-              edgeLogger.info('RAG operation completed', {
+              edgeLogger[isSlow ? 'warn' : 'info']('RAG operation completed', {
                 category: LOG_CATEGORIES.TOOLS,
                 durationMs: ragDurationMs,
                 resultsCount: 0, // No content found
@@ -365,7 +366,7 @@ export async function POST(req: Request) {
                 important: isImportant,
                 status: 'no_matches',
                 level: isSlow ? 'warn' : 'info',
-                ragOperationId: `rag-${Date.now().toString(36)}`
+                ragOperationId
               });
             }
           } else {
@@ -379,7 +380,7 @@ export async function POST(req: Request) {
               status: 'unexpected_result_type',
               resultType: typeof ragContent,
               level: 'warn',
-              ragOperationId: `rag-${Date.now().toString(36)}`
+              ragOperationId
             });
           }
         } catch (error) {
