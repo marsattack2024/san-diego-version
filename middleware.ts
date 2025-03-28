@@ -6,6 +6,12 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   console.log('[Middleware] Processing request for:', pathname);
 
+  // Special bypass for Perplexity API to allow internal server-to-server communication
+  if (pathname.startsWith('/api/perplexity')) {
+    console.log('Bypassing auth middleware for Perplexity API');
+    return;
+  }
+
   // Special bypass for widget-related paths to allow anonymous access
   if (
     pathname.startsWith('/api/widget-chat') ||
