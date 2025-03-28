@@ -11,6 +11,22 @@ export async function POST(req: NextRequest) {
 
   // Environment variable validation and logging
   const perplexityApiKey = process.env.PERPLEXITY_API_KEY;
+
+  // Enhanced debug logging for API key
+  edgeLogger.info('Perplexity API key detailed inspection', {
+    operation: 'perplexity_key_debug',
+    operationId,
+    keyExists: !!perplexityApiKey,
+    keyLength: perplexityApiKey?.length || 0,
+    keyFormat: perplexityApiKey?.startsWith('pplx-') ? 'valid_prefix' : 'invalid_prefix',
+    keyFirstChar: perplexityApiKey ? perplexityApiKey.charAt(0) : 'none',
+    nodeEnv: process.env.NODE_ENV,
+    vercelEnv: process.env.VERCEL_ENV || 'unknown',
+    isProduction: process.env.NODE_ENV === 'production',
+    environment: process.env.NODE_ENV,
+    important: true
+  });
+
   edgeLogger.debug('Perplexity API environment check', {
     operation: 'perplexity_env_check',
     operationId,
@@ -30,6 +46,23 @@ export async function POST(req: NextRequest) {
   // Add detailed header logging for debugging
   const headerEntries = Array.from(req.headers.entries());
   const headers = Object.fromEntries(headerEntries);
+
+  // Enhanced headers debugging
+  edgeLogger.info('Perplexity request detailed headers analysis', {
+    operation: 'perplexity_headers_detailed',
+    operationId,
+    headerCount: headerEntries.length,
+    hasContentType: !!headers['content-type'],
+    contentType: headers['content-type'],
+    userAgent: req.headers.get('user-agent'),
+    host: req.headers.get('host'),
+    origin: req.headers.get('origin'),
+    referer: req.headers.get('referer'),
+    method: req.method,
+    url: req.url,
+    important: true
+  });
+
   edgeLogger.debug('Perplexity request headers', {
     operation: 'perplexity_headers_debug',
     operationId,
@@ -40,6 +73,18 @@ export async function POST(req: NextRequest) {
   // Check if the request is from our own server (internal API-to-API)
   const userAgent = req.headers.get('user-agent') || '';
   const isInternalRequest = userAgent.includes('SanDiego');
+
+  edgeLogger.info('Perplexity authentication decision detailed', {
+    operation: 'perplexity_auth_detailed',
+    operationId,
+    userAgent,
+    userAgentLength: userAgent.length,
+    isInternalRequest,
+    containsSanDiego: userAgent.includes('SanDiego'),
+    containsMozilla: userAgent.includes('Mozilla'),
+    userAgentFirstChars: userAgent.substring(0, 20),
+    important: true
+  });
 
   edgeLogger.debug('Perplexity authentication decision', {
     operation: 'perplexity_auth_debug',
@@ -153,11 +198,27 @@ export async function POST(req: NextRequest) {
     };
 
     // Use consistent headers with User-Agent
+    const authorizationHeader = `Bearer ${perplexityApiKey}`;
     const headers = {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${perplexityApiKey}`,
+      'Authorization': authorizationHeader,
       'User-Agent': 'Mozilla/5.0 SanDiego/1.0'
     };
+
+    // Log detailed information about the request and authorization
+    edgeLogger.info('Perplexity API request detailed debug info', {
+      operation: 'perplexity_request_debug',
+      operationId,
+      url: API_URL,
+      model,
+      authHeaderExists: !!headers['Authorization'],
+      authHeaderLength: headers['Authorization'].length,
+      authHeaderPrefix: headers['Authorization'].substring(0, 7), // Only log "Bearer " part
+      contentTypeHeader: headers['Content-Type'],
+      userAgentHeader: headers['User-Agent'],
+      requestBodyKeys: Object.keys(requestBody),
+      important: true
+    });
 
     edgeLogger.info('Sending request to Perplexity API (serverless)', {
       operation: 'perplexity_serverless_request',
@@ -174,6 +235,19 @@ export async function POST(req: NextRequest) {
     });
 
     const statusCode = response.status;
+    const responseHeaders = Object.fromEntries(response.headers.entries());
+
+    // Enhanced response header logging
+    edgeLogger.info('Perplexity API response headers', {
+      operation: 'perplexity_response_headers',
+      operationId,
+      statusCode,
+      responseHeadersCount: Object.keys(responseHeaders).length,
+      contentType: responseHeaders['content-type'],
+      contentLength: responseHeaders['content-length'],
+      server: responseHeaders['server'],
+      important: true
+    });
 
     let responseBody;
     try {
@@ -181,9 +255,32 @@ export async function POST(req: NextRequest) {
         responseBody = await response.json();
       } else {
         responseBody = await response.text();
+
+        // Enhanced error response logging
+        edgeLogger.error('Perplexity API error detailed response', {
+          operation: 'perplexity_detailed_error_response',
+          operationId,
+          statusCode,
+          responseType: typeof responseBody,
+          responsePreview: typeof responseBody === 'string' ?
+            responseBody.substring(0, 500) : 'Not string',
+          responseLength: typeof responseBody === 'string' ?
+            responseBody.length : 0,
+          importantSnippet: typeof responseBody === 'string' && responseBody.includes('error') ?
+            responseBody.substring(responseBody.indexOf('error'), Math.min(responseBody.indexOf('error') + 100, responseBody.length)) :
+            'No error snippet found',
+          important: true
+        });
       }
     } catch (e) {
       responseBody = 'Error parsing response';
+
+      edgeLogger.error('Perplexity API response parsing error', {
+        operation: 'perplexity_response_parse_error',
+        operationId,
+        error: e instanceof Error ? e.message : String(e),
+        important: true
+      });
     }
 
     const duration = Math.round(performance.now() - startTime);
@@ -216,6 +313,17 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     const duration = Math.round(performance.now() - startTime);
+
+    // Enhanced fetch error logging
+    edgeLogger.error('Perplexity API fetch error detailed', {
+      operation: 'perplexity_serverless_fetch_error_detailed',
+      operationId,
+      errorMessage,
+      errorName: error instanceof Error ? error.name : 'Unknown',
+      errorStack: error instanceof Error ? error.stack : 'No stack',
+      durationMs: duration,
+      important: true
+    });
 
     edgeLogger.error('Error calling Perplexity API (serverless)', {
       operation: 'perplexity_serverless_error',
