@@ -14,24 +14,24 @@ export const maxDuration = 60; // Maximum allowed duration for Hobby plan (60 se
  * @returns A summary of the website content with prefix "Website Summary: "
  */
 export async function generateWebsiteSummary(
-  url: string, 
+  url: string,
   maxWords: number = 600,
   userId?: string
 ): Promise<string> {
   const operation = 'website_summary';
   const startTime = Date.now();
-  
+
   try {
     if (!url || !url.startsWith('http')) {
-      logger.warn('Invalid URL provided for website summarization', { 
-        url, 
-        operation 
+      logger.warn('Invalid URL provided for website summarization', {
+        url,
+        operation
       });
       return '';
     }
 
-    logger.info('Starting website summarization process', { 
-      url, 
+    logger.info('Starting website summarization process', {
+      url,
       maxWords,
       operation,
       userId: userId || 'anonymous'
@@ -45,29 +45,53 @@ export async function generateWebsiteSummary(
     });
 
     const scrapeTime = Date.now() - scrapeStartTime;
-    
-    if (!scrapeResult || !scrapeResult.content) {
+
+    // Handle different response formats from the webScraper tool
+    let content = '';
+    let title = 'Unknown';
+
+    // Define a type for the possible object structure
+    interface ScraperResult {
+      content?: string | any;
+      title?: string;
+      url?: string;
+    }
+
+    if (typeof scrapeResult === 'string') {
+      // If scrapeResult is a string, use it directly as content
+      content = scrapeResult;
+    } else if (scrapeResult && typeof scrapeResult === 'object') {
+      // If scrapeResult is an object, extract content and title properties
+      // Use type assertion to inform TypeScript about the structure
+      const typedResult = scrapeResult as ScraperResult;
+
+      content = typeof typedResult.content === 'string' ? typedResult.content :
+        (typedResult.content ? JSON.stringify(typedResult.content) : '');
+      title = typedResult.title || 'Unknown';
+    }
+
+    if (!content || content.trim() === '') {
       logger.warn('Failed to scrape website content', { url, operation });
       return 'Website Summary: [Error: Failed to scrape website content]';
     }
-    
-    logger.info('Website scraped successfully', { 
-      url, 
-      contentLength: scrapeResult.content.length,
-      title: scrapeResult.title || 'No title',
+
+    logger.info('Website scraped successfully', {
+      url,
+      contentLength: content.length,
+      title: title,
       scrapeTimeMs: scrapeTime,
       operation
     });
 
     // Step 2: Generate the summary
     const summary = await generateSummary(
-      scrapeResult.content,
-      scrapeResult.title || 'Unknown',
+      content,
+      title,
       url,
       maxWords,
       startTime
     );
-    
+
     // Log total processing time
     const totalTime = Date.now() - startTime;
     logger.info('Total website summarization process completed', {
@@ -75,12 +99,12 @@ export async function generateWebsiteSummary(
       totalProcessingTimeMs: totalTime,
       operation
     });
-    
+
     return summary;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.error('Error in website summarization process', { 
-      url, 
+    logger.error('Error in website summarization process', {
+      url,
       error: errorMessage,
       operation,
       totalTimeMs: Date.now() - startTime,
@@ -108,12 +132,12 @@ async function generateSummary(
 ): Promise<string> {
   const operation = 'website_summary';
   const summaryStartTime = Date.now();
-  
+
   try {
     // Truncate content for faster processing - using 25,000 characters as requested
     const truncatedContent = content.substring(0, 25000);
     const truncated = truncatedContent.length < content.length;
-    
+
     logger.info('Preparing content for summarization', {
       url,
       contentLength: content.length,
@@ -175,19 +199,19 @@ Keep the language benefit-focused and persuasive while maintaining the brand's v
       temperature: 0.3,
       maxTokens: 1500, // Adjusted for the faster model
     });
-    
+
     const aiProcessingTime = Date.now() - aiStartTime;
     const summaryTime = Date.now() - summaryStartTime;
     const wordCount = aiSummary.split(/\s+/).filter(Boolean).length;
-    
+
     // Format the summary with a consistent prefix
     const formattedSummary = `Website Summary: ${aiSummary}`;
-    
+
     // Log word count percentage of target
     const wordCountPercentage = Math.floor((wordCount / maxWords) * 100);
-    
-    logger.info('Summary generated successfully', { 
-      url, 
+
+    logger.info('Summary generated successfully', {
+      url,
       wordCount,
       wordCountPercentage: `${wordCountPercentage}% of target`,
       summaryLength: formattedSummary.length,
@@ -209,14 +233,14 @@ Keep the language benefit-focused and persuasive while maintaining the brand's v
     return formattedSummary;
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    
-    logger.error('Error generating website summary', { 
-      url, 
+
+    logger.error('Error generating website summary', {
+      url,
       error: errorMessage,
       operation,
       stack: error instanceof Error ? error.stack : 'No stack trace'
     });
-    
+
     return `Website Summary: [Error summarizing ${url}]`;
   }
 }

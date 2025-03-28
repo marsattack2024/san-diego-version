@@ -5,7 +5,7 @@ export const chatModels: ChatModel[] = [
     id: 'gpt-4o',
     name: 'GPT-4o',
     description: 'Most capable model for complex tasks',
-    maxTokens: 25000,
+    maxTokens: 16000,
     provider: 'openai'
   },
   {

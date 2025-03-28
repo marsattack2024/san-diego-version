@@ -15,22 +15,17 @@ import { extractUrls } from '@/lib/chat/url-utils';
 import { toolManager } from '@/lib/chat/tool-manager';
 import { streamText, appendClientMessage, appendResponseMessages } from 'ai';
 
+// Import schema types
+import { getInformationSchema, webScraperSchema, detectAndScrapeUrlsSchema } from '@/lib/chat/tool-schemas';
+
 // Allow streaming responses up to 120 seconds instead of 60
 export const maxDuration = 120;
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
 // Define tool schemas using Zod for better type safety
-const getInformationSchema = z.object({
-  query: z.string().describe('The search query to find information about')
-});
-
 const addResourceSchema = z.object({
   content: z.string().describe('The information to store')
-});
-
-const detectAndScrapeUrlsSchema = z.object({
-  text: z.string().describe('The text to extract URLs from')
 });
 
 // Removed comprehensiveScraperSchema since we're not using it anymore with the middleware approach
@@ -328,138 +323,11 @@ export async function POST(req: Request) {
       // Use the final (potentially routed) agent ID for building the system prompt
       const systemPrompt = agentRouter.getSystemPrompt(routedAgentId as AgentType, deepSearchEnabled);
 
-      // Process resources in the correct priority order (as specified in requirements)
-      // Order of importance: 1. System Message 2. RAG 3. Web Scraper 4. Deep Search
+      // Process resources in the correct hybrid approach:
+      // 1. Deep Search - Preprocessed when enabled by user toggle
+      // 2. Knowledge Base & Web Scraper - Implemented as AI SDK tools
 
-      // 1. System Message is already prioritized in the buildAIMessages function
-
-      // Import the tools - but only once to reduce memory overhead
-      const { chatTools } = await import('@/lib/chat/tools');
-
-      // 2. RAG (Knowledge Base) - HIGH PRIORITY for queries over 15 characters
-      if (lastUserMessage.content.length > 15) {
-        const ragStartTime = Date.now();
-
-        try {
-          // Execute the RAG tool with proper operation tracking - don't include full query in logs
-          const ragResult = await edgeLogger.trackOperation(
-            'rag_search',
-            async () => {
-              const result = await chatTools.getInformation.execute(
-                { query: lastUserMessage.content },
-                { toolCallId: 'rag-search', messages: [] }
-              );
-
-              // Parse document count from the result for accurate logging
-              // For format: "Found X most relevant documents (out of Y retrieved,..."
-              const docCountMatch = result.match(/Found (\d+) most relevant documents \(out of (\d+) retrieved/);
-              const retrievedCount = docCountMatch ? parseInt(docCountMatch[2], 10) : 0;
-
-              return {
-                content: result,
-                retrievedCount
-              };
-            },
-            {
-              category: LOG_CATEGORIES.TOOLS,
-              queryLength: lastUserMessage.content.length,
-              queryPreview: lastUserMessage.content.substring(0, 20) + '...'
-            }
-          );
-
-          // Check if we got valid results
-          const ragDurationMs = Date.now() - ragStartTime;
-          const isSlow = ragDurationMs > 2000; // Use SLOW_OPERATION constant from logger
-          const isImportant = ragDurationMs > 5000; // Use IMPORTANT_THRESHOLD constant from logger
-
-          // Handle the updated result format
-          const ragContent = typeof ragResult === 'object' && ragResult?.content ? ragResult.content : ragResult;
-          const retrievedCount = typeof ragResult === 'object' && ragResult?.retrievedCount ? ragResult.retrievedCount : 0;
-          const ragOperationId = `rag-${Date.now().toString(36)}`;
-
-          if (typeof ragContent === 'string') {
-            if (!ragContent.includes("No relevant information found")) {
-              toolManager.registerToolResult('Knowledge Base', ragContent);
-
-              // Single consolidated RAG completion log per SOP
-              edgeLogger[isSlow ? 'warn' : 'info']('RAG operation completed', {
-                category: LOG_CATEGORIES.TOOLS,
-                durationMs: ragDurationMs,
-                resultsCount: retrievedCount, // Use actual retrieved count
-                contentLength: ragContent.length,
-                slow: isSlow,
-                important: isImportant,
-                status: 'completed',
-                level: isSlow ? 'warn' : 'info',
-                ragOperationId
-              });
-            } else {
-              // No results case
-              edgeLogger[isSlow ? 'warn' : 'info']('RAG operation completed', {
-                category: LOG_CATEGORIES.TOOLS,
-                durationMs: ragDurationMs,
-                resultsCount: 0, // No content found
-                slow: isSlow,
-                important: isImportant,
-                status: 'no_matches',
-                level: isSlow ? 'warn' : 'info',
-                ragOperationId
-              });
-            }
-          } else {
-            // If it's not a string, log unexpected result type
-            edgeLogger.warn('RAG operation completed', {
-              category: LOG_CATEGORIES.TOOLS,
-              durationMs: ragDurationMs,
-              resultsCount: 0,
-              slow: isSlow,
-              important: isImportant,
-              status: 'unexpected_result_type',
-              resultType: typeof ragContent,
-              level: 'warn',
-              ragOperationId
-            });
-          }
-        } catch (error) {
-          const ragDurationMs = Date.now() - ragStartTime;
-          edgeLogger.error('RAG operation failed', {
-            category: LOG_CATEGORIES.TOOLS,
-            error: formatError(error),
-            durationMs: ragDurationMs,
-            resultsCount: 0,
-            status: 'error',
-            level: 'error',
-            ragOperationId: `rag-${Date.now().toString(36)}`,
-            important: true
-          });
-        }
-      }
-
-      // Memory usage checkpoint after RAG
-      edgeLogger.debug('Memory checkpoint after RAG', {
-        elapsedMs: Date.now() - startTime,
-        tool: 'RAG'
-      });
-
-      // 3. Web Scraper - Detect and process URLs directly in the route handler
-      if (urls.length > 0) {
-        // Log URLs detected in the user message
-        edgeLogger.info('URLs detected in user message', {
-          urlCount: urls.length,
-          firstUrl: urls[0],
-          message: "These will be processed directly via our Puppeteer scraper"
-        });
-      }
-
-      // Memory usage checkpoint after URL detection
-      edgeLogger.debug('Memory checkpoint after URL detection', {
-        elapsedMs: Date.now() - startTime,
-        tool: 'URL detection',
-        automaticProcessing: true,
-        message: "URLs will be processed directly in the route handler"
-      });
-
-      // 4. Deep Search - LOWEST PRIORITY (if enabled)
+      // 1. Deep Search (Perplexity) - ONLY when enabled
       if (deepSearchEnabled === true) {
         edgeLogger.info('Deep Search is enabled, preparing to run', {
           category: 'tools',
@@ -474,16 +342,11 @@ export async function POST(req: Request) {
 
         // Skip Deep Search if we already have a substantial amount of context
         const toolResults = toolManager.getToolResults();
-        const ragContentLength = toolResults.ragContent?.length || 0;
-        const webScraperLength = toolResults.webScraper?.length || 0;
-        const hasExtensiveRAG = ragContentLength > 5000;
-        const hasExtensiveWebContent = webScraperLength > 8000;
+        const hasExtensiveContent = false; // Modified to always run when enabled
 
-        if (hasExtensiveRAG && hasExtensiveWebContent) {
+        if (hasExtensiveContent) {
           edgeLogger.info('Skipping Deep Search due to sufficient existing context', {
             operation: 'deep_search_skipped',
-            ragContentLength,
-            webScraperLength,
             reason: 'sufficient_context',
             category: 'tools',
             deepSearchEnabled: true
@@ -818,9 +681,8 @@ export async function POST(req: Request) {
       }
 
       // Memory usage checkpoint after Deep Search
-      edgeLogger.debug('Memory checkpoint after Deep Search', {
-        elapsedMs: Date.now() - startTime,
-        tool: 'Deep Search'
+      edgeLogger.debug('Memory checkpoint after tools setup', {
+        elapsedMs: Date.now() - startTime
       });
 
       /**
@@ -836,8 +698,6 @@ export async function POST(req: Request) {
           toolsCount: toolsUsed.length,
           toolsUsed,
           contentSizes: {
-            ragContent: toolResults.ragContent?.length || 0,
-            webScraper: toolResults.webScraper?.length || 0,
             deepSearch: toolResults.deepSearch?.length || 0
           },
           webSearch: {
@@ -858,7 +718,7 @@ export async function POST(req: Request) {
       // Log the preprocessing summary
       generatePreprocessingSummary(toolManager);
 
-      // Build AI messages with tool results and user profile data
+      // Build AI messages with Deep Search results and user profile data
       const aiMessageStartTime = Date.now();
       edgeLogger.info('Building AI messages', {
         operation: 'build_ai_messages',
@@ -896,7 +756,7 @@ export async function POST(req: Request) {
         // Convert our tools to AI SDK format
         aiSdkTools = {
           getInformation: tool({
-            description: 'Search the internal knowledge base for relevant information',
+            description: 'Search the internal knowledge base for relevant information about photography business topics',
             parameters: getInformationSchema,
             execute: async ({ query }) => {
               const startTime = performance.now();
@@ -914,8 +774,10 @@ export async function POST(req: Request) {
                   resultLength: typeof result === 'string' ? result.length : 0
                 });
 
+                // Register the tool as used for validation purposes
+                toolManager.registerToolUsage('Knowledge Base');
+
                 // Just return the string result from the tools layer
-                // The AI only cares about the content, not the metadata
                 return result;
               } catch (error) {
                 const duration = Math.round(performance.now() - startTime);
@@ -930,29 +792,42 @@ export async function POST(req: Request) {
             }
           }),
 
-          addResource: tool({
-            description: 'Store new information in the knowledge base',
-            parameters: addResourceSchema,
-            execute: async ({ content }) => {
+          webScraper: tool({
+            description: 'Analyze web content from a URL to extract detailed information about the photography website',
+            parameters: webScraperSchema,
+            execute: async ({ url }) => {
               const startTime = performance.now();
 
               try {
-                const result = await chatTools.addResource.execute({ content }, {
-                  toolCallId: 'ai-initiated-store',
-                  messages: []
-                });
+                // Import the web scraper tool
+                const { callPuppeteerScraper, validateAndSanitizeUrl } = await import('@/lib/agents/tools/web-scraper-tool');
+                const { ensureProtocol } = await import('@/lib/chat/url-utils');
+
+                // Process URL
+                const fullUrl = ensureProtocol(url);
+                const validUrl = validateAndSanitizeUrl(fullUrl);
+
+                // Call the scraper
+                const result = await callPuppeteerScraper(validUrl);
+
+                // Format the content
+                const formattedContent = formatScrapedContent(result);
 
                 const duration = Math.round(performance.now() - startTime);
-                edgeLogger.info('Resource storage completed', {
-                  contentLength: content.length,
-                  durationMs: duration
+                edgeLogger.info('Web scraper completed', {
+                  url: validUrl,
+                  durationMs: duration,
+                  contentLength: formattedContent.length
                 });
 
-                return result;
+                // Register the tool as used for validation purposes
+                toolManager.registerToolUsage('Web Scraper');
+
+                return formattedContent;
               } catch (error) {
                 const duration = Math.round(performance.now() - startTime);
-                edgeLogger.error('Resource storage failed', {
-                  contentLength: content.length,
+                edgeLogger.error('Web scraper failed', {
+                  url,
                   durationMs: duration,
                   error: formatError(error)
                 });
@@ -980,6 +855,11 @@ export async function POST(req: Request) {
                   durationMs: duration,
                   urlsFound: result.urls.length
                 });
+
+                // Register the tool as used for validation purposes
+                if (result.urls.length > 0) {
+                  toolManager.registerToolUsage('Web Scraper');
+                }
 
                 return result;
               } catch (error) {
@@ -1209,13 +1089,67 @@ export async function POST(req: Request) {
           model: openai('gpt-4o'),
           messages: aiMessages,
           temperature: 0.4,
-          maxTokens: 15000,
+          maxTokens: 16000,
           tools: aiSdkTools,
           maxSteps: 10,
           toolChoice: 'auto',
+          toolCallStreaming: true,
+          onChunk: ({ chunk }) => {
+            try {
+              // Use a simpler approach with fewer TypeScript issues
+              const chunkType = chunk.type as string;
+
+              // We'll use any typing here to avoid TypeScript errors with different chunk types
+              const typedChunk = chunk as any;
+
+              if (chunkType === 'tool-call') {
+                edgeLogger.info('Tool call chunk received', {
+                  toolName: typedChunk.name || 'unknown',
+                  parameters: JSON.stringify(typedChunk.parameters || {}).substring(0, 100) + '...',
+                  elapsedTimeMs: Date.now() - startTime
+                });
+              } else if (chunkType === 'tool-result') {
+                edgeLogger.info('Tool result chunk received', {
+                  resultLength: typeof typedChunk.result === 'string' ? typedChunk.result.length : JSON.stringify(typedChunk.result || {}).length,
+                  resultType: typeof typedChunk.result,
+                  elapsedTimeMs: Date.now() - startTime
+                });
+              } else if (chunkType === 'text-delta' && Math.random() < 0.05) {
+                // Only log text delta occasionally to avoid flooding
+                const text = typedChunk.text || '';
+                edgeLogger.debug('Text delta chunk received', {
+                  textLength: text.length,
+                  textPreview: text.substring(0, 20) + (text.length > 20 ? '...' : ''),
+                  elapsedTimeMs: Date.now() - startTime
+                });
+              } else if (chunkType === 'error') {
+                edgeLogger.error('Error chunk in stream', {
+                  error: formatError(typedChunk.error),
+                  elapsedTimeMs: Date.now() - startTime
+                });
+              }
+            } catch (error) {
+              // Prevent errors in the debug logging from breaking the stream
+              edgeLogger.error('Error in chunk handler', {
+                error: formatError(error),
+                chunkType: (chunk as any).type || 'unknown'
+              });
+            }
+          },
+          onError: ({ error }) => {
+            edgeLogger.error('Error during AI streaming', {
+              error: formatError(error),
+              chatId: id,
+              modelName,
+              elapsedTimeMs: Date.now() - startTime,
+              messageCount: aiMessages.length,
+              toolsCount: Object.keys(aiSdkTools).length,
+              important: true,
+              stack: error instanceof Error ? error.stack : undefined
+            });
+          },
           onFinish: async (completion) => {
             try {
-              // Log successful completion
               edgeLogger.info('LLM generation completed successfully', {
                 chatId: id,
                 modelName,
@@ -1224,31 +1158,30 @@ export async function POST(req: Request) {
                 systemPromptSize: aiMessages[0]?.content?.length || 0
               });
 
-              // Extract the text content from the completion object
-              // The AI SDK returns a complex object, not a simple string
               let fullText = '';
 
-              // Use a safer approach to extract text from the completion
-              // First try to get the text from the completion itself
               if (typeof completion === 'object' && completion !== null) {
-                // Check for the completion.text property (most common format)
                 if ('text' in completion && typeof completion.text === 'string') {
                   fullText = completion.text;
-                }
-                // Check for more complex structures
-                else if ('content' in completion && typeof completion.content === 'string') {
+                } else if ('content' in completion && typeof completion.content === 'string') {
                   fullText = completion.content;
-                }
-                // Try to get tool results if text is empty
-                else if (fullText.trim() === '' && 'toolResults' in completion) {
-                  const toolResultsArray = Array.isArray(completion.toolResults) ? completion.toolResults : [];
+                } else if (fullText.trim() === '' && 'toolResults' in completion) {
+                  // Define a type for tool result items
+                  interface ToolResultItem {
+                    result?: string | Record<string, any>;
+                    content?: string | Record<string, any>;
+                    output?: string | Record<string, any>;
+                    text?: string | Record<string, any>;
+                  }
+
+                  const toolResultsArray = Array.isArray(completion.toolResults)
+                    ? completion.toolResults
+                    : [];
+
                   if (toolResultsArray.length > 0) {
-                    // Extract content from tool results using a type-safe approach
                     const toolContents = toolResultsArray
-                      .map(tr => {
+                      .map((tr: any) => {
                         if (typeof tr === 'object' && tr !== null) {
-                          // Check if it has a 'result' property or any other likely property containing output
-                          // @ts-ignore - We're deliberately checking for possible properties dynamically
                           const resultContent = tr.result || tr.content || tr.output || tr.text || '';
                           return typeof resultContent === 'string' ? resultContent : JSON.stringify(resultContent);
                         }
@@ -1260,30 +1193,23 @@ export async function POST(req: Request) {
                       fullText = `Here's what I found in the content:\n\n${toolContents.join('\n\n')}`;
                     }
                   }
-                }
-                // Convert the whole object to string if we can't find the text
-                else {
+                } else {
                   fullText = JSON.stringify(completion);
                 }
               } else if (typeof completion === 'string') {
-                // If it's already a string, use it directly
                 fullText = completion;
               } else {
-                // Fallback to a safe default
                 fullText = `Response: ${String(completion)}`;
               }
 
-              // Log the content before validation
               edgeLogger.debug('Content before validation', {
                 contentLength: fullText.length,
                 contentPreview: fullText.substring(0, 100),
                 isEmpty: fullText.trim() === ''
               });
 
-              // Validate the response
               const validatedText = validateResponse(fullText);
 
-              // Log validation results
               const wasModified = validatedText !== fullText;
               edgeLogger.info(wasModified ? 'Fixed response with validation function' : 'Response validation completed', {
                 originalLength: fullText.length,
@@ -1291,44 +1217,35 @@ export async function POST(req: Request) {
                 wasModified
               });
 
-              // Create Supabase client for session storage
               if (id) {
                 edgeLogger.debug('Storing chat session', { id });
                 try {
                   const authClient = await createClient();
 
-                  // First check if the session already exists
                   const { data: existingSession } = await authClient
                     .from('sd_chat_sessions')
                     .select('id, title')
                     .eq('id', id)
                     .maybeSingle();
 
-                  // Check if this is the first message in the conversation
                   const isFirstMessage = messages.length <= 1;
 
-                  // Only store/update the session record
                   const sessionResponse = await authClient
                     .from('sd_chat_sessions')
                     .upsert({
                       id,
                       user_id: userId,
-                      // Use the first message as title if this is the first message
-                      // Otherwise preserve the existing title
                       title: isFirstMessage
                         ? lastUserMessage.content.substring(0, 50)
                         : (existingSession?.title || lastUserMessage.content.substring(0, 50)),
                       updated_at: new Date().toISOString(),
-                      agent_id: routedAgentId  // Use the routed agent ID
+                      agent_id: routedAgentId
                     });
 
                   if (sessionResponse.error) {
                     throw new Error(`Failed to store session: ${sessionResponse.error.message}`);
                   }
 
-                  // Create a complete message set using the AI SDK helper
-                  // The completion object structure depends on the model and response format
-                  // Extract response messages or create a new message with the validated text
                   const assistantMessage = {
                     role: 'assistant' as const,
                     content: validatedText,
@@ -1340,7 +1257,6 @@ export async function POST(req: Request) {
                     responseMessages: [assistantMessage]
                   });
 
-                  // Save the assistant message
                   const lastAssistantMessage = updatedMessages.filter(m => m.role === 'assistant').pop();
                   if (lastAssistantMessage) {
                     const { error: saveError } = await authClient
@@ -1376,7 +1292,6 @@ export async function POST(req: Request) {
                 }
               }
 
-              // Just log that we completed response generation
               edgeLogger.info('Generated assistant response', {
                 chatId: id,
                 userId,
@@ -1385,7 +1300,6 @@ export async function POST(req: Request) {
                 totalTimeMs: Date.now() - startTime
               });
 
-              // Clear our operation timeout since we completed successfully
               if (operationTimeoutId) {
                 clearTimeout(operationTimeoutId);
                 operationTimeoutId = undefined;
@@ -1396,10 +1310,8 @@ export async function POST(req: Request) {
           }
         });
 
-        // Consume the stream to ensure onFinish runs even if client disconnects
         result.consumeStream();
 
-        // Return the stream as a response using the SDK's helper
         clearTimeout(operationTimeoutId);
         operationTimeoutId = undefined;
         resolve(result.toDataStreamResponse());
@@ -1418,7 +1330,6 @@ export async function POST(req: Request) {
       processRequest(resolve, reject).catch(reject);
     });
 
-    // Return the promise that will resolve either with the successful response or a timeout
     return await operationPromise;
 
   } catch (error) {
