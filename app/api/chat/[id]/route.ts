@@ -17,14 +17,15 @@ export const dynamic = 'force-dynamic';
 // GET handler to retrieve a specific chat and its messages
 export async function GET(
     request: NextRequest,
-    { params }: { params: { id: string } }
+    { params }: { params: { id: Promise<string> } }
 ) {
     const operationId = `get_chat_${Math.random().toString(36).substring(2, 10)}`;
-    const chatId = params.id;
+    const chatId = await params.id;
 
     edgeLogger.info('Chat GET request started', {
-        chatId,
-        operationId
+        category: 'chat',
+        operationId,
+        chatId
     });
 
     try {
@@ -34,6 +35,7 @@ export async function GET(
 
         if (authError || !user) {
             edgeLogger.warn('Authentication failed getting chat', {
+                category: 'auth',
                 operationId,
                 error: authError?.message || 'No user found'
             });
@@ -53,9 +55,11 @@ export async function GET(
 
         if (sessionError || !sessionData) {
             edgeLogger.error('Error fetching chat session', {
+                category: 'chat',
                 operationId,
                 chatId,
-                error: sessionError?.message || 'Session not found'
+                error: sessionError?.message || 'Session not found',
+                important: true
             });
 
             return NextResponse.json(
@@ -67,6 +71,7 @@ export async function GET(
         // Verify that the authenticated user owns this chat
         if (sessionData.user_id !== user.id) {
             edgeLogger.warn('User attempted to access chat they do not own', {
+                category: 'auth',
                 operationId,
                 userId: user.id,
                 chatUserId: sessionData.user_id
@@ -81,15 +86,17 @@ export async function GET(
         // Get chat messages
         const { data: messagesData, error: messagesError } = await supabase
             .from('sd_chat_histories')
-            .select('id, content, role, created_at, parent_message_id, tools_used')
+            .select('id, content, role, created_at, tools_used')
             .eq('session_id', chatId)
             .order('created_at', { ascending: true });
 
         if (messagesError) {
             edgeLogger.error('Error fetching chat messages', {
+                category: 'chat',
                 operationId,
                 chatId,
-                error: messagesError.message
+                error: messagesError.message,
+                important: true
             });
 
             return NextResponse.json(
@@ -104,7 +111,6 @@ export async function GET(
             content: msg.content,
             role: msg.role,
             createdAt: msg.created_at,
-            parentMessageId: msg.parent_message_id,
             toolsUsed: msg.tools_used
         }));
 
@@ -119,6 +125,7 @@ export async function GET(
         };
 
         edgeLogger.info('Successfully retrieved chat data', {
+            category: 'chat',
             operationId,
             chatId,
             messageCount: messages.length
@@ -128,9 +135,11 @@ export async function GET(
 
     } catch (error) {
         edgeLogger.error('Unexpected error getting chat', {
+            category: 'chat',
             operationId,
             chatId,
-            error: error instanceof Error ? error.message : String(error)
+            error: error instanceof Error ? error.message : String(error),
+            important: true
         });
 
         return NextResponse.json(
@@ -143,14 +152,15 @@ export async function GET(
 // PATCH handler to update chat metadata
 export async function PATCH(
     request: NextRequest,
-    { params }: { params: { id: string } }
+    { params }: { params: { id: Promise<string> } }
 ) {
     const operationId = `patch_chat_${Math.random().toString(36).substring(2, 10)}`;
-    const chatId = params.id;
+    const chatId = await params.id;
 
     edgeLogger.info('Chat PATCH request started', {
-        chatId,
-        operationId
+        category: 'chat',
+        operationId,
+        chatId
     });
 
     try {
@@ -160,8 +170,10 @@ export async function PATCH(
             body = await request.json();
         } catch (error) {
             edgeLogger.error('Failed to parse request JSON', {
+                category: 'chat',
                 operationId,
-                error: error instanceof Error ? error.message : String(error)
+                error: error instanceof Error ? error.message : String(error),
+                important: true
             });
 
             return NextResponse.json(
@@ -176,6 +188,7 @@ export async function PATCH(
 
         if (authError || !user) {
             edgeLogger.warn('Authentication failed updating chat', {
+                category: 'auth',
                 operationId,
                 error: authError?.message || 'No user found'
             });
@@ -195,9 +208,11 @@ export async function PATCH(
 
         if (sessionError || !sessionData) {
             edgeLogger.error('Chat not found for update', {
+                category: 'chat',
                 operationId,
                 chatId,
-                error: sessionError?.message || 'Session not found'
+                error: sessionError?.message || 'Session not found',
+                important: true
             });
 
             return NextResponse.json(
@@ -209,6 +224,7 @@ export async function PATCH(
         // Verify ownership
         if (sessionData.user_id !== user.id) {
             edgeLogger.warn('User attempted to update chat they do not own', {
+                category: 'auth',
                 operationId,
                 userId: user.id,
                 chatUserId: sessionData.user_id
@@ -231,6 +247,7 @@ export async function PATCH(
         // If nothing to update, return success
         if (Object.keys(updateData).length === 0) {
             edgeLogger.info('No fields to update', {
+                category: 'chat',
                 operationId,
                 chatId
             });
@@ -249,9 +266,11 @@ export async function PATCH(
 
         if (updateError) {
             edgeLogger.error('Error updating chat', {
+                category: 'chat',
                 operationId,
                 chatId,
-                error: updateError.message
+                error: updateError.message,
+                important: true
             });
 
             return NextResponse.json(
@@ -261,6 +280,7 @@ export async function PATCH(
         }
 
         edgeLogger.info('Successfully updated chat', {
+            category: 'chat',
             operationId,
             chatId,
             fields: Object.keys(updateData).join(', ')
@@ -270,9 +290,11 @@ export async function PATCH(
 
     } catch (error) {
         edgeLogger.error('Unexpected error updating chat', {
+            category: 'chat',
             operationId,
             chatId,
-            error: error instanceof Error ? error.message : String(error)
+            error: error instanceof Error ? error.message : String(error),
+            important: true
         });
 
         return NextResponse.json(
@@ -280,4 +302,4 @@ export async function PATCH(
             { status: 500 }
         );
     }
-} 
+}
