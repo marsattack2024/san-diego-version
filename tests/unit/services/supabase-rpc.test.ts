@@ -7,9 +7,12 @@ setupLoggerMock();
 // Mock crypto module correctly with default export
 vi.mock('crypto', async (importOriginal) => {
   const actual = await importOriginal();
+  // Create a properly typed object for spreading
+  const actualObj = actual as Record<string, unknown>;
+
   return {
     default: {
-      ...actual,
+      ...actualObj,
       randomUUID: vi.fn().mockImplementation(() => '00000000-0000-0000-0000-000000000000')
     },
     randomUUID: vi.fn().mockImplementation(() => '00000000-0000-0000-0000-000000000000')
@@ -42,14 +45,14 @@ vi.mock('@supabase/supabase-js', () => {
     status: 200,
     statusText: 'OK'
   }));
-  
+
   const mockSelect = vi.fn();
   const mockEq = vi.fn();
-  const mockFrom = vi.fn(() => ({ 
+  const mockFrom = vi.fn(() => ({
     select: mockSelect.mockReturnThis(),
     eq: mockEq.mockReturnThis()
   }));
-  
+
   return {
     createClient: vi.fn(() => ({
       rpc: mockRpc,
@@ -90,20 +93,20 @@ describe('Supabase RPC Service', () => {
   const TEST_SESSION_ID = 'session-123';
   const TEST_MESSAGE_ID = 'message-123';
   const TEST_CONTENT = 'Test message content';
-  
+
   // Reference to the mocked Supabase client
   let supabase: ReturnType<typeof createClient>;
-  
+
   beforeEach(() => {
     // Reset all mocks
     mockLogger.reset();
     vi.mocked(crypto.randomUUID).mockClear();
     vi.mocked(createClient).mockClear();
-    
+
     // Get reference to the mocked Supabase client
     supabase = createClient('', '');
   });
-  
+
   describe('save_message_and_update_session', () => {
     it('should successfully save a user message', async () => {
       // Mock successful RPC call
@@ -114,7 +117,7 @@ describe('Supabase RPC Service', () => {
         status: 200,
         statusText: 'OK'
       } as any);
-      
+
       // Execute RPC call
       const result = await supabase.rpc('save_message_and_update_session', {
         p_session_id: TEST_SESSION_ID,
@@ -125,7 +128,7 @@ describe('Supabase RPC Service', () => {
         p_tools_used: null,
         p_update_timestamp: true
       });
-      
+
       // Verify RPC was called with correct parameters
       expect(supabase.rpc).toHaveBeenCalledWith(
         'save_message_and_update_session',
@@ -136,12 +139,12 @@ describe('Supabase RPC Service', () => {
           p_user_id: TEST_USER_ID
         })
       );
-      
+
       // Verify result
       expect(result.error).toBeNull();
       expect(result.data).toEqual({ success: true });
     });
-    
+
     it('should successfully save an assistant message', async () => {
       // Mock successful RPC call
       vi.mocked(supabase.rpc).mockResolvedValueOnce({
@@ -151,7 +154,7 @@ describe('Supabase RPC Service', () => {
         status: 200,
         statusText: 'OK'
       } as any);
-      
+
       // Execute RPC call
       const result = await supabase.rpc('save_message_and_update_session', {
         p_session_id: TEST_SESSION_ID,
@@ -162,7 +165,7 @@ describe('Supabase RPC Service', () => {
         p_tools_used: null,
         p_update_timestamp: true
       });
-      
+
       // Verify RPC was called with correct parameters
       expect(supabase.rpc).toHaveBeenCalledWith(
         'save_message_and_update_session',
@@ -171,12 +174,12 @@ describe('Supabase RPC Service', () => {
           p_content: 'Assistant response'
         })
       );
-      
+
       // Verify result
       expect(result.error).toBeNull();
       expect(result.data).toEqual({ success: true });
     });
-    
+
     it('should handle RPC errors', async () => {
       // Mock failed RPC call
       const mockError = { message: 'Database error', code: 'DB_ERROR' };
@@ -187,7 +190,7 @@ describe('Supabase RPC Service', () => {
         status: 400,
         statusText: 'Bad Request'
       } as any);
-      
+
       // Execute RPC call
       const result = await supabase.rpc('save_message_and_update_session', {
         p_session_id: TEST_SESSION_ID,
@@ -198,13 +201,13 @@ describe('Supabase RPC Service', () => {
         p_tools_used: null,
         p_update_timestamp: true
       });
-      
+
       // Verify error was returned
       expect(result.data).toBeNull();
       expect(result.error).toEqual(mockError);
     });
   });
-  
+
   describe('message verification', () => {
     it('should fetch saved messages for a session', async () => {
       // Mock data for the query
@@ -212,7 +215,7 @@ describe('Supabase RPC Service', () => {
         { id: 'msg1', role: 'user', content: 'User message', created_at: '2023-01-01T12:00:00Z' },
         { id: 'msg2', role: 'assistant', content: 'Assistant response', created_at: '2023-01-01T12:01:00Z' }
       ];
-      
+
       // Set up mock return values for the query chain
       vi.mocked(supabase.from).mockReturnValue({
         select: vi.fn().mockReturnThis(),
@@ -224,26 +227,26 @@ describe('Supabase RPC Service', () => {
           statusText: 'OK'
         } as any)
       } as any);
-      
+
       // Execute query
       const result = await supabase
         .from('sd_chat_histories')
         .select('id, role, content, created_at')
         .eq('session_id', TEST_SESSION_ID);
-      
+
       // Verify from was called with correct table
       expect(supabase.from).toHaveBeenCalledWith('sd_chat_histories');
-      
+
       // Verify result
       expect(result.error).toBeNull();
       expect(result.data).toEqual(mockMessages);
       expect(result.data?.length).toBe(2);
     });
-    
+
     it('should handle database query errors', async () => {
       // Mock error for the query
       const mockError = { message: 'Query error', code: 'QUERY_ERROR' };
-      
+
       // Set up mock return values for the query chain
       vi.mocked(supabase.from).mockReturnValue({
         select: vi.fn().mockReturnThis(),
@@ -255,19 +258,19 @@ describe('Supabase RPC Service', () => {
           statusText: 'Bad Request'
         } as any)
       } as any);
-      
+
       // Execute query
       const result = await supabase
         .from('sd_chat_histories')
         .select('id, role, content, created_at')
         .eq('session_id', TEST_SESSION_ID);
-      
+
       // Verify error was returned
       expect(result.data).toBeNull();
       expect(result.error).toEqual(mockError);
     });
   });
-  
+
   describe('user management', () => {
     it('should fetch users when no user ID is provided', async () => {
       // Mock ListUsersResponse with properly typed users array
@@ -278,52 +281,52 @@ describe('Supabase RPC Service', () => {
         perPage: 1,
         totalPages: 1
       };
-      
+
       // Set up mock return value
       vi.mocked(supabase.auth.admin.listUsers).mockResolvedValueOnce({
         data: mockUsers,
         error: null
       } as any);
-      
+
       // Execute the call
       const result = await supabase.auth.admin.listUsers({
         page: 1,
         perPage: 1
       });
-      
+
       // Verify listUsers was called with correct parameters
       expect(supabase.auth.admin.listUsers).toHaveBeenCalledWith({
         page: 1,
         perPage: 1
       });
-      
+
       // Verify result
       expect(result.error).toBeNull();
       expect(result.data).toEqual(mockUsers);
       expect(result.data?.users[0].id).toBe('auto-user-123');
     });
-    
+
     it('should handle errors when fetching users', async () => {
       // Mock error with proper typing
-      const mockError = { 
-        message: 'Unauthorized', 
+      const mockError = {
+        message: 'Unauthorized',
         code: 'AUTH_ERROR',
         name: 'AuthError',
         status: 401
       };
-      
+
       // Set up mock return value
       vi.mocked(supabase.auth.admin.listUsers).mockResolvedValueOnce({
         data: null,
         error: mockError
       } as any);
-      
+
       // Execute the call
       const result = await supabase.auth.admin.listUsers({
         page: 1,
         perPage: 1
       });
-      
+
       // Verify error was returned
       expect(result.data).toBeNull();
       expect(result.error).toEqual(mockError);

@@ -47,12 +47,14 @@ export const agentRoutingSchema = z.object({
 export async function detectAgentType(message: string, currentAgentType: AgentType = 'default'): Promise<{
     agentType: AgentType;
     config: AgentConfig;
+    reasoning?: string;
 }> {
     // If a specific agent is already selected (not default), keep using it
     if (currentAgentType !== 'default') {
         edgeLogger.info('Using explicitly selected agent', {
             category: LOG_CATEGORIES.CHAT,
             operation: 'agent_routing',
+            requestedAgent: currentAgentType,
             selectedAgent: currentAgentType,
             selectionMethod: 'user-selected'
         });
@@ -84,30 +86,41 @@ export async function detectAgentType(message: string, currentAgentType: AgentTy
         });
 
         const selectedAgent = routingResult.object.agentType as AgentType;
+        const reasoning = routingResult.object.reasoning;
 
-        // Log the AI routing decision
+        // Log the AI routing decision with detailed reasoning
         edgeLogger.info('Agent routing decision', {
             category: LOG_CATEGORIES.CHAT,
             operation: 'agent_routing_decision',
+            requestedAgent: 'default',
             selectedAgent,
-            reasoning: routingResult.object.reasoning.substring(0, 100) + '...'
+            selectionMethod: 'automatic',
+            reasoning: reasoning.substring(0, 150) + (reasoning.length > 150 ? '...' : ''),
+            keywordScores: {}, // Could be populated if using keyword scoring
+            confidenceScore: 1.0 // Could be calculated if using confidence scoring
         });
 
         return {
             agentType: selectedAgent,
-            config: getAgentConfig(selectedAgent)
+            config: getAgentConfig(selectedAgent),
+            reasoning
         };
     } catch (error) {
         // If AI routing fails, fall back to default agent
         edgeLogger.error('AI agent routing failed, falling back to default agent', {
             category: LOG_CATEGORIES.CHAT,
             operation: 'agent_routing_fallback',
+            requestedAgent: 'default',
+            selectedAgent: 'default',
+            selectionMethod: 'automatic',
             error: error instanceof Error ? error.message : String(error),
+            reason: 'routing_error'
         });
 
         return {
             agentType: 'default',
-            config: getAgentConfig('default')
+            config: getAgentConfig('default'),
+            reasoning: 'Fallback to default agent due to routing error'
         };
     }
 }

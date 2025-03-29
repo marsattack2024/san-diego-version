@@ -13,6 +13,7 @@ import { createToolSet } from '@/lib/chat-engine/tools/registry';
 import { prompts } from '@/lib/chat-engine/prompts';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createClient } from '@/utils/supabase/server';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
 // Remove validator import
 // import { validateChatRequest } from '@/lib/chat/validator';
 
@@ -154,22 +155,32 @@ export async function POST(req: Request) {
 
     // Detect the appropriate agent type based on message content
     try {
-      var { agentType, config: agentConfig } = await detectAgentType(
+      var { agentType, config: agentConfig, reasoning } = await detectAgentType(
         lastUserMessage.content as string,
         requestedAgentId as any
       );
 
+      // Log agent selection with detailed information
       edgeLogger.info('Agent type detected', {
+        category: LOG_CATEGORIES.CHAT,
         operation: 'agent_detection',
         sessionId,
-        detectedAgent: agentType,
         requestedAgent: requestedAgentId,
-        selectionMethod: requestedAgentId === 'default' ? 'automatic' : 'user-selected'
+        detectedAgent: agentType,
+        selectionMethod: requestedAgentId === 'default' ? 'automatic' : 'user-selected',
+        reason: reasoning ? reasoning.substring(0, 150) + (reasoning.length > 150 ? '...' : '') : undefined,
+        messagePreview: (lastUserMessage.content as string).substring(0, 50) + '...',
+        messageTokenCount: (lastUserMessage.content as string).length / 4 // Rough estimate
       });
     } catch (agentError) {
       edgeLogger.error('Agent detection failed', {
+        category: LOG_CATEGORIES.CHAT,
         operation: 'agent_detection',
-        error: agentError instanceof Error ? agentError.message : String(agentError)
+        sessionId,
+        error: agentError instanceof Error ? agentError.message : String(agentError),
+        requestedAgent: requestedAgentId,
+        fallbackAgent: 'default',
+        important: true
       });
 
       return new Response(

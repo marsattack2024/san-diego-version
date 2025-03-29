@@ -20,7 +20,7 @@ export async function GET(
     { params }: { params: { id: string } }
 ) {
     const operationId = `get_chat_${Math.random().toString(36).substring(2, 10)}`;
-    const chatId = await params.id;
+    const chatId = params.id;
 
     edgeLogger.info('Chat GET request started', {
         category: 'chat',
@@ -155,7 +155,7 @@ export async function PATCH(
     { params }: { params: { id: string } }
 ) {
     const operationId = `patch_chat_${Math.random().toString(36).substring(2, 10)}`;
-    const chatId = await params.id;
+    const chatId = params.id;
 
     edgeLogger.info('Chat PATCH request started', {
         category: 'chat',

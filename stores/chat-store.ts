@@ -104,6 +104,7 @@ export const useChatStore = create<ChatState>()(
               messages: [],
               createdAt: timestamp,
               updatedAt: timestamp,
+              title: 'New Chat', // Use "New Chat" to match the title generation condition
               agentId: selectedAgentId,
               deepSearchEnabled: state.deepSearchEnabled
             }
@@ -117,16 +118,28 @@ export const useChatStore = create<ChatState>()(
           setTimeout(async () => {
             try {
               console.debug(`[ChatStore] Creating session in database: ${id}`);
-              await fetch('/api/chat/session', {
+              const response = await fetch('/api/chat/session', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   id,
-                  title: 'Untitled Conversation',
+                  title: 'New Chat', // Match the local state
                   agentId: selectedAgentId,
                   deepSearchEnabled
                 })
               });
+
+              if (!response.ok) {
+                console.error(`Failed to create chat session in database: ${response.status}`, await response.text());
+                // Invalidate history cache to ensure we don't get out of sync
+                setTimeout(() => {
+                  try {
+                    fetch('/api/history/invalidate', { method: 'POST' }).catch(e => console.error('Failed to invalidate history:', e));
+                  } catch (error) {
+                    console.error('Failed to invalidate history:', error);
+                  }
+                }, 1000);
+              }
             } catch (error) {
               console.error('Failed to create chat session in database:', error);
             }
@@ -152,6 +165,34 @@ export const useChatStore = create<ChatState>()(
         const messageWithId = message.id ? message : { ...message, id: uuidv4() };
         const timestamp = new Date().toISOString();
 
+        // Generate title from first user message if title is default
+        let newTitle = conversations[currentConversationId].title;
+        if (message.role === 'user') {
+          const currentTitle = conversations[currentConversationId].title;
+          // Auto-generate title from user message
+          if (currentTitle === 'New Chat' || currentTitle === 'Untitled Conversation' || !currentTitle) {
+            newTitle = message.content.substring(0, 30) + (message.content.length > 30 ? '...' : '');
+            console.log(`[ChatStore] Auto-generating title: "${newTitle}" from message: "${message.content}"`);
+
+            // Update title in the database
+            if (typeof window !== 'undefined') {
+              setTimeout(async () => {
+                try {
+                  console.debug(`[ChatStore] Updating chat title in database: ${currentConversationId} to "${newTitle}"`);
+                  await fetch(`/api/chat/${currentConversationId}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: newTitle })
+                  });
+                } catch (error) {
+                  console.error('Failed to update chat title in database:', error);
+                }
+              }, 100);
+            }
+          }
+        }
+
+        // Update local state with the new message and potentially new title
         set({
           conversations: {
             ...conversations,
@@ -159,12 +200,7 @@ export const useChatStore = create<ChatState>()(
               ...conversations[currentConversationId],
               messages: [...conversations[currentConversationId].messages, messageWithId],
               updatedAt: timestamp,
-              // Auto-generate a title from the first user message if none exists
-              title: !conversations[currentConversationId].title &&
-                message.role === 'user' &&
-                conversations[currentConversationId].messages.length === 0
-                ? message.content.substring(0, 30) + (message.content.length > 30 ? '...' : '')
-                : conversations[currentConversationId].title
+              title: newTitle
             }
           }
         });
