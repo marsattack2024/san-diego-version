@@ -7,7 +7,7 @@
 
 import { edgeLogger } from './edge-logger';
 import { LOG_CATEGORIES } from './constants';
-import { getContext, startRequest, endRequest } from './context';
+import { getContext, contextUtils } from './context';
 import { THRESHOLDS } from './edge-logger';
 
 // Mask user ID for logging - follow the pattern in other loggers for consistency
@@ -28,7 +28,7 @@ export const chatLogger = {
     deepSearchEnabled?: boolean;
   }) => {
     const { sessionId, userId, messageId, agentType, deepSearchEnabled } = params;
-    const context = startRequest({
+    const context = contextUtils.startRequest({
       sessionId,
       userId,
       operation: 'chat_request',
@@ -39,7 +39,7 @@ export const chatLogger = {
         deepSearchEnabled
       }
     });
-    
+
     edgeLogger.info('Chat request started', {
       category: LOG_CATEGORIES.CHAT,
       operation: 'chat_request_start',
@@ -50,10 +50,10 @@ export const chatLogger = {
       deepSearchEnabled: !!deepSearchEnabled,
       requestId: context.requestId
     });
-    
+
     return context;
   },
-  
+
   /**
    * Log chat request completed - end of end-to-end request timing
    * Logs the entire lifecycle duration from initial request to final response
@@ -66,9 +66,9 @@ export const chatLogger = {
     additionalData?: Record<string, any>;
   }) => {
     const { responseLength, hasToolsUsed, toolsCount, toolNames, additionalData } = params;
-    const context = endRequest();
+    const context = contextUtils.endRequest();
     const totalDuration = context.totalRequestDuration || 0;
-    
+
     const logMessage = {
       category: LOG_CATEGORIES.CHAT,
       operation: 'chat_request_complete',
@@ -84,16 +84,16 @@ export const chatLogger = {
       important: totalDuration > THRESHOLDS.IMPORTANT_THRESHOLD,
       ...additionalData
     };
-    
+
     if (totalDuration > THRESHOLDS.SLOW_OPERATION) {
       edgeLogger.warn('Chat request completed (slow)', logMessage);
     } else {
       edgeLogger.info('Chat request completed', logMessage);
     }
-    
+
     return context;
   },
-  
+
   /**
    * Log individual operation within chat processing
    * For tracking intermediate steps with their own timing
@@ -110,15 +110,15 @@ export const chatLogger = {
       ...data
     });
   },
-  
+
   /**
    * Log error in chat processing
    * Includes end-to-end timing up to the error point
    */
   error: (message: string, error: Error | string, data: Record<string, any> = {}) => {
-    const context = endRequest();
+    const context = contextUtils.endRequest();
     const totalDuration = context.totalRequestDuration || 0;
-    
+
     edgeLogger.error(message, {
       category: LOG_CATEGORIES.CHAT,
       operation: 'chat_request_error',

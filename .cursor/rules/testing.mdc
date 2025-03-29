@@ -1,350 +1,352 @@
 ---
-description: 
+description: Use these instructions for all testing scripts
 globs: 
-alwaysApply: true
+alwaysApply: false
 ---
-# CursorMD Agent Testing Guidelines
+AI Agent Cursor Rules
+State Management Rules
 
-This document outlines the standard testing approach for CursorMD agents based on our Vitest framework.
+Zustand Integration
 
-## Core Testing Principles
+Use Zustand persist middleware for client-side state persistence
+Never attempt to update Zustand stores directly from server-side code
+Follow the pattern of API call → response → client update
+Implement optimistic updates with fallback mechanisms
 
-1. **Test in Isolation**: Each agent function must be tested independently without side effects
-2. **Mock External Dependencies**: Never allow agents to make real API calls during tests
-3. **Verify Logging**: Confirm agents log appropriate messages using the mock logger
-4. **Test Edge Cases**: Validate agent behavior with invalid inputs, timeouts, and failure scenarios
 
-## Directory Structure
+Middleware Interaction
 
-Add agent tests in the appropriate locations:
+Respect rate limits defined in /lib/middleware/rate-limit.ts
+Handle authentication as defined by the auth middleware chain
+Process requests through the CORS middleware when accessing external resources
 
-```
-tests/
-├── unit/
-│   ├── agents/                      # Unit tests for agent components
-│   │   ├── title-agent.test.ts      # Tests for title generation agent
-│   │   ├── search-agent.test.ts     # Tests for search functionality
-│   │   └── ...
-│   └── chat-engine/
-│       ├── agent-manager.test.ts    # Tests for agent orchestration logic
-│       └── ...
-├── integration/
-│   └── agents/                      # Tests for multi-agent interactions
-└── helpers/
-    ├── mock-agents.ts              # Mock implementations of agents
-    └── test-data/
-        └── agent-test-data.ts      # Sample data for agent testing
-```
 
-## Mock Setup Requirements
+Error Handling
 
-All agent tests must use the following mock setup pattern:
+Follow standardized error logging as defined in test patterns
+Include appropriate LOG_CATEGORIES in all log messages
+Structure error responses consistently with error codes
 
-```typescript
+
+
+Testing Compliance
+
+Mocking Requirements
+
+Support mocking through Vitest's vi.mock() interface
+Implement test-friendly interfaces for all services
+Expose internal state for verification when in test mode
+
+
+Logging Standards
+
+Log all state transitions with appropriate categories
+Include performance metrics in logs for critical operations
+Mask sensitive user information in logs
+
+
+Error Simulation
+
+Support controlled failure modes for testing error paths
+Implement fallback behaviors when primary operations fail
+Expose hooks for test verification of error handling
+
+
+
+Implementation Pattern
+typescriptCopy// Example implementation following your standards
+import { cacheService } from '@/lib/cache/cache-service';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+
+export class AIAgentCursor {
+  private readonly lockPrefix = 'agent-cursor:';
+  private readonly lockTTL = 30; // seconds
+  
+  /**
+   * Updates the cursor position with appropriate locking and logging
+   * @param userId User ID 
+   * @param sessionId Session ID
+   * @param position New cursor position
+   */
+  async updatePosition(userId: string, sessionId: string, position: number): Promise<boolean> {
+    const startTime = Date.now();
+    const lockKey = `${this.lockPrefix}${sessionId}`;
+    
+    try {
+      // Attempt to acquire lock
+      const lockAcquired = await cacheService.setNX(lockKey, '1', this.lockTTL);
+      
+      if (!lockAcquired) {
+        edgeLogger.warn('Cursor update already in progress', {
+          category: LOG_CATEGORIES.AGENT,
+          sessionId,
+          userId: this.maskUserId(userId),
+          operation: 'updatePosition'
+        });
+        return false;
+      }
+      
+      // Perform the actual update
+      const success = await this.performPositionUpdate(sessionId, position);
+      
+      // Log completion
+      const duration = Date.now() - startTime;
+      edgeLogger.info('Cursor position updated', {
+        category: LOG_CATEGORIES.AGENT,
+        sessionId,
+        userId: this.maskUserId(userId),
+        operation: 'updatePosition',
+        durationMs: duration,
+        success
+      });
+      
+      return success;
+    } catch (error) {
+      // Log error with full context
+      edgeLogger.error('Failed to update cursor position', {
+        category: LOG_CATEGORIES.AGENT,
+        sessionId,
+        userId: this.maskUserId(userId),
+        operation: 'updatePosition',
+        error,
+        important: true
+      });
+      
+      return false;
+    } finally {
+      // Always release lock
+      await cacheService.delete(lockKey).catch(err => {
+        edgeLogger.warn('Failed to release cursor lock', {
+          category: LOG_CATEGORIES.AGENT,
+          sessionId,
+          operation: 'releaseLock',
+          error: err
+        });
+      });
+    }
+  }
+  
+  /**
+   * Performs the actual update operation
+   * @private
+   */
+  private async performPositionUpdate(sessionId: string, position: number): Promise<boolean> {
+    // Implementation here
+    return true;
+  }
+  
+  /**
+   * Masks user ID for privacy in logs
+   * @private
+   */
+  private maskUserId(userId: string): string {
+    if (!userId) return 'unknown';
+    return userId.substring(0, 8) + '...';
+  }
+}
+Client-Side Integration
+typescriptCopy// Store definition following your Zustand pattern
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+
+interface CursorState {
+  positions: Record<string, number>;
+  updatePosition: (sessionId: string, position: number) => Promise<void>;
+}
+
+export const useCursorStore = create<CursorState>()(
+  persist(
+    (set, get) => ({
+      positions: {},
+      
+      updatePosition: async (sessionId, position) => {
+        // Optimistic update
+        set(state => ({
+          positions: {
+            ...state.positions,
+            [sessionId]: position
+          }
+        }));
+        
+        try {
+          // Send to server
+          const response = await fetch('/api/agent/cursor', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessionId, position })
+          });
+          
+          if (!response.ok) {
+            throw new Error(`Failed to update cursor: ${response.status}`);
+          }
+        } catch (error) {
+          console.error('Cursor update failed:', error);
+          
+          // Revert optimistic update on failure
+          set(state => {
+            const newPositions = { ...state.positions };
+            delete newPositions[sessionId]; // Remove failed update
+            return { positions: newPositions };
+          });
+        }
+      }
+    }),
+    {
+      name: 'cursor-storage'
+    }
+  )
+);
+API Endpoint Implementation
+typescriptCopy// api/agent/cursor/route.ts
+import { NextRequest, NextResponse } from 'next/server';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { rateLimit } from '@/lib/middleware/rate-limit';
+import { corsMiddleware } from '@/lib/middleware/cors';
+import { AIAgentCursor } from '@/lib/agent/cursor';
+
+const cursor = new AIAgentCursor();
+
+export async function POST(req: NextRequest) {
+  // Apply middleware
+  const corsResult = await corsMiddleware(req);
+  if (corsResult.status !== 200) {
+    return corsResult;
+  }
+  
+  // Apply rate limiting
+  const rateLimit = await apiRateLimit(req);
+  if (rateLimit.status !== 200) {
+    return rateLimit;
+  }
+  
+  try {
+    const { sessionId, position } = await req.json();
+    
+    // Validation
+    if (!sessionId || typeof position !== 'number') {
+      return NextResponse.json(
+        { error: 'Invalid input' },
+        { status: 400 }
+      );
+    }
+    
+    // Extract user ID from auth
+    const { supabase } = await createServerSupabaseClient({ req });
+    const { data: { user } } = await supabase.auth.getUser();
+    
+    if (!user) {
+      return NextResponse.json(
+        { error: 'Unauthorized' },
+        { status: 401 }
+      );
+    }
+    
+    // Update position
+    const success = await cursor.updatePosition(user.id, sessionId, position);
+    
+    if (success) {
+      return NextResponse.json({ success: true });
+    } else {
+      return NextResponse.json(
+        { error: 'Failed to update cursor' },
+        { status: 500 }
+      );
+    }
+  } catch (error) {
+    edgeLogger.error('Error in cursor update endpoint', {
+      category: LOG_CATEGORIES.API,
+      error,
+      important: true
+    });
+    
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
+Test Implementation
+typescriptCopy// tests/unit/agent/cursor.test.ts
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { setupLoggerMock, mockLogger } from '@/tests/helpers/mock-logger';
 
-// Set up mocks BEFORE importing agent modules
+// Set up mocks before importing modules that use them
 setupLoggerMock();
+vi.mock('@/lib/cache/cache-service');
 
-// Import the agent to test
-import { TitleAgent } from '@/lib/agents/title-agent';
+// Import the code to test
+import { AIAgentCursor } from '@/lib/agent/cursor';
+import { cacheService } from '@/lib/cache/cache-service';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
-describe('TitleAgent', () => {
-  let titleAgent;
+describe('AIAgentCursor', () => {
+  let cursor: AIAgentCursor;
+  const userId = '5c80df74-1e2b-4435-89eb-b61b740120e9';
+  const sessionId = 'test-session-id';
   
-  beforeEach(() => {
-    // Reset all mocks
+  beforeEach(async () => {
+    // Reset mocks
     mockLogger.reset();
     vi.clearAllMocks();
     
-    // Initialize the agent with test configuration
-    titleAgent = new TitleAgent();
+    // Initialize service
+    cursor = new AIAgentCursor();
+    
+    // Mock cache service methods
+    vi.mocked(cacheService.setNX).mockResolvedValue(true);
+    vi.mocked(cacheService.delete).mockResolvedValue(1);
   });
   
-  // Tests...
-});
-```
-
-## AI Model Testing
-
-For agents that use AI models:
-
-1. **Mock AI Responses**: Create consistent, predefined responses for AI models
-2. **Test Response Parsing**: Verify correct handling of model outputs
-3. **Validate Prompt Construction**: Ensure effective prompt creation
-4. **Test Rate Limiting**: Verify rate limit handling in agents
-
-Example AI model mocking:
-
-```typescript
-// Mock OpenAI for title generation
-vi.mock('openai', () => {
-  return {
-    OpenAI: vi.fn().mockImplementation(() => ({
-      chat: {
-        completions: {
-          create: vi.fn().mockResolvedValue({
-            choices: [{
-              message: {
-                content: 'Generated Title Example'
-              }
-            }],
-            usage: {
-              prompt_tokens: 50,
-              completion_tokens: 10
-            }
-          })
-        }
-      }
-    }))
-  };
-});
-```
-
-## Testing Agent Functions
-
-Each agent should be tested for:
-
-### 1. Core Functionality
-
-```typescript
-it('should generate a title from user message', async () => {
-  // Arrange
-  const chatId = 'test-chat-id';
-  const userMessage = 'How do I improve my JavaScript skills?';
-  
-  // Act
-  const result = await titleAgent.generateTitle(chatId, userMessage);
-  
-  // Assert
-  expect(result).toBe('Generated Title Example');
-  expect(mockLogger.info).toHaveBeenCalledWith(
-    expect.stringContaining('Title generated'),
-    expect.objectContaining({
-      category: LOG_CATEGORIES.AGENT,
-      chatId
-    })
-  );
-});
-```
-
-### 2. Error Handling
-
-```typescript
-it('should handle API errors gracefully', async () => {
-  // Arrange
-  const chatId = 'test-chat-id';
-  const userMessage = 'Test message';
-  
-  // Mock API failure
-  const openaiMock = await import('openai');
-  openaiMock.OpenAI.mockImplementationOnce(() => ({
-    chat: {
-      completions: {
-        create: vi.fn().mockRejectedValue(new Error('API Error'))
-      }
-    }
-  }));
-  
-  // Act
-  const result = await titleAgent.generateTitle(chatId, userMessage);
-  
-  // Assert
-  expect(result).toBe('Chat About JavaScript'); // Default title
-  expect(mockLogger.error).toHaveBeenCalledWith(
-    expect.stringContaining('Title generation failed'),
-    expect.objectContaining({
-      category: LOG_CATEGORIES.AGENT,
-      chatId,
-      error: expect.any(String)
-    })
-  );
-});
-```
-
-### 3. Cache and Database Interactions
-
-```typescript
-it('should check for existing title before generation', async () => {
-  // Arrange
-  const chatId = 'test-chat-id';
-  const userMessage = 'Test message';
-  
-  // Mock database check
-  const mockSupabase = {
-    from: vi.fn().mockReturnThis(),
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    single: vi.fn().mockResolvedValue({
-      data: { title: 'Existing Title' }
-    })
-  };
-  
-  vi.spyOn(titleAgent, 'getDatabaseClient').mockReturnValue(mockSupabase);
-  
-  // Act
-  const result = await titleAgent.generateTitle(chatId, userMessage);
-  
-  // Assert
-  expect(result).toBeNull(); // No new title generated
-  expect(mockLogger.info).toHaveBeenCalledWith(
-    expect.stringContaining('Title already exists'),
-    expect.objectContaining({
-      category: LOG_CATEGORIES.AGENT,
-      chatId
-    })
-  );
-});
-```
-
-## Integration Testing for Multi-Agent Scenarios
-
-```typescript
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { setupLoggerMock, mockLogger } from '@/tests/helpers/mock-logger';
-
-setupLoggerMock();
-
-import { AgentManager } from '@/lib/chat-engine/agent-manager';
-import { TitleAgent } from '@/lib/agents/title-agent';
-import { SearchAgent } from '@/lib/agents/search-agent';
-
-describe('Agent Collaboration', () => {
-  let agentManager, titleAgent, searchAgent;
-  
-  beforeEach(() => {
-    mockLogger.reset();
+  describe('#updatePosition', () => {
+    it('should successfully update cursor position', async () => {
+      // Arrange
+      const position = 42;
+      
+      // Act
+      const result = await cursor.updatePosition(userId, sessionId, position);
+      
+      // Assert
+      expect(result).toBe(true);
+      
+      // Verify logging
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Cursor position updated',
+        expect.objectContaining({
+          category: LOG_CATEGORIES.AGENT,
+          sessionId,
+          operation: 'updatePosition',
+          success: true
+        })
+      );
+      
+      // Verify lock was acquired and released
+      expect(cacheService.setNX).toHaveBeenCalled();
+      expect(cacheService.delete).toHaveBeenCalled();
+    });
     
-    titleAgent = new TitleAgent();
-    searchAgent = new SearchAgent();
+    it('should handle lock acquisition failure', async () => {
+      // Arrange
+      vi.mocked(cacheService.setNX).mockResolvedValue(false);
+      
+      // Act
+      const result = await cursor.updatePosition(userId, sessionId, 42);
+      
+      // Assert
+      expect(result).toBe(false);
+      
+      // Verify logging
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        'Cursor update already in progress',
+        expect.objectContaining({
+          category: LOG_CATEGORIES.AGENT,
+          sessionId
+        })
+      );
+    });
     
-    // Mock agent methods
-    vi.spyOn(titleAgent, 'generateTitle').mockResolvedValue('Research Results');
-    vi.spyOn(searchAgent, 'performSearch').mockResolvedValue(['result1', 'result2']);
-    
-    agentManager = new AgentManager(titleAgent, searchAgent);
-  });
-  
-  it('should coordinate search and title generation', async () => {
-    // Arrange
-    const chatId = 'test-chat-id';
-    const query = 'quantum computing';
-    
-    // Act
-    const result = await agentManager.processQuery(chatId, query);
-    
-    // Assert
-    expect(searchAgent.performSearch).toHaveBeenCalledWith(query);
-    expect(titleAgent.generateTitle).toHaveBeenCalledWith(
-      chatId, 
-      expect.stringContaining(query)
-    );
-    expect(result.title).toBe('Research Results');
-    expect(result.searchResults).toEqual(['result1', 'result2']);
+    // Additional tests...
   });
 });
-```
-
-## Rate Limiting and Concurrency Tests
-
-```typescript
-it('should respect rate limits', async () => {
-  // Arrange
-  const chatId = 'test-chat-id';
-  const userMessage = 'Test message';
-  
-  // Create a spy on the rate limiter
-  const rateLimiterSpy = vi.spyOn(titleAgent.rateLimiter, 'check')
-    .mockResolvedValue(false); // Simulate rate limit reached
-  
-  // Act
-  const result = await titleAgent.generateTitle(chatId, userMessage);
-  
-  // Assert
-  expect(result).toBe('Rate Limited Chat'); // Default rate-limited title
-  expect(mockLogger.warn).toHaveBeenCalledWith(
-    expect.stringContaining('Rate limit reached'),
-    expect.objectContaining({
-      category: LOG_CATEGORIES.AGENT,
-      chatId
-    })
-  );
-});
-```
-
-## Testing Agent Timeouts
-
-```typescript
-it('should handle timeouts gracefully', async () => {
-  // Arrange
-  const chatId = 'test-chat-id';
-  const userMessage = 'Test message';
-  
-  // Mock OpenAI to never resolve
-  const openaiMock = await import('openai');
-  openaiMock.OpenAI.mockImplementationOnce(() => ({
-    chat: {
-      completions: {
-        create: vi.fn().mockImplementation(() => new Promise(resolve => {
-          // This promise will never resolve within the test timeout
-          setTimeout(resolve, 30000);
-        }))
-      }
-    }
-  }));
-  
-  // Set a short timeout for the agent
-  titleAgent.requestTimeout = 100; // ms
-  
-  // Act
-  const result = await titleAgent.generateTitle(chatId, userMessage);
-  
-  // Assert
-  expect(result).toBe('Timed Out Chat'); // Default timeout title
-  expect(mockLogger.warn).toHaveBeenCalledWith(
-    expect.stringContaining('Request timed out'),
-    expect.objectContaining({
-      category: LOG_CATEGORIES.AGENT,
-      chatId,
-      timeoutMs: 100
-    })
-  );
-});
-```
-
-## Performance Testing Guidelines
-
-For agent performance testing:
-
-1. **Measure Execution Time**: Track response times for different inputs
-2. **Test Concurrent Requests**: Verify behavior under load
-3. **Memory Usage**: Monitor agent memory footprint during operations
-
-```typescript
-it('should complete title generation within acceptable time', async () => {
-  // Arrange
-  const chatId = 'test-chat-id';
-  const userMessage = 'Test message';
-  
-  // Act
-  const startTime = performance.now();
-  await titleAgent.generateTitle(chatId, userMessage);
-  const endTime = performance.now();
-  const executionTime = endTime - startTime;
-  
-  // Assert
-  expect(executionTime).toBeLessThan(200); // Should complete within 200ms
-});
-```
-
-## Best Practices
-
-1. **Deterministic Tests**: Ensure tests produce the same results on each run
-2. **Explicit Test Data**: Use clear, purpose-built test data from test-data files
-3. **Avoid Conditional Tests**: Tests should never depend on environment conditions
-4. **Clear Assertions**: Each test should have explicit assertions that verify specific outcomes
-5. **Test Both Success and Failure**: Verify both happy path and error scenarios
-6. **Descriptive Test Names**: Test names should clearly describe the behavior being tested
-
-Follow this guidance for all agent testing to ensure reliability and maintainability.
+These patterns maintain consistency with your existing middleware architecture and testing framework while implementing cursor functionality for your AI agent.

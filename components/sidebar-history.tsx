@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { Chat } from '@/lib/db/schema';
@@ -53,6 +53,8 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { useChatStore, type Conversation } from '@/stores/chat-store';
+import { shallow } from 'zustand/shallow';
 
 // Consistent type definition for grouped chats
 type GroupedChats = {
@@ -168,67 +170,59 @@ const PureChatItem = ({
   );
 };
 
-// Add className to the props interface
-// interface PureSidebarHistoryProps {
-//  onChatSelected: (chatId: string) => void;
-//  selectedChatId?: string;
-//  className?: string;
-// }
-
-// Module-level request tracking for global deduplication
-const pendingHistoryRequests: {
-  timestamp: number;
-  promise: Promise<Chat[]> | null;
-} = {
-  timestamp: 0,
-  promise: null
-};
-
 const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   const { setOpenMobile, openMobile } = useSidebar();
   const params = useParams();
   const id = params?.id as string;
   const pathname = usePathname();
   const router = useRouter();
-  const [history, setHistory] = useState<Array<Chat>>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
-  const [chatWarning, setChatWarning] = useState<string | null>(null);
-  const [lastRefresh, setLastRefresh] = useState(Date.now());
+
+  // Use Zustand store with selector functions for each property separately
+  const conversations = useChatStore(state => state.conversations);
+  const fetchHistory = useChatStore(state => state.fetchHistory);
+  const isLoadingHistory = useChatStore(state => state.isLoadingHistory);
+  const historyError = useChatStore(state => state.historyError);
+  const lastHistoryFetch = useChatStore(state => state.lastHistoryFetch);
+  const deleteConversation = useChatStore(state => state.deleteConversation);
+
+  // Convert conversations map to Chat array for display
+  const historyArray = useMemo(() => {
+    return Object.values(conversations).map(conv => ({
+      id: conv.id,
+      title: conv.title || '',
+      createdAt: conv.createdAt,
+      updatedAt: conv.updatedAt,
+      userId: conv.userId || '',
+      messages: [] // We don't need the messages for display
+    } as Chat));
+  }, [conversations]);
+
+  // Local UI state (keep only UI-specific state)
   const [isDeleting, setIsDeleting] = useState<Record<string, boolean>>({});
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  // State for showing all older chats
   const [showAllOlder, setShowAllOlder] = useState(false);
-  // Mobile detection
   const [isMobile, setIsMobile] = useState(false);
-  const [isEmpty, setIsEmpty] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isRenaming, setIsRenaming] = useState<Record<string, boolean>>({});
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [renameId, setRenameId] = useState<string | null>(null);
   const [renameTitle, setRenameTitle] = useState('');
 
-  // Helper functions for polling
-  const detectMobile = () => {
+  // Compute empty state
+  const isEmpty = useMemo(() => {
+    return historyArray.length === 0 && !isLoadingHistory;
+  }, [historyArray.length, isLoadingHistory]);
+
+  // Helper functions
+  const detectMobile = useCallback(() => {
     return typeof window !== 'undefined' && window.innerWidth < 768;
-  };
-
-  const getMobilePollInterval = () => 5 * 60 * 1000; // 5 minutes for mobile
-  const getDesktopPollInterval = () => 2 * 60 * 1000; // 2 minutes for desktop
-
-  // Should polling be enabled
-  const shouldPoll = () => {
-    // Skip polling on low-powered devices or if auth failure
-    return !isMobile || !historyService.isInAuthFailure();
-  };
+  }, []);
 
   // Check if page is visible
-  const isPageVisible = () => {
-    return typeof document !== 'undefined' &&
-      document.visibilityState === 'visible';
-  };
+  const isPageVisible = useCallback(() => {
+    return typeof document !== 'undefined' && document.visibilityState === 'visible';
+  }, []);
 
   // Update mobile state on resize
   useEffect(() => {
@@ -248,434 +242,173 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
         window.removeEventListener('resize', handleResize);
       };
     }
-  }, []);
+  }, [detectMobile]);
 
-  // Log render cycle for debugging - FIXED to avoid infinite loop
-  useEffect(() => {
-    // Only log on a small percentage of renders to avoid spam
-    if (Math.random() < 0.05) {
-      edgeLogger.debug('SidebarHistory rendered', {
-        category: LOG_CATEGORIES.CHAT,
-        chatCount: history.length || 0,
-        currentChatId: id
-      });
-    }
-  }, [history.length, id]);
-
-  // Add this at the right scope level
-  const getSupabase = () => createClient();
-
-  // Optimized function to fetch chat history using the service with global deduplication
-  const fetchChatHistory = useCallback(async (forceRefresh = false) => {
-    // Skip if already refreshing
-    if (isRefreshing) return;
-
-    const now = Date.now();
-    const timeSinceLastRequest = now - pendingHistoryRequests.timestamp;
-
-    // Add a property to track if this is being called from mobile sidebar open
-    const isMobileOpen = isMobile && openMobile;
-
-    // If not forcing and a recent request was made, use existing data
-    // But make an exception for mobile sidebar open events
-    if (!forceRefresh && !isMobileOpen && timeSinceLastRequest < 60000 && pendingHistoryRequests.promise) {
-      if (timeSinceLastRequest < 60000) {
-        edgeLogger.debug('Using existing history data', {
-          category: LOG_CATEGORIES.CHAT,
-          ageSeconds: Math.round(timeSinceLastRequest / 1000)
-        });
-      }
-      return pendingHistoryRequests.promise;
-    }
-
-    setIsRefreshing(true);
-    setErrorMessage('');
-
-    // Create a single promise for all requests in this timeframe
-    pendingHistoryRequests.timestamp = now;
-    pendingHistoryRequests.promise = (async () => {
-      try {
-        // CRITICAL FIX #1: First check if auth cookies exist
-        const hasCookies = historyService.checkForAuthCookies();
-
-        if (!hasCookies) {
-          console.warn('No auth cookies found, cannot fetch history');
-          setErrorMessage('Please log in to view your chat history');
-          setIsLoading(false);
-          return [];
-        }
-
-        // CRITICAL FIX #2: Check if auth is fully ready before fetching
-        // This prevents 401 errors from occurring during initial page load
-        const authReady = await historyService.isAuthReady();
-        if (!authReady) {
-          edgeLogger.info('Auth not ready yet for history fetch, will retry', { category: 'auth' });
-
-          // Don't show error message during normal startup
-          if (isLoading) {
-            setErrorMessage('Preparing your history...');
-          }
-
-          // Set up retry with exponential backoff
-          const retryDelay = Math.min(2000 + Math.random() * 1000, 8000);
-          edgeLogger.debug(`Will retry history fetch in ${Math.round(retryDelay / 1000)}s`, { category: 'auth' });
-
-          // Schedule retry
-          setTimeout(() => {
-            // Only retry if we're still in the loading state or this was a forced refresh
-            if (isLoading || forceRefresh) {
-              edgeLogger.debug('Retrying history fetch after auth delay', { category: 'auth' });
-              fetchChatHistory(forceRefresh);
-            }
-          }, retryDelay);
-
-          return [];
-        }
-
-        // Auth is ready, proceed with history fetch
-        edgeLogger.info('Auth ready, fetching history', { category: 'auth' });
-        const historyData = await historyService.fetchHistory(forceRefresh, isMobileOpen);
-
-        // Handle empty array as a valid response (not an error)
-        if (Array.isArray(historyData)) {
-          setHistory(historyData);
-          // Only show no history message when we've confirmed array is empty and loading is done
-          setIsEmpty(historyData.length === 0);
-          setError(null);
-          setErrorMessage('');
-        }
-
-        setIsLoading(false);
-        return historyData;
-      } catch (error) {
-        console.error('Error fetching chat history:', error);
-        setErrorMessage('Failed to load chat history');
-        setError(error instanceof Error ? error : new Error('Unknown error'));
-        setIsLoading(false);
-        return [];
-      } finally {
-        setIsRefreshing(false);
-      }
-    })();
-
-    // Return the shared promise
-    return pendingHistoryRequests.promise;
-  }, [setError, setErrorMessage, setHistory, setIsEmpty, setIsLoading, setIsRefreshing, isLoading, isMobile, openMobile]);
-
-  // Add throttled fetch function to reduce API calls
-  const throttledFetchChatHistory = useCallback(
-    throttle((forceRefresh = false) => {
-      if (!isRefreshing && user?.id && isPageVisible()) {
-        fetchChatHistory(forceRefresh);
-      }
-    }, 30000), // 30 second throttle (increased from 10s)
-    [user?.id, isRefreshing, fetchChatHistory]
-  );
-
-  // Add proper tab visibility tracking
-  useEffect(() => {
-    const visibilityHandler = () => {
-      if (document.visibilityState === 'visible' && user?.id) {
-        edgeLogger.debug('Tab visible, refreshing history', { category: 'chat' });
-        fetchChatHistory(false);
-      }
-    };
-
-    document.addEventListener('visibilitychange', visibilityHandler);
-    return () => document.removeEventListener('visibilitychange', visibilityHandler);
-  }, [fetchChatHistory, user?.id]);
-
-  // Add a new effect to fetch history when mobile sidebar is opened
-  useEffect(() => {
-    if (isMobile && openMobile && user?.id) {
-      edgeLogger.debug('Mobile sidebar opened, fetching history', { category: 'chat' });
-      fetchChatHistory(false);
-    }
-  }, [isMobile, openMobile, fetchChatHistory, user?.id]);
-
-  // Initial fetch on mount
+  // Initial fetch history when component mounts
   useEffect(() => {
     if (!user?.id) return;
 
-    edgeLogger.debug('Initial history fetch on component mount', { category: 'chat' });
-    fetchChatHistory(false);
-  }, [fetchChatHistory, user?.id]);
+    console.debug('[SidebarHistory] Initial history fetch on component mount');
+    fetchHistory(false);
+  }, [fetchHistory, user?.id]);
 
-  // Setup polling for history updates with adaptive intervals
+  // Set up polling for history updates with adaptive intervals
   useEffect(() => {
-    // Skip polling completely if no user or no user ID
     if (!user?.id) return;
 
-    // Don't set up polling if we should skip it
-    if (!shouldPoll()) return;
-
-    // Determine polling interval based on device type with much longer intervals
-    // IMPORTANT: Increased intervals significantly to reduce API load and improve responsiveness
+    // Polling logic for periodic refreshes
     const pollingInterval = isMobile ?
-      15 * 60 * 1000 : // 15 minutes for mobile (increased from 10)
-      8 * 60 * 1000;   // 8 minutes for desktop (increased from 5)
+      15 * 60 * 1000 : // 15 minutes for mobile
+      8 * 60 * 1000;   // 8 minutes for desktop
 
-    // Add jitter to prevent synchronized requests from multiple clients/tabs
-    // Using a larger jitter window to better distribute requests
-    const jitter = Math.floor(Math.random() * 45000); // 0-45s jitter (increased from 15s)
+    // Add jitter to prevent synchronized requests
+    const jitter = Math.floor(Math.random() * 45000); // 0-45s jitter
     const effectiveInterval = pollingInterval + jitter;
 
-    edgeLogger.debug('Setting up history polling', {
-      category: LOG_CATEGORIES.CHAT,
-      intervalSeconds: Math.round(effectiveInterval / 1000)
-    });
+    console.debug(`[SidebarHistory] Setting up history polling every ${Math.round(effectiveInterval / 1000)}s`);
 
-    // Initial delayed fetch after component mount
-    // This helps prevent all components from fetching simultaneously on page load
-    const initialDelay = Math.floor(Math.random() * 5000); // 0-5s initial delay
-    const initialFetchTimeout = setTimeout(() => {
-      if (isPageVisible() && !isRefreshing && !historyService.isInAuthFailure()) {
-        edgeLogger.debug('Running initial delayed history fetch', {
-          category: LOG_CATEGORIES.CHAT,
-          delayMs: initialDelay
-        });
-        throttledFetchChatHistory(false);
-      }
-    }, initialDelay);
-
-    // Set up polling interval with adaptive timing
     const intervalId = setInterval(() => {
-      // Only fetch if page is visible, not already refreshing, and no auth failure
-      if (isPageVisible() && !isRefreshing && !historyService.isInAuthFailure()) {
-        edgeLogger.debug('Running scheduled history check', {
-          category: LOG_CATEGORIES.CHAT
-        });
-        throttledFetchChatHistory(false);
-      } else {
-        if (Math.random() < 0.3) { // Only log 30% of skips to reduce console noise
-          const skipReason = !isPageVisible() ? 'page not visible' : isRefreshing ? 'already refreshing' : 'auth failure';
-          edgeLogger.debug('Skipping history poll', {
-            category: LOG_CATEGORIES.CHAT,
-            reason: skipReason
-          });
-        }
+      // Only refresh if page is visible and user is logged in
+      if (isPageVisible() && user?.id) {
+        console.debug('[SidebarHistory] Polling: fetching history');
+        fetchHistory(false);
       }
     }, effectiveInterval);
 
-    // Clean up interval and timeout on unmount
+    // Clean up interval on unmount
     return () => {
       clearInterval(intervalId);
-      clearTimeout(initialFetchTimeout);
     };
-  }, [throttledFetchChatHistory, isMobile, user?.id, isRefreshing]);
+  }, [fetchHistory, isMobile, isPageVisible, user?.id]);
 
-  // Manual refresh function for the refresh button
-  const refreshHistory = useCallback(async () => {
-    edgeLogger.debug('Manually refreshing chat history', {
-      category: LOG_CATEGORIES.CHAT,
-      source: 'button_click'
-    });
-    await fetchChatHistory(true); // Force refresh AND manual (show toast)
-  }, [fetchChatHistory]);
-
-  // Handle navigation back to main chat page
+  // Handle tab visibility changes
   useEffect(() => {
-    if (user && pathname === '/chat' && !id && history.length > 0) {
-      // Only refresh when returning to main chat page
-      const lastUpdateTime = localStorage.getItem('lastHistoryUpdate');
-      const now = Date.now();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && user?.id) {
+        // When tab becomes visible, fetch fresh data if last fetch was a while ago
+        const now = Date.now();
+        const lastFetch = lastHistoryFetch || 0;
+        const timeSinceLastFetch = now - lastFetch;
 
-      // Only refresh if we haven't updated in the last minute
-      if (!lastUpdateTime || now - parseInt(lastUpdateTime) > 60000) {
-        edgeLogger.debug('Refreshing history after returning to chat main page', {
-          category: LOG_CATEGORIES.CHAT
-        });
-        fetchChatHistory(true);
-        localStorage.setItem('lastHistoryUpdate', now.toString());
+        // Only refresh if it's been more than 2 minutes since last fetch
+        if (timeSinceLastFetch > 2 * 60 * 1000) {
+          console.debug(`[SidebarHistory] Tab visible after ${Math.round(timeSinceLastFetch / 1000)}s, refreshing history`);
+          fetchHistory(false);
+        }
       }
-    }
-  }, [user, id, pathname, fetchChatHistory, history.length]);
+    };
 
-  // Add auto-retry when errors occur
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [fetchHistory, lastHistoryFetch, user?.id]);
+
+  // Set error message when store has errors
   useEffect(() => {
-    if (error) {
-      // Don't retry if we're in auth failure state
-      if (historyService.isInAuthFailure()) {
-        edgeLogger.debug('Skipping auto-retry due to auth failure state', {
-          category: LOG_CATEGORIES.AUTH
-        });
-        return;
-      }
-
-      const timer = setTimeout(() => {
-        edgeLogger.debug('Auto-retrying after error', {
-          category: LOG_CATEGORIES.CHAT,
-          retryCount: 1
-        });
-        fetchChatHistory(true);
-      }, 5000);
-
-      return () => clearTimeout(timer);
+    if (historyError) {
+      setErrorMessage(`Error loading chats: ${historyError}`);
+    } else {
+      setErrorMessage(null);
     }
-  }, [error, fetchChatHistory]);
+  }, [historyError]);
 
-  // When navigating between chats, check if the current chat exists in history
-  useEffect(() => {
-    // Only check if we have an ID, we're not loading, we have history, and we're on a chat page
-    if (id && !isLoading && history.length > 0 && pathname?.startsWith('/chat/')) {
-      const chatExists = history.some(chat => chat.id === id);
+  // Manual refresh function
+  const refreshHistory = useCallback(() => {
+    console.debug('[SidebarHistory] Manual refresh requested');
+    fetchHistory(true); // Force refresh
+  }, [fetchHistory]);
 
-      if (!chatExists) {
-        edgeLogger.debug('Current chat ID not found in history', {
-          category: LOG_CATEGORIES.CHAT,
-          chatId: id
-        });
-        setChatWarning(`Chat ${id.slice(0, 8)}... not found in your history`);
-
-        // Automatically refresh to see if it appears
-        refreshHistory();
-      } else {
-        // Clear any warning if the chat exists
-        setChatWarning(null);
-      }
-    }
-  }, [id, history, isLoading, pathname, refreshHistory]);
-
-  // Delete a chat with confirmation
-  const handleDeleteWithConfirmation = useCallback((chatId: string) => {
+  // Handle delete button click
+  const handleDeleteClick = useCallback((chatId: string) => {
     setDeleteId(chatId);
     setShowDeleteDialog(true);
   }, []);
 
-  // Handle delete function with state management
-  const handleDelete = useCallback(async (chatId: string) => {
-    if (!chatId) return;
+  // Handle delete confirmation
+  const handleDeleteConfirm = useCallback(async () => {
+    if (!deleteId) return;
+
+    setIsDeleting(prev => ({ ...prev, [deleteId]: true }));
 
     try {
-      setIsDeleting(prev => ({ ...prev, [chatId]: true }));
-      await historyService.deleteChat(chatId);
-
-      // Update the history in memory
-      setHistory(prev => {
-        const updatedHistory = prev.filter(chat => chat.id !== chatId);
-
-        // If we delete the current chat, navigate to the next available chat
-        if (id === chatId) {
-          if (updatedHistory.length > 0) {
-            // Find the most recent chat and navigate to it
-            const nextChat = updatedHistory[0]; // History is already sorted by date
-            edgeLogger.debug('Navigating to next available chat', {
-              category: LOG_CATEGORIES.CHAT,
-              chatId: nextChat.id
-            });
-            router.push(`/chat/${nextChat.id}`);
-          } else {
-            // If no chats left, go to main chat page
-            edgeLogger.debug('No chats left, navigating to main chat page', {
-              category: LOG_CATEGORIES.CHAT
-            });
-            router.push('/chat');
-          }
-        }
-
-        return updatedHistory;
-      });
-
-      // Show success toast in development mode
-      if (process.env.NODE_ENV === 'development') {
-        toast.success('Chat deleted successfully', {
-          duration: 2000,
-          position: 'bottom-right'
-        });
-      }
+      // Delete conversation using Zustand store action
+      deleteConversation(deleteId);
+      toast.success('Chat deleted successfully');
     } catch (error) {
-      console.error('Error deleting chat:', error);
+      console.error('Failed to delete chat:', error);
       toast.error('Failed to delete chat');
+      setIsDeleting(prev => ({ ...prev, [deleteId]: false }));
     } finally {
-      setIsDeleting(prev => ({ ...prev, [chatId]: false }));
+      setShowDeleteDialog(false);
+      setDeleteId(null);
     }
-  }, [router, id]);
+  }, [deleteId, deleteConversation]);
 
-  // Function to open rename dialog
-  const handleRenameStart = useCallback((chatId: string, currentTitle: string) => {
+  // Handle rename button click  
+  const handleRenameClick = useCallback((chatId: string, currentTitle: string) => {
     setRenameId(chatId);
     setRenameTitle(currentTitle);
     setShowRenameDialog(true);
   }, []);
 
-  // Function to handle renaming
-  const handleRename = useCallback(async () => {
+  // Handle rename confirmation
+  const handleRenameConfirm = useCallback(async () => {
     if (!renameId || !renameTitle.trim()) return;
 
+    setIsRenaming(prev => ({ ...prev, [renameId]: true }));
+
     try {
-      setIsRenaming(prev => ({ ...prev, [renameId]: true }));
-      const success = await historyService.renameChat(renameId, renameTitle);
+      const supabase = await createClient();
 
-      if (success) {
-        // Update the history in memory
-        setHistory(prev => prev.map(chat =>
-          chat.id === renameId ? { ...chat, title: renameTitle } : chat
-        ));
+      // Update title in database
+      const { error } = await supabase
+        .from('sd_chat_sessions')
+        .update({ title: renameTitle.trim() })
+        .eq('id', renameId);
 
-        // Show success toast in development mode
-        if (process.env.NODE_ENV === 'development') {
-          toast.success('Chat renamed successfully', {
-            duration: 2000,
-            position: 'bottom-right'
-          });
-        }
-      } else {
-        toast.error('Failed to rename chat');
-      }
+      if (error) throw error;
+
+      // Update conversation title in Zustand store
+      useChatStore.getState().updateConversationTitle(renameId, renameTitle.trim());
+
+      toast.success('Chat renamed successfully');
     } catch (error) {
-      console.error('Error renaming chat:', error);
+      console.error('Failed to rename chat:', error);
       toast.error('Failed to rename chat');
     } finally {
       setIsRenaming(prev => ({ ...prev, [renameId]: false }));
       setShowRenameDialog(false);
       setRenameId(null);
+      setRenameTitle('');
     }
   }, [renameId, renameTitle]);
 
-  // Function to handle delete confirmation
-  const handleConfirmDelete = useCallback(() => {
-    if (deleteId) {
-      handleDelete(deleteId);
-      setShowDeleteDialog(false);
-    }
-  }, [deleteId, handleDelete]);
+  // Group chats by date
+  const groupedChats = useMemo(() => {
+    return groupChatsByDate(historyArray);
+  }, [historyArray]);
 
-  // Render grouped chats and empty state
-  const renderChats = (chats: Array<Chat>) => {
-    if (chats.length === 0 && !isLoading) {
-      return (
-        <div className="flex flex-col items-center justify-center h-40 text-center space-y-2">
-          <p className="text-base text-sidebar-foreground/70">No chats found</p>
-          <Link
-            href="/chat"
-            className="text-sm text-primary hover:underline font-medium"
-            onClick={() => setOpenMobile(false)}
-          >
-            Start a new chat
-          </Link>
-        </div>
-      );
+  // Render chat sections
+  const renderChats = useCallback((chats: Array<Chat>) => {
+    if (chats.length === 0) {
+      return null;
     }
 
-    // Group chats by date
     const groupedChats = groupChatsByDate(chats);
 
     return (
-      <div className="space-y-6 pt-1">
+      <>
         {/* Today's chats */}
         {groupedChats.today.length > 0 && (
-          <div>
-            <div className="px-3 py-1.5 text-sm font-semibold text-sidebar-foreground mb-2">
-              Today
-            </div>
+          <div className="mb-4">
+            <h3 className="font-semibold mb-1 text-xs text-sidebar-foreground/60 px-4">Today</h3>
             <div className="space-y-1">
               {groupedChats.today.map((chat) => (
                 <PureChatItem
                   key={chat.id}
                   chat={chat}
                   isActive={chat.id === id}
-                  onDelete={handleDeleteWithConfirmation}
-                  onRename={handleRenameStart}
+                  onDelete={handleDeleteClick}
+                  onRename={handleRenameClick}
                   setOpenMobile={setOpenMobile}
                   isDeleting={isDeleting[chat.id] || false}
                 />
@@ -686,18 +419,16 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
 
         {/* Yesterday's chats */}
         {groupedChats.yesterday.length > 0 && (
-          <div>
-            <div className="px-3 py-1.5 text-sm font-semibold text-sidebar-foreground mb-2">
-              Yesterday
-            </div>
+          <div className="mb-4">
+            <h3 className="font-semibold mb-1 text-xs text-sidebar-foreground/60 px-4">Yesterday</h3>
             <div className="space-y-1">
               {groupedChats.yesterday.map((chat) => (
                 <PureChatItem
                   key={chat.id}
                   chat={chat}
                   isActive={chat.id === id}
-                  onDelete={handleDeleteWithConfirmation}
-                  onRename={handleRenameStart}
+                  onDelete={handleDeleteClick}
+                  onRename={handleRenameClick}
                   setOpenMobile={setOpenMobile}
                   isDeleting={isDeleting[chat.id] || false}
                 />
@@ -706,20 +437,18 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
           </div>
         )}
 
-        {/* Past week */}
+        {/* Past week's chats */}
         {groupedChats.pastWeek.length > 0 && (
-          <div>
-            <div className="px-3 py-1.5 text-sm font-semibold text-sidebar-foreground mb-2">
-              Past 7 days
-            </div>
+          <div className="mb-4">
+            <h3 className="font-semibold mb-1 text-xs text-sidebar-foreground/60 px-4">Past Week</h3>
             <div className="space-y-1">
               {groupedChats.pastWeek.map((chat) => (
                 <PureChatItem
                   key={chat.id}
                   chat={chat}
                   isActive={chat.id === id}
-                  onDelete={handleDeleteWithConfirmation}
-                  onRename={handleRenameStart}
+                  onDelete={handleDeleteClick}
+                  onRename={handleRenameClick}
                   setOpenMobile={setOpenMobile}
                   isDeleting={isDeleting[chat.id] || false}
                 />
@@ -728,54 +457,38 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
           </div>
         )}
 
-        {/* Older */}
+        {/* Older chats (with toggle) */}
         {groupedChats.older.length > 0 && (
-          <div>
-            <div className="px-3 py-1.5 text-sm font-semibold text-sidebar-foreground mb-2">
-              Older ({groupedChats.older.length})
-            </div>
-            <div className="space-y-1">
-              {/* Show limited number of older chats if there are many */}
-              {groupedChats.older.length > 10 ? (
-                <>
-                  {(showAllOlder ? groupedChats.older : groupedChats.older.slice(0, 10)).map((chat) => (
-                    <PureChatItem
-                      key={chat.id}
-                      chat={chat}
-                      isActive={chat.id === id}
-                      onDelete={handleDeleteWithConfirmation}
-                      onRename={handleRenameStart}
-                      setOpenMobile={setOpenMobile}
-                      isDeleting={isDeleting[chat.id] || false}
-                    />
-                  ))}
-                  <button
-                    onClick={() => setShowAllOlder(!showAllOlder)}
-                    className="w-full text-sm py-2 text-primary hover:underline text-center font-medium"
-                  >
-                    {showAllOlder ? "Show less" : `Show ${groupedChats.older.length - 10} more`}
-                  </button>
-                </>
-              ) : (
-                // Just show all if there are 10 or fewer
-                groupedChats.older.map((chat) => (
-                  <PureChatItem
-                    key={chat.id}
-                    chat={chat}
-                    isActive={chat.id === id}
-                    onDelete={handleDeleteWithConfirmation}
-                    onRename={handleRenameStart}
-                    setOpenMobile={setOpenMobile}
-                    isDeleting={isDeleting[chat.id] || false}
-                  />
-                ))
+          <div className="mb-4">
+            <h3 className="font-semibold mb-1 text-xs text-sidebar-foreground/60 px-4 flex justify-between items-center">
+              <span>Older</span>
+              {groupedChats.older.length > 5 && (
+                <button
+                  onClick={() => setShowAllOlder(!showAllOlder)}
+                  className="text-xs font-medium text-blue-500 hover:text-blue-700 dark:hover:text-blue-300"
+                >
+                  {showAllOlder ? "Show Less" : `Show All (${groupedChats.older.length})`}
+                </button>
               )}
+            </h3>
+            <div className="space-y-1">
+              {(showAllOlder ? groupedChats.older : groupedChats.older.slice(0, 5)).map((chat) => (
+                <PureChatItem
+                  key={chat.id}
+                  chat={chat}
+                  isActive={chat.id === id}
+                  onDelete={handleDeleteClick}
+                  onRename={handleRenameClick}
+                  setOpenMobile={setOpenMobile}
+                  isDeleting={isDeleting[chat.id] || false}
+                />
+              ))}
             </div>
           </div>
         )}
-      </div>
+      </>
     );
-  };
+  }, [groupChatsByDate, handleDeleteClick, handleRenameClick, id, isDeleting, setOpenMobile, showAllOlder]);
 
   // Main component render
   return (
@@ -785,7 +498,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
           <div className="flex items-center justify-between">
             <div className="flex-1"></div>
             <div className="flex items-center gap-1">
-              {error || chatWarning ? (
+              {historyError ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <div className="p-1">
@@ -794,17 +507,31 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
                   </TooltipTrigger>
                   <TooltipContent>
                     <p className="max-w-60 text-sm">
-                      {error?.message || chatWarning || "Warning"}
+                      {historyError}
                     </p>
                   </TooltipContent>
                 </Tooltip>
               ) : null}
+              <SidebarMenuAction
+                onClick={refreshHistory}
+                className="ml-auto"
+                disabled={isLoadingHistory}
+              >
+                {isLoadingHistory ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <MessageSquare className="h-4 w-4" />
+                )}
+                <span className="ml-2">
+                  {isLoadingHistory ? "Loading..." : "Chats"}
+                </span>
+              </SidebarMenuAction>
             </div>
           </div>
         </SidebarGroupLabel>
         <SidebarGroupContent className="overflow-y-auto pb-20">
           <SidebarMenu>
-            {isLoading ? (
+            {isLoadingHistory ? (
               <div className="flex justify-center py-8">
                 <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
               </div>
@@ -818,46 +545,47 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
                 <p className="text-base">{errorMessage}</p>
                 <button
                   className="text-sm mt-2 px-4 py-2 bg-muted rounded-md hover:bg-muted/80 transition-colors"
-                  onClick={() => fetchChatHistory(true)}
+                  onClick={() => fetchHistory(true)}
                 >
                   Try Again
                 </button>
               </div>
-            ) : history.length === 0 ? (
+            ) : historyArray.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground px-4">
                 <p className="text-base">No chat history found</p>
                 <p className="text-sm mt-1">Start a new conversation to get started</p>
               </div>
             ) : (
-              renderChats(history)
+              renderChats(historyArray)
             )}
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>
-      <AlertDialog
-        open={showDeleteDialog}
-        onOpenChange={setShowDeleteDialog}
-      >
+
+      {/* Delete confirmation dialog */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogTitle>Delete Chat</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete this chat and all of its messages.
+              Are you sure you want to delete this chat? This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={handleConfirmDelete}
-              className="bg-red-600 hover:bg-red-700 focus:ring-red-600"
+              onClick={handleDeleteConfirm}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Delete
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Rename dialog */}
       <Dialog open={showRenameDialog} onOpenChange={setShowRenameDialog}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>Rename Chat</DialogTitle>
           </DialogHeader>
@@ -865,25 +593,30 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
             <Input
               value={renameTitle}
               onChange={(e) => setRenameTitle(e.target.value)}
-              placeholder="Enter a new name for this chat"
+              placeholder="Enter a new title"
               className="w-full"
               autoFocus
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  handleRename();
-                }
-              }}
             />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setShowRenameDialog(false)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowRenameDialog(false);
+                setRenameTitle('');
+              }}
+            >
               Cancel
             </Button>
-            <Button
-              onClick={handleRename}
-              disabled={isRenaming[renameId || ''] || !renameTitle.trim()}
-            >
-              {isRenaming[renameId || ''] ? 'Renaming...' : 'Rename'}
+            <Button onClick={handleRenameConfirm} disabled={!renameTitle.trim()}>
+              {isRenaming[renameId ?? ''] ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Renaming...
+                </>
+              ) : (
+                'Rename'
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -892,33 +625,6 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   );
 };
 
-// Properly memoize the component to prevent unnecessary re-renders
-export const ChatItem = React.memo(PureChatItem, (prevProps, nextProps) => {
-  return (
-    prevProps.isActive === nextProps.isActive &&
-    prevProps.chat.id === nextProps.chat.id &&
-    prevProps.chat.title === nextProps.chat.title &&
-    prevProps.isDeleting === nextProps.isDeleting
-  );
-});
-
-// Add component display name for easier debugging
-ChatItem.displayName = 'ChatItem';
-
-// Create a module variable to track component instance for debugging
-let instanceCounter = 0;
-
-// Create the memoized component
-const MemoizedSidebarHistory = React.memo(PureSidebarHistory, (prevProps, nextProps) => {
-  // Only re-render if the user ID changes
-  return prevProps.user?.id === nextProps.user?.id;
-});
-
-// Add component display name for easier debugging
-MemoizedSidebarHistory.displayName = 'SidebarHistory';
-
-// Export the component
-export const SidebarHistory = MemoizedSidebarHistory;
-
-// Default export uses the wrapped component
-export default MemoizedSidebarHistory;
+// Export memoized version for better performance
+export const SidebarHistory = React.memo(PureSidebarHistory);
+export default SidebarHistory;

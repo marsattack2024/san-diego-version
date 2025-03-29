@@ -12,8 +12,8 @@ import { clientCache } from '@/lib/cache/client-cache';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { Chat } from '@/lib/db/schema';
-import { randomUUID } from 'crypto';
 import { Message } from 'ai';
+import { generateUUID } from '@/lib/utils/uuid';
 
 // Keep track of pending requests to deduplicate
 const pendingRequests: Record<string, Promise<Chat[]> | null> = {};
@@ -1102,7 +1102,7 @@ export const historyService = {
    */
   async createNewSession(): Promise<{ id: string; success: boolean; error?: string }> {
     const operationId = Math.random().toString(36).substring(2, 10);
-    const sessionId = randomUUID();
+    const sessionId = generateUUID();
 
     // Track pending session creation requests
     const pendingKey = `creating_session_${sessionId}`;

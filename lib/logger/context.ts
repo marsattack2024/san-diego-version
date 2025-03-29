@@ -51,10 +51,10 @@ export function startRequest(context: Omit<LogContext, 'requestStartTime'>): Log
 export function endRequest(additionalContext: Partial<LogContext> = {}): LogContext {
   const context = getContext();
   const now = Date.now();
-  const totalRequestDuration = context.requestStartTime 
-    ? now - context.requestStartTime 
+  const totalRequestDuration = context.requestStartTime
+    ? now - context.requestStartTime
     : undefined;
-    
+
   return {
     ...context,
     ...additionalContext,
@@ -62,3 +62,13 @@ export function endRequest(additionalContext: Partial<LogContext> = {}): LogCont
     totalRequestDuration
   };
 }
+
+// Export everything in a named object for easier imports
+export const contextUtils = {
+  getContext,
+  withContext,
+  createTimedContext,
+  getElapsedTime,
+  startRequest,
+  endRequest
+};

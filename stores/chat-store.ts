@@ -3,6 +3,10 @@ import { persist, createJSONStorage, StateStorage } from 'zustand/middleware';
 import { v4 as uuidv4 } from 'uuid';
 import { Message } from 'ai';
 import { type AgentType } from '@/lib/chat-engine/prompts';
+import { historyService } from '@/lib/api/history-service';
+import { Chat } from '@/lib/db/schema';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { shallow } from 'zustand/shallow';
 
 // Define a more comprehensive conversation type for Supabase integration
 export interface Conversation {
@@ -35,6 +39,11 @@ interface ChatState {
   deepSearchEnabled: boolean;
   isDeepSearchInProgress: boolean; // Track when deep search is actively running
 
+  // New state properties for history synchronization
+  isLoadingHistory: boolean; // Tracks when history is loading
+  historyError: string | null; // Stores any history loading errors
+  lastHistoryFetch: number | null; // Timestamp of last history fetch
+
   // Actions
   createConversation: () => string;
   setCurrentConversation: (id: string) => void;
@@ -51,6 +60,12 @@ interface ChatState {
   getSelectedAgent: () => AgentType;
   setDeepSearchInProgress: (inProgress: boolean) => void; // Set deep search progress state
   isAnySearchInProgress: () => boolean; // Check if either regular loading or deep search is happening
+
+  // New synchronization methods
+  fetchHistory: (forceRefresh?: boolean) => Promise<void>;
+  syncConversationsFromHistory: (historyData: Chat[]) => void;
+  updateConversationTitle: (id: string, title: string) => void;
+  removeConversationOptimistic: (id: string) => void;
 }
 
 // Custom storage with debug logging
@@ -89,33 +104,168 @@ export const useChatStore = create<ChatState>()(
       deepSearchEnabled: false,
       isDeepSearchInProgress: false,
 
+      // Initialize new state properties
+      isLoadingHistory: false,
+      historyError: null,
+      lastHistoryFetch: null,
+
+      // New method to synchronize conversations from history data
+      syncConversationsFromHistory: (historyData: Chat[]) => {
+        const conversationsMap: Record<string, Conversation> = {};
+
+        // Convert API format to store format
+        historyData.forEach(chat => {
+          conversationsMap[chat.id] = {
+            id: chat.id,
+            title: chat.title || 'Untitled Chat',
+            messages: [], // We don't load messages in bulk
+            createdAt: chat.createdAt,
+            updatedAt: chat.updatedAt || chat.createdAt, // Fallback to createdAt if updatedAt is undefined
+            agentId: ((chat as any).agentId as AgentType) || 'default',
+            deepSearchEnabled: (chat as any).deepSearchEnabled || false,
+            userId: chat.userId
+          };
+        });
+
+        set({ conversations: conversationsMap });
+
+        console.debug(`[ChatStore] Synchronized ${historyData.length} conversations from history`);
+      },
+
+      // New method to fetch history from API
+      fetchHistory: async (forceRefresh = false) => {
+        const state = get();
+
+        // Prevent multiple concurrent fetches unless forced
+        if (state.isLoadingHistory && !forceRefresh) {
+          console.debug(`[ChatStore] History fetch already in progress, skipping`);
+          return;
+        }
+
+        // Implement adaptive refresh timing - only refresh if needed
+        const now = Date.now();
+        const timeSinceLastFetch = state.lastHistoryFetch ? now - state.lastHistoryFetch : Infinity;
+        const minRefreshInterval = 30 * 1000; // 30 seconds between refreshes
+
+        if (!forceRefresh && timeSinceLastFetch < minRefreshInterval) {
+          console.debug(`[ChatStore] Skipping fetchHistory - last fetch was ${Math.round(timeSinceLastFetch / 1000)}s ago`);
+          return;
+        }
+
+        set({ isLoadingHistory: true, historyError: null });
+
+        try {
+          console.debug(`[ChatStore] Fetching history (forceRefresh=${forceRefresh})`);
+          const historyData = await historyService.fetchHistory(forceRefresh);
+
+          // Process history data into conversations map
+          get().syncConversationsFromHistory(historyData);
+
+          set({
+            isLoadingHistory: false,
+            lastHistoryFetch: Date.now()
+          });
+
+          console.debug(`[ChatStore] History fetched and store updated with ${historyData.length} conversations`);
+        } catch (error) {
+          console.error("Failed to fetch history:", error);
+          set({
+            isLoadingHistory: false,
+            historyError: error instanceof Error ? error.message : 'Failed to load history',
+            lastHistoryFetch: Date.now() // Still update timestamp to prevent immediate retry
+          });
+        }
+      },
+
+      // Update a conversation's title
+      updateConversationTitle: (id: string, title: string) => {
+        set((state) => {
+          // Skip if conversation doesn't exist
+          if (!state.conversations[id]) {
+            console.warn(`[ChatStore] Attempted to update title for non-existent conversation: ${id}`);
+            return {};
+          }
+
+          console.debug(`[ChatStore] Updating title for chat ${id}: "${title}"`);
+
+          return {
+            conversations: {
+              ...state.conversations,
+              [id]: {
+                ...state.conversations[id],
+                title,
+                updatedAt: new Date().toISOString()
+              }
+            }
+          };
+        });
+      },
+
+      // Remove a conversation that failed to save to the database
+      removeConversationOptimistic: (id: string) => {
+        console.warn(`[ChatStore] Removing optimistically created conversation ${id} due to database failure`);
+
+        set(state => {
+          const newConversations = { ...state.conversations };
+          delete newConversations[id];
+
+          // If this was the current conversation, find a new one
+          let newCurrentId = state.currentConversationId;
+
+          if (state.currentConversationId === id) {
+            const conversationIds = Object.keys(newConversations);
+            newCurrentId = conversationIds.length > 0 ? conversationIds[0] : null;
+
+            // Navigate if needed
+            if (typeof window !== 'undefined') {
+              if (newCurrentId) {
+                window.location.href = `/chat/${newCurrentId}`;
+              } else {
+                window.location.href = '/chat';
+              }
+            }
+          }
+
+          return {
+            conversations: newConversations,
+            currentConversationId: newCurrentId
+          };
+        });
+      },
+
+      // Enhanced createConversation with optimistic updates
       createConversation: () => {
         const id = uuidv4();
         const timestamp = new Date().toISOString();
         const selectedAgentId = get().selectedAgentId;
         const deepSearchEnabled = get().deepSearchEnabled;
 
-        // Update local state
+        // Create new conversation object
+        const newConversation: Conversation = {
+          id,
+          messages: [],
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          title: 'New Chat',
+          agentId: selectedAgentId,
+          deepSearchEnabled
+        };
+
+        // 1. Update local state immediately (optimistic update)
         set((state) => ({
           conversations: {
+            // Add new conversation at the beginning of the map
+            [id]: newConversation,
             ...state.conversations,
-            [id]: {
-              id,
-              messages: [],
-              createdAt: timestamp,
-              updatedAt: timestamp,
-              title: 'New Chat', // Use "New Chat" to match the title generation condition
-              agentId: selectedAgentId,
-              deepSearchEnabled: state.deepSearchEnabled
-            }
           },
           currentConversationId: id
         }));
 
-        // Create session in the database
+        console.debug(`[ChatStore] Optimistically created new chat ${id}`);
+
+        // 2. Create session in the database asynchronously
         if (typeof window !== 'undefined') {
-          // Use setTimeout to not block the UI while creating the session
-          setTimeout(async () => {
+          (async () => {
             try {
               console.debug(`[ChatStore] Creating session in database: ${id}`);
               const response = await fetch('/api/chat/session', {
@@ -123,27 +273,30 @@ export const useChatStore = create<ChatState>()(
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   id,
-                  title: 'New Chat', // Match the local state
+                  title: 'New Chat',
                   agentId: selectedAgentId,
                   deepSearchEnabled
                 })
               });
 
               if (!response.ok) {
-                console.error(`Failed to create chat session in database: ${response.status}`, await response.text());
-                // Invalidate history cache to ensure we don't get out of sync
-                setTimeout(() => {
-                  try {
-                    fetch('/api/history/invalidate', { method: 'POST' }).catch(e => console.error('Failed to invalidate history:', e));
-                  } catch (error) {
-                    console.error('Failed to invalidate history:', error);
-                  }
-                }, 1000);
+                console.error(`Failed to create chat session in database: ${response.status}`);
+
+                // Revert optimistic update on failure
+                get().removeConversationOptimistic(id);
+                return;
               }
+
+              // Success - force refresh history to ensure sidebar is updated
+              setTimeout(() => get().fetchHistory(true), 500);
+
             } catch (error) {
               console.error('Failed to create chat session in database:', error);
+
+              // Revert optimistic update on error
+              get().removeConversationOptimistic(id);
             }
-          }, 0);
+          })();
         }
 
         return id;
@@ -154,8 +307,7 @@ export const useChatStore = create<ChatState>()(
       },
 
       getConversation: (id) => {
-        const { conversations } = get();
-        return conversations[id];
+        return get().conversations[id];
       },
 
       addMessage: (message) => {
@@ -224,25 +376,64 @@ export const useChatStore = create<ChatState>()(
       clearConversation: () => {
         const id = uuidv4();
         const timestamp = new Date().toISOString();
+        const selectedAgentId = get().selectedAgentId;
+        const deepSearchEnabled = get().deepSearchEnabled;
 
-        // Create a new conversation without clearing localStorage history
+        // Create a new conversation with optimistic update
+        const newConversation: Conversation = {
+          id,
+          messages: [],
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          title: 'New Chat',
+          agentId: selectedAgentId,
+          deepSearchEnabled
+        };
+
+        // Update local state immediately
         set((state) => ({
           conversations: {
-            ...state.conversations,  // Preserve existing conversations
-            [id]: {
-              id,
-              messages: [],
-              createdAt: timestamp,
-              updatedAt: timestamp,
-              title: 'New Conversation',
-              userId: undefined,
-              agentId: 'default' as AgentType,
-              metadata: {},
-              deepSearchEnabled: false
-            }
+            [id]: newConversation,
+            ...state.conversations,
           },
           currentConversationId: id
         }));
+
+        // Create session in the database
+        if (typeof window !== 'undefined') {
+          (async () => {
+            try {
+              console.debug(`[ChatStore] Creating session in database: ${id}`);
+              const response = await fetch('/api/chat/session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  id,
+                  title: 'New Chat',
+                  agentId: selectedAgentId,
+                  deepSearchEnabled
+                })
+              });
+
+              if (!response.ok) {
+                console.error(`Failed to create chat session in database: ${response.status}`);
+
+                // Revert optimistic update on failure
+                get().removeConversationOptimistic(id);
+                return;
+              }
+
+              // Success - force refresh history
+              setTimeout(() => get().fetchHistory(true), 500);
+
+            } catch (error) {
+              console.error('Failed to create chat session in database:', error);
+
+              // Revert optimistic update on error
+              get().removeConversationOptimistic(id);
+            }
+          })();
+        }
 
         return id;
       },
@@ -318,52 +509,24 @@ export const useChatStore = create<ChatState>()(
           conversations: newConversations,
           currentConversationId: newCurrentId
         });
-      },
 
-      setSelectedAgent: (agentId: AgentType) => {
-        set({ selectedAgentId: agentId });
-
-        // Update current conversation if it exists
-        const { currentConversationId, conversations } = get();
-        if (currentConversationId && conversations[currentConversationId]) {
-          set({
-            conversations: {
-              ...conversations,
-              [currentConversationId]: {
-                ...conversations[currentConversationId],
-                agentId,
-                updatedAt: new Date().toISOString()
-              }
-            }
-          });
-        }
-      },
-
-      getSelectedAgent: () => {
-        return get().selectedAgentId;
+        // Refresh history after deletion to update sidebar
+        setTimeout(() => get().fetchHistory(true), 500);
       },
 
       setDeepSearchEnabled: (enabled) => {
         // Ensure we're working with a boolean value - use strict boolean casting
-        const booleanEnabled = enabled === true;
+        const booleanEnabled = !!enabled;
 
-        // Log the toggle state change for debugging
-        console.info(`[Deep Search] Toggle state changed`, {
-          timestamp: new Date().toISOString(),
-          oldState: get().deepSearchEnabled,
-          newState: booleanEnabled,
-          newStateType: typeof booleanEnabled,
-          originalValueType: typeof enabled,
-          originalValue: enabled,
-          environment: process.env.NODE_ENV || 'unknown',
-          conversationId: get().currentConversationId
-        });
-
-        // Set the boolean flag
+        // Update the global setting
         set({ deepSearchEnabled: booleanEnabled });
 
-        // Update current conversation if it exists
-        const { currentConversationId, conversations } = get();
+        // Also update the current conversation's setting
+        const { conversations, currentConversationId } = get();
+
+        // Skip if no current conversation
+        if (!currentConversationId) return;
+
         if (currentConversationId && conversations[currentConversationId]) {
           console.info(`[Deep Search] Updating conversation settings`, {
             conversationId: currentConversationId,
@@ -387,20 +550,33 @@ export const useChatStore = create<ChatState>()(
         return get().deepSearchEnabled;
       },
 
+      setSelectedAgent: (agentId) => {
+        set({ selectedAgentId: agentId });
+      },
+
+      getSelectedAgent: () => {
+        return get().selectedAgentId;
+      },
+
       setDeepSearchInProgress: (inProgress) => {
         set({ isDeepSearchInProgress: inProgress });
       },
 
       isAnySearchInProgress: () => {
-        // This function can be used to check if either regular loading or deep search is happening
-        // Will be used by the UI to determine when to show the loading indicator
-        return get().isDeepSearchInProgress;
+        // Now checks both history loading and deep search
+        return get().isDeepSearchInProgress || get().isLoadingHistory;
       }
     }),
     {
       name: 'chat-storage',
       version: 1,
       storage: createJSONStorage(() => createDebugStorage()),
+      partialize: (state) => ({
+        currentConversationId: state.currentConversationId,
+        selectedAgentId: state.selectedAgentId,
+        deepSearchEnabled: state.deepSearchEnabled,
+        // Don't persist full conversation data, fetch from API instead
+      }),
       migrate: (persistedState: any, version: number) => {
         if (version === 0) {
           const v0State = persistedState as ChatStateV0;

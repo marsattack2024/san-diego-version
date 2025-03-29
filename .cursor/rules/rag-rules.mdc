@@ -1,5 +1,5 @@
 ---
-description: 
+description: RAG, vector search or knowledge base info
 globs: 
 alwaysApply: false
 ---
