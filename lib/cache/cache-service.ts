@@ -9,7 +9,7 @@
 import { Redis } from '@upstash/redis';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { CACHE_TTL, CACHE_NAMESPACES } from './constants';
+import { CACHE_TTL, CACHE_NAMESPACES, NAMESPACES } from './constants';
 
 /**
  * Interface for the Cache Service
@@ -19,6 +19,7 @@ export interface CacheServiceInterface {
   get<T>(key: string): Promise<T | null>;
   set<T>(key: string, value: T, options?: { ttl?: number }): Promise<void>;
   delete(key: string): Promise<void>;
+  exists(key: string): Promise<boolean>;
   
   // Domain-specific operations
   getRagResults<T>(query: string, options?: any): Promise<T | null>;
@@ -119,6 +120,18 @@ function createInMemoryFallback() {
     async del(key: string): Promise<number> {
       const deleted = store.delete(key);
       return deleted ? 1 : 0;
+    },
+    
+    async exists(key: string): Promise<number> {
+      const item = store.get(key);
+      if (!item) return 0;
+      
+      if (item.expiry && item.expiry < Date.now()) {
+        store.delete(key);
+        return 0;
+      }
+      
+      return 1;
     }
   };
 }
@@ -271,6 +284,25 @@ export class CacheService implements CacheServiceInterface {
   }
   
   /**
+   * Check if a key exists in the cache
+   */
+  async exists(key: string): Promise<boolean> {
+    const fullKey = this.generateKey(key);
+    try {
+      const redis = await this.redisPromise;
+      const result = await redis.exists(fullKey);
+      return result === 1;
+    } catch (error) {
+      edgeLogger.error('Cache exists error', {
+        category: LOG_CATEGORIES.SYSTEM,
+        key: fullKey,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return false;
+    }
+  }
+  
+  /**
    * Get RAG results from cache
    * @param query Search query
    * @param options Additional options like tenantId, filters, etc.
@@ -349,32 +381,75 @@ export class CacheService implements CacheServiceInterface {
   }
   
   /**
-   * Get deep search results from cache
-   * @param query Search query
+   * Retrieves deep search results from cache
+   * 
+   * @param query - The search query
+   * @returns Cached results or null if not found
    */
   async getDeepSearchResults<T>(query: string): Promise<T | null> {
-    // Normalize query
-    const normalizedQuery = query.toLowerCase().trim();
-    const hashedQuery = await this.hashKey(normalizedQuery);
-    
-    return this.get<T>(this.generateKey(hashedQuery, CACHE_NAMESPACES.DEEP_SEARCH));
+    try {
+      // Normalize query
+      const normalizedQuery = query.toLowerCase().trim();
+      const hashedQuery = await this.hashKey(normalizedQuery);
+      const key = this.generateKey(hashedQuery, CACHE_NAMESPACES.DEEP_SEARCH);
+      const cachedData = await this.get<T>(key);
+      
+      if (cachedData) {
+        edgeLogger.info('Cache hit for deep search query', { 
+          category: LOG_CATEGORIES.CACHE, 
+          service: 'cache-service', 
+          query,
+          key
+        });
+        return cachedData;
+      }
+      
+      edgeLogger.info('Cache miss for deep search query', { 
+        category: LOG_CATEGORIES.CACHE, 
+        service: 'cache-service',
+        query,
+        key
+      });
+      return null;
+    } catch (error) {
+      edgeLogger.error('Error retrieving deep search results from cache', {
+        category: LOG_CATEGORIES.CACHE,
+        service: 'cache-service',
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return null;
+    }
   }
-  
+
   /**
-   * Set deep search results in cache
-   * @param query Search query
-   * @param results Results to cache
+   * Stores deep search results in cache
+   * 
+   * @param query - The search query
+   * @param results - The results to cache
+   * @returns Promise that resolves when complete
    */
   async setDeepSearchResults<T>(query: string, results: T): Promise<void> {
-    // Normalize query
-    const normalizedQuery = query.toLowerCase().trim();
-    const hashedQuery = await this.hashKey(normalizedQuery);
-    
-    return this.set<T>(
-      this.generateKey(hashedQuery, CACHE_NAMESPACES.DEEP_SEARCH),
-      results,
-      { ttl: CACHE_TTL.DEEP_SEARCH }
-    );
+    try {
+      // Normalize query
+      const normalizedQuery = query.toLowerCase().trim();
+      const hashedQuery = await this.hashKey(normalizedQuery);
+      const key = this.generateKey(hashedQuery, CACHE_NAMESPACES.DEEP_SEARCH);
+      
+      await this.set(key, results, { ttl: CACHE_TTL.DEEP_SEARCH });
+      
+      edgeLogger.info('Cached deep search results', {
+        category: LOG_CATEGORIES.CACHE,
+        service: 'cache-service',
+        query,
+        key
+      });
+    } catch (error) {
+      edgeLogger.error('Error caching deep search results', {
+        category: LOG_CATEGORIES.CACHE,
+        service: 'cache-service',
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 }
 

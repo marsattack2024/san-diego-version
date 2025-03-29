@@ -7,6 +7,7 @@
 
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { vi, afterEach } from 'vitest';
 
 // Use the edge logger for test output
 const logger = edgeLogger;
@@ -197,30 +198,106 @@ export function assert(condition: boolean, message: string): void {
 
 /**
  * Sleep for a specified number of milliseconds
- * Useful for testing asynchronous processes
- * 
- * @param ms - Milliseconds to sleep
- * @returns Promise that resolves after the delay
+ * Useful for testing timeouts and TTLs
  */
 export function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
- * Mock implementation of the current date for testing time-dependent logic
- * This is a simpler implementation that just mocks Date.now()
- * 
- * @param mockDate - Date to use as "now"
- * @returns Function to restore the original Date.now
+ * Generate a random string of specified length
+ * Useful for creating unique test IDs
+ */
+export function randomString(length = 10): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  return Array.from({ length }, () => 
+    chars.charAt(Math.floor(Math.random() * chars.length))
+  ).join('');
+}
+
+/**
+ * Create a mock date that can be restored later
+ * @param mockDate The date to set as current
+ * @returns Function to restore the original Date
  */
 export function mockDate(mockDate: Date): () => void {
-  const originalNow = Date.now;
+  const RealDate = global.Date;
   
-  // Only override the Date.now method
+  // A simpler implementation that just mocks Date.now
+  const originalNow = Date.now;
   Date.now = () => mockDate.getTime();
   
-  // Return function to restore original Date.now
+  // Return function to restore real Date
   return () => {
     Date.now = originalNow;
   };
+}
+
+/**
+ * Utility to retry a function until it succeeds or times out
+ * Useful for testing eventually consistent systems
+ */
+export async function retry<T>(
+  fn: () => Promise<T>,
+  options: {
+    maxRetries?: number;
+    delay?: number;
+    shouldRetry?: (error: any) => boolean;
+  } = {}
+): Promise<T> {
+  const { 
+    maxRetries = 3, 
+    delay = 100, 
+    shouldRetry = () => true 
+  } = options;
+  
+  let lastError: any;
+  
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      
+      if (!shouldRetry(error)) {
+        throw error;
+      }
+      
+      if (i < maxRetries - 1) {
+        await sleep(delay);
+      }
+    }
+  }
+  
+  throw lastError;
+}
+
+/**
+ * Create a temporary object that will be automatically cleaned up
+ * after the test completes
+ */
+export function createTemp<T>(value: T, cleanup: (value: T) => Promise<void> | void): T {
+  // Register cleanup to run after the test
+  afterEach(async () => {
+    await cleanup(value);
+  });
+  
+  return value;
+}
+
+/**
+ * Check if a test should be skipped based on environment variables
+ * Useful for conditionally skipping slow or external tests
+ */
+export function shouldSkipTest(type: 'slow' | 'external' | 'flaky'): boolean {
+  switch (type) {
+    case 'slow':
+      return process.env.SKIP_SLOW_TESTS === 'true';
+    case 'external':
+      return process.env.SKIP_EXTERNAL_TESTS === 'true';
+    case 'flaky':
+      return process.env.SKIP_FLAKY_TESTS === 'true';
+    default:
+      return false;
+  }
 } 

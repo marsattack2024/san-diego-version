@@ -1,17 +1,13 @@
 import { NextResponse } from 'next/server';
-import { Redis } from '@upstash/redis';
 import { cacheService } from '@/lib/cache/cache-service';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-
-// Initialize Redis client directly using environment variables
-const redis = Redis.fromEnv();
 
 /**
  * Debug endpoint for inspecting Redis cache entries
  * 
  * This endpoint allows fetching and inspecting values from the Redis cache
- * using both the raw Redis client and the cacheService for comparison.
+ * using the standardized cacheService.
  * 
  * Example usage: /api/debug/cache?key=global:rag:4525a018453d5765
  */
@@ -25,15 +21,16 @@ export async function GET(request: Request) {
       key
     });
 
-    // Get raw value directly from Redis without any processing
-    const rawValue = await redis.get(key);
+    // Get raw value using cache service
+    const rawValue = await cacheService.get(key);
 
-    // Attempt to parse it if it's a string
+    // Attempt to parse it if it's a string and looks like JSON
     let parsedValue = null;
     let parseError = null;
 
     try {
-      if (typeof rawValue === 'string') {
+      if (typeof rawValue === 'string' && 
+          (rawValue.startsWith('{') || rawValue.startsWith('['))) {
         parsedValue = JSON.parse(rawValue);
       }
     } catch (error) {
@@ -43,12 +40,12 @@ export async function GET(request: Request) {
       };
     }
 
-    // Get value using our cache service for comparison
-    const cacheResult = await cacheService.get(key);
+    // Get stats about the key
+    const exists = await cacheService.exists(key);
 
     return NextResponse.json({
       key,
-      exists: rawValue !== null,
+      exists,
       rawValue,
       rawValueType: typeof rawValue,
       rawValueLength: typeof rawValue === 'string' ? rawValue.length : null,
@@ -59,8 +56,6 @@ export async function GET(request: Request) {
         rawValue.includes('\\'),
       parseError,
       parsedValue,
-      cacheResult,
-      cacheResultType: typeof cacheResult,
       timestamp: new Date().toISOString()
     }, {
       status: 200

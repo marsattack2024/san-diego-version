@@ -6,9 +6,17 @@
 
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { CacheService } from '@/lib/cache/cache-service';
-import { CACHE_TTL, CACHE_NAMESPACES, LOG_CATEGORIES } from '@/lib/cache/constants';
+import { CACHE_TTL, CACHE_NAMESPACES } from '@/lib/cache/constants';
 import { sleep } from '@/tests/helpers/test-utils';
 import { setupLoggerMock, mockLogger } from '@/tests/helpers/mock-logger';
+
+// Define LOG_CATEGORIES for the test
+// These should match the ones in the constants file
+const LOG_CATEGORIES = {
+  CACHE: 'cache',
+  RAG: 'rag',
+  WEBSCRAPER: 'webscraper'
+};
 
 // Set up mock logger before importing modules that use it
 setupLoggerMock();

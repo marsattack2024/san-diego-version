@@ -12,5 +12,7 @@ export * from './test-utils';
 
 // Export mock implementations
 export * from './mock-logger';
-// export * from './mock-clients';
-// export * from './mock-data'; 
+export * from './mock-clients';
+
+// Export test data
+export * from './test-data/mock-data'; 
