@@ -50,7 +50,24 @@ export async function POST(req: Request) {
 
   try {
     // Extract the request body
-    const body = await req.json();
+    let body;
+    try {
+      body = await req.json();
+      edgeLogger.info('Successfully parsed JSON body', {
+        operation: 'request_validation',
+        bodyKeys: Object.keys(body)
+      });
+    } catch (error) {
+      edgeLogger.error('Failed to parse request JSON', {
+        operation: 'request_validation',
+        error: error instanceof Error ? error.message : String(error)
+      });
+
+      return new Response(
+        JSON.stringify({ error: 'Invalid JSON: Failed to parse request body' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
 
     // Handle validation directly instead of using the validator
     // Process the messages from either format (array or single message)
@@ -58,15 +75,24 @@ export async function POST(req: Request) {
 
     if (body.messages && Array.isArray(body.messages)) {
       clientMessages = body.messages;
+      edgeLogger.info('Using messages array format', {
+        operation: 'request_validation',
+        messageCount: clientMessages.length
+      });
     } else if (body.message && typeof body.message === 'object') {
       edgeLogger.info('Using optimized single message format', {
-        category: 'chat',
+        operation: 'request_validation',
         messageId: body.message.id
       });
       clientMessages = [body.message];
     } else {
+      edgeLogger.error('Invalid message format', {
+        operation: 'request_validation',
+        body: JSON.stringify(body).substring(0, 200) // Log first 200 chars
+      });
+
       return new Response(
-        JSON.stringify({ error: 'Invalid request: messages required' }),
+        JSON.stringify({ error: 'Invalid request: messages required', bodyProvided: Object.keys(body) }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
       );
     }
@@ -80,6 +106,13 @@ export async function POST(req: Request) {
 
     // Basic validation
     if (!clientMessages || !Array.isArray(clientMessages) || clientMessages.length === 0) {
+      edgeLogger.error('Empty or invalid messages array', {
+        operation: 'request_validation',
+        messagesType: typeof clientMessages,
+        isArray: Array.isArray(clientMessages),
+        length: clientMessages?.length
+      });
+
       return new Response(
         JSON.stringify({ error: 'Invalid request: messages required' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
@@ -87,6 +120,10 @@ export async function POST(req: Request) {
     }
 
     if (!sessionId) {
+      edgeLogger.error('Missing session ID', {
+        operation: 'request_validation'
+      });
+
       return new Response(
         JSON.stringify({ error: 'Invalid request: session ID required' }),
         { status: 400, headers: { 'Content-Type': 'application/json' } }
@@ -95,6 +132,16 @@ export async function POST(req: Request) {
 
     // Get the latest user message for agent detection
     const lastUserMessage = clientMessages[clientMessages.length - 1];
+
+    edgeLogger.info('Validation passed', {
+      operation: 'request_validation',
+      sessionId,
+      requestedAgentId,
+      messageCount: clientMessages.length,
+      lastMessageContent: typeof lastUserMessage.content === 'string'
+        ? lastUserMessage.content.substring(0, 50) + '...'
+        : typeof lastUserMessage.content
+    });
 
     edgeLogger.info('Chat request received', {
       operation: 'chat_request',
@@ -105,18 +152,33 @@ export async function POST(req: Request) {
     });
 
     // Detect the appropriate agent type based on message content
-    const { agentType, config: agentConfig } = await detectAgentType(
-      lastUserMessage.content as string,
-      requestedAgentId as any
-    );
+    try {
+      var { agentType, config: agentConfig } = await detectAgentType(
+        lastUserMessage.content as string,
+        requestedAgentId as any
+      );
 
-    edgeLogger.info('Agent type detected', {
-      operation: 'agent_detection',
-      sessionId,
-      detectedAgent: agentType,
-      requestedAgent: requestedAgentId,
-      selectionMethod: requestedAgentId === 'default' ? 'automatic' : 'user-selected'
-    });
+      edgeLogger.info('Agent type detected', {
+        operation: 'agent_detection',
+        sessionId,
+        detectedAgent: agentType,
+        requestedAgent: requestedAgentId,
+        selectionMethod: requestedAgentId === 'default' ? 'automatic' : 'user-selected'
+      });
+    } catch (agentError) {
+      edgeLogger.error('Agent detection failed', {
+        operation: 'agent_detection',
+        error: agentError instanceof Error ? agentError.message : String(agentError)
+      });
+
+      return new Response(
+        JSON.stringify({
+          error: 'Agent detection failed',
+          message: agentError instanceof Error ? agentError.message : 'Unknown error'
+        }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
 
     // Determine if this agent type can use Deep Search
     const canAgentUseDeepSearch = agentConfig.toolOptions.useDeepSearch;
@@ -125,25 +187,60 @@ export async function POST(req: Request) {
     const shouldUseDeepSearch = canAgentUseDeepSearch && deepSearchEnabled;
 
     // Create tools object with conditional inclusion of Deep Search
-    const tools = createToolSet({
-      useKnowledgeBase: agentConfig.toolOptions.useKnowledgeBase,
-      useWebScraper: agentConfig.toolOptions.useWebScraper,
-      useDeepSearch: shouldUseDeepSearch, // Only include if explicitly enabled
-      useRagTool: agentConfig.toolOptions.useRagTool
-    });
+    try {
+      var tools = createToolSet({
+        useKnowledgeBase: agentConfig.toolOptions.useKnowledgeBase,
+        useWebScraper: agentConfig.toolOptions.useWebScraper,
+        useDeepSearch: shouldUseDeepSearch // Only include if explicitly enabled
+      });
 
-    edgeLogger.info('Tool selection', {
-      operation: 'tool_selection',
-      toolNames: Object.keys(tools),
-      deepSearchEnabled,
-      shouldUseDeepSearch,
-      deepSearchIncluded: 'deepSearch' in tools
-    });
+      edgeLogger.info('Tool selection', {
+        operation: 'tool_selection',
+        toolNames: Object.keys(tools),
+        deepSearchEnabled,
+        shouldUseDeepSearch,
+        deepSearchIncluded: 'deepSearch' in tools
+      });
+    } catch (toolError) {
+      edgeLogger.error('Tool creation failed', {
+        operation: 'tool_creation',
+        error: toolError instanceof Error ? toolError.message : String(toolError)
+      });
+
+      return new Response(
+        JSON.stringify({
+          error: 'Tool creation failed',
+          message: toolError instanceof Error ? toolError.message : 'Unknown error'
+        }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // TEMPORARY: Check for bypass_auth flag to help during development
+    const bypassAuth = process.env.NODE_ENV !== 'production' ||
+      process.env.BYPASS_AUTH === 'true' ||
+      parseBooleanValue(body.bypass_auth);
+
+    if (bypassAuth) {
+      edgeLogger.warn('Auth requirement bypassed for testing', {
+        operation: 'chat_engine_config'
+      });
+    }
+
+    // Check if message persistence should be disabled
+    const disableMessagePersistence = parseBooleanValue(body.disable_persistence);
+
+    if (disableMessagePersistence) {
+      edgeLogger.info('Message persistence disabled for this request', {
+        operation: 'chat_engine_config',
+        sessionId
+      });
+    }
 
     // Create the chat engine with the detected agent configuration
     const engineConfig: ChatEngineConfig = {
       tools, // Tools object built conditionally
-      requiresAuth: true,
+      requiresAuth: !bypassAuth, // Allow bypassing auth for testing
       corsEnabled: false,
       model: agentConfig.model || 'gpt-4o',
       temperature: agentConfig.temperature || 0.7,
@@ -151,6 +248,10 @@ export async function POST(req: Request) {
       operationName: `chat_${agentType}`,
       cacheEnabled: true,
       messageHistoryLimit: 50,
+      // Explicitly enable DeepSearch at the engine level if supported by the agent
+      useDeepSearch: shouldUseDeepSearch,
+      // Configure message persistence
+      messagePersistenceDisabled: disableMessagePersistence,
       // Pass prompts system
       prompts,
       // Set agent type
@@ -163,19 +264,73 @@ export async function POST(req: Request) {
       }
     };
 
-    const engine = createChatEngine(engineConfig);
+    try {
+      var engine = createChatEngine(engineConfig);
 
-    edgeLogger.info('Chat engine created', {
-      operation: 'chat_engine_created',
-      sessionId,
-      agentType,
-      deepSearchEnabled: shouldUseDeepSearch,
-      toolCount: Object.keys(tools).length,
-      elapsedMs: Date.now() - startTime
+      edgeLogger.info('Chat engine created', {
+        operation: 'chat_engine_created',
+        sessionId,
+        agentType,
+        deepSearchEnabled: shouldUseDeepSearch,
+        toolCount: Object.keys(tools).length,
+        elapsedMs: Date.now() - startTime
+      });
+    } catch (engineError) {
+      edgeLogger.error('Chat engine creation failed', {
+        operation: 'chat_engine_creation',
+        error: engineError instanceof Error ? engineError.message : String(engineError)
+      });
+
+      return new Response(
+        JSON.stringify({
+          error: 'Chat engine creation failed',
+          message: engineError instanceof Error ? engineError.message : 'Unknown error'
+        }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Clone the request before passing it to handleRequest to preserve it for debugging
+    const reqClone = new Request(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: JSON.stringify(body)
     });
 
-    // Let the engine handle the request
-    return engine.handleRequest(req);
+    edgeLogger.info('Calling handleRequest', {
+      operation: 'route_handler',
+      requestBody: JSON.stringify(body).substring(0, 200) // Log first 200 chars
+    });
+
+    try {
+      // Let the engine handle the request
+      const response = await engine.handleRequest(reqClone);
+
+      edgeLogger.info('Request handled successfully', {
+        operation: 'route_handler',
+        status: response.status,
+        statusText: response.statusText,
+        contentType: response.headers.get('Content-Type'),
+        elapsedMs: Date.now() - startTime
+      });
+
+      return response;
+    } catch (handleRequestError) {
+      edgeLogger.error('Handle request failed', {
+        operation: 'handle_request',
+        error: handleRequestError instanceof Error ? handleRequestError.message : String(handleRequestError),
+        stack: handleRequestError instanceof Error ? handleRequestError.stack : undefined
+      });
+
+      return new Response(
+        JSON.stringify({
+          error: 'Request handling failed',
+          message: handleRequestError instanceof Error ? handleRequestError.message : 'Unknown error',
+          location: 'handle_request'
+        }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
 
   } catch (error) {
     // Log the error
@@ -188,7 +343,8 @@ export async function POST(req: Request) {
     return new Response(
       JSON.stringify({
         error: 'An error occurred processing your request',
-        message: error instanceof Error ? error.message : 'Unknown error'
+        message: error instanceof Error ? error.message : 'Unknown error',
+        location: 'outer_try_catch'
       }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );

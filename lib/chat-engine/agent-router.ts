@@ -170,7 +170,7 @@ function getAgentConfig(agentType: AgentType): AgentConfig {
             toolOptions: {
                 useKnowledgeBase: true,
                 useWebScraper: true,
-                useDeepSearch: false, // No deep search by default
+                useDeepSearch: true, // Allow deep search by default
                 useRagTool: true
             }
         }

@@ -197,6 +197,17 @@ export async function POST(req: NextRequest) {
       }
     };
 
+    // Log the exact request format for debugging
+    edgeLogger.info('Perplexity API request body format', {
+      operation: 'perplexity_request_body',
+      operationId,
+      model,
+      bodyKeys: Object.keys(requestBody),
+      hasWebSearchOptions: !!requestBody.web_search_options,
+      webSearchOptionsKeys: Object.keys(requestBody.web_search_options),
+      important: true
+    });
+
     // Fix the authorization header format to strictly follow Perplexity documentation
     // Ensure there's a single space between "Bearer" and the token
     const apiKey = perplexityApiKey.trim();
