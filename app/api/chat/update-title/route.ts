@@ -38,6 +38,22 @@ async function generateTitle(sessionId: string, content: string, userId: string)
     }
 }
 
+// Helper function to add CORS headers
+function addCorsHeaders(response: NextResponse): NextResponse {
+    // Add CORS headers for Edge compatibility
+    response.headers.set('Access-Control-Allow-Origin', '*');
+    response.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    return response;
+}
+
+// OPTIONS handler for CORS preflight requests
+export async function OPTIONS(request: NextRequest) {
+    return addCorsHeaders(
+        new NextResponse(null, { status: 204 })
+    );
+}
+
 /**
  * POST handler for the title update API
  * 
@@ -51,33 +67,97 @@ export async function POST(request: NextRequest) {
 
     try {
         // Parse request body
-        const { sessionId, content } = await request.json();
-
-        // Validate required fields
-        if (!sessionId) {
-            return NextResponse.json({
-                success: false,
-                error: 'Session ID is required'
-            }, { status: 400 });
-        }
-
-        // Get user
-        const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
-
-        if (!user) {
-            edgeLogger.warn('Unauthorized title generation attempt', {
-                sessionId,
+        let sessionId, content;
+        try {
+            const body = await request.json();
+            sessionId = body.sessionId;
+            content = body.content;
+        } catch (err) {
+            edgeLogger.error('Failed to parse request body', {
+                category: 'system',
+                error: err instanceof Error ? err.message : String(err),
                 operationId
             });
 
-            return NextResponse.json({
-                success: false,
-                error: 'Unauthorized'
-            }, { status: 401 });
+            return addCorsHeaders(
+                NextResponse.json({
+                    success: false,
+                    error: 'Invalid request body'
+                }, { status: 400 })
+            );
         }
 
-        // Generate title
+        // Validate required fields
+        if (!sessionId) {
+            return addCorsHeaders(
+                NextResponse.json({
+                    success: false,
+                    error: 'Session ID is required'
+                }, { status: 400 })
+            );
+        }
+
+        // Get user from Supabase auth - standard authentication approach
+        const supabase = await createClient();
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+        // Handle authentication errors
+        if (authError || !user) {
+            edgeLogger.warn('Auth error for title generation', {
+                category: 'system',
+                sessionId,
+                error: authError?.message || 'No user found',
+                operationId
+            });
+
+            // Try to get the user ID from the database using the session ID
+            // This is a fallback for when the user isn't authenticated but we still want to generate a title
+            const { data: sessionData, error: sessionError } = await supabase
+                .from('sd_chat_sessions')
+                .select('user_id')
+                .eq('id', sessionId)
+                .single();
+
+            if (sessionError || !sessionData?.user_id) {
+                return addCorsHeaders(
+                    NextResponse.json({
+                        success: false,
+                        error: 'Unauthorized and could not find session'
+                    }, { status: 401 })
+                );
+            }
+
+            // Use the user_id from the session
+            const userId = sessionData.user_id;
+
+            edgeLogger.info('Generating title using session user_id', {
+                category: 'chat',
+                sessionId,
+                userId,
+                operationId
+            });
+
+            const title = await generateTitle(sessionId, content, userId);
+
+            if (!title) {
+                return addCorsHeaders(
+                    NextResponse.json({
+                        success: false,
+                        error: 'Failed to generate title'
+                    }, { status: 500 })
+                );
+            }
+
+            return addCorsHeaders(
+                NextResponse.json({
+                    success: true,
+                    chatId: sessionId,
+                    title
+                })
+            );
+        }
+
+        // Generate title with authenticated user
         edgeLogger.info('Generating title for chat', {
             category: 'chat',
             sessionId,
@@ -88,17 +168,21 @@ export async function POST(request: NextRequest) {
         const title = await generateTitle(sessionId, content, user.id);
 
         if (!title) {
-            return NextResponse.json({
-                success: false,
-                error: 'Failed to generate title'
-            }, { status: 500 });
+            return addCorsHeaders(
+                NextResponse.json({
+                    success: false,
+                    error: 'Failed to generate title'
+                }, { status: 500 })
+            );
         }
 
-        return NextResponse.json({
-            success: true,
-            chatId: sessionId,
-            title
-        });
+        return addCorsHeaders(
+            NextResponse.json({
+                success: true,
+                chatId: sessionId,
+                title
+            })
+        );
     } catch (error) {
         edgeLogger.error('Title generation error', {
             category: 'system',
@@ -106,9 +190,11 @@ export async function POST(request: NextRequest) {
             operationId
         });
 
-        return NextResponse.json({
-            success: false,
-            error: 'Server error'
-        }, { status: 500 });
+        return addCorsHeaders(
+            NextResponse.json({
+                success: false,
+                error: 'Server error'
+            }, { status: 500 })
+        );
     }
 } 

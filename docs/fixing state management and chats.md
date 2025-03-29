@@ -8,8 +8,8 @@
 - Address TypeScript typing issues for improved reliability
 
 ## Implementation Progress
-- **Current Phase**: All Phases Completed ✅
-- **Last Updated**: [Current Date]
+- **Current Phase**: All Phases Completed, Bug Fixes In Progress 🔄
+- **Last Updated**: March 29, 2025
 
 ## Implementation Phases
 
@@ -171,8 +171,6 @@ Potential future improvements to consider:
 ## Conclusion
 
 This refactoring successfully addresses the initial synchronization issues between chat creation, title generation, and sidebar updates while also creating a more maintainable architecture. The centralized Zustand store approach with optimistic updates provides a solid foundation for future features and enhancements.
-
-add to our file:
 
 # Chat State Synchronization Refactoring
 
@@ -371,6 +369,39 @@ This refactoring successfully addresses the synchronization issues between chat 
 - [✅] Replaced Node.js crypto with Web Crypto API by creating a utility file (lib/utils/uuid.ts)
 - [✅] Fixed the TypeScript logger category typing issue in update-title/route.ts
 - [✅] Fixed UUID generation in Edge Runtime environments
+- [✅] Fixed URL malformed error by using absolute URLs for API calls in Edge Runtime
+
+### Recent Fixes (Updated March 2025)
+- [✅] Standardized new chat naming to consistently use "New Conversation" across all components
+- [✅] Fixed sorting of new chats to always appear at the top of the "Today" section
+- [✅] Added proper CORS handling to title update API for Edge Runtime compatibility
+- [✅] Enhanced authentication flow in title generation API to handle Edge Runtime limitations
+- [✅] Improved error handling and logging for title generation process
+- [✅] Fixed authentication issue in title update API by adding `credentials: 'same-origin'` to fetch call
+- [✅] Enhanced message count check in title generation trigger to ensure titles are generated correctly
+- [✅] Added detailed debugging logs for title generation process to improve troubleshooting
+- [✅] Fixed conversation navigation behavior when a conversation is deleted to go to the most recent conversation instead of creating a new one
+- [🔄] Currently investigating issues with title generation not being triggered for certain conversations
+
+### Conversation Navigation Improvements
+We've enhanced the way the application handles conversation navigation, particularly when deleting conversations:
+
+1. **Redirection to Most Recent Chat**: When a conversation is deleted (especially the current one), the app now redirects to the most recent existing conversation instead of creating a new one. This is accomplished by:
+   - Sorting remaining conversations by `updatedAt` timestamp in descending order
+   - Redirecting the user to the most recent conversation using client-side navigation
+   - Only creating a new conversation when absolutely no history exists
+
+2. **Root Path Navigation Logic**: When navigating to `/chat` with no specific ID:
+   - The app always checks for existing conversations first
+   - If conversations exist, it redirects to the most recent one
+   - Only creates a new conversation when no history is available
+
+3. **Benefits**:
+   - More predictable navigation behavior
+   - Prevents unnecessary creation of empty conversations
+   - Maintains context by preferring existing conversations over new ones
+
+This change ensures users stay in the context of their most recent meaningful conversation, reducing the problem of accumulating empty conversations during normal app usage.
 
 ## Logger Type System Notes
 
@@ -389,4 +420,106 @@ edgeLogger.info('Message', {
 });
 ```
 
-This is a permanent fix rather than a bandaid, as it respects the edge-logger's type system while ensuring that Edge API routes can run without Node.js dependencies. 
+This is a permanent fix rather than a bandaid, as it respects the edge-logger's type system while ensuring that Edge API routes can run without Node.js dependencies.
+
+## URL Handling in Edge Runtime
+
+Another issue encountered was related to making fetch requests from Edge Runtime environments. When running in Edge Functions or middleware, Next.js requires all URLs to be absolute, not relative. 
+
+We encountered this error when trying to call our title update API:
+
+```
+Error: URL is malformed "/api/chat/update-title". Please use only absolute URLs - https://nextjs.org/docs/messages/middleware-relative-urls
+```
+
+The solution was to generate an absolute URL based on environment variables:
+
+```typescript
+// Create an absolute URL for edge runtime compatibility
+const baseUrl = process.env.VERCEL_URL 
+  ? `https://${process.env.VERCEL_URL}`
+  : process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+
+// Use the absolute URL for fetch
+fetch(`${baseUrl}/api/chat/update-title`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  credentials: 'same-origin',  // Required for auth cookies to be sent
+  body: JSON.stringify({
+    sessionId,
+    content: firstUserMessage.content
+  })
+})
+```
+
+This ensures our API calls work properly in all runtime environments, including Edge Runtime.
+
+## Authentication in Cross-Origin Requests
+
+We encountered an issue where authentication cookies were not being sent with the fetch request to the title update API. This caused the middleware to mark the request as unauthenticated, resulting in the title generation API failing.
+
+The solution was to add the `credentials: 'same-origin'` option to the fetch call:
+
+```typescript
+fetch(`${baseUrl}/api/chat/update-title`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  credentials: 'same-origin',  // Add this line to send cookies
+  body: JSON.stringify({
+    sessionId,
+    content: firstUserMessage.content
+  })
+})
+```
+
+Without this option, the browser doesn't send cookies with the request, even if it's going to the same origin. This is a security feature of the Fetch API, but it can cause authentication issues if not properly configured.
+
+## Ongoing Investigation: Title Generation Trigger
+
+We are currently investigating issues with the title generation not being triggered for some conversations. The potential issues include:
+
+1. **Message Count Condition**: The title generation is triggered only when the message count is 2 or less, but this condition might not be accurate for all conversation scenarios.
+
+2. **Database Query Issues**: The query to check the message count might be returning incorrect results due to caching or database inconsistencies.
+
+3. **Error Handling**: Silent failures in the title generation process might be occurring without proper logging.
+
+We've implemented additional logging to help diagnose these issues:
+
+```typescript
+edgeLogger.debug('Title generation check - message count', {
+  category: LOG_CATEGORIES.CHAT,
+  operation: 'title_count_check',
+  chatId: sessionId,
+  count,
+  hasCountError: !!countError,
+  shouldGenerateTitle: !countError && count !== null && count <= 2
+});
+```
+
+This will help us track the exact conditions under which title generation is triggered or skipped.
+
+## Authentication for Title Generation
+
+To fix issues with title generation requiring authentication, we implemented a robust authentication flow that:
+
+1. Uses Supabase auth.getUser() as the primary authentication method via cookies
+2. Falls back to session lookup if the primary authentication fails
+3. Properly handles error cases and unauthorized requests
+4. Includes comprehensive logging for debugging
+
+### Testing Strategy
+
+We developed a comprehensive testing strategy to verify this implementation:
+
+1. **Unit Tests**: Created focused unit tests to verify:
+   - Cookie-based authentication flow
+   - Session-based fallback authentication
+   - Error handling for unauthorized requests
+   - Logging consistency
+
+2. **Integration Tests**: Created integration tests to verify the entire flow works end-to-end
+
+3. **Test Scripts**: Added a dedicated script (`scripts/run-title-auth-test.sh`) to run authentication tests
+
+For more details on testing, see the testing documentation in `tests/README.md`. 

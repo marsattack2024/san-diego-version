@@ -21,7 +21,8 @@ import {
   AlertCircle,
   Loader2,
   MessageSquare,
-  PlusCircle
+  PlusCircle,
+  RefreshCw
 } from 'lucide-react';
 import { User } from '@supabase/supabase-js';
 import {
@@ -516,15 +517,13 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
                 onClick={refreshHistory}
                 className="ml-auto"
                 disabled={isLoadingHistory}
+                title="Refresh chat history"
               >
                 {isLoadingHistory ? (
                   <Loader2 className="h-4 w-4 animate-spin" />
                 ) : (
-                  <MessageSquare className="h-4 w-4" />
+                  <RefreshCw className="h-4 w-4" />
                 )}
-                <span className="ml-2">
-                  {isLoadingHistory ? "Loading..." : "Chats"}
-                </span>
               </SidebarMenuAction>
             </div>
           </div>

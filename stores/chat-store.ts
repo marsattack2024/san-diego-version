@@ -246,20 +246,29 @@ export const useChatStore = create<ChatState>()(
           messages: [],
           createdAt: timestamp,
           updatedAt: timestamp,
-          title: 'New Chat',
+          title: 'New Conversation',
           agentId: selectedAgentId,
           deepSearchEnabled
         };
 
         // 1. Update local state immediately (optimistic update)
-        set((state) => ({
-          conversations: {
-            // Add new conversation at the beginning of the map
-            [id]: newConversation,
-            ...state.conversations,
-          },
-          currentConversationId: id
-        }));
+        set((state) => {
+          // Create a new conversations object
+          const newConversations: Record<string, Conversation> = {};
+
+          // Add the new conversation first (so it appears at the top)
+          newConversations[id] = newConversation;
+
+          // Then add all existing conversations
+          Object.keys(state.conversations).forEach(key => {
+            newConversations[key] = state.conversations[key];
+          });
+
+          return {
+            conversations: newConversations,
+            currentConversationId: id
+          };
+        });
 
         console.debug(`[ChatStore] Optimistically created new chat ${id}`);
 
@@ -273,7 +282,7 @@ export const useChatStore = create<ChatState>()(
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   id,
-                  title: 'New Chat',
+                  title: 'New Conversation',
                   agentId: selectedAgentId,
                   deepSearchEnabled
                 })
@@ -385,19 +394,29 @@ export const useChatStore = create<ChatState>()(
           messages: [],
           createdAt: timestamp,
           updatedAt: timestamp,
-          title: 'New Chat',
+          title: 'New Conversation',
           agentId: selectedAgentId,
           deepSearchEnabled
         };
 
         // Update local state immediately
-        set((state) => ({
-          conversations: {
-            [id]: newConversation,
-            ...state.conversations,
-          },
-          currentConversationId: id
-        }));
+        set((state) => {
+          // Create a new conversations object
+          const newConversations: Record<string, Conversation> = {};
+
+          // Add the new conversation first (so it appears at the top)
+          newConversations[id] = newConversation;
+
+          // Then add all existing conversations
+          Object.keys(state.conversations).forEach(key => {
+            newConversations[key] = state.conversations[key];
+          });
+
+          return {
+            conversations: newConversations,
+            currentConversationId: id
+          };
+        });
 
         // Create session in the database
         if (typeof window !== 'undefined') {
@@ -409,7 +428,7 @@ export const useChatStore = create<ChatState>()(
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   id,
-                  title: 'New Chat',
+                  title: 'New Conversation',
                   agentId: selectedAgentId,
                   deepSearchEnabled
                 })
@@ -470,30 +489,33 @@ export const useChatStore = create<ChatState>()(
         const { conversations, currentConversationId } = get();
         const newConversations = { ...conversations };
 
+        // Optimistically delete from local state first
         delete newConversations[conversationId];
 
         // If we're deleting the current conversation, find the most recent one
         let newCurrentId = currentConversationId;
 
         if (currentConversationId === conversationId) {
-          // Find the most recent conversation
+          // Find the most recent conversation by updatedAt date
           const remainingConversations = Object.values(newConversations);
           if (remainingConversations.length > 0) {
-            // Sort by updatedAt in descending order
+            // Sort by updatedAt in descending order (newest first)
             remainingConversations.sort((a, b) =>
               new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
             );
             newCurrentId = remainingConversations[0].id;
 
-            // Navigate to the new conversation if we're in the browser
+            // Navigate to the most recent conversation if we're in the browser
             if (typeof window !== 'undefined') {
               // Use setTimeout to avoid state update conflicts
               setTimeout(() => {
-                // Use client-side navigation to the new chat
+                // Use client-side navigation to the chat
                 window.location.href = `/chat/${newCurrentId}`;
               }, 0);
             }
           } else {
+            // If no conversations left, set currentConversationId to null
+            // but don't create a new one automatically - redirect to main chat page
             newCurrentId = null;
 
             // Navigate to the main chat page if no conversations left
@@ -505,13 +527,31 @@ export const useChatStore = create<ChatState>()(
           }
         }
 
+        // Update local state immediately (optimistic update)
         set({
           conversations: newConversations,
           currentConversationId: newCurrentId
         });
 
-        // Refresh history after deletion to update sidebar
-        setTimeout(() => get().fetchHistory(true), 500);
+        // Call the historyService to delete from database
+        if (typeof window !== 'undefined') {
+          (async () => {
+            try {
+              // Use the history service to delete the chat from the database
+              const success = await historyService.deleteChat(conversationId);
+              
+              if (!success) {
+                console.error(`Failed to delete chat from database: ${conversationId}`);
+                // No need to revert the optimistic update, as refreshing history will restore the correct state
+              }
+            } catch (error) {
+              console.error('Error deleting chat:', error);
+            } finally {
+              // Refresh history after deletion to update sidebar
+              setTimeout(() => get().fetchHistory(true), 500);
+            }
+          })();
+        }
       },
 
       setDeepSearchEnabled: (enabled) => {
