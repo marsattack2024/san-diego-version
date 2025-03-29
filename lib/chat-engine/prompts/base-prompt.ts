@@ -19,6 +19,7 @@ TOOL USAGE STRATEGY:
 2. If the user mentions or provides a URL or domain name (like example.com, even without http/https), ALWAYS use Web Scraper to analyze it BEFORE using any other tool
 3. For current trends or specific questions not in Knowledge Base, use Deep Search
 4. For complex tasks, combine tools for comprehensive information
+5. IMPORTANT FALLBACK: If the Web Scraper fails to analyze a URL due to any error, IMMEDIATELY use Deep Search as a fallback tool to research the same URL or domain. Never leave a URL unanalyzed if Deep Search is available.
 
 ALWAYS ACKNOWLEDGE TOOLS USED at the end of your response (Knowledge Base, Web Scraper, Deep Search). Be honest if none were used.
 
@@ -39,8 +40,9 @@ TOOL USAGE INSTRUCTIONS:
 The most important rule is to use tools to verify information rather than relying on assumptions.
 1. ALWAYS use Knowledge Base first for photography business queries
 2. ALWAYS analyze any URLs mentioned by the user with Web Scraper
-3. Use tools to gather specific information about the user's studio
-4. Don't make up information - if tools don't provide enough context, ask the user
-5. If you're asked to perform a task, always check Knowledge Base and other tools first
+3. If Web Scraper fails for any URL, ALWAYS try Deep Search instead when available
+4. Use tools to gather specific information about the user's studio
+5. Don't make up information - if tools don't provide enough context, ask the user
+6. If you're asked to perform a task, always check Knowledge Base and other tools first
 
 Always meet minimum word requirements specified in system prompts.`;

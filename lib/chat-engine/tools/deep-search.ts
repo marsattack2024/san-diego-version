@@ -46,10 +46,10 @@ export const deepSearchTool = tool({
             });
 
             // Check if deep search is enabled directly from the body
-            const deepSearchEnabled = true; // BYPASS CHECK FOR NOW
+            // @ts-ignore - Custom property added in app/api/chat/route.ts
+            const deepSearchEnabled = runOptions.body?.deepSearchEnabled === true;
 
             // CRITICAL SAFETY CHECK: Verify deep search is explicitly enabled
-            /* Temporarily disable check for testing
             if (!deepSearchEnabled) {
                 edgeLogger.warn("Deep Search tool was invoked without being enabled", {
                     category: LOG_CATEGORIES.TOOLS,
@@ -63,7 +63,6 @@ export const deepSearchTool = tool({
 
                 return "I'm sorry, but web search capabilities are not enabled for this conversation. Please enable Deep Search in your user settings if you'd like me to search the web for information.";
             }
-            */
 
             // Initialize Perplexity client and verify it's ready
             const clientStatus = perplexityService.initialize();
