@@ -365,14 +365,21 @@ export class ChatEngine {
      */
     private async processRequest(context: ChatEngineContext): Promise<Response> {
         try {
+            // Generate a unique request ID for tracing this entire request lifecycle
+            const requestId = crypto.randomUUID().substring(0, 8);
+            
             // Get userId from context or body
             const userId = context.userId || (this.config.body?.userId as string);
+
+            // Use a more privacy-focused user ID in logs
+            const logUserId = userId ? (userId.substring(0, 3) + '...' + userId.substring(userId.length - 3)) : 'anonymous';
 
             if (userId) {
                 edgeLogger.info('Using userId for persistence', {
                     operation: this.config.operationName,
                     sessionId: context.sessionId,
-                    userId
+                    userId: logUserId,
+                    requestId
                 });
             }
 
@@ -430,7 +437,8 @@ export class ChatEngine {
                         error: error instanceof Error ? error.message : String(error),
                         sessionId,
                         messageId: lastUserMessage.id,
-                        userId
+                        userId: logUserId,
+                        requestId
                     });
                 });
             }
@@ -439,12 +447,13 @@ export class ChatEngine {
             const result = await streamText({
                 model: openai(this.config.model || 'gpt-4o'),
                 messages: [...context.previousMessages || [], ...context.messages],
-                system: this.config.systemPrompt,
+                system: `${this.config.systemPrompt}\n\nIMPORTANT INSTRUCTION: When a user message contains a URL (in any format including https://example.com or just example.com), you MUST use the scrapeWebContent tool to retrieve and analyze the content before responding. Never attempt to guess the content of a URL without scraping it first. For example, if asked to summarize a blog post at a URL, first use scrapeWebContent to get the full content, then provide your summary based on the actual content.`,
                 tools: this.config.tools,
                 temperature: this.config.temperature,
                 maxTokens: this.config.maxTokens,
                 maxSteps: 5, // Allow multiple steps for complex tool interactions
-                toolChoice: this.config.useDeepSearch ? 'auto' : 'none', // Enable tools conditionally based on configuration
+                // Use auto tool selection always, and rely on tool descriptions to prioritize correctly
+                toolChoice: 'auto',
                 onStepFinish({ text, toolCalls, toolResults, finishReason, usage }) {
                     // Log essential info about each step using AI SDK standard pattern
                     edgeLogger.info('Step completed in multi-step execution', {
@@ -458,7 +467,8 @@ export class ChatEngine {
                             completionTokens: usage.completionTokens,
                             promptTokens: usage.promptTokens,
                             totalTokens: usage.totalTokens
-                        } : undefined
+                        } : undefined,
+                        requestId
                     });
                     
                     // Log tool calls when present
@@ -466,7 +476,8 @@ export class ChatEngine {
                         edgeLogger.info('Tool calls executed', {
                             operation: operationName,
                             toolNames: toolCalls.map(call => call.toolName),
-                            step: 'tool_calls'
+                            step: 'tool_calls',
+                            requestId
                         });
                     }
                     
@@ -475,7 +486,8 @@ export class ChatEngine {
                         edgeLogger.info('Tool results processed', {
                             operation: operationName,
                             toolResultCount: toolResults.length,
-                            step: 'tool_results'
+                            step: 'tool_results',
+                            requestId
                         });
                     }
                 },
@@ -488,7 +500,8 @@ export class ChatEngine {
                             sessionId,
                             disabled: messagePersistenceDisabled,
                             hasPersistenceService: !!persistenceService,
-                            hasUserId: !!userId
+                            hasUserId: !!userId,
+                            requestId
                         });
                         return;
                     }
@@ -506,14 +519,16 @@ export class ChatEngine {
                             operation: operationName,
                             sessionId,
                             contentLength: text.length,
-                            hasToolsUsed: !!toolsUsed
+                            hasToolsUsed: !!toolsUsed,
+                            requestId
                         });
                     } catch (error) {
                         edgeLogger.error('Failed to save assistant message in onFinish callback', {
                             operation: operationName,
                             error: error instanceof Error ? error.message : String(error),
                             sessionId,
-                            userId
+                            userId: logUserId,
+                            requestId
                         });
                     }
                 }
@@ -526,7 +541,8 @@ export class ChatEngine {
 
             edgeLogger.info('Stream consumption enabled to ensure processing completes', {
                 operation: this.config.operationName,
-                sessionId: context.sessionId
+                sessionId: context.sessionId,
+                requestId
             });
 
             // Get the streamable response
@@ -537,7 +553,8 @@ export class ChatEngine {
                 operation: this.config.operationName,
                 durationMs: Date.now() - context.startTime,
                 sessionId: context.sessionId,
-                userId: userId
+                userId: logUserId,
+                requestId
             });
 
             return response;
@@ -546,7 +563,8 @@ export class ChatEngine {
                 operation: this.config.operationName,
                 error: error instanceof Error ? error.message : String(error),
                 sessionId: context.sessionId,
-                userId: context.userId
+                userId: context.userId ? (context.userId.substring(0, 3) + '...' + context.userId.substring(context.userId.length - 3)) : 'anonymous',
+                requestId: crypto.randomUUID().substring(0, 8) // Generate a new requestId for errors without context
             });
 
             return new Response(
@@ -683,42 +701,30 @@ export class ChatEngine {
     }
 
     /**
-     * Extract tools used from assistant message content
-     * This is a utility function to extract tool usage information from the message
+     * Extracts tool usage information from the assistant message
+     * @param text - The complete text from the assistant
+     * @returns Object containing structured tool usage information or undefined
      */
-    private extractToolsUsed(content: string): Record<string, any> | undefined {
+    private extractToolsUsed(text: string): Record<string, any> | undefined {
         try {
-            // Check for tools section in the message
-            const toolsSection = content.match(/--- Tools and Resources Used ---\s*([\s\S]*?)(?:\n\n|$)/);
-
+            // Look for the tools and resources section
+            const toolsSection = text.match(/--- Tools and Resources Used ---\s*([\s\S]*?)(?:\n\n|$)/);
+            
             if (toolsSection && toolsSection[1]) {
-                const toolsList = toolsSection[1]
-                    .split('\n')
-                    .filter(line => line.trim().startsWith('-'))
-                    .map(line => line.trim().substring(1).trim());
-
-                if (toolsList.length > 0) {
-                    const tools: Record<string, any> = {};
-
-                    // Add each tool to the record
-                    toolsList.forEach(tool => {
-                        const toolName = tool.includes(':')
-                            ? tool.split(':')[0].trim()
-                            : tool;
-
-                        tools[toolName] = { used: true };
-                    });
-
-                    return tools;
-                }
+                return {
+                    tools: toolsSection[1]
+                        .split('\n')
+                        .filter(line => line.trim().startsWith('-'))
+                        .map(line => line.trim())
+                };
             }
-
+            
             return undefined;
         } catch (error) {
-            edgeLogger.warn('Error extracting tools used', {
+            // Safely handle errors without interrupting the message flow
+            edgeLogger.warn('Failed to extract tools used', {
                 error: error instanceof Error ? error.message : String(error)
             });
-
             return undefined;
         }
     }

@@ -199,6 +199,81 @@ The history API implements sophisticated rate limiting to prevent abuse while al
    lastHistoryRequestTime = now;
    ```
 
+## Optimizing History Fetching
+
+### Preventing Duplicate History Requests
+
+An observed issue in the chat application is duplicate history fetch requests occurring close together, which may cause unnecessary server load and potential rate limiting issues.
+
+#### Observed Problem
+- Multiple GET `/api/history` calls are made within milliseconds of each other
+- This happens primarily during page navigation and component mounting
+- These duplicate requests use server resources and database connections unnecessarily
+
+#### Root Causes
+
+1. **Component Mount Timing**:
+   - Multiple components request history data independently during initial load
+   - No centralized state management for fetching status
+
+2. **React Effect Cleanup Issues**:
+   - Effect cleanup functions may not be properly canceling in-flight requests
+   - Navigation between routes may trigger duplicate fetches
+
+3. **Race Conditions**:
+   - Cache invalidation and refetching might race during updates
+
+#### Recommended Fixes
+
+1. **Enhanced Request Deduplication**:
+   ```typescript
+   // Track in-flight requests with a request ID
+   const pendingRequests = new Map<string, Promise<ChatSession[]>>();
+   
+   async function fetchHistory(options: FetchOptions = {}): Promise<ChatSession[]> {
+     const requestId = crypto.randomUUID();
+     const requestKey = `history-${Date.now()}`;
+     
+     // If there's an identical request in flight, reuse its promise
+     if (pendingRequests.has(requestKey)) {
+       console.debug(`Reusing in-flight history request: ${requestKey}`);
+       return pendingRequests.get(requestKey)!;
+     }
+     
+     // Create the request promise
+     const requestPromise = actuallyFetchHistory(options);
+     
+     // Store in pending requests
+     pendingRequests.set(requestKey, requestPromise);
+     
+     // Clean up after completion
+     requestPromise.finally(() => {
+       pendingRequests.delete(requestKey);
+     });
+     
+     return requestPromise;
+   }
+   ```
+
+2. **Improved Component Design**:
+   - Use a singleton pattern for history service to prevent multiple instances
+   - Implement a central state management approach (Redux, Context API, Zustand)
+   - Ensure all components access history through a single service instance
+
+3. **React Query Integration**:
+   ```typescript
+   // Use React Query for built-in deduplication, caching, and staleness management
+   const historyQuery = useQuery({
+     queryKey: ['history'],
+     queryFn: () => historyService.fetchHistory(),
+     staleTime: 10000, // Consider data fresh for 10 seconds
+     refetchOnWindowFocus: false, // Prevent refetch on window focus
+     refetchOnMount: false // Prevent refetch on component mount
+   });
+   ```
+
+By implementing these optimizations, we can significantly reduce unnecessary API calls and improve application performance.
+
 ## Caching Strategy
 
 ### Multi-Level Caching

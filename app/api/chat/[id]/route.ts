@@ -16,8 +16,8 @@ export const dynamic = 'force-dynamic';
 
 // GET handler to retrieve a specific chat and its messages
 export async function GET(
-    request: NextRequest,
-    { params }: { params: { id: Promise<string> } }
+    req: Request,
+    { params }: { params: { id: string } }
 ) {
     const operationId = `get_chat_${Math.random().toString(36).substring(2, 10)}`;
     const chatId = await params.id;
@@ -152,7 +152,7 @@ export async function GET(
 // PATCH handler to update chat metadata
 export async function PATCH(
     request: NextRequest,
-    { params }: { params: { id: Promise<string> } }
+    { params }: { params: { id: string } }
 ) {
     const operationId = `patch_chat_${Math.random().toString(36).substring(2, 10)}`;
     const chatId = await params.id;

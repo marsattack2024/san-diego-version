@@ -10,7 +10,8 @@ import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
 // Enhanced URL detection regex pattern - more comprehensive to catch various URL formats
 // This pattern is more precise to avoid false positives like 'e.g.' or 'i.e.'
-const URL_REGEX = /(?:https?:\/\/(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*))|(?:www\.[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*))/gi;
+// Updated to better catch naked domains
+const URL_REGEX = /(?:https?:\/\/(?:www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*))|(?:(?:www\.|(?!www))[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|www\.[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9]+\.[^\s]{2,}|www\.[a-zA-Z0-9]+\.[^\s]{2,})/gi;
 
 // Common abbreviations and terms that might be falsely detected as URLs
 const COMMON_FALSE_POSITIVES = [
@@ -135,19 +136,43 @@ export function extractUrls(
     if (matches.length === 0) {
         const words = text.split(/\s+/);
         for (const word of words) {
-            // Clean up the word (remove punctuation at the end)
-            const cleanWord = word.replace(/[.,;:!?]$/, '');
+            // Clean up the word (remove punctuation at the start/end)
+            const cleanWord = word.replace(/^[.,;:!?]+|[.,;:!?]+$/g, '');
 
             // Skip if it's too short to be a valid domain
-            if (cleanWord.length < 5) continue;
-
-            // Skip common abbreviations and false positives
-            if (COMMON_FALSE_POSITIVES.some(fp => cleanWord.toLowerCase().includes(fp))) {
-                continue;
-            }
-
-            if (isDomainLike(cleanWord)) {
-                result.push(cleanWord);
+            if (cleanWord.length < 4) continue;
+            
+            // Check if it contains a dot with valid characters on both sides
+            if (cleanWord.includes('.') && /^[a-z0-9].*\.[a-z0-9].*$/i.test(cleanWord)) {
+                // Skip common abbreviations and false positives
+                if (COMMON_FALSE_POSITIVES.some(fp => 
+                    cleanWord.toLowerCase() === fp.toLowerCase()
+                )) {
+                    continue;
+                }
+                
+                // More aggressive check for domain-like strings
+                // If it has a dot and ends with a valid TLD, treat it as a URL
+                const parts = cleanWord.split('.');
+                const potentialTld = parts[parts.length - 1].toLowerCase();
+                
+                const commonTlds = ['com', 'org', 'net', 'edu', 'gov', 'io', 'ai', 'co', 'me', 
+                                   'app', 'dev', 'tech', 'site', 'web', 'blog', 'info'];
+                
+                if (parts.length >= 2 && (
+                    commonTlds.includes(potentialTld) || 
+                    potentialTld.length >= 2 && potentialTld.length <= 4
+                )) {
+                    result.push(cleanWord);
+                    
+                    // Log potential URL detection
+                    edgeLogger.info('Potential URL detected with enhanced detection', {
+                        category: LOG_CATEGORIES.TOOLS,
+                        operation: 'url_extraction_enhanced',
+                        detectedUrl: cleanWord,
+                        from: 'word_analysis'
+                    });
+                }
             }
         }
     }

@@ -62,6 +62,62 @@ function logError(logger: typeof edgeLogger, operation: string, error: unknown, 
 }
 
 /**
+ * Implements a simple retry mechanism for database operations
+ * @param operation Function to retry
+ * @param maxRetries Maximum number of retry attempts
+ * @param baseDelayMs Base delay between retries in milliseconds (will be exponentially increased)
+ * @returns Result of the operation or throws after all retries are exhausted
+ */
+async function withRetry<T>(
+    operation: () => Promise<T>,
+    maxRetries: number = 3,
+    baseDelayMs: number = 200
+): Promise<T> {
+    let lastError: any;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            return await operation();
+        } catch (error) {
+            lastError = error;
+            
+            // Only retry on potentially transient errors
+            if (error instanceof Error) {
+                const errorMessage = error.message.toLowerCase();
+                const isTransient = 
+                    errorMessage.includes('network') ||
+                    errorMessage.includes('timeout') ||
+                    errorMessage.includes('connection') ||
+                    errorMessage.includes('rate limit') ||
+                    error.name === 'AbortError';
+                
+                if (!isTransient) {
+                    throw error; // Don't retry on non-transient errors
+                }
+            }
+            
+            // Exponential backoff with jitter
+            const delayMs = baseDelayMs * Math.pow(2, attempt) + Math.random() * 100;
+            
+            // Log retry attempt
+            edgeLogger.warn(`Retrying database operation (${attempt + 1}/${maxRetries}) after ${delayMs.toFixed(0)}ms`, {
+                operation: 'database_retry',
+                attempt: attempt + 1,
+                maxRetries,
+                delayMs: Math.round(delayMs),
+                error: lastError instanceof Error ? lastError.message : String(lastError)
+            });
+            
+            // Wait before retrying
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+    }
+    
+    // If we get here, all retries failed
+    throw lastError;
+}
+
+/**
  * Service for persisting messages to the database
  * Uses direct Supabase operations with appropriate error handling
  */
@@ -208,66 +264,76 @@ export class MessagePersistenceService {
                     });
 
                     // Try the direct insert as fallback
-                    const { error: insertError } = await supabase
-                        .from('sd_chat_histories')
-                        .insert({
-                            id: messageId,
-                            session_id: input.sessionId,
-                            role: input.role,
-                            content: input.content,
-                            user_id: input.userId,
-                            tools_used: input.tools
-                        });
+                    try {
+                        await withRetry(async () => {
+                            const { error: insertError } = await supabase
+                                .from('sd_chat_histories')
+                                .insert({
+                                    id: messageId,
+                                    session_id: input.sessionId,
+                                    role: input.role,
+                                    content: input.content,
+                                    user_id: input.userId,
+                                    tools_used: input.tools
+                                });
 
-                    if (insertError) {
-                        edgeLogger.error('Failed to save message with direct insert', {
+                            if (insertError) {
+                                // Convert database errors to JS errors for the retry mechanism
+                                throw new Error(`Database insert failed: ${insertError.message}`);
+                            }
+                            
+                            return true;
+                        });
+                        
+                        // If we reach here, the insert succeeded with retries
+                        
+                        // Update session timestamp as a fallback
+                        const { error: updateSessionError } = await supabase
+                            .from('sd_chat_sessions')
+                            .upsert({
+                                id: input.sessionId,
+                                user_id: input.userId,
+                                title: 'New Chat',
+                                updated_at: new Date().toISOString()
+                            });
+
+                        if (updateSessionError) {
+                            edgeLogger.warn('Failed to update session timestamp', {
+                                operation: this.operationName,
+                                sessionId: input.sessionId,
+                                error: updateSessionError.message
+                            });
+                        }
+
+                        // Continue despite error updating timestamp since the message was saved
+                        const executionTime = Date.now() - startTime;
+                        edgeLogger.info('Message saved with direct insert with retry (RPC failed)', {
                             operation: this.operationName,
                             sessionId: input.sessionId,
                             messageId,
-                            error: insertError.message,
-                            code: insertError.code
+                            executionTimeMs: executionTime
+                        });
+
+                        return {
+                            success: true,
+                            messageId,
+                            message: 'Message saved with direct insert (RPC failed)',
+                            executionTimeMs: executionTime
+                        };
+                    } catch (insertRetryError) {
+                        edgeLogger.error('Failed to save message after retry attempts', {
+                            operation: this.operationName,
+                            sessionId: input.sessionId,
+                            messageId,
+                            error: insertRetryError instanceof Error ? insertRetryError.message : String(insertRetryError)
                         });
 
                         return {
                             success: false,
                             messageId,
-                            error: `Message save failed: ${insertError.message}`
+                            error: `Message save failed after retries: ${insertRetryError instanceof Error ? insertRetryError.message : String(insertRetryError)}`
                         };
                     }
-
-                    // Update session timestamp as a fallback
-                    const { error: updateSessionError } = await supabase
-                        .from('sd_chat_sessions')
-                        .upsert({
-                            id: input.sessionId,
-                            user_id: input.userId,
-                            title: 'New Chat',
-                            updated_at: new Date().toISOString()
-                        });
-
-                    if (updateSessionError) {
-                        edgeLogger.warn('Failed to update session timestamp', {
-                            operation: this.operationName,
-                            sessionId: input.sessionId,
-                            error: updateSessionError.message
-                        });
-                    }
-
-                    // Continue despite error updating timestamp since the message was saved
-                    const executionTime = Date.now() - startTime;
-                    edgeLogger.info('Message saved with direct insert (RPC failed)', {
-                        operation: this.operationName,
-                        sessionId: input.sessionId,
-                        messageId,
-                        executionTimeMs: executionTime
-                    });
-
-                    return {
-                        success: true,
-                        messageId,
-                        message: 'Message saved with direct insert (RPC failed)',
-                        executionTimeMs: executionTime
-                    };
                 }
 
                 // RPC was successful

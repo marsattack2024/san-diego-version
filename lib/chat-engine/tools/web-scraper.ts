@@ -40,7 +40,7 @@ export function createWebScraperTool(options: WebScraperToolOptions = {}) {
     } = options;
 
     return tool({
-        description: 'Scrape content from web pages when URLs are provided in a message. Use this when specific web content needs to be analyzed or information from websites is requested.',
+        description: 'CRITICAL: Use this tool IMMEDIATELY for ANY URL in the user message (including http://, https://, or just domain.com formats). This tool extracts text content from web pages, allowing you to summarize, analyze, or quote from the web page. This tool MUST be preferred over general search when the user provides a specific URL or asks to summarize a webpage. Example triggers: "summarize this website", "tell me about example.com", "extract info from https://site.com". The tool can process up to 3 URLs at once and will automatically cache results for faster future access.',
         parameters: webScraperSchema,
         execute: async ({ query, urls: specificUrls }, { toolCallId }) => {
             try {

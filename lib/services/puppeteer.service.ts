@@ -85,21 +85,38 @@ class PuppeteerService {
             // Check cache first
             const cachedContent = await cacheService.getScrapedContent(sanitizedUrl);
             if (cachedContent) {
-                const cachedResult = JSON.parse(cachedContent) as PuppeteerResponseData;
+                // Handle both string and object responses from cache
+                let cachedResult: PuppeteerResponseData;
+                try {
+                    // If it's a string, parse it; if it's already an object, use it directly
+                    cachedResult = typeof cachedContent === 'string' 
+                        ? JSON.parse(cachedContent) as PuppeteerResponseData 
+                        : cachedContent as PuppeteerResponseData;
+                        
+                    edgeLogger.info('Web scraping cache hit', {
+                        category: LOG_CATEGORIES.TOOLS,
+                        operation: 'web_scraping_cache_hit',
+                        operationId,
+                        url: sanitizedUrl
+                    });
 
-                edgeLogger.info('Web scraping cache hit', {
-                    category: LOG_CATEGORIES.TOOLS,
-                    operation: 'web_scraping_cache_hit',
-                    operationId,
-                    url: sanitizedUrl
-                });
-
-                return {
-                    content: this.formatContent(cachedResult),
-                    title: cachedResult.title || 'Untitled Page',
-                    url: sanitizedUrl,
-                    timestamp: Date.now()
-                };
+                    return {
+                        content: this.formatContent(cachedResult),
+                        title: cachedResult.title || 'Untitled Page',
+                        url: sanitizedUrl,
+                        timestamp: Date.now()
+                    };
+                } catch (error) {
+                    // If parsing fails, log it but continue to fetch fresh content
+                    edgeLogger.warn('Failed to process cached content, fetching fresh data', {
+                        category: LOG_CATEGORIES.TOOLS,
+                        operation: 'cache_processing_error',
+                        operationId,
+                        url: sanitizedUrl,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                    // Cache error, continue to fresh scraping
+                }
             }
 
             // Log scraping start
@@ -165,9 +182,13 @@ class PuppeteerService {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'User-Agent': 'Mozilla/5.0 SanDiego/1.0'
+                    'User-Agent': 'Mozilla/5.0 SanDiego/1.0',
+                    'Accept': 'application/json, text/html'
                 },
-                body: JSON.stringify({ url })
+                body: JSON.stringify({ 
+                    url,
+                    format: 'json' // Explicitly request JSON format
+                })
             });
 
             if (!response.ok) {
@@ -175,17 +196,41 @@ class PuppeteerService {
             }
 
             const responseText = await response.text();
+            const contentType = response.headers.get('content-type') || '';
 
             // Parse JSON response
             let jsonData;
             try {
-                jsonData = JSON.parse(responseText);
+                // Check if response is already JSON
+                if (contentType.includes('application/json')) {
+                    jsonData = JSON.parse(responseText);
+                } else {
+                    // Handle HTML/text responses by wrapping in a JSON structure
+                    edgeLogger.info('Received non-JSON response, converting to JSON format', {
+                        category: LOG_CATEGORIES.TOOLS,
+                        operation: 'html_to_json_conversion',
+                        contentType,
+                        responseTextLength: responseText.length
+                    });
+                    
+                    // Extract title if possible
+                    const titleMatch = responseText.match(/<title[^>]*>([^<]+)<\/title>/i);
+                    const title = titleMatch ? titleMatch[1].trim() : 'Untitled Page';
+                    
+                    // Create a JSON structure with the HTML content
+                    jsonData = {
+                        content: responseText,
+                        title: title,
+                        url: url
+                    };
+                }
             } catch (error) {
                 edgeLogger.error('Failed to parse JSON response', {
                     category: LOG_CATEGORIES.TOOLS,
                     operation: 'json_parse_error',
                     responseTextLength: responseText.length,
-                    responseTextPreview: responseText.substring(0, 200)
+                    responseTextPreview: responseText.substring(0, 200),
+                    contentType
                 });
                 throw new Error('Failed to parse scraper response');
             }
@@ -236,6 +281,118 @@ class PuppeteerService {
     private formatContent(data: PuppeteerResponseData): string {
         // If content is already formatted, return as is
         if (data.content) {
+            // Check if content is HTML and needs processing
+            if (data.content.includes('<!DOCTYPE html>') || data.content.includes('<html')) {
+                // This appears to be raw HTML content - extract readable text
+                try {
+                    edgeLogger.info('Processing HTML content for better readability', {
+                        category: LOG_CATEGORIES.TOOLS,
+                        operation: 'html_content_processing',
+                        contentLength: data.content.length
+                    });
+                    
+                    // Extract meaningful content from HTML
+                    // 1. Extract title
+                    let title = data.title || '';
+                    if (!title) {
+                        const titleMatch = data.content.match(/<title[^>]*>([^<]+)<\/title>/i);
+                        title = titleMatch ? titleMatch[1].trim() : 'Untitled Page';
+                    }
+                    
+                    // 2. Extract meta description
+                    let description = '';
+                    const descriptionMatch = data.content.match(/<meta\s+name="description"\s+content="([^"]+)"/i);
+                    if (descriptionMatch) {
+                        description = descriptionMatch[1].trim();
+                    }
+                    
+                    // 3. Extract main content - focus on common content containers
+                    let mainContent = '';
+                    
+                    // Try to find main content elements
+                    const contentElements = [
+                        /<article[^>]*>([\s\S]*?)<\/article>/gi,
+                        /<main[^>]*>([\s\S]*?)<\/main>/gi,
+                        /<div[^>]*(?:class|id)="(?:content|main|post)[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
+                        /<div[^>]*(?:class|id)="(?:blog-post|article|entry)[^"]*"[^>]*>([\s\S]*?)<\/div>/gi
+                    ];
+                    
+                    // Try each pattern until we find content
+                    for (const pattern of contentElements) {
+                        const matches = [...data.content.matchAll(pattern)];
+                        if (matches.length > 0) {
+                            // Use the longest match as it's likely the main content
+                            const sortedMatches = matches.sort((a, b) => 
+                                (b[1]?.length || 0) - (a[1]?.length || 0));
+                            mainContent = sortedMatches[0][1];
+                            break;
+                        }
+                    }
+                    
+                    // If we couldn't find main content elements, use the body content
+                    if (!mainContent) {
+                        const bodyMatch = data.content.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+                        if (bodyMatch) {
+                            mainContent = bodyMatch[1];
+                        } else {
+                            // Fallback to the whole HTML
+                            mainContent = data.content;
+                        }
+                    }
+                    
+                    // Remove scripts, styles, and other non-content elements
+                    mainContent = mainContent
+                        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+                        .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
+                        .replace(/<nav\b[^<]*(?:(?!<\/nav>)<[^<]*)*<\/nav>/gi, '')
+                        .replace(/<footer\b[^<]*(?:(?!<\/footer>)<[^<]*)*<\/footer>/gi, '')
+                        .replace(/<header\b[^<]*(?:(?!<\/header>)<[^<]*)*<\/header>/gi, '');
+                    
+                    // Convert HTML to plain text (simple version)
+                    const plainText = mainContent
+                        .replace(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/gi, '\n## $1\n')
+                        .replace(/<p[^>]*>(.*?)<\/p>/gi, '$1\n')
+                        .replace(/<br\s*\/?>/gi, '\n')
+                        .replace(/<li[^>]*>(.*?)<\/li>/gi, '• $1\n')
+                        .replace(/<a[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gi, '$2 [$1]')
+                        .replace(/<[^>]*>/g, '') // Remove remaining HTML tags
+                        .replace(/&nbsp;/g, ' ')
+                        .replace(/&amp;/g, '&')
+                        .replace(/&lt;/g, '<')
+                        .replace(/&gt;/g, '>')
+                        .replace(/&quot;/g, '"')
+                        .replace(/\n\s*\n\s*\n/g, '\n\n') // Remove excessive newlines
+                        .trim();
+                    
+                    // Build formatted content
+                    let formattedContent = '';
+                    
+                    // Add title
+                    formattedContent += `# ${title}\n\n`;
+                    
+                    // Add URL and description
+                    formattedContent += `URL: ${data.url || 'Unknown URL'}\n\n`;
+                    if (description) {
+                        formattedContent += `**Description**: ${description}\n\n`;
+                    }
+                    
+                    // Add main content
+                    formattedContent += plainText;
+                    
+                    return formattedContent;
+                } catch (error) {
+                    // Log error but continue with default processing
+                    edgeLogger.error('Error processing HTML content', {
+                        category: LOG_CATEGORIES.TOOLS,
+                        operation: 'html_processing_error',
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                    
+                    // Fall back to default formatting
+                    return `# ${data.title || 'Untitled Page'}\n\nURL: ${data.url || 'Unknown URL'}\n\n${data.content}`;
+                }
+            }
+            
             return data.content;
         }
 

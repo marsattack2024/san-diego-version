@@ -1,4 +1,3 @@
-
 Logging System Documentation
 (Last Updated: March 28, 2025)
 
@@ -48,6 +47,7 @@ Plaintext
   chatId={chatId}
   userId={maskedUserId}
   operationId={unique-operation-identifier} // e.g., ragOperationId, requestId
+  requestId={uuid-short} // Request lifecycle tracking ID
   durationMs={duration} // For timed operations
   slow={true|false} // If duration > SLOW_OPERATION
   important={true|false} // If error/timeout or duration > IMPORTANT_THRESHOLD
@@ -151,6 +151,10 @@ Perplexity/DeepSearch: Internal logs moved to debug, incorrect important=true fl
 Structure: Consistent level field added, important=true usage corrected across all logs.
 Startup: Duplicate startup logs eliminated via singleton pattern.
 Security: Full query and cookie logging eliminated. User ID masking implemented.
+Request Tracing: Added unique requestId to track complete request lifecycles across all log entries.
+Error Handling: Implemented retry logic with exponential backoff for database operations to improve resilience.
+Privacy: Enhanced user ID masking in logs to show only first/last 3 characters.
+Correlation: Ensured all related log entries within a request share the same requestId for easier debugging.
 Best Practices
 (Copied and verified from final Logging Rules document)
 
