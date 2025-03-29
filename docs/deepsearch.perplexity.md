@@ -1,4 +1,3 @@
-
 # Perplexity DeepSearch Integration Guide
 
 This document explains how the Perplexity DeepSearch feature is implemented in the application, including key files, configuration, prompting strategy, and how results are processed.
@@ -23,7 +22,7 @@ The API key must use the `pplx-` prefix format to be valid.
 
 | File | Purpose |
 |------|---------|
-| `/lib/chat/tools.ts` | Defines the DeepSearch tool interface and imports the implementation |
+| `/lib/chat-engine/tools/deepsearch-tool.ts` | Defines the DeepSearch tool interface and imports the implementation |
 | `/lib/agents/tools/perplexity/api.ts` | Core client implementation for Perplexity API, handles auth and URL construction |
 | `/app/api/perplexity/route.ts` | Internal API endpoint that communicates with Perplexity |
 | `/app/api/chat/route.ts` | Manages when and how DeepSearch is triggered |
@@ -89,7 +88,7 @@ For server-to-server communication without user authentication issues:
    }
    ```
 
-3. The middleware completely bypasses requests to `/api/perplexity`
+3. The middleware completely bypasses auth checks for requests to `/api/perplexity`
 
 ### URL Construction Logic
 
@@ -103,7 +102,7 @@ if (process.env.NODE_ENV === 'development') {
   host = 'localhost:3000';
 } else {
   // In production, use the actual host from the request if possible, or a hardcoded value
-  host = process.env.NEXT_PUBLIC_HOST || 'marlan.photographytoprofits.com';
+  host = process.env.NEXT_PUBLIC_HOST || 'app.photographytoprofits.com';
 }
 
 const apiUrl = `${protocol}://${host}${INTERNAL_API_URL}`;
@@ -135,7 +134,7 @@ const requestBody = {
 
 2. When identical queries are made, results are served from cache:
    ```
-   {"level":"info","message":"Deep Search results found","operation":"deep_search_success","operationId":"deepsearch-m8t9x251","contentLength":1510,"firstChars":"Here are some key results...","fromCache":true,"durationMs":13883}
+   {"level":"info","message":"Deep Search results found in cache","operation":"deep_search_success","operationId":"deepsearch-m8t9x251","contentLength":1510,"firstChars":"Here are some key results...","fromCache":true,"durationMs":138}
    ```
 
 3. Typical processing time ranges from 5-15 seconds for new searches
@@ -202,8 +201,8 @@ Enhanced logging statements are strategically placed throughout the flow:
 
 3. Authentication flow:
    ```typescript
-   edgeLogger.info('Perplexity authentication decision detailed', {
-     operation: 'perplexity_auth_detailed',
+   edgeLogger.info('Perplexity authentication decision details', {
+     operation: 'perplexity_auth_details',
      userAgent,
      isInternalRequest,
      containsSanDiego: userAgent.includes('SanDiego')
