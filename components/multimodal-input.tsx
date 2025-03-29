@@ -414,6 +414,15 @@ function PureDeepSearchButton({
   setDeepSearchEnabled: (enabled: boolean) => void;
   isLoading: boolean;
 }) {
+  // Add debug log when component renders
+  console.info('[DeepSearchButton] Rendering with state:', {
+    deepSearchEnabled,
+    type: typeof deepSearchEnabled,
+    stringValue: String(deepSearchEnabled),
+    booleanValue: Boolean(deepSearchEnabled),
+    timestamp: new Date().toISOString()
+  });
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -422,15 +431,28 @@ function PureDeepSearchButton({
           className={`h-10 ${deepSearchEnabled ? 'bg-primary text-primary-foreground hover:bg-primary/90' : ''}`}
           onClick={(event) => {
             event.preventDefault();
-            // Explicitly cast to boolean to ensure proper type
+            // Explicitly cast to boolean with extra safeguards
             const newValue = !deepSearchEnabled;
+            // Add extra debug logging
             console.info('[DeepSearchButton] Setting new toggle state:', {
               oldValue: deepSearchEnabled,
-              newValue: newValue,
               oldValueType: typeof deepSearchEnabled,
-              newValueType: typeof newValue
+              newValue: newValue,
+              newValueType: typeof newValue,
+              booleanCast: Boolean(newValue),
+              timestamp: new Date().toISOString()
             });
             setDeepSearchEnabled(Boolean(newValue));
+
+            // Verify the state was updated after a short delay
+            setTimeout(() => {
+              const currentState = useChatStore.getState().deepSearchEnabled;
+              console.info('[DeepSearchButton] State after update:', {
+                storeValue: currentState,
+                storeValueType: typeof currentState,
+                timestamp: new Date().toISOString()
+              });
+            }, 100);
           }}
           disabled={isLoading}
           variant={deepSearchEnabled ? "default" : "outline"}

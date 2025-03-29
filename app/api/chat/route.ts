@@ -102,6 +102,15 @@ export async function POST(req: Request) {
     // Parse deepSearchEnabled flag
     const deepSearchEnabled = parseBooleanValue(body.deepSearchEnabled);
 
+    // Add more detailed logging for the DeepSearch flag
+    edgeLogger.info('DeepSearch flag parsed', {
+      operation: 'deepsearch_flag',
+      rawDeepSearchValue: body.deepSearchEnabled,
+      rawValueType: typeof body.deepSearchEnabled,
+      parsedDeepSearchValue: deepSearchEnabled,
+      parsedValueType: typeof deepSearchEnabled
+    });
+
     // Get sessionId and agentId
     const sessionId = body.id;
     const requestedAgentId = body.agentId || 'default';

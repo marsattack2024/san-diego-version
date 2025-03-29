@@ -96,7 +96,7 @@ export function Chat({
     id,
     body: {
       id,
-      deepSearchEnabled,
+      deepSearchEnabled: deepSearchEnabled === true,
       agentId: selectedAgentId
     },
     initialMessages,
@@ -121,7 +121,7 @@ export function Chat({
       return {
         message: lastMessage,
         id,
-        deepSearchEnabled: deepSearchEnabled === true, // Force to boolean true/false
+        deepSearchEnabled: deepSearchEnabled === true,
         agentId: selectedAgentId
       };
     },

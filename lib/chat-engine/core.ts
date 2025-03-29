@@ -133,6 +133,24 @@ export class ChatEngine {
             this.config.useDeepSearch = true;
         }
 
+        // Fix deepSearchEnabled flag - make sure it's propagated
+        // IMPORTANT: This ensures the flag is passed to tool execution context
+        if (this.config.useDeepSearch) {
+            if (!this.config.body) {
+                this.config.body = {};
+            }
+            this.config.body.deepSearchEnabled = true;
+
+            // Add debug logging for configuration
+            edgeLogger.info('DeepSearch flag configured', {
+                operation: this.config.operationName || 'chat_engine',
+                configUseDeepSearch: this.config.useDeepSearch,
+                bodyDeepSearchEnabled: this.config.body.deepSearchEnabled,
+                configKeys: Object.keys(this.config),
+                bodyKeys: Object.keys(this.config.body)
+            });
+        }
+
         // Initialize the message persistence service
         this.persistenceService = new MessagePersistenceService({
             operationName: this.config.operationName,
@@ -367,7 +385,7 @@ export class ChatEngine {
         try {
             // Generate a unique request ID for tracing this entire request lifecycle
             const requestId = crypto.randomUUID().substring(0, 8);
-            
+
             // Get userId from context or body
             const userId = context.userId || (this.config.body?.userId as string);
 
@@ -470,7 +488,7 @@ export class ChatEngine {
                         } : undefined,
                         requestId
                     });
-                    
+
                     // Log tool calls when present
                     if (toolCalls && toolCalls.length > 0) {
                         edgeLogger.info('Tool calls executed', {
@@ -480,7 +498,7 @@ export class ChatEngine {
                             requestId
                         });
                     }
-                    
+
                     // Log tool results when present
                     if (toolResults && toolResults.length > 0) {
                         edgeLogger.info('Tool results processed', {
@@ -508,13 +526,13 @@ export class ChatEngine {
 
                     try {
                         // Extract any tool usage information from the response
-                        const toolsUsed = text.includes('Tools and Resources Used') 
-                            ? self.extractToolsUsed(text) 
+                        const toolsUsed = text.includes('Tools and Resources Used')
+                            ? self.extractToolsUsed(text)
                             : undefined;
-                        
+
                         // Save the assistant message to the database
                         await self.saveAssistantMessage(context, text, toolsUsed);
-                        
+
                         edgeLogger.info('Successfully saved assistant message in onFinish', {
                             operation: operationName,
                             sessionId,
@@ -709,7 +727,7 @@ export class ChatEngine {
         try {
             // Look for the tools and resources section
             const toolsSection = text.match(/--- Tools and Resources Used ---\s*([\s\S]*?)(?:\n\n|$)/);
-            
+
             if (toolsSection && toolsSection[1]) {
                 return {
                     tools: toolsSection[1]
@@ -718,7 +736,7 @@ export class ChatEngine {
                         .map(line => line.trim())
                 };
             }
-            
+
             return undefined;
         } catch (error) {
             // Safely handle errors without interrupting the message flow

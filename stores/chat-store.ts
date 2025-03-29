@@ -371,7 +371,7 @@ export const useChatStore = create<ChatState>()(
       },
 
       setDeepSearchEnabled: (enabled) => {
-        // Ensure we're working with a boolean value
+        // Ensure we're working with a boolean value - use strict boolean casting
         const booleanEnabled = enabled === true;
 
         // Log the toggle state change for debugging
@@ -386,11 +386,17 @@ export const useChatStore = create<ChatState>()(
           conversationId: get().currentConversationId
         });
 
+        // Set the boolean flag
         set({ deepSearchEnabled: booleanEnabled });
 
         // Update current conversation if it exists
         const { currentConversationId, conversations } = get();
         if (currentConversationId && conversations[currentConversationId]) {
+          console.info(`[Deep Search] Updating conversation settings`, {
+            conversationId: currentConversationId,
+            deepSearchEnabled: booleanEnabled
+          });
+
           set({
             conversations: {
               ...conversations,

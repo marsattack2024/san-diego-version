@@ -1,12 +1,12 @@
 # Testing Framework
 
-This document outlines the testing approach for the application, based on our implementation of a standardized testing structure using Vitest.
+This document outlines our standardized testing approach using Vitest for the San Diego application.
 
 ## Framework Overview
 
-We've selected **Vitest** as our primary testing framework, offering:
+We use **Vitest** as our primary testing framework, which offers:
 
-- Native ESM support (crucial for our Next.js 15.2 project)
+- Native ESM support (crucial for our Next.js project)
 - Fast parallel test execution
 - TypeScript integration
 - Intuitive mocking capabilities
@@ -14,28 +14,36 @@ We've selected **Vitest** as our primary testing framework, offering:
 
 ## Directory Structure
 
-Tests are organized in a standardized structure that mirrors the source code:
+The actual test structure is organized to mirror the source code:
 
 ```
 tests/
-├── unit/                # Unit tests for individual components
-│   ├── lib/             # Tests for library code
-│   │   └── edge-logger.test.ts  # Tests for edge logger
-│   ├── services/        # Tests for services
-│   │   ├── document-retrieval.test.ts # Tests for document retrieval
-│   │   └── scraper.test.ts # Tests for scraper service
-│   └── components/      # Tests for UI components
-│
-├── integration/         # Integration tests across components
-│   ├── api/             # API route tests
-│   └── services/        # Service integration tests
-│
 ├── helpers/             # Shared testing utilities
 │   ├── env-loader.ts    # Environment variable handling
 │   ├── mock-logger.ts   # Mock implementation of the logger
 │   ├── mock-clients.ts  # Mock implementations of external services
 │   ├── test-utils.ts    # Core testing utilities
 │   └── test-data/       # Mock data for tests
+│       └── mock-data.ts # Predefined test data
+│
+├── unit/                # Unit tests for individual components
+│   ├── lib/             # Tests for library code
+│   │   ├── cache/       # Cache-related tests
+│   │   │   └── cache-service.test.ts # Tests for cache service
+│   │   └── edge-logger.test.ts # Tests for edge logger
+│   ├── services/        # Tests for services
+│   │   ├── document-retrieval.test.ts # Tests for document retrieval
+│   │   ├── perplexity.test.ts # Tests for Perplexity API
+│   │   ├── scraper.test.ts # Tests for scraper service
+│   │   └── supabase-rpc.test.ts # Tests for Supabase RPC functions
+│   ├── components/      # Tests for UI components
+│   └── chat-engine/     # Tests for chat engine components
+│       ├── deep-search.test.ts # Tests for deep search tool
+│       └── web-scraper.test.ts # Tests for web scraper
+│
+├── integration/         # Integration tests across components
+│   ├── api/             # API route tests
+│   └── services/        # Service integration tests
 │
 ├── setup.ts             # Global setup/teardown for all tests
 └── README.md            # Test documentation
@@ -50,10 +58,16 @@ The `tests/helpers/` directory contains reusable testing utilities:
 - Automatically loads environment variables from `.env.test`, falling back to `.env`
 - Sets a default log level of `error` for tests to keep output clean
 - Provides typed access to all environment variables with defaults
-- Validates required variables and enforces test-specific API keys
-- Includes runtime environment detection for Edge and Vercel
-- Implements automatic type conversion for boolean and numeric values
-- Handles missing critical variables with placeholder values for testing
+- Handles validation for required testing variables
+- Example usage:
+
+```typescript
+import { testEnv } from '@/tests/helpers/env-loader';
+
+// Access typed environment variables
+const supabaseUrl = testEnv.SUPABASE_URL;
+const isTestEnv = testEnv.isTestEnv();
+```
 
 ### Logger Mocking (`mock-logger.ts`) 
 
@@ -82,18 +96,10 @@ import { MyService } from '@/lib/services/my-service';
 ### Test Utilities (`test-utils.ts`)
 
 - Timing utilities like `sleep()` for testing TTLs and async operations
-- Mock date functionality for time-dependent tests
-- Retry functionality for testing eventually consistent operations
 - Helper functions for common testing patterns
+- Global setup and teardown functions
 
-### Test Data (`test-data/mock-data.ts`)
-
-- Predefined data structures for different types of tests
-- Mock users, documents, embeddings, and API responses
-- Sample data for cache, RAG, web scraping, and other tests
-- Reusable error instances for testing error handling
-
-## Global Setup and Test Configuration
+## Global Setup and Configuration
 
 The `tests/setup.ts` file provides global configuration that runs once before all tests:
 
@@ -131,8 +137,11 @@ export default defineConfig({
   test: {
     // Global test setup
     setupFiles: ['./tests/setup.ts'],
-    
-    // Other configuration...
+    environment: 'node',
+    include: ['./tests/**/*.test.ts'],
+    exclude: ['**/node_modules/**'],
+    testTimeout: 10000,
+    clearMocks: true
   },
   
   // Path aliases
@@ -143,8 +152,6 @@ export default defineConfig({
   },
 });
 ```
-
-Use this global setup sparingly for operations that truly need to happen once before all tests. For most test state initialization, prefer `beforeEach` in the test files themselves.
 
 ## Mocking Approach
 
@@ -196,34 +203,30 @@ getSpy.mockRestore();
 
 ### Custom Mock Implementations
 
-For complex services, we've created custom mock implementations in `mock-clients.ts`:
+For complex services, we create custom mock implementations in `mock-clients.ts`. For example, our Redis mock:
 
 ```typescript
 // Example of our Redis mock implementation
-export class MockRedisClient {
-  private store = new Map<string, any>();
+vi.mock('@upstash/redis', () => {
+  const mockStore = new Map<string, any>();
   
-  async get(key: string): Promise<any> {
-    return this.store.get(key) || null;
-  }
-  
-  async set(key: string, value: any): Promise<string> {
-    this.store.set(key, value);
-    return 'OK';
-  }
-  
-  // More methods...
-}
-```
-
-These mocks can be used with `vi.mock()` to replace real implementations:
-
-```typescript
-vi.mock('@upstash/redis', () => ({
-  Redis: {
-    fromEnv: () => mockRedisClient
-  }
-}));
+  return {
+    Redis: {
+      fromEnv: () => ({
+        get: vi.fn().mockImplementation(async (key: string) => {
+          return mockStore.get(key) || null;
+        }),
+        
+        set: vi.fn().mockImplementation(async (key: string, value: any) => {
+          mockStore.set(key, value);
+          return 'OK';
+        }),
+        
+        // More methods...
+      })
+    }
+  };
+});
 ```
 
 ## Logging Standards in Tests
@@ -286,6 +289,8 @@ npm run test:coverage
 
 ## Example Test Pattern
 
+Here's an example of a typical test file structure:
+
 ```typescript
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { setupLoggerMock, mockLogger } from '@/tests/helpers/mock-logger';
@@ -322,9 +327,9 @@ describe('CacheService', () => {
       
       // Verify logging
       expect(mockLogger.debug).toHaveBeenCalledWith(
-        'Cache get',
+        expect.stringContaining('Cache get'),
         expect.objectContaining({
-          category: LOG_CATEGORIES.SYSTEM,
+          category: LOG_CATEGORIES.CACHE,
           key
         })
       );
@@ -333,51 +338,22 @@ describe('CacheService', () => {
 });
 ```
 
-## Migration Progress
+## Current Test Coverage
 
-We're in the process of migrating our test suite to the standardized Vitest framework. Here's the current status:
+Based on our examination of the codebase, we have tests for:
 
-### Completed Migrations
-
-1. ✅ **Document Retrieval Tests**: Comprehensive tests for RAG caching and vector search functionality
-   - File: `/tests/unit/services/document-retrieval.test.ts`
-   - Coverage: Basic operations, caching, error handling, key generation
-
+1. ✅ **Document Retrieval Tests**: Tests for RAG caching and vector search
 2. ✅ **Web Scraper Tests**: Tests for the Puppeteer scraping service
-   - File: `/tests/unit/services/scraper.test.ts`
-   - Coverage: URL validation, content caching, error handling
-
-3. ✅ **Edge Logger Tests**: Tests for our Edge-compatible logging system
-   - File: `/tests/unit/lib/edge-logger.test.ts`
-   - Coverage: Log levels, metadata, error formatting, operation tracking, batch logging
-
-4. ✅ **Cache Service Tests**: Unit tests for the Redis cache service implementation
-   - File: `/tests/unit/lib/cache/cache-service.test.ts`
-   - Coverage: Basic operations, TTL handling, domain-specific methods, key normalization, error handling
-
-5. ✅ **Environment Tests**: Testing environment variable loading and validation
-   - File: `/tests/unit/lib/env-loader.test.ts`
-   - Coverage: Required variables, default values, validation failure, runtime detection, type conversion
-
-6. ✅ **Perplexity Service Tests**: Testing the Perplexity API integration
-   - File: `/tests/unit/services/perplexity.test.ts`
-   - Coverage: Initialization, caching, error handling, API interactions
-
-7. ✅ **Deep Search Tool Tests**: Testing the deep search tool with the Perplexity API
-   - File: `/tests/unit/chat-engine/deep-search.test.ts`
-   - Coverage: Search execution, query formatting, error handling, logging
-
-### Still to Migrate
-
-1. ⏳ **API Route Tests**: Testing Next.js API routes
-2. ⏳ **Authentication Tests**: Testing auth flow and middleware
-3. ⏳ **Vector Service Tests**: Testing vector operations and embeddings
-4. ⏳ **Supabase RPC Tests**: Testing Supabase RPC function calls
-   - Legacy File: `/scripts/tests/supabase-rpc-test.ts`
+3. ✅ **Edge Logger Tests**: Tests for our logging system
+4. ✅ **Cache Service Tests**: Tests for the Redis cache service
+5. ✅ **Environment Tests**: Tests for environment variable loading
+6. ✅ **Perplexity Service Tests**: Tests for the Perplexity API integration
+7. ✅ **Deep Search Tool Tests**: Tests for the deep search tool
+8. ✅ **Supabase RPC Tests**: Tests for Supabase RPC function calls
 
 ## Best Practices
 
-1. **Test Isolation**: Each test should be independent
+1. **Test Isolation**: Each test should be independent and not rely on side effects
 2. **Mock External Dependencies**: Don't make real API calls in tests
 3. **Clear Structure**: Use `describe` blocks to group related tests
 4. **Descriptive Names**: Test names should clearly describe what's being tested
@@ -385,7 +361,7 @@ We're in the process of migrating our test suite to the standardized Vitest fram
 6. **Verify Logging**: Check that appropriate messages are logged
 7. **Clean Setup/Teardown**: Reset mocks and state before/after tests
 8. **Environment Variables**: Test both presence and absence of critical environment variables
-   - Explicitly set environment variables with `vi.stubEnv()` instead of modifying `process.env` directly
+   - Use `vi.stubEnv()` instead of modifying `process.env` directly
    - Use `vi.resetModules()` to ensure clean environment between tests
    - Test validation logic for missing critical variables
    - Verify behavior with type conversion (strings to numbers/booleans)
@@ -395,137 +371,3 @@ We're in the process of migrating our test suite to the standardized Vitest fram
 - **Type Issues with LOG_CATEGORIES**: When using the mock logger in tests, you may encounter TypeScript errors about string literals vs the LogCategory type. Use a local constants object with the same values as a workaround.
 - **ESM Compatibility**: Some older libraries might have CommonJS compatibility issues. Use dynamic imports or ESM-compatible alternatives when possible.
 - **Edge Runtime Testing**: For Edge API routes, ensure mocks are compatible with the Edge runtime restrictions (no Node.js specific APIs).
-
-## Testing Standards
-
-This document outlines the standardized testing methodology for the San Diego project.
-
-### Testing Framework
-
-- **Vitest**: We use Vitest as our primary testing framework
-- **Test Types**: Unit tests, integration tests, and end-to-end tests
-- **Test Structure**: Tests are organized by type and module
-
-### Directory Structure
-
-```
-tests/
-├── unit/             # Unit tests for individual components
-│   ├── components/   # React component tests
-│   ├── lib/          # Utility function tests
-│   ├── services/     # Service module tests
-│   └── helpers/      # Test helper functions
-├── integration/      # Integration tests for multiple components
-└── e2e/              # End-to-end tests for full application workflows
-```
-
-### Naming Conventions
-
-- **Test Files**: `[component-name].test.ts` or `[component-name].test.tsx`
-- **Test Suites**: Use descriptive names that match the component or module being tested
-- **Test Cases**: Should clearly describe the specific behavior being tested
-
-### Mocking Standards
-
-- Use Vitest's mocking capabilities (`vi.mock()`, `vi.fn()`)
-- Define mocks before importing the modules that use them
-- For modules with default exports, include proper default export in mocks
-- Reusable mocks should be defined in the `tests/helpers` directory
-
-```typescript
-// Example of proper module mocking with default export
-vi.mock('crypto', async (importOriginal) => {
-  const actual = await importOriginal();
-  return {
-    default: {
-      // Default export properties
-      randomUUID: vi.fn().mockImplementation(() => 'mocked-uuid')
-    },
-    // Named exports
-    randomUUID: vi.fn().mockImplementation(() => 'mocked-uuid')
-  };
-});
-```
-
-### Test Helpers
-
-- **Mock Logger**: Use `setupLoggerMock()` and `mockLogger` from `@/tests/helpers/mock-logger` 
-- **Test Data Generation**: Create utility functions for generating test data
-- **Response Type Definitions**: Define types that match external service responses
-
-### Best Practices
-
-1. **Arrange-Act-Assert**: Structure tests with clear setup, action, and verification phases
-2. **Isolated Tests**: Each test should be independent and not rely on side effects from other tests
-3. **Reset Mocks**: Use `beforeEach` to reset mocks between tests
-4. **Type Safety**: Use proper type annotations for mocked responses
-5. **Error Handling**: Test both success and error cases
-6. **Avoid Nesting**: Keep test nesting to a minimum for readability
-
-### Environment Variables in Tests
-
-- Use `vi.stubEnv()` to mock environment variables in tests
-- Reset environment variables in `afterEach` hooks
-- For required environment variables, test validation failure scenarios
-
-```typescript
-beforeEach(() => {
-  vi.stubEnv('API_KEY', 'test-key');
-});
-
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
-```
-
-### Testing External Services
-
-#### Supabase Testing
-
-When testing Supabase functionality, follow these standards:
-
-1. **Mock the Supabase Client**:
-   ```typescript
-   vi.mock('@supabase/supabase-js', () => {
-     const mockRpc = vi.fn();
-     // Define other mock methods
-     return {
-       createClient: vi.fn(() => ({
-         rpc: mockRpc,
-         // Other mocked methods
-       }))
-     };
-   });
-   ```
-
-2. **Testing RPC Functions**:
-   - Mock successful and error responses for RPC calls
-   - Verify the RPC function was called with expected parameters
-   - Test handling of error responses
-
-3. **User Authentication**:
-   - Mock the auth admin functions for user management
-   - Test user fetching, creation, and error handling
-
-4. **Example Tests**:
-   - `save_message_and_update_session`: Tests for saving user and assistant messages
-   - Database queries: Tests for fetching data and handling query errors
-
-See the standardized implementation in `tests/unit/services/supabase-rpc.test.ts` for a complete example.
-
-### Redis Cache Testing
-
-- Mock Redis client using Vitest mocks
-- Test cache hit/miss scenarios
-- Verify key generation and TTL settings
-
-### Migration Status
-
-- [x] Environment Loader Tests
-- [x] Redis Caching Tests
-- [x] Perplexity Service Tests 
-- [x] Deep Search Tests
-- [x] Supabase RPC Tests
-- [ ] Web Scraper Tests
-- [ ] Document Retrieval Tests
-- [ ] Integration Tests
