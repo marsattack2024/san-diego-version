@@ -12,6 +12,7 @@ import { detectAgentType } from '@/lib/chat-engine/agent-router';
 import { createToolSet } from '@/lib/chat-engine/tools/registry';
 import { prompts } from '@/lib/chat-engine/prompts';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { createClient } from '@/utils/supabase/server';
 // Remove validator import
 // import { validateChatRequest } from '@/lib/chat/validator';
 
@@ -227,6 +228,36 @@ export async function POST(req: Request) {
       });
     }
 
+    // Get the authenticated user (if any)
+    const authClient = await createClient();
+    const { data: { user }, error: authError } = await authClient.auth.getUser();
+
+    const userId = user?.id;
+
+    if (!bypassAuth && (!userId || authError)) {
+      edgeLogger.warn('Authentication required', {
+        operation: 'chat_request',
+        authenticated: !!userId,
+        authError: authError?.message
+      });
+
+      return new Response(
+        JSON.stringify({ error: 'Authentication required' }),
+        { status: 401, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // For testing: when auth is bypassed, use a default user ID for persistence
+    // This ensures messages can still be saved even when auth is bypassed
+    const persistenceUserId = userId || (bypassAuth ? '00000000-0000-0000-0000-000000000000' : undefined);
+
+    if (bypassAuth && !userId) {
+      edgeLogger.warn('Using default userId for persistence in bypass mode', {
+        operation: 'chat_request',
+        persistenceUserId
+      });
+    }
+
     // Check if message persistence should be disabled
     const disableMessagePersistence = parseBooleanValue(body.disable_persistence);
 
@@ -236,6 +267,15 @@ export async function POST(req: Request) {
         sessionId
       });
     }
+
+    // Log authentication and user ID information for debugging
+    edgeLogger.info('Authentication status for chat request', {
+      operation: 'chat_request_auth',
+      hasAuthUser: !!userId,
+      bypassAuth,
+      persistenceUserId,
+      sessionId
+    });
 
     // Create the chat engine with the detected agent configuration
     const engineConfig: ChatEngineConfig = {
@@ -260,9 +300,19 @@ export async function POST(req: Request) {
       body: {
         deepSearchEnabled: shouldUseDeepSearch, // Pass for safety check in execute function
         sessionId,
+        userId: persistenceUserId, // Pass the authenticated user ID for message persistence
         agentType
       }
     };
+
+    // Log user ID for message persistence
+    edgeLogger.info('Chat engine configuration', {
+      operation: 'chat_engine_config',
+      sessionId,
+      userId: persistenceUserId,
+      authBypass: bypassAuth,
+      persistenceDisabled: disableMessagePersistence
+    });
 
     try {
       var engine = createChatEngine(engineConfig);
@@ -306,6 +356,7 @@ export async function POST(req: Request) {
       // Let the engine handle the request
       const response = await engine.handleRequest(reqClone);
 
+      // Log successful handling
       edgeLogger.info('Request handled successfully', {
         operation: 'route_handler',
         status: response.status,
@@ -313,6 +364,18 @@ export async function POST(req: Request) {
         contentType: response.headers.get('Content-Type'),
         elapsedMs: Date.now() - startTime
       });
+
+      // Consume the response stream to ensure processing continues even if client disconnects
+      // This is crucial for ensuring message persistence completes even during disconnects
+      if (response.body && 'consumeStream' in response) {
+        // Non-awaited call so we don't block the response
+        (response as any).consumeStream();
+
+        edgeLogger.info('Stream consumption initiated to handle potential client disconnects', {
+          operation: 'route_handler',
+          sessionId
+        });
+      }
 
       return response;
     } catch (handleRequestError) {

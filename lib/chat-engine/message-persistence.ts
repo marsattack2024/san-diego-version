@@ -4,24 +4,24 @@
  * This service handles saving chat messages to the database asynchronously,
  * ensuring the chat UI flow is never blocked by database operations.
  * It provides methods for saving both user and assistant messages using
- * the save_message_and_update_session RPC function.
+ * direct database operations while respecting Row Level Security policies.
  */
 
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { Message } from 'ai';
 import { createClient } from '@/utils/supabase/server';
+import { createAdminClient } from '@/utils/supabase/server';
+import { v4 as uuid } from 'uuid';
 
-// Import the supabase client or create a function to get it
-import { createClient as createSupabaseClient } from '@supabase/supabase-js';
-
-const supabaseClient = createSupabaseClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+// IMPORTANT: We should not create a direct client here.
+// The createClient() function should handle proper authentication
+// and return a fully authenticated client.
 
 export interface MessagePersistenceConfig {
     disabled?: boolean;
+    bypassAuth?: boolean;
+    defaultUserId?: string;
     operationName?: string;
     throwErrors?: boolean;
     messageHistoryLimit?: number;
@@ -31,6 +31,7 @@ export interface HistoryMessageInput {
     sessionId: string;
     role: 'user' | 'assistant' | 'system' | 'function' | 'tool';
     content: string;
+    userId?: string;
     messageId?: string;
     tools?: Record<string, any>;
 }
@@ -44,8 +45,25 @@ export interface MessageSaveResult {
 }
 
 /**
+ * Helper function to log errors consistently
+ */
+function logError(logger: typeof edgeLogger, operation: string, error: unknown, context: Record<string, any> = {}) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : undefined;
+
+    logger.error(`Error in ${operation}`, {
+        operation,
+        error: errorMessage,
+        stack: errorStack,
+        ...context
+    });
+
+    return errorMessage;
+}
+
+/**
  * Service for persisting messages to the database
- * Uses the Supabase RPC function for message saving
+ * Uses direct Supabase operations with appropriate error handling
  */
 export class MessagePersistenceService {
     private config: MessagePersistenceConfig;
@@ -75,123 +93,37 @@ export class MessagePersistenceService {
     }
 
     /**
-     * Save a message to the database (deprecated version - will be removed soon)
-     * @param message Message data to save
-     * @param sessionId Session identifier
-     * @param userId User identifier
-     * @returns Result of the save operation, or null if persistence is disabled
+     * Creates a Supabase client based on configuration
+     * Uses admin client if bypassAuth is true, with fallback to standard client
      */
-    async saveHistoryMessage(message: HistoryMessageInput, sessionId: string, userId: string | null): Promise<any | null> {
-        // Skip if persistence is disabled
-        if (this.config.disabled) {
-            edgeLogger.info('Message persistence skipped (disabled)', {
-                category: LOG_CATEGORIES.TOOLS,
-                operation: this.operationName,
-                sessionId,
-                role: message.role,
-                messageId: message.messageId
-            });
-            return null;
-        }
-
-        // Skip if no user ID and auth is required
-        if (!userId) {
-            edgeLogger.info('Message persistence skipped (no authentication)', {
-                category: LOG_CATEGORIES.TOOLS,
-                operation: this.operationName,
-                sessionId,
-                role: message.role,
-                messageId: message.messageId
-            });
-            return null;
-        }
-
+    private async createSupabaseClient(context: Record<string, any> = {}) {
+        const useAdminClient = this.config.bypassAuth === true;
         try {
-            // Create Supabase client
-            const supabase = await createClient();
-
-            // Log the operation
-            edgeLogger.info(`Saving ${message.role} message`, {
-                category: LOG_CATEGORIES.TOOLS,
-                operation: this.operationName,
-                sessionId,
-                role: message.role,
-                userId,
-                messageId: message.messageId,
-                contentLength: message.content.length
-            });
-
-            const messageId = message.messageId || crypto.randomUUID();
-
-            // Call the RPC function
-            const { data, error } = await supabase.rpc(
-                'save_message_and_update_session',
-                {
-                    p_session_id: sessionId,
-                    p_role: message.role,
-                    p_content: message.content,
-                    p_user_id: userId,
-                    p_message_id: messageId,
-                    p_tools_used: message.tools ? JSON.stringify(message.tools) : null,
-                    p_update_timestamp: true
-                }
-            );
-
-            if (error) {
-                edgeLogger.error(`Failed to save ${message.role} message via RPC`, {
-                    category: LOG_CATEGORIES.TOOLS,
+            if (useAdminClient) {
+                edgeLogger.info('Using admin client to bypass RLS', {
                     operation: this.operationName,
-                    sessionId,
-                    role: message.role,
-                    userId,
-                    messageId,
-                    error: error.message
+                    ...context
                 });
-
-                // Throw if configured to do so
-                if (this.throwErrors) {
-                    throw error;
-                }
-
-                return {
-                    success: false,
-                    error: error.message
-                };
+                return await createAdminClient();
+            } else {
+                return await createClient();
             }
-
-            // Log successful save
-            edgeLogger.info(`${message.role} message saved successfully`, {
-                category: LOG_CATEGORIES.TOOLS,
-                operation: this.operationName,
-                sessionId,
-                role: message.role,
-                userId,
-                messageId
-            });
-
-            return data;
         } catch (error) {
-            // Log error
-            edgeLogger.error(`Error saving ${message.role} message`, {
-                category: LOG_CATEGORIES.TOOLS,
-                operation: this.operationName,
-                sessionId,
-                role: message.role,
-                userId,
-                error: error instanceof Error ? error.message : String(error)
+            logError(edgeLogger, this.operationName, error, {
+                useAdminClient,
+                ...context,
+                action: 'creating_client'
             });
 
-            // Throw if configured to do so
-            if (this.throwErrors) {
-                throw error;
+            // Fall back to the standard client if admin client fails
+            if (useAdminClient) {
+                edgeLogger.info('Falling back to standard client', {
+                    operation: this.operationName
+                });
+                return await createClient();
             }
-
-            return {
-                success: false,
-                error: error instanceof Error ? error.message : String(error)
-            };
+            throw error;
         }
-
     }
 
     /**
@@ -200,6 +132,7 @@ export class MessagePersistenceService {
      * @returns Result of the save operation
      */
     async saveMessage(input: HistoryMessageInput & { userId?: string }): Promise<MessageSaveResult> {
+        const startTime = Date.now();
         try {
             // Generate a message ID if not provided
             const messageId = input.messageId || crypto.randomUUID();
@@ -220,85 +153,158 @@ export class MessagePersistenceService {
                 };
             }
 
-            // Safety check - verify user authentication if available
+            // If we don't have a userId, we can't save the message
             if (!input.userId) {
-                edgeLogger.warn('Saving message without user ID', {
+                edgeLogger.warn('Cannot save message without user ID', {
                     operation: this.operationName,
                     messageId,
                     sessionId: input.sessionId
                 });
+
+                return {
+                    success: false,
+                    messageId,
+                    error: 'Cannot save message without user ID'
+                };
             }
 
             edgeLogger.info('Saving message to database', {
                 operation: this.operationName,
                 sessionId: input.sessionId,
                 role: input.role,
-                userId: input.userId || 'anonymous',
+                userId: input.userId,
                 messageId,
                 contentLength: input.content.length,
                 hasToolsUsed: input.tools ? Object.keys(input.tools).length > 0 : false
             });
 
             // Create Supabase client
-            const supabase = await createClient();
+            const supabase = await this.createSupabaseClient({
+                sessionId: input.sessionId,
+                action: 'save_message'
+            });
 
-            // Call the Supabase RPC function to save the message
-            const { data, error } = await supabase.rpc(
-                'save_message_and_update_session',
-                {
-                    p_session_id: input.sessionId,
-                    p_role: input.role,
-                    p_content: input.content,
-                    p_user_id: input.userId || '00000000-0000-0000-0000-000000000000', // Anonymous user ID if not provided
-                    p_message_id: messageId,
-                    p_tools_used: input.tools ? JSON.stringify(input.tools) : null,
-                    p_update_timestamp: true
+            // First, try to save via RPC function
+            try {
+                const { data: rpcResult, error: rpcError } = await supabase
+                    .rpc('save_message_and_update_session', {
+                        p_session_id: input.sessionId,
+                        p_role: input.role,
+                        p_content: input.content,
+                        p_user_id: input.userId,
+                        p_message_id: messageId,
+                        p_tools_used: input.tools || null,
+                        p_update_timestamp: true
+                    });
+
+                if (rpcError) {
+                    edgeLogger.error('RPC failed to save message', {
+                        operation: this.operationName,
+                        sessionId: input.sessionId,
+                        messageId,
+                        error: rpcError.message,
+                        code: rpcError.code,
+                        details: rpcError.details || rpcError.message
+                    });
+
+                    // Try the direct insert as fallback
+                    const { error: insertError } = await supabase
+                        .from('sd_chat_histories')
+                        .insert({
+                            id: messageId,
+                            session_id: input.sessionId,
+                            role: input.role,
+                            content: input.content,
+                            user_id: input.userId,
+                            tools_used: input.tools
+                        });
+
+                    if (insertError) {
+                        edgeLogger.error('Failed to save message with direct insert', {
+                            operation: this.operationName,
+                            sessionId: input.sessionId,
+                            messageId,
+                            error: insertError.message,
+                            code: insertError.code
+                        });
+
+                        return {
+                            success: false,
+                            messageId,
+                            error: `Message save failed: ${insertError.message}`
+                        };
+                    }
+
+                    // Update session timestamp as a fallback
+                    const { error: updateSessionError } = await supabase
+                        .from('sd_chat_sessions')
+                        .upsert({
+                            id: input.sessionId,
+                            user_id: input.userId,
+                            title: 'New Chat',
+                            updated_at: new Date().toISOString()
+                        });
+
+                    if (updateSessionError) {
+                        edgeLogger.warn('Failed to update session timestamp', {
+                            operation: this.operationName,
+                            sessionId: input.sessionId,
+                            error: updateSessionError.message
+                        });
+                    }
+
+                    // Continue despite error updating timestamp since the message was saved
+                    const executionTime = Date.now() - startTime;
+                    edgeLogger.info('Message saved with direct insert (RPC failed)', {
+                        operation: this.operationName,
+                        sessionId: input.sessionId,
+                        messageId,
+                        executionTimeMs: executionTime
+                    });
+
+                    return {
+                        success: true,
+                        messageId,
+                        message: 'Message saved with direct insert (RPC failed)',
+                        executionTimeMs: executionTime
+                    };
                 }
-            );
 
-            // Log result
-            if (error) {
-                edgeLogger.error('Failed to save message to database', {
+                // RPC was successful
+                const executionTime = Date.now() - startTime;
+                edgeLogger.info('Message saved successfully via RPC', {
                     operation: this.operationName,
                     sessionId: input.sessionId,
                     messageId,
-                    error: error.message,
-                    details: error.details
+                    executionTimeMs: executionTime,
+                    rpcSuccess: rpcResult?.success === true
                 });
 
-                if (this.throwErrors) {
-                    throw new Error(`Failed to save message: ${error.message}`);
-                }
+                return {
+                    success: true,
+                    messageId,
+                    message: 'Message saved successfully via RPC',
+                    executionTimeMs: executionTime
+                };
+            } catch (error) {
+                const errorMessage = logError(edgeLogger, this.operationName, error, {
+                    sessionId: input.sessionId,
+                    action: 'save_message_exception'
+                });
 
                 return {
                     success: false,
-                    error: error.message
+                    messageId,
+                    error: `Exception when saving message: ${errorMessage}`,
+                    executionTimeMs: Date.now() - startTime
                 };
             }
-
-            // Extract execution time if available
-            const executionTimeMs = data?.execution_time_ms || 0;
-
-            edgeLogger.info('Message saved to database', {
-                operation: this.operationName,
-                sessionId: input.sessionId,
-                messageId,
-                executionTimeMs
-            });
-
-            return {
-                success: true,
-                messageId,
-                message: 'Message saved successfully',
-                executionTimeMs
-            };
         } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-
-            edgeLogger.error('Error in saveMessage', {
-                operation: this.operationName,
+            const executionTimeMs = Date.now() - startTime;
+            const errorMessage = logError(edgeLogger, this.operationName, error, {
                 sessionId: input.sessionId,
-                error: errorMessage
+                executionTimeMs,
+                action: 'save_message_outer'
             });
 
             if (this.throwErrors) {
@@ -313,103 +319,209 @@ export class MessagePersistenceService {
     }
 
     /**
-     * Load previous messages for a session from the database
-     * @param sessionId Session identifier
-     * @param limit Maximum number of messages to return
-     * @returns Array of previous messages or undefined if not found
+     * Load previous messages from a chat session
+     * 
+     * @param sessionId - The chat session ID to load messages from
+     * @param userId - The user ID (required for RLS policies)
+     * @param limit - Maximum number of messages to load (default: 100)
+     * @returns Array of Message objects or empty array if none found
      */
-    async loadPreviousMessages(sessionId: string, limit?: number): Promise<Message[] | undefined> {
-        const messageLimit = limit || this.messageHistoryLimit;
-
+    async loadPreviousMessages(
+        sessionId: string,
+        userId: string | undefined,
+        limit = 100
+    ): Promise<Message[]> {
+        const startTime = Date.now();
         try {
-            edgeLogger.info('Loading messages from database', {
-                operation: this.operationName,
-                sessionId,
-                limit: messageLimit
-            });
-
-            // Create Supabase client
-            const supabase = await createClient();
-
-            const { data, error } = await supabase
-                .from('sd_chat_histories')
-                .select('id, role, content, created_at, tools_used')
-                .eq('session_id', sessionId)
-                .order('created_at', { ascending: true })
-                .limit(messageLimit);
-
-            if (error) {
-                edgeLogger.error('Failed to load messages from database', {
-                    operation: this.operationName,
-                    sessionId,
-                    error: error.message
-                });
-
-                return undefined;
-            }
-
-            if (!data || data.length === 0) {
-                edgeLogger.info('No messages found for session', {
+            // Skip if persistence is disabled
+            if (this.config.disabled) {
+                edgeLogger.info('Loading previous messages skipped (disabled)', {
                     operation: this.operationName,
                     sessionId
                 });
-
-                return undefined;
+                return [];
             }
 
-            // Convert database records to Message format
-            const messages: Message[] = data.map((record: any) => ({
-                id: record.id,
-                role: record.role as Message['role'],
-                content: record.content,
-                // Include tools_used as extra data if available
-                ...(record.tools_used ? { tools_used: record.tools_used } : {})
-            }));
+            if (!userId) {
+                edgeLogger.warn('Loading messages without user ID may fail due to RLS', {
+                    operation: this.operationName,
+                    sessionId
+                });
+            }
 
-            edgeLogger.info('Loaded messages from database', {
+            edgeLogger.info('Loading previous messages', {
                 operation: this.operationName,
                 sessionId,
-                messageCount: messages.length
+                userId,
+                limit
+            });
+
+            // Create Supabase client
+            const supabase = await this.createSupabaseClient({
+                sessionId,
+                action: 'load_messages'
+            });
+
+            // Try the RPC function first
+            try {
+                const { data: messages, error: rpcError } = await supabase
+                    .rpc('get_chat_messages', {
+                        p_session_id: sessionId,
+                        p_limit: limit
+                    });
+
+                if (!rpcError && messages && Array.isArray(messages)) {
+                    // Map the RPC results to Message objects
+                    const formattedMessages = messages.map(msg => ({
+                        id: msg.id,
+                        role: msg.role as "user" | "assistant",
+                        content: msg.content,
+                        createdAt: new Date(msg.created_at),
+                        tools: msg.tools_used
+                    }));
+
+                    edgeLogger.info('Messages loaded successfully via RPC', {
+                        operation: this.operationName,
+                        sessionId,
+                        count: formattedMessages.length,
+                        executionTimeMs: Date.now() - startTime
+                    });
+
+                    return formattedMessages;
+                }
+
+                // Log the RPC error but continue with the fallback query
+                if (rpcError) {
+                    edgeLogger.warn('RPC get_chat_messages failed, using fallback query', {
+                        operation: this.operationName,
+                        sessionId,
+                        error: rpcError.message,
+                        code: rpcError.code
+                    });
+                }
+            } catch (rpcException) {
+                edgeLogger.warn('Exception in RPC get_chat_messages, using fallback query', {
+                    operation: this.operationName,
+                    sessionId,
+                    error: rpcException instanceof Error ? rpcException.message : String(rpcException)
+                });
+            }
+
+            // Fallback: Direct query approach
+            const { data: historyData, error } = await supabase
+                .from('sd_chat_histories')
+                .select('*')
+                .eq('session_id', sessionId)
+                .order('created_at', { ascending: true })
+                .limit(limit);
+
+            if (error) {
+                edgeLogger.error('Failed to load messages', {
+                    operation: this.operationName,
+                    sessionId,
+                    error: error.message,
+                    code: error.code,
+                    details: error.details
+                });
+                return [];
+            }
+
+            if (!historyData || historyData.length === 0) {
+                edgeLogger.info('No previous messages found', {
+                    operation: this.operationName,
+                    sessionId
+                });
+                return [];
+            }
+
+            // Convert from database format to Message format
+            const messages: Message[] = historyData.map(record => ({
+                id: record.id,
+                role: record.role as "user" | "assistant",
+                content: record.content,
+                createdAt: new Date(record.created_at),
+                tools: record.tools_used
+            }));
+
+            edgeLogger.info('Messages loaded successfully', {
+                operation: this.operationName,
+                sessionId,
+                count: messages.length,
+                executionTimeMs: Date.now() - startTime
             });
 
             return messages;
         } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-
-            edgeLogger.error('Error in loadPreviousMessages', {
-                operation: this.operationName,
+            const executionTimeMs = Date.now() - startTime;
+            logError(edgeLogger, this.operationName, error, {
                 sessionId,
-                error: errorMessage
+                executionTimeMs,
+                action: 'load_messages'
             });
 
-            return undefined;
+            if (this.throwErrors) {
+                throw error;
+            }
+
+            return [];
         }
     }
 
     /**
      * Get the most recent messages for a session
      * @param sessionId - Session identifier
+     * @param userId - User identifier (required for RLS policies) 
      * @param currentMessages - Current messages in the conversation
      * @param historyLimit - Optional limit on history size
      * @returns Combined messages array
      */
     async getRecentHistory(
         sessionId: string,
+        userId: string,
         currentMessages: Message[],
         historyLimit: number = 10
     ): Promise<Message[]> {
         try {
-            const previousMessages = await this.loadPreviousMessages(sessionId, historyLimit);
-
-            if (previousMessages && previousMessages.length > 0) {
-                // Combine with current messages
-                return [...previousMessages, ...currentMessages];
+            if (!userId) {
+                edgeLogger.warn('Cannot get recent history without user ID', {
+                    operation: this.operationName,
+                    sessionId
+                });
+                return currentMessages;
             }
-        } catch (error) {
-            edgeLogger.error('Failed to get recent history', {
+
+            edgeLogger.info('Getting recent history', {
                 operation: this.operationName,
                 sessionId,
-                error: error instanceof Error ? error.message : String(error)
+                userId,
+                currentMessageCount: currentMessages.length,
+                historyLimit
+            });
+
+            const previousMessages = await this.loadPreviousMessages(sessionId, userId, historyLimit);
+
+            if (previousMessages && previousMessages.length > 0) {
+                edgeLogger.info('Combined messages with history', {
+                    operation: this.operationName,
+                    sessionId,
+                    previousCount: previousMessages.length,
+                    currentCount: currentMessages.length,
+                    totalCount: previousMessages.length + currentMessages.length
+                });
+
+                // Combine with current messages
+                return [...previousMessages, ...currentMessages];
+            } else {
+                edgeLogger.info('No history found, using current messages only', {
+                    operation: this.operationName,
+                    sessionId,
+                    currentCount: currentMessages.length
+                });
+            }
+        } catch (error) {
+            logError(edgeLogger, this.operationName, error, {
+                sessionId,
+                action: 'get_recent_history'
             });
         }
 

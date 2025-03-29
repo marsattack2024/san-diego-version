@@ -245,32 +245,52 @@ export class ChatEngine {
      * @returns ChatEngineContext object
      */
     private async createContext(messages: Message[], sessionId: string, userId?: string): Promise<ChatEngineContext> {
-        // Try to load previous messages from history service
-        let previousMessages: Message[] | undefined;
+        // Create a request ID for this chat context
+        const requestId = crypto.randomUUID();
+        const startTime = Date.now();
 
-        if (this.config.cacheEnabled) {
-            previousMessages = await this.persistenceService.getRecentHistory(
-                sessionId,
-                messages,
-                this.config.messageHistoryLimit
-            );
+        // Extract URLs from the latest user message
+        const lastUserMessage = messages[messages.length - 1];
+        const urls = lastUserMessage?.role === 'user' && typeof lastUserMessage.content === 'string'
+            ? extractUrls(lastUserMessage.content)
+            : [];
+
+        // Load previous messages if available via persistence service
+        let previousMessages: Message[] | undefined;
+        if (userId && sessionId && this.persistenceService && !this.config.messagePersistenceDisabled) {
+            try {
+                previousMessages = await this.persistenceService.loadPreviousMessages(
+                    sessionId,
+                    userId,
+                    this.config.messageHistoryLimit
+                );
+
+                if (previousMessages && previousMessages.length > 0) {
+                    edgeLogger.info('Loaded previous messages from database', {
+                        operation: this.config.operationName,
+                        sessionId,
+                        messageCount: previousMessages.length
+                    });
+                }
+            } catch (error) {
+                edgeLogger.error('Failed to load previous messages', {
+                    operation: this.config.operationName,
+                    sessionId,
+                    error: error instanceof Error ? error.message : String(error)
+                });
+            }
         }
 
-        // Extract URLs from the latest user message for potential processing
-        const userMessage = messages.find(m => m.role === 'user');
-        const urls = userMessage?.content ? extractUrls(userMessage.content as string) : [];
-
+        // Return the context object
         return {
-            requestId: crypto.randomUUID(),
+            requestId,
             sessionId,
             userId,
-            startTime: Date.now(),
+            startTime,
             messages,
             previousMessages,
-            urls: urls.length > 0 ? urls : undefined,
-            metrics: {
-                cacheHits: previousMessages ? 1 : 0
-            }
+            urls,
+            metrics: {}
         };
     }
 
@@ -345,12 +365,26 @@ export class ChatEngine {
      */
     private async processRequest(context: ChatEngineContext): Promise<Response> {
         try {
-            // Get recent history using the message history service
-            const modelMessages = await this.persistenceService.getRecentHistory(
-                context.sessionId,
-                context.messages,
-                this.config.messageHistoryLimit
-            );
+            // Get userId from context or body
+            const userId = context.userId || (this.config.body?.userId as string);
+
+            if (userId) {
+                edgeLogger.info('Using userId for persistence', {
+                    operation: this.config.operationName,
+                    sessionId: context.sessionId,
+                    userId
+                });
+            }
+
+            // Get recent history using the message persistence service
+            const modelMessages = this.persistenceService && !this.config.messagePersistenceDisabled
+                ? await this.persistenceService.getRecentHistory(
+                    context.sessionId,
+                    userId || '',
+                    context.messages,
+                    this.config.messageHistoryLimit
+                )
+                : context.messages;
 
             // Add Deep Search information to user messages so it's accessible in the context
             const systemPrompt = this.config.systemPrompt || 'You are a helpful AI assistant.';
@@ -373,7 +407,6 @@ export class ChatEngine {
             // Store config values in local variables for callback access
             const operationName = this.config.operationName;
             const sessionId = context.sessionId;
-            const userId = context.userId;
             const messagePersistenceDisabled = this.config.messagePersistenceDisabled;
             const persistenceService = this.persistenceService;
 
@@ -381,19 +414,21 @@ export class ChatEngine {
             const lastUserMessage = context.messages.find(m => m.role === 'user');
 
             // Save the user message first if it exists
-            if (lastUserMessage && userId && !messagePersistenceDisabled) {
+            if (lastUserMessage && userId && !messagePersistenceDisabled && persistenceService) {
                 // Using Promise without await to avoid blocking
                 // Fire-and-forget style, but still log errors
                 this.saveUserMessage(
-                    sessionId,
-                    userId,
-                    lastUserMessage
+                    context,
+                    typeof lastUserMessage.content === 'string'
+                        ? lastUserMessage.content
+                        : JSON.stringify(lastUserMessage.content)
                 ).catch(error => {
                     edgeLogger.error('Failed to save user message (non-blocking)', {
                         operation: this.config.operationName,
                         error: error instanceof Error ? error.message : String(error),
                         sessionId,
-                        messageId: lastUserMessage.id
+                        messageId: lastUserMessage.id,
+                        userId
                     });
                 });
             }
@@ -433,21 +468,25 @@ export class ChatEngine {
                     });
 
                     // Save assistant message if user is authenticated and persistence is enabled
-                    if (userId && !messagePersistenceDisabled) {
+                    if (userId && !messagePersistenceDisabled && persistenceService) {
                         // Extract tool usage from the assistant's response
                         const toolsUsed = this.extractToolsUsed(text);
 
-                        // Create a unique ID for the assistant message
-                        const assistantMessageId = crypto.randomUUID();
-
                         // Save the assistant message
-                        await this.saveAssistantMessage(
-                            sessionId,
-                            userId,
-                            text,
-                            assistantMessageId,
-                            toolsUsed
-                        );
+                        try {
+                            await this.saveAssistantMessage(
+                                context,
+                                text,
+                                toolsUsed
+                            );
+                        } catch (saveError) {
+                            edgeLogger.error('Failed to save assistant message', {
+                                operation: operationName,
+                                error: saveError instanceof Error ? saveError.message : String(saveError),
+                                sessionId,
+                                userId
+                            });
+                        }
                     }
                 },
                 onError({ error }: { error: any }) {
@@ -461,6 +500,16 @@ export class ChatEngine {
                 }
             });
 
+            // Consume the stream in the background to ensure all callbacks are triggered
+            // even if the client disconnects from the HTTP response
+            // This is important for message persistence
+            result.consumeStream();
+
+            edgeLogger.info('Stream consumption enabled to ensure processing completes', {
+                operation: this.config.operationName,
+                sessionId: context.sessionId
+            });
+
             // Get the streamable response
             const response = result.toDataStreamResponse();
 
@@ -469,7 +518,7 @@ export class ChatEngine {
                 operation: this.config.operationName,
                 durationMs: Date.now() - context.startTime,
                 sessionId: context.sessionId,
-                userId: context.userId
+                userId: userId
             });
 
             return response;
@@ -564,10 +613,21 @@ export class ChatEngine {
                 );
             }
 
+            // Use userId from auth or from body.userId (for testing/bypass)
+            const contextUserId = userId || (body.userId as string) || (this.config.body?.userId as string);
+
+            if (contextUserId && !userId) {
+                edgeLogger.info('Using userId from request body for context', {
+                    operation: this.config.operationName,
+                    userId: contextUserId,
+                    source: userId ? 'auth' : body.userId ? 'body' : 'config'
+                });
+            }
+
             const context = await this.createContext(
                 chatMessages,
                 id || sessionId,
-                userId
+                contextUserId
             );
 
             // Process the request
@@ -644,67 +704,109 @@ export class ChatEngine {
         }
     }
 
-    // Using the correct method signature for the persistenceService.saveMessage method
-    private async saveUserMessage(sessionId: string, userId: string | undefined, message: Message): Promise<void> {
-        try {
-            if (!userId || this.config.messagePersistenceDisabled) {
-                return;
-            }
+    private async saveUserMessage(
+        context: ChatEngineContext,
+        content: string
+    ): Promise<void> {
+        // Skip if message persistence is disabled
+        if (this.config.messagePersistenceDisabled || !this.persistenceService) {
+            return;
+        }
 
+        const { sessionId } = context;
+        // Get userId from context or from config.body as fallback
+        const userId = context.userId || (this.config.body?.userId as string);
+
+        // Check for userId - required for RLS policies
+        if (!userId) {
+            edgeLogger.warn('No userId provided for message persistence', {
+                operation: this.config.operationName,
+                sessionId
+            });
+            return;
+        }
+
+        // Format content properly (string or JSON string)
+        const formattedContent = typeof content === 'string'
+            ? content
+            : JSON.stringify(content);
+
+        const messageId = crypto.randomUUID();
+
+        edgeLogger.info('Saving user message', {
+            operation: this.config.operationName,
+            sessionId,
+            userId,
+            messageId,
+            contentPreview: formattedContent.substring(0, 50) + (formattedContent.length > 50 ? '...' : '')
+        });
+
+        try {
             await this.persistenceService.saveMessage({
                 sessionId,
-                role: message.role as any,
-                content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content),
-                messageId: message.id,
-                userId
-            }).catch(error => {
-                edgeLogger.error('Failed to save user message', {
-                    operation: this.config.operationName,
-                    sessionId,
-                    messageId: message.id,
-                    error: error instanceof Error ? error.message : String(error)
-                });
+                userId,
+                role: 'user',
+                content: formattedContent,
+                messageId
             });
         } catch (error) {
-            edgeLogger.error('Error in saveUserMessage', {
+            edgeLogger.error('Failed to save user message', {
                 operation: this.config.operationName,
                 sessionId,
+                userId,
                 error: error instanceof Error ? error.message : String(error)
             });
         }
     }
 
     private async saveAssistantMessage(
-        sessionId: string,
-        userId: string | undefined,
+        context: ChatEngineContext,
         content: string,
-        messageId: string,
         toolsUsed?: Record<string, any>
     ): Promise<void> {
-        try {
-            if (!userId || this.config.messagePersistenceDisabled) {
-                return;
-            }
+        // Skip if message persistence is disabled
+        if (this.config.messagePersistenceDisabled || !this.persistenceService) {
+            return;
+        }
 
+        const { sessionId } = context;
+        // Get userId from context or from config.body as fallback
+        const userId = context.userId || (this.config.body?.userId as string);
+
+        // Check for userId - required for RLS policies
+        if (!userId) {
+            edgeLogger.warn('No userId provided for message persistence', {
+                operation: this.config.operationName,
+                sessionId
+            });
+            return;
+        }
+
+        const messageId = crypto.randomUUID();
+
+        edgeLogger.info('Saving assistant message', {
+            operation: this.config.operationName,
+            sessionId,
+            userId,
+            messageId,
+            contentPreview: content.substring(0, 50) + (content.length > 50 ? '...' : ''),
+            toolsUsed: !!toolsUsed
+        });
+
+        try {
             await this.persistenceService.saveMessage({
                 sessionId,
+                userId,
                 role: 'assistant',
                 content,
                 messageId,
-                userId,
                 tools: toolsUsed
-            }).catch(error => {
-                edgeLogger.error('Failed to save assistant message', {
-                    operation: this.config.operationName,
-                    sessionId,
-                    messageId,
-                    error: error instanceof Error ? error.message : String(error)
-                });
             });
         } catch (error) {
-            edgeLogger.error('Error in saveAssistantMessage', {
+            edgeLogger.error('Failed to save assistant message', {
                 operation: this.config.operationName,
                 sessionId,
+                userId,
                 error: error instanceof Error ? error.message : String(error)
             });
         }
