@@ -18,6 +18,7 @@ import { createToolSet } from './tools/registry';
 interface AgentConfig {
     systemPrompt: string;
     temperature: number;
+    model?: string;
     toolOptions: {
         useKnowledgeBase: boolean;
         useWebScraper: boolean;
@@ -125,6 +126,7 @@ function getAgentConfig(agentType: AgentType): AgentConfig {
     const configurations: Record<AgentType, Omit<AgentConfig, 'systemPrompt'>> = {
         'copywriting': {
             temperature: 0.7, // More creative for copywriting
+            model: 'gpt-4o',
             toolOptions: {
                 useKnowledgeBase: true,
                 useWebScraper: true,
@@ -134,6 +136,7 @@ function getAgentConfig(agentType: AgentType): AgentConfig {
         },
         'google-ads': {
             temperature: 0.4, // More focused for ads
+            model: 'gpt-4o',
             toolOptions: {
                 useKnowledgeBase: true,
                 useWebScraper: true,
@@ -143,6 +146,7 @@ function getAgentConfig(agentType: AgentType): AgentConfig {
         },
         'facebook-ads': {
             temperature: 0.4, // More focused for ads
+            model: 'gpt-4o',
             toolOptions: {
                 useKnowledgeBase: true,
                 useWebScraper: true,
@@ -152,6 +156,7 @@ function getAgentConfig(agentType: AgentType): AgentConfig {
         },
         'quiz': {
             temperature: 0.6, // Balanced creativity for quiz creation
+            model: 'gpt-4o',
             toolOptions: {
                 useKnowledgeBase: true,
                 useWebScraper: false, // Reduced tool set for quiz agent
@@ -161,6 +166,7 @@ function getAgentConfig(agentType: AgentType): AgentConfig {
         },
         'default': {
             temperature: 0.5, // Balanced temperature for general purposes
+            model: 'gpt-4o',
             toolOptions: {
                 useKnowledgeBase: true,
                 useWebScraper: true,

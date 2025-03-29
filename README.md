@@ -24,7 +24,61 @@ Marlan is a specialized AI assistant that helps photographers with marketing str
 - 📜 Conversation history persistence
 - 🔌 Embeddable chat widget for external websites
 
-## Recent Improvements
+### Chat Engine with Conditional Tools
+
+The application uses a unified chat engine with conditional tool inclusion, allowing different agent types to have access to specific capabilities:
+
+- **Knowledge Base Tool**: Retrieves information from the internal knowledge base
+- **Web Scraper Tool**: Extracts content from web pages to provide context
+- **RAG Tool**: Retrieves and generates content using the Retrieval-Augmented Generation approach
+- **Deep Search Tool**: Performs web research using the Perplexity API (requires explicit enablement)
+
+### Deep Search Feature
+
+The Deep Search feature enables agents to search the web for up-to-date information using the Perplexity API. This feature follows a service-oriented architecture:
+
+#### Architecture
+
+- **Tool Definition**: `lib/chat-engine/tools/deep-search.ts`
+- **Service Layer**: `lib/chat-engine/services/perplexity.service.ts` 
+- **Route Handler**: `app/api/perplexity/route.ts`
+
+#### Usage
+
+To use Deep Search:
+
+1. Enable the feature in the chat interface using the toggle control
+2. Use an agent type that supports Deep Search capabilities
+3. Ask questions that would benefit from up-to-date web information
+
+#### Implementation Notes
+
+The feature includes multiple security controls:
+- Conditional tool inclusion based on user preference and agent capability
+- System prompt feature flags to reinforce availability
+- Runtime verification in the tool's execute function
+
+## Recently Implemented Features
+
+### Deep Search Integration
+
+The application now includes a robust Deep Search feature that leverages the Perplexity API to provide comprehensive web research capabilities. This feature is implemented following Vercel AI SDK best practices with multi-layered controls:
+
+1. **User Toggle Control**: Deep Search only activates when explicitly enabled by the user through the UI toggle.
+2. **Agent-Based Availability**: Only specific agent types support Deep Search capability.
+3. **Conditional Tool Inclusion**: The Deep Search tool is only included in the available tools set when explicitly enabled.
+4. **Self-Verification**: The tool includes an internal verification check to ensure it cannot be misused.
+
+#### Key Components
+
+- `lib/chat-engine/tools/deep-search.ts`: Implementation of the Deep Search tool following Vercel AI SDK patterns
+- `lib/chat-engine/tools/registry.ts`: Conditional inclusion of the Deep Search tool based on feature flags
+- `app/api/chat/route.ts`: Configuration of the chat engine with conditional Deep Search integration
+- `lib/agents/agent-router.ts`: Agent-specific configuration for Deep Search availability
+
+#### Usage
+
+Users can enable Deep Search by toggling the Deep Search button in the chat interface. When enabled and supported by the current agent, the AI can use this tool to perform web research on complex topics, providing more comprehensive and up-to-date information.
 
 ### Enhanced Logging System
 

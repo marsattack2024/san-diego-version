@@ -17,7 +17,7 @@ import { MessageHistoryService, createMessageHistoryService } from './message-hi
  */
 export interface ChatEngineConfig {
     // Basic configuration
-    tools: Record<string, Tool<any, any>>; // Properly typed tools object
+    tools?: Record<string, Tool<any, any>>; // Properly typed tools object
     requiresAuth?: boolean;
     corsEnabled?: boolean;
 
@@ -44,6 +44,22 @@ export interface ChatEngineConfig {
     // Cache configuration
     cacheEnabled?: boolean;
     messageHistoryLimit?: number;
+
+    /**
+     * Prompts to use with the chat engine.
+     */
+    prompts?: any;
+
+    /**
+     * The agent type being used.
+     */
+    agentType?: string;
+
+    /**
+     * Optional request body parameters that will be passed to tool execution
+     * Used for passing feature flags and other configuration options to tools
+     */
+    body?: Record<string, any>;
 }
 
 /**
@@ -257,12 +273,16 @@ export class ChatEngine {
                 context.messages
             );
 
-            // Simply use the system prompt without manual context injection
-            // Context will be provided by tools when the LLM calls them
+            // Add Deep Search information to user messages so it's accessible in the context
             const systemPrompt = this.config.systemPrompt || 'You are a helpful AI assistant.';
+
+            // Create system message with feature flags explicitly included
+            const dsEnabled = this.config.body?.deepSearchEnabled ? 'deepSearchEnabled' : 'deepSearchDisabled';
+            let systemContent = `${systemPrompt}\n\nFeature flags: ${dsEnabled}`;
+
             const systemMessage: CoreMessage = {
                 role: 'system',
-                content: systemPrompt
+                content: systemContent
             };
 
             // Add system message to the beginning
@@ -287,7 +307,7 @@ export class ChatEngine {
                 // Enable multi-step tool use for more complex interactions
                 maxSteps: 5,
                 // Add callbacks for monitoring and logging
-                onChunk({ chunk }) {
+                onChunk({ chunk }: { chunk: any }) {
                     // Monitor different types of chunks for logging
                     if (chunk.type === 'tool-call') {
                         edgeLogger.info('Tool call detected', {
@@ -298,7 +318,7 @@ export class ChatEngine {
                         });
                     }
                 },
-                onFinish({ text, finishReason, usage }) {
+                onFinish({ text, finishReason, usage }: { text: string, finishReason: string, usage?: { completionTokens?: number, promptTokens?: number, totalTokens?: number } }) {
                     // Log completion metrics
                     edgeLogger.info('Chat completion finished', {
                         operation: operationName,
@@ -310,7 +330,7 @@ export class ChatEngine {
                         userId
                     });
                 },
-                onError({ error }) {
+                onError({ error }: { error: any }) {
                     // Log any error that occurs during streaming
                     edgeLogger.error('Streaming error encountered', {
                         operation: operationName,

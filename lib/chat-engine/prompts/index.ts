@@ -38,6 +38,28 @@ export function buildSystemPrompt(agentType: AgentType): string {
 }
 
 /**
+ * Builds a complete system prompt for the specified agent type
+ * with optional DeepSearch instructions
+ */
+export function buildSystemPromptWithDeepSearch(agentType: AgentType, deepSearchEnabled = false): string {
+  // Get the base system prompt for the agent type
+  const basePrompt = buildSystemPrompt(agentType);
+
+  // Add common tool description
+  const withToolDescription = basePrompt + "\n\n### AVAILABLE TOOLS:\n\nYou have access to the following resources:\n- Knowledge Base: Retrieve information from our internal knowledge base\n- Web Scraper: Extract content from specific URLs provided by the user\n- Deep Search: Conduct in-depth research on complex topics using Perplexity AI\n\nUse these resources when appropriate to provide accurate and comprehensive responses.";
+
+  // Add DeepSearch-specific instructions
+  const withDeepSearchInstructions = withToolDescription + "\n\n" + (
+    deepSearchEnabled
+      ? "IMPORTANT: DeepSearch is enabled for this conversation. Use the deepSearch tool for research-intensive questions."
+      : "NOTE: DeepSearch is NOT enabled for this conversation. Do NOT use the deepSearch tool."
+  );
+
+  // Add instruction to mention tools used
+  return withDeepSearchInstructions + "\n\nCRITICAL INSTRUCTION: At the end of your response, you MUST include a section that explicitly states which resources you used (Knowledge Base, Web Scraper, or Deep Search). If you didn't use any of these resources, state that you didn't use any specific resources.";
+}
+
+/**
  * Builds a complete system prompt for the specified prompt type
  * For agent types, it delegates to the buildSystemPrompt function
  * For widget types, it uses the widget-specific prompts
@@ -127,5 +149,11 @@ export const prompts = {
   withToolResults: (
     basePrompt: string,
     toolResults: ToolResults
-  ) => enhancePromptWithToolResults(basePrompt, toolResults)
+  ) => enhancePromptWithToolResults(basePrompt, toolResults),
+
+  // Function to build system prompt with DeepSearch instructions
+  buildSystemPrompt: (
+    agentType: AgentType,
+    deepSearchEnabled = false
+  ) => buildSystemPromptWithDeepSearch(agentType, deepSearchEnabled)
 }; 

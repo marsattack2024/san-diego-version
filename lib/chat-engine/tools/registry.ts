@@ -9,6 +9,7 @@
 import { knowledgeBaseTool } from './knowledge-base';
 import { webScraperTool } from './web-scraper';
 import { ragTool } from './rag-tool';
+import { deepSearchTool } from './deep-search';
 import { Tool } from 'ai';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
@@ -86,8 +87,10 @@ export function createToolSet(options: {
         toolSet.getContext = ragTool;
     }
 
-    // Deep search tool will be added here
-    // when it is extracted in future phases
+    // Add Deep Search tool ONLY if explicitly enabled
+    if (useDeepSearch) {
+        toolSet.deepSearch = deepSearchTool;
+    }
 
     return toolSet;
 }
