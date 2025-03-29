@@ -6,9 +6,9 @@
  * consistent tool definition while supporting different feature sets.
  */
 
-import { knowledgeBaseTool } from './knowledge-base';
-import { webScraperTool } from './web-scraper';
-import { deepSearchTool } from './deep-search';
+import { knowledgeBaseTool } from './knowledge-base.tool';
+import { webScraperTool } from './web-scraper.tool';
+import { deepSearchTool } from './deep-search.tool';
 import { Tool } from 'ai';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';

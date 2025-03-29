@@ -93,7 +93,7 @@ vi.stubGlobal('fetch', vi.fn().mockImplementation(() =>
 // Import modules after mocking
 import { createChatEngine, ChatEngine } from '@/lib/chat-engine/core';
 import { detectAgentType } from '@/lib/chat-engine/agent-router';
-import { createToolSet } from '@/lib/chat-engine/tools/registry';
+import { createToolSet } from '@/lib/tools/registry.tool';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { perplexityService } from '@/lib/services/perplexity.service';
 import { streamText } from 'ai';

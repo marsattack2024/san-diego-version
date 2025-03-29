@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { generateText } from 'ai';
 import { openai } from '@ai-sdk/openai';
-import { webScraperTool } from '@/lib/chat-engine/tools/web-scraper';
+import { webScraperTool } from '@/lib/tools/web-scraper.tool';
 import { ensureProtocol } from '@/lib/utils/url-utils';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 

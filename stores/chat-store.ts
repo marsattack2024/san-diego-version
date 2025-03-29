@@ -165,34 +165,7 @@ export const useChatStore = create<ChatState>()(
         const messageWithId = message.id ? message : { ...message, id: uuidv4() };
         const timestamp = new Date().toISOString();
 
-        // Generate title from first user message if title is default
-        let newTitle = conversations[currentConversationId].title;
-        if (message.role === 'user') {
-          const currentTitle = conversations[currentConversationId].title;
-          // Auto-generate title from user message
-          if (currentTitle === 'New Chat' || currentTitle === 'Untitled Conversation' || !currentTitle) {
-            newTitle = message.content.substring(0, 30) + (message.content.length > 30 ? '...' : '');
-            console.log(`[ChatStore] Auto-generating title: "${newTitle}" from message: "${message.content}"`);
-
-            // Update title in the database
-            if (typeof window !== 'undefined') {
-              setTimeout(async () => {
-                try {
-                  console.debug(`[ChatStore] Updating chat title in database: ${currentConversationId} to "${newTitle}"`);
-                  await fetch(`/api/chat/${currentConversationId}`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title: newTitle })
-                  });
-                } catch (error) {
-                  console.error('Failed to update chat title in database:', error);
-                }
-              }, 100);
-            }
-          }
-        }
-
-        // Update local state with the new message and potentially new title
+        // Remove title generation from client-side
         set({
           conversations: {
             ...conversations,
@@ -200,7 +173,7 @@ export const useChatStore = create<ChatState>()(
               ...conversations[currentConversationId],
               messages: [...conversations[currentConversationId].messages, messageWithId],
               updatedAt: timestamp,
-              title: newTitle
+              // No title update here - handled by backend now
             }
           }
         });

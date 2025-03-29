@@ -9,7 +9,7 @@
 import { NextRequest } from 'next/server';
 import { createChatEngine, ChatEngineConfig } from '@/lib/chat-engine/core';
 import { detectAgentType } from '@/lib/chat-engine/agent-router';
-import { createToolSet } from '@/lib/chat-engine/tools/registry';
+import { createToolSet } from '@/lib/tools/registry.tool';
 import { prompts } from '@/lib/chat-engine/prompts';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createClient } from '@/utils/supabase/server';

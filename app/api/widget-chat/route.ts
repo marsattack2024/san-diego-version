@@ -7,7 +7,7 @@
  */
 
 import { createChatEngine } from '@/lib/chat-engine/core';
-import { widgetTools } from '@/lib/chat-engine/tools/registry';
+import { widgetTools } from '@/lib/tools/registry.tool';
 import { prompts } from '@/lib/chat-engine/prompts';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { NextRequest } from 'next/server';

@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { openai } from '@ai-sdk/openai';
 import { generateObject } from 'ai';
 import { AgentType, buildSystemPrompt } from './prompts';
-import { createToolSet } from './tools/registry';
+import { createToolSet } from '@/lib/tools/registry.tool';
 
 // Agent types and their configurations
 interface AgentConfig {

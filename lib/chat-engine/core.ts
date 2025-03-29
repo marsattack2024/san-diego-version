@@ -540,6 +540,52 @@ export class ChatEngine {
                             hasToolsUsed: !!toolsUsed,
                             requestId
                         });
+
+                        // NEW TITLE GENERATION CODE
+                        // Check if this is the first message in the conversation
+                        // We can do this by checking the message history length
+                        try {
+                            const supabase = await createClient();
+                            const { count, error: countError } = await supabase
+                                .from('sd_chat_histories')
+                                .select('id', { count: 'exact', head: true })
+                                .eq('session_id', sessionId);
+
+                            if (!countError && count !== null && count <= 2) { // 2 because we just saved the assistant message
+                                // Find the first user message in the context
+                                const firstUserMessage = context.messages.find(m => m.role === 'user');
+                                if (firstUserMessage && firstUserMessage.content) {
+                                    // Import title service and generate title asynchronously (fire and forget)
+                                    try {
+                                        const { generateAndSaveChatTitle } = await import('../chat/title-service');
+
+                                        // Don't await this to avoid blocking the response
+                                        generateAndSaveChatTitle(sessionId, firstUserMessage.content as string)
+                                            .catch(titleError => {
+                                                edgeLogger.error('Unhandled exception in title generation', {
+                                                    category: LOG_CATEGORIES.CHAT,
+                                                    operation: 'title_generation_error',
+                                                    chatId: sessionId,
+                                                    error: titleError instanceof Error ? titleError.message : String(titleError)
+                                                });
+                                            });
+                                    } catch (importError) {
+                                        edgeLogger.error('Failed to import title service', {
+                                            category: LOG_CATEGORIES.CHAT,
+                                            operation: 'title_import_error',
+                                            error: importError instanceof Error ? importError.message : String(importError)
+                                        });
+                                    }
+                                }
+                            }
+                        } catch (dbError) {
+                            edgeLogger.error('Error checking message count for title generation', {
+                                category: LOG_CATEGORIES.CHAT,
+                                operation: 'title_check_error',
+                                error: dbError instanceof Error ? dbError.message : String(dbError)
+                            });
+                        }
+                        // END TITLE GENERATION CODE
                     } catch (error) {
                         edgeLogger.error('Failed to save assistant message in onFinish callback', {
                             operation: operationName,

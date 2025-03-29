@@ -13,7 +13,7 @@ vi.mock('@/lib/services/perplexity.service', () => ({
 }));
 
 // Now import the modules that depend on the mocks
-import { deepSearchTool } from '@/lib/chat-engine/tools/deep-search';
+import { deepSearchTool } from '@/lib/tools/deep-search.tool';
 import { perplexityService } from '@/lib/services/perplexity.service';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
