@@ -47,7 +47,7 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
     const scrollRef = useRef<HTMLDivElement>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
-    // Auto scroll to bottom on new messages
+    // Auto scroll to bottom on new messages or status changes
     useEffect(() => {
         if (scrollRef.current && isOpen) {
             scrollRef.current.scrollTo({
@@ -55,7 +55,7 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
                 behavior: 'smooth'
             });
         }
-    }, [messages, isOpen]);
+    }, [messages, isOpen, status]);
 
     // Focus input when opening the widget
     useEffect(() => {
@@ -110,6 +110,29 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
 
         warmupAPI();
     }, []);
+
+    // Ensure messages end ref scrolls into view when status changes
+    useEffect(() => {
+        if (messagesEndRef.current && isOpen) {
+            messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+    }, [status, isOpen]);
+
+    // Add continuous scrolling during streaming
+    useEffect(() => {
+        if (status === 'streaming' && scrollRef.current && isOpen) {
+            const scrollInterval = setInterval(() => {
+                if (scrollRef.current) {
+                    scrollRef.current.scrollTo({
+                        top: scrollRef.current.scrollHeight,
+                        behavior: 'smooth'
+                    });
+                }
+            }, 500); // Check and scroll every 500ms during streaming
+
+            return () => clearInterval(scrollInterval);
+        }
+    }, [status, isOpen]);
 
     return (
         <div
@@ -179,53 +202,63 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
 
                         {/* Message list */}
                         <div className="space-y-4">
-                            {messages.map((message) => (
-                                <div
-                                    key={message.id}
-                                    className={cn(
-                                        "flex flex-col max-w-[80%] rounded-lg p-3",
-                                        message.role === 'user'
-                                            ? "ml-auto bg-primary/10 text-foreground"
-                                            : "mr-auto bg-muted text-muted-foreground"
-                                    )}
-                                >
-                                    <div className="whitespace-pre-wrap">
-                                        {/* If using parts API */}
-                                        {message.parts?.map((part, i) => (
-                                            part.type === 'text' ? <span key={i}>{part.text}</span> : null
-                                        )) || message.content}
+                            {messages.map((message) => {
+                                // Check if the message actually has displayable content
+                                const hasTextContent = !!message.content || (message.parts && message.parts.some(p => p.type === 'text' && p.text));
+
+                                // Skip rendering empty assistant messages (prevent gray line)
+                                if (message.role === 'assistant' && !hasTextContent) {
+                                    return null;
+                                }
+
+                                return (
+                                    <div
+                                        key={message.id}
+                                        className={cn(
+                                            "flex flex-col max-w-[80%] rounded-lg p-3 overflow-hidden",
+                                            message.role === 'user'
+                                                ? "ml-auto bg-primary/10 text-foreground"
+                                                : "mr-auto bg-muted text-muted-foreground"
+                                        )}
+                                    >
+                                        <div className="whitespace-pre-wrap break-words w-full">
+                                            {/* If using parts API */}
+                                            {message.parts?.map((part, i) => (
+                                                part.type === 'text' ? <span key={i}>{part.text}</span> : null
+                                            )) || message.content}
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
-
-                            {/* Loading indicator during message sending */}
-                            {status === 'streaming' && (
-                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                    <Loader className="h-3 w-3 animate-spin" />
-                                    <span>Processing...</span>
-                                </div>
-                            )}
-
-                            {/* Error message */}
-                            {error && (
-                                <div className="flex items-center gap-2 p-3 text-sm text-red-500 bg-red-50 rounded-lg">
-                                    <AlertCircle className="h-4 w-4" />
-                                    <span>{getErrorMessage()}</span>
-                                    {status !== 'streaming' && (
-                                        <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            onClick={() => reload()}
-                                            className="ml-auto text-xs"
-                                        >
-                                            Retry
-                                        </Button>
-                                    )}
-                                </div>
-                            )}
+                                );
+                            })}
 
                             <div ref={messagesEndRef} />
                         </div>
+
+                        {/* Processing indicator moved outside space-y-4 container */}
+                        {status === 'streaming' && (
+                            <div className="mt-4 flex items-center gap-2" style={{ marginLeft: '8px' }}>
+                                <Loader className="h-3 w-3 animate-spin text-muted-foreground" />
+                                <span className="text-xs text-muted-foreground">Processing...</span>
+                            </div>
+                        )}
+
+                        {/* Error message moved outside space-y-4 as well */}
+                        {error && (
+                            <div className="mt-4 flex items-center gap-2 p-3 text-sm text-red-500 bg-red-50 rounded-lg">
+                                <AlertCircle className="h-4 w-4" />
+                                <span>{getErrorMessage()}</span>
+                                {status !== 'streaming' && (
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => reload()}
+                                        className="ml-auto text-xs"
+                                    >
+                                        Retry
+                                    </Button>
+                                )}
+                            </div>
+                        )}
                     </ScrollArea>
 
                     {/* Input area */}

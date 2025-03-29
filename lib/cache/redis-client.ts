@@ -37,17 +37,19 @@ async function initializeRedisClient() {
     }
   });
 
-  // Validate environment variables
+  // Create a mock/fallback client if Redis is not available
   if (!url || !token) {
     const missingVars = [];
     if (!url) missingVars.push('KV_REST_API_URL/UPSTASH_REDIS_REST_URL');
     if (!token) missingVars.push('KV_REST_API_TOKEN/UPSTASH_REDIS_REST_TOKEN');
 
-    const error = `Missing required environment variables: ${missingVars.join(', ')}`;
-    edgeLogger.error(error, {
+    const warning = `Missing Redis environment variables: ${missingVars.join(', ')}. Using in-memory fallback.`;
+    edgeLogger.warn(warning, {
       category: LOG_CATEGORIES.SYSTEM
     });
-    throw new Error(error);
+
+    // Return a mock Redis client that uses in-memory storage
+    return createMockRedisClient();
   }
 
   try {
@@ -73,13 +75,58 @@ async function initializeRedisClient() {
     await redis.del('connection-test');
     return redis;
   } catch (error) {
-    edgeLogger.error('Failed to initialize Redis client', {
+    edgeLogger.error('Failed to initialize Redis client, using fallback', {
       category: LOG_CATEGORIES.SYSTEM,
       error: error instanceof Error ? error.message : String(error),
       url
     });
-    throw error;
+
+    // If connection fails, return the mock client
+    return createMockRedisClient();
   }
+}
+
+// Create a mock Redis client using in-memory storage for fallback
+function createMockRedisClient() {
+  edgeLogger.info('Creating in-memory cache fallback', {
+    category: LOG_CATEGORIES.SYSTEM
+  });
+
+  // Simple in-memory store with expiration handling
+  const store = new Map<string, { value: any, expiry: number | null }>();
+
+  return {
+    async set(key: string, value: any, options?: { ex?: number }): Promise<string> {
+      const expiry = options?.ex ? Date.now() + (options.ex * 1000) : null;
+      store.set(key, { value, expiry });
+      return 'OK';
+    },
+
+    async get(key: string): Promise<any> {
+      const item = store.get(key);
+      if (!item) return null;
+
+      // Check if the item has expired
+      if (item.expiry && item.expiry < Date.now()) {
+        store.delete(key);
+        return null;
+      }
+
+      return item.value;
+    },
+
+    async del(key: string): Promise<number> {
+      const deleted = store.delete(key);
+      return deleted ? 1 : 0;
+    },
+
+    async keys(pattern: string): Promise<string[]> {
+      // Simple pattern matching for keys
+      // This is a simplified implementation that doesn't support full Redis pattern syntax
+      const regex = new RegExp(pattern.replace('*', '.*'));
+      return Array.from(store.keys()).filter(key => regex.test(key));
+    }
+  };
 }
 
 // Initialize Redis client and export promise
