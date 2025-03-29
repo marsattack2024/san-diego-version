@@ -8,6 +8,8 @@
 
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
+// Import the cacheService for caching deep search results
+import { cacheService } from '@/lib/cache/cache-service';
 
 // Constants
 const INTERNAL_API_URL = "/api/perplexity";
@@ -68,6 +70,20 @@ class PerplexityService {
         try {
             // Ensure the client is initialized before proceeding
             this.initialize();
+
+            // Check cache first to avoid unnecessary API calls
+            const cachedResults = await cacheService.getDeepSearchResults<PerplexitySearchResult>(query);
+            if (cachedResults) {
+                edgeLogger.info("Using cached deep search results", {
+                    category: LOG_CATEGORIES.TOOLS,
+                    operation: "perplexity_cache_hit",
+                    operationId,
+                    queryLength: query.length,
+                    responseLength: cachedResults.content.length
+                });
+                
+                return cachedResults;
+            }
 
             // Runtime environment information for debugging
             const runtimeInfo = {
@@ -189,12 +205,26 @@ class PerplexityService {
                 durationMs: duration
             });
 
-            // Return formatted result
-            return {
+            // Create formatted result
+            const searchResult: PerplexitySearchResult = {
                 content,
                 model: data.model,
                 timing: { total: duration }
             };
+
+            // Cache the search result
+            await cacheService.setDeepSearchResults(query, searchResult);
+            
+            edgeLogger.debug("Perplexity result cached", {
+                category: LOG_CATEGORIES.TOOLS,
+                operation: "perplexity_result_cached",
+                operationId,
+                queryLength: query.length,
+                responseLength: content.length
+            });
+
+            // Return formatted result
+            return searchResult;
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             const duration = Date.now() - startTime;

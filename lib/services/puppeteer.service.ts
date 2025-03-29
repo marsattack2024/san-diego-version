@@ -8,7 +8,7 @@
 
 import { edgeLogger } from '../logger/edge-logger';
 import { LOG_CATEGORIES } from '../logger/constants';
-import { chatEngineCache } from '../chat-engine/cache-service';
+import { cacheService } from '../cache/cache-service';
 import { validateAndSanitizeUrl } from '@/lib/utils/url-utils';
 
 // Constants
@@ -83,7 +83,7 @@ class PuppeteerService {
             }
 
             // Check cache first
-            const cachedContent = await chatEngineCache.getScrapedContent(sanitizedUrl);
+            const cachedContent = await cacheService.getScrapedContent(sanitizedUrl);
             if (cachedContent) {
                 const cachedResult = JSON.parse(cachedContent) as PuppeteerResponseData;
 
@@ -114,7 +114,7 @@ class PuppeteerService {
             const result = await this.callPuppeteerScraper(sanitizedUrl);
 
             // Cache result
-            await chatEngineCache.setScrapedContent(sanitizedUrl, JSON.stringify(result));
+            await cacheService.setScrapedContent(sanitizedUrl, JSON.stringify(result));
 
             const duration = Date.now() - startTime;
 
@@ -256,7 +256,7 @@ class PuppeteerService {
         const content = data.text || '';
 
         // Calculate statistics for logging
-        const stats = this.calculateStats(data);
+        const stats = this.calculateStats(content);
 
         // Return the formatted content
         return formattedContent + content;
@@ -264,20 +264,22 @@ class PuppeteerService {
 
     /**
      * Calculate statistics about the scraped content
-     * @param data Raw Puppeteer response data
+     * @param content The scraped content
      * @returns Statistics about the content
      */
-    private calculateStats(data: PuppeteerResponseData): ScraperStats {
-        const content = data.content || data.text || '';
-        const wordCount = content.split(/\s+/).filter(Boolean).length;
+    private calculateStats(content: string): ScraperStats {
         const characterCount = content.length;
+        const wordCount = content.split(/\s+/).filter(Boolean).length;
+        const paragraphCount = content.split(/\n\s*\n/).filter(Boolean).length;
+        const linkCount = (content.match(/https?:\/\/[^\s]+/g) || []).length;
+        const headingCount = (content.match(/^#+\s+.+$/gm) || []).length;
 
         return {
             characterCount,
             wordCount,
-            paragraphCount: 0, // Would require more parsing to determine paragraphs
-            linkCount: data.links?.length || 0,
-            headingCount: 0 // Would require more parsing to determine headings
+            paragraphCount,
+            linkCount,
+            headingCount
         };
     }
 }

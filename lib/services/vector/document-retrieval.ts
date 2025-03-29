@@ -1,6 +1,6 @@
 import { logger } from '@/lib/logger';
-// Update import to use redis-client directly
-import { redisCache } from '@/lib/cache/redis-client';
+// Remove redisCache import and replace with cacheService
+import { cacheService } from '@/lib/cache/cache-service';
 import { THRESHOLDS } from '@/lib/logger/edge-logger';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES, OPERATION_TYPES } from '@/lib/logger/constants';
@@ -33,12 +33,6 @@ export interface DocumentSearchMetrics {
     isSlowQuery: boolean;
     fromCache?: boolean;
 }
-
-// Cache constants
-const CACHE_TTL = {
-    RAG_RESULTS: 12 * 60 * 60, // 12 hours default
-    SHORT: 1 * 60 * 60 // 1 hour for frequent updates
-};
 
 // Cache statistics for monitoring
 const cacheStats = {
@@ -103,32 +97,7 @@ function calculateSearchMetrics(documents: RetrievedDocument[], retrievalTimeMs:
     };
 }
 
-// Generate a consistent cache key for RAG queries
-async function generateConsistentCacheKey(queryText: string, options: DocumentSearchOptions = {}): Promise<string> {
-    // Create a stable representation of the query and relevant options
-    const keyContent = {
-        query: queryText.toLowerCase().trim(),
-        filter: options.metadataFilter || {},
-        limit: options.limit || 10
-    };
-
-    // Use Web Crypto API for hashing to ensure consistency
-    const msgUint8 = new TextEncoder().encode(JSON.stringify(keyContent));
-    const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-
-    // Return just the first 16 characters of the hash for a shorter key
-    return hashHex.slice(0, 16);
-}
-
-// Helper function to create a tenant-specific RAG cache key
-async function createRagCacheKey(tenantId: string, query: string): Promise<string> {
-    const hash = await generateConsistentCacheKey(query);
-    return `${tenantId}:rag:${hash}`;
-}
-
-// Updated implementation to use the centralized Redis cache directly
+// Updated implementation to use the centralized CacheService
 export async function findSimilarDocumentsOptimized(
     queryText: string,
     options: DocumentSearchOptions = {}
@@ -137,51 +106,49 @@ export async function findSimilarDocumentsOptimized(
     const startTime = performance.now();
     const tenantId = options.tenantId || 'global';
 
-    // Generate cache key
-    const cacheKey = await createRagCacheKey(tenantId, queryText);
-
     // Log the start of the RAG operation with cache check
     edgeLogger.info('Starting RAG operation with cache check', {
         operation: OPERATION_TYPES.RAG_SEARCH,
         ragOperationId,
         queryLength: queryText.length,
-        queryPreview: queryText.substring(0, 20) + '...',
-        cacheKey
+        queryPreview: queryText.substring(0, 20) + '...'
     });
 
     try {
-        const cachedResults = await redisCache.get(cacheKey);
+        // Use the cacheService for RAG results, passing options with tenantId
+        const cachedResults = await cacheService.getRagResults<{
+            documents: RetrievedDocument[],
+            metrics: DocumentSearchMetrics
+        }>(queryText, { 
+            tenantId, 
+            metadataFilter: options.metadataFilter,
+            limit: options.limit 
+        });
 
         // Log cache check attempt
         edgeLogger.debug('RAG cache check completed', {
             operation: 'rag_cache_check',
             ragOperationId,
-            cacheHit: !!cachedResults,
-            valueType: cachedResults ? typeof cachedResults : 'null'
+            cacheHit: !!cachedResults
         });
 
         if (cachedResults) {
-            try {
-                const parsed = JSON.parse(typeof cachedResults === 'string' ? cachedResults : '');
+            edgeLogger.info('Using cached RAG results', {
+                operation: OPERATION_TYPES.RAG_SEARCH,
+                ragOperationId,
+                documentCount: cachedResults.documents.length,
+                source: 'cache'
+            });
 
-                if (parsed && parsed.documents && Array.isArray(parsed.documents)) {
-                    edgeLogger.info('Using cached RAG results', {
-                        operation: OPERATION_TYPES.RAG_SEARCH,
-                        ragOperationId,
-                        documentCount: parsed.documents.length,
-                        source: 'cache'
-                    });
-
-                    cacheStats.hits++;
-                    return parsed;
+            cacheStats.hits++;
+            // Add fromCache flag for transparency
+            return {
+                ...cachedResults,
+                metrics: {
+                    ...cachedResults.metrics,
+                    fromCache: true
                 }
-            } catch (parseError) {
-                edgeLogger.warn('Failed to parse cached RAG results', {
-                    operation: OPERATION_TYPES.RAG_SEARCH,
-                    ragOperationId,
-                    error: parseError instanceof Error ? parseError.message : String(parseError)
-                });
-            }
+            };
         }
 
         cacheStats.misses++;
@@ -196,16 +163,19 @@ export async function findSimilarDocumentsOptimized(
         // Create result object
         const result = { documents, metrics };
 
-        // Cache the results for future use
-        await redisCache.set(cacheKey, JSON.stringify(result), CACHE_TTL.RAG_RESULTS);
+        // Cache the results using the standardized approach
+        await cacheService.setRagResults(queryText, result, {
+            tenantId,
+            metadataFilter: options.metadataFilter,
+            limit: options.limit
+        });
 
         edgeLogger.info('RAG search completed', {
             operation: OPERATION_TYPES.RAG_SEARCH,
             ragOperationId,
             documentCount: documents.length,
             retrievalTimeMs,
-            source: 'search',
-            cacheKey
+            source: 'search'
         });
 
         return result;
@@ -235,29 +205,22 @@ export async function findSimilarDocumentsOptimized(
     }
 }
 
-// Helper function to cache scraped web content 
+// Update the cacheScrapedContent function to use cacheService
 export async function cacheScrapedContent(tenantId: string, url: string, content: string): Promise<void> {
     try {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(url);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-
-        const key = `${tenantId}:scrape:${hashHex.slice(0, 16)}`;
-        await redisCache.set(key, content, CACHE_TTL.RAG_RESULTS);
-
+        await cacheService.setScrapedContent(url, content);
+        
         edgeLogger.debug('Cached scraped content', {
-            category: LOG_CATEGORIES.SYSTEM,
-            url,
-            contentLength: content.length,
-            key
+            category: LOG_CATEGORIES.TOOLS,
+            tenantId,
+            urlLength: url.length
         });
     } catch (error) {
         edgeLogger.error('Failed to cache scraped content', {
-            category: LOG_CATEGORIES.SYSTEM,
-            url,
-            error: error instanceof Error ? error.message : String(error)
+            category: LOG_CATEGORIES.TOOLS,
+            error: error instanceof Error ? error.message : String(error),
+            tenantId,
+            urlLength: url.length
         });
     }
 }
@@ -265,18 +228,13 @@ export async function cacheScrapedContent(tenantId: string, url: string, content
 // Helper function to retrieve cached scraped content
 export async function getCachedScrapedContent(tenantId: string, url: string): Promise<string | null> {
     try {
-        const encoder = new TextEncoder();
-        const data = encoder.encode(url);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-
-        const key = `${tenantId}:scrape:${hashHex.slice(0, 16)}`;
-        return await redisCache.get(key);
+        // Use the cacheService instead of direct Redis access and custom hashing
+        return await cacheService.getScrapedContent(url);
     } catch (error) {
         edgeLogger.error('Failed to retrieve cached scraped content', {
             category: LOG_CATEGORIES.SYSTEM,
             url,
+            tenantId,
             error: error instanceof Error ? error.message : String(error)
         });
         return null;

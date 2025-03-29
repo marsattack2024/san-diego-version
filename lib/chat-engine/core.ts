@@ -8,7 +8,7 @@ import { extractUrls } from '@/lib/utils/url-utils';
 import { openai } from '@ai-sdk/openai';
 
 // Import the centralized cache service and message history service
-import { chatEngineCache } from './cache-service';
+import { cacheService } from '@/lib/cache/cache-service';
 import { MessagePersistenceService } from './message-persistence';
 
 /**

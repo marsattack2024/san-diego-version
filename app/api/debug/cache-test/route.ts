@@ -2,164 +2,145 @@ import { NextRequest, NextResponse } from 'next/server';
 import { edgeLogger } from '../../../../lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '../../../../lib/logger/constants';
 import { Redis } from '@upstash/redis';
+import { cacheService } from '@/lib/cache/cache-service';
 
 /**
  * API endpoint to test the Redis caching system.
  * Tests setting and getting different data types and checks for serialization issues.
+ * 
+ * NOTE: This endpoint does not require authentication for testing purposes only.
+ * It should be removed or secured in production.
  */
-export async function GET(_request: NextRequest) {
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const operation = searchParams.get('operation') || 'get';
+  const key = searchParams.get('key') || 'test-key';
+  const value = searchParams.get('value') || `test-value-${Date.now()}`;
+  const ttl = searchParams.get('ttl') ? parseInt(searchParams.get('ttl')!) : undefined;
+  const query = searchParams.get('query') || 'test query';
+  const url = searchParams.get('url') || 'https://example.com';
+  const options = searchParams.get('options') ? JSON.parse(searchParams.get('options')!) : { tenantId: 'test' };
+  
+  const runtime = typeof (globalThis as any).EdgeRuntime === 'string' ? 'edge' : 'node';
+  
+  const startTime = Date.now();
+  let result: any = null;
+  let error: any = null;
+  
   try {
-    // Use Redis.fromEnv() for consistent initialization across the codebase
-    const redis = Redis.fromEnv();
-    
-    // Perform a connection test first
-    try {
-      await redis.set('connection-test', 'ok', { ex: 60 });
-      const testResult = await redis.get('connection-test');
-      
-      if (testResult !== 'ok') {
-        throw new Error('Connection test failed');
-      }
-      
-      // Log successful connection
-      edgeLogger.info('Redis connection test successful for cache test endpoint', {
-        category: LOG_CATEGORIES.SYSTEM
-      });
-    } catch (connError) {
-      edgeLogger.error('Redis connection test failed for cache test endpoint', {
-        category: LOG_CATEGORIES.SYSTEM,
-        error: connError instanceof Error ? connError.message : String(connError)
-      });
-      
-      // Return error response if the Redis connection fails
-      return NextResponse.json({
-        success: false,
-        error: 'Redis connection failed',
-        details: connError instanceof Error ? connError.message : String(connError)
-      }, { status: 500 });
-    }
-    
-    // Generate a unique key for testing
-    const testKey = `test:cache:${Date.now()}`;
-    
-    // Create a test object with various data types
-    const testObject = {
-      string: "Test string value",
-      number: 12345,
-      boolean: true,
-      array: [1, 2, 3, "test", { nested: "object" }],
-      object: {
-        name: "Test object",
-        properties: {
-          deeply: {
-            nested: "value"
-          }
-        }
-      },
-      date: new Date().toISOString(),
-      nullValue: null
-    };
-    
-    // Log test start
-    edgeLogger.info('Starting cache test', {
+    edgeLogger.info('Cache test operation', {
       category: LOG_CATEGORIES.SYSTEM,
-      testKey
+      operation: `cache_test_${operation}`,
+      key,
+      runtime,
+      env: process.env.NODE_ENV
     });
     
-    // Set the test object in cache - direct Redis usage
-    await redis.set(testKey, JSON.stringify(testObject), { ex: 60 });
-    
-    // Get the object back
-    let retrievedObject = null;
-    let retrievalError = null;
-    
-    try {
-      const rawResult = await redis.get(testKey);
-      if (rawResult && typeof rawResult === 'string') {
-        retrievedObject = JSON.parse(rawResult);
-      } else {
-        retrievedObject = rawResult;
+    // Test different cache operations based on the "operation" parameter
+    switch (operation) {
+      case 'set': {
+        await cacheService.set(key, value, ttl ? { ttl } : undefined);
+        result = { success: true, message: `Value set for key: ${key}` };
+        break;
       }
-    } catch (error) {
-      retrievalError = error instanceof Error ? error.message : String(error);
+      
+      case 'get': {
+        const cachedValue = await cacheService.get(key);
+        result = { 
+          success: true,
+          message: cachedValue ? `Value retrieved for key: ${key}` : `No value found for key: ${key}`,
+          value: cachedValue
+        };
+        break;
+      }
+      
+      case 'delete': {
+        await cacheService.delete(key);
+        result = { success: true, message: `Key deleted: ${key}` };
+        break;
+      }
+      
+      case 'rag': {
+        // Test RAG-specific methods
+        if (operation.includes('set')) {
+          const mockResults = { documents: [{ id: 1, content: 'Test content', score: 0.95 }] };
+          await cacheService.setRagResults(query, mockResults, options);
+          result = { success: true, message: `RAG results set for query: ${query}` };
+        } else {
+          const cachedResults = await cacheService.getRagResults(query, options);
+          result = {
+            success: true,
+            message: cachedResults ? `RAG results retrieved for query: ${query}` : `No RAG results found for query: ${query}`,
+            value: cachedResults
+          };
+        }
+        break;
+      }
+      
+      case 'scraper': {
+        // Test scraper-specific methods
+        if (operation.includes('set')) {
+          const scrapedContent = `<div>Scraped content for ${url} at ${new Date().toISOString()}</div>`;
+          await cacheService.setScrapedContent(url, scrapedContent);
+          result = { success: true, message: `Scraped content set for URL: ${url}` };
+        } else {
+          const cachedContent = await cacheService.getScrapedContent(url);
+          result = {
+            success: true,
+            message: cachedContent ? `Scraped content retrieved for URL: ${url}` : `No scraped content found for URL: ${url}`,
+            value: cachedContent
+          };
+        }
+        break;
+      }
+      
+      case 'deep-search': {
+        // Test deep search-specific methods
+        if (operation.includes('set')) {
+          const searchResults = { content: `Deep search results for "${query}"`, model: 'test-model' };
+          await cacheService.setDeepSearchResults(query, searchResults);
+          result = { success: true, message: `Deep search results set for query: ${query}` };
+        } else {
+          const cachedResults = await cacheService.getDeepSearchResults(query);
+          result = {
+            success: true,
+            message: cachedResults ? `Deep search results retrieved for query: ${query}` : `No deep search results found for query: ${query}`,
+            value: cachedResults
+          };
+        }
+        break;
+      }
+      
+      default: {
+        result = { success: false, message: `Unknown operation: ${operation}` };
+      }
     }
-    
-    // Clean up
-    await redis.set(testKey, null, { ex: 1 }); // Short TTL for cleanup
-    
-    // JSON string to test serialization
-    const jsonString = JSON.stringify({ data: "This is a JSON string" });
-    const jsonStringKey = `${testKey}:json-string`;
-    
-    // Set and get a JSON string
-    let retrievedJsonString = null;
-    let jsonStringError = null;
-    
-    try {
-      await redis.set(jsonStringKey, jsonString, { ex: 60 });
-      const result = await redis.get(jsonStringKey);
-      retrievedJsonString = result;
-    } catch (error) {
-      jsonStringError = error instanceof Error ? error.message : String(error);
-    }
-    
-    await redis.set(jsonStringKey, null, { ex: 1 }); // Clean up
-    
-    // Test a regular string
-    const regularString = "This is a regular string";
-    const regularStringKey = `${testKey}:regular-string`;
-    
-    let retrievedRegularString = null;
-    let regularStringError = null;
-    
-    try {
-      await redis.set(regularStringKey, regularString, { ex: 60 });
-      retrievedRegularString = await redis.get(regularStringKey);
-    } catch (error) {
-      regularStringError = error instanceof Error ? error.message : String(error);
-    }
-    
-    await redis.set(regularStringKey, null, { ex: 1 }); // Clean up
-    
-    // Prepare response data
-    const responseData = {
-      success: true,
-      testKey,
-      originalObject: testObject,
-      retrievedObject,
-      objectEquality: JSON.stringify(testObject) === JSON.stringify(retrievedObject),
-      objectRetrievalError: retrievalError,
-      jsonStringTest: {
-        original: jsonString,
-        retrieved: retrievedJsonString,
-        retrievedType: typeof retrievedJsonString,
-        isEqual: jsonString === retrievedJsonString || 
-                 (retrievedJsonString && typeof retrievedJsonString === 'object' && 
-                  JSON.stringify(JSON.parse(jsonString)) === JSON.stringify(retrievedJsonString)),
-        error: jsonStringError
-      },
-      regularStringTest: {
-        original: regularString,
-        retrieved: retrievedRegularString,
-        retrievedType: typeof retrievedRegularString,
-        isEqual: regularString === retrievedRegularString,
-        error: regularStringError
-      },
-      cacheParseError: null,
-      timeToLive: 60 // 60 second TTL for test keys
+  } catch (err) {
+    error = {
+      message: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : 'No stack available'
     };
     
-    return NextResponse.json(responseData);
-  } catch (error) {
     edgeLogger.error('Cache test error', {
       category: LOG_CATEGORIES.SYSTEM,
-      error: error instanceof Error ? error.message : String(error)
+      operation: `cache_test_error`,
+      error: error.message,
+      runtime
     });
-    
-    return NextResponse.json({
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined
-    }, { status: 500 });
   }
+  
+  const duration = Date.now() - startTime;
+  
+  return NextResponse.json({
+    operation,
+    key,
+    runtime,
+    environment: process.env.NODE_ENV,
+    durationMs: duration,
+    result,
+    error,
+    timestamp: new Date().toISOString()
+  }, {
+    status: error ? 500 : 200
+  });
 } 
