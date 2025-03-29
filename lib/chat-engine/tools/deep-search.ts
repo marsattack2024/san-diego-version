@@ -10,7 +10,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { perplexityService } from '../services/perplexity.service';
+import { perplexityService } from '@/lib/services/perplexity.service';
 
 // Define tool parameters schema using Zod
 const deepSearchSchema = z.object({

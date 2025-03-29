@@ -11,6 +11,7 @@ import { z } from 'zod';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { extractUrls } from '@/lib/chat/url-utils';
+import { puppeteerService } from '../../services/puppeteer.service';
 
 // Define tool parameters schema using Zod
 const webScraperSchema = z.object({
@@ -82,24 +83,47 @@ export function createWebScraperTool(options: WebScraperToolOptions = {}) {
                     urls: urlsToProcess
                 });
 
-                // TODO: Implement actual web scraping logic
-                // This is a placeholder that will be replaced with the actual implementation
-                // The actual implementation will:
-                // 1. Fetch content from each URL
-                // 2. Parse HTML to extract meaningful content
-                // 3. Format content for use by the AI
-                const scrapedContent = urlsToProcess.map(url => ({
-                    url,
-                    title: `Page title for ${url}`,
-                    content: `Placeholder content for ${url}. This will be replaced with actual scraped content.`
-                }));
+                // Process each URL using the puppeteerService
+                const scrapedResults = await Promise.all(
+                    urlsToProcess.map(async (url) => {
+                        try {
+                            // Use the puppeteerService to scrape the URL
+                            const result = await puppeteerService.scrapeUrl(url);
+                            return {
+                                url,
+                                title: result.title || `Content from ${url}`,
+                                content: result.content,
+                                success: true
+                            };
+                        } catch (error) {
+                            // Handle errors for individual URLs
+                            edgeLogger.warn(`Failed to scrape URL: ${url}`, {
+                                category: LOG_CATEGORIES.TOOLS,
+                                operation: `${operationName}_url_error`,
+                                toolCallId,
+                                url,
+                                error: error instanceof Error ? error.message : String(error)
+                            });
+
+                            return {
+                                url,
+                                title: `Failed to scrape ${url}`,
+                                content: `Could not retrieve content: ${error instanceof Error ? error.message : String(error)}`,
+                                success: false
+                            };
+                        }
+                    })
+                );
 
                 // Calculate duration
                 const durationMs = Date.now() - startTime;
 
                 // Format the content for the AI
-                const formattedContent = scrapedContent
-                    .map(item => `## ${item.title}\nURL: ${item.url}\n\n${item.content}`)
+                const formattedContent = scrapedResults
+                    .map(item => {
+                        const statusIndicator = item.success ? '✓' : '✗';
+                        return `## ${item.title} ${statusIndicator}\nURL: ${item.url}\n\n${item.content}`;
+                    })
                     .join('\n\n---\n\n');
 
                 // Log completion
@@ -108,6 +132,8 @@ export function createWebScraperTool(options: WebScraperToolOptions = {}) {
                     operation: operationName,
                     toolCallId,
                     urlCount: urlsToProcess.length,
+                    successCount: scrapedResults.filter(r => r.success).length,
+                    failureCount: scrapedResults.filter(r => !r.success).length,
                     durationMs,
                     query
                 });
