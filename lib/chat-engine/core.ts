@@ -608,23 +608,52 @@ export class ChatEngine {
                         const isFirstMessage = async () => {
                             try {
                                 const supabase = await createClient();
+
+                                // First get history from sd_messages table
                                 const { count, error } = await supabase
                                     .from('sd_messages')
                                     .select('id', { count: 'exact', head: true })
                                     .eq('session_id', sessionId);
 
-                                // If this is the first or second message (including the current one)
+                                // If this is the first or second message in this conversation
                                 // The first is typically system, second is user's first message
-                                const shouldGenerateTitle = !error && count !== null && count <= 2;
+                                // Note: When a session is new, count might be null
+                                const messageCount = count === null ? 0 : count;
+                                const shouldGenerateTitle = !error && messageCount <= 2;
 
                                 edgeLogger.debug('Title generation check - message count', {
                                     category: 'chat',
                                     operation: 'title_count_check',
                                     chatId: sessionId,
-                                    count: count,
+                                    count: messageCount,
+                                    rawCount: count,
                                     hasCountError: !!error,
                                     shouldGenerateTitle
                                 });
+
+                                // If there's an error or no messages, check if this is a new session
+                                if (error || count === null) {
+                                    // Try querying the sessions table to see if this session exists but is new
+                                    const { data: sessionData, error: sessionError } = await supabase
+                                        .from('sd_chat_sessions')
+                                        .select('title')
+                                        .eq('id', sessionId)
+                                        .single();
+
+                                    // If session exists and has default title, we should generate a new one
+                                    if (!sessionError && sessionData &&
+                                        (sessionData.title === 'New Conversation' ||
+                                            !sessionData.title)) {
+
+                                        edgeLogger.info('New session detected, will generate title', {
+                                            category: 'chat',
+                                            operation: 'title_check_new_session',
+                                            chatId: sessionId
+                                        });
+
+                                        return true;
+                                    }
+                                }
 
                                 return shouldGenerateTitle;
                             } catch (countError) {
@@ -633,8 +662,10 @@ export class ChatEngine {
                                     error: countError instanceof Error ? countError.message : String(countError),
                                     chatId: sessionId
                                 });
-                                // Default to false on error
-                                return false;
+
+                                // For new conversations, default to true when we can't determine count
+                                // This ensures new conversations get titles
+                                return true;
                             }
                         };
 
@@ -700,80 +731,7 @@ export class ChatEngine {
                             'x-auth-state': 'authenticated'
                         };
 
-                        // PRIMARY APPROACH: Direct database update - most reliable method
-                        try {
-                            const directSupabase = await createClient();
-
-                            // First, directly update the title in the database
-                            // This bypasses the API and ensures the title is updated
-                            // Use a simpler title generation approach without external dependencies
-                            const cleanedTitle = messageContent
-                                .substring(0, 50)
-                                .split(' ')
-                                .slice(0, 6)
-                                .join(' ') + '...';
-
-                            // Update the database directly
-                            const { error } = await directSupabase
-                                .from('sd_chat_sessions')
-                                .update({
-                                    title: cleanedTitle,
-                                    updated_at: new Date().toISOString()
-                                })
-                                .eq('id', sessionId);
-
-                            if (error) {
-                                edgeLogger.error('Direct title update failed', {
-                                    category: 'system',
-                                    error: error.message,
-                                    chatId: sessionId,
-                                });
-                            } else {
-                                edgeLogger.info('Direct title update succeeded', {
-                                    category: 'system',
-                                    title: cleanedTitle,
-                                    chatId: sessionId,
-                                });
-
-                                // Update zustand store with the new title
-                                try {
-                                    // Only attempt to update the store in browser environments
-                                    if (typeof window !== 'undefined') {
-                                        const { useChatStore } = await import('@/stores/chat-store');
-                                        const { updateConversationTitle } = useChatStore.getState();
-                                        updateConversationTitle(sessionId, cleanedTitle);
-
-                                        edgeLogger.info('Title generated and store updated successfully', {
-                                            category: 'system',
-                                            chatId: sessionId,
-                                            title: cleanedTitle,
-                                            method: 'direct-database',
-                                            important: true
-                                        });
-                                    }
-                                    // Since direct DB update succeeded, return early - no need for API call
-                                    return;
-                                } catch (storeError) {
-                                    edgeLogger.warn('Store update failed but DB update succeeded', {
-                                        category: 'system',
-                                        error: storeError instanceof Error ? storeError.message : String(storeError),
-                                    });
-                                }
-                            }
-                        } catch (directError) {
-                            edgeLogger.error('Direct title generation failed', {
-                                category: 'system',
-                                error: directError instanceof Error ? directError.message : String(directError),
-                                chatId: sessionId,
-                            });
-                        }
-
-                        // FALLBACK APPROACH: If direct update failed, try API approach
-                        edgeLogger.info('Direct database update failed, falling back to API approach', {
-                            category: 'system',
-                            chatId: sessionId,
-                        });
-
+                        // Prepare cookies for authentication
                         let cookieHeader = ''; // Define cookieHeader variable at this scope
                         try {
                             // Need to import cookies as fallback
@@ -808,7 +766,7 @@ export class ChatEngine {
                             });
                         }
 
-                        // Create a direct supabase client for the title API call if needed
+                        // Get JWT token for authorization header
                         try {
                             const authClient = await createClient();
 
@@ -837,15 +795,14 @@ export class ChatEngine {
                             });
                         }
 
-                        // Set up backup API fetch request
-                        // This is a backup approach only used if direct DB update fails
-                        // but leaving the API call logic in place for completeness
+                        // Call the title generation API with all authentication mechanisms
                         fetch(`${baseUrl}/api/chat/update-title`, {
                             method: 'POST',
                             headers: {
                                 ...authHeaders,
                                 ...(cookieHeader ? { 'Cookie': cookieHeader } : {})
                             },
+                            credentials: 'include',
                             cache: 'no-store', // Ensure fresh data - no caching
                             body: JSON.stringify({
                                 sessionId,
@@ -867,16 +824,19 @@ export class ChatEngine {
 
                                             // Update Zustand store
                                             try {
-                                                // Use dynamic import to avoid SSR issues
-                                                const { useChatStore } = await import('@/stores/chat-store');
-                                                const { updateConversationTitle } = useChatStore.getState();
-                                                updateConversationTitle(sessionId, data.title);
+                                                // Only attempt to update the store in browser environments
+                                                if (typeof window !== 'undefined') {
+                                                    // Use dynamic import to avoid SSR issues
+                                                    const { useChatStore } = await import('@/stores/chat-store');
+                                                    const { updateConversationTitle } = useChatStore.getState();
+                                                    updateConversationTitle(sessionId, data.title);
 
-                                                edgeLogger.debug('Zustand store updated with new title', {
-                                                    category: LOG_CATEGORIES.CHAT,
-                                                    operation: 'title_update_store',
-                                                    chatId: sessionId
-                                                });
+                                                    edgeLogger.debug('Zustand store updated with new title', {
+                                                        category: LOG_CATEGORIES.CHAT,
+                                                        operation: 'title_update_store',
+                                                        chatId: sessionId
+                                                    });
+                                                }
                                             } catch (storeError) {
                                                 edgeLogger.warn('Failed to update Zustand store with new title', {
                                                     category: LOG_CATEGORIES.CHAT,

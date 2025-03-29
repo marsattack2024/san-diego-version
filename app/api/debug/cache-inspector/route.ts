@@ -18,24 +18,24 @@ export async function GET(request: NextRequest) {
     const key = searchParams.get('key');
 
     if (!key) {
-      return NextResponse.json({ 
-        error: 'Missing required parameter: key', 
-        usage: '/api/debug/cache-inspector?key=your-cache-key' 
+      return NextResponse.json({
+        error: 'Missing required parameter: key',
+        usage: '/api/debug/cache-inspector?key=your-cache-key'
       }, { status: 400 });
     }
 
     // Use Redis.fromEnv() for consistent initialization
     const redis = Redis.fromEnv();
-    
+
     // Perform a connection test first
     try {
       await redis.set('connection-test', 'ok', { ex: 60 });
       const testResult = await redis.get('connection-test');
-      
+
       if (testResult !== 'ok') {
         throw new Error('Connection test failed');
       }
-      
+
       // Log successful connection
       edgeLogger.info('Redis connection test successful for cache inspector', {
         category: LOG_CATEGORIES.SYSTEM
@@ -47,13 +47,13 @@ export async function GET(request: NextRequest) {
         error: connError instanceof Error ? connError.message : String(connError)
       });
     }
-    
+
     const rawValue = await redis.get<string>(key);
 
     if (!rawValue) {
-      return NextResponse.json({ 
-        error: 'Cache key not found', 
-        key 
+      return NextResponse.json({
+        error: 'Cache key not found',
+        key
       }, { status: 404 });
     }
 
@@ -86,13 +86,13 @@ export async function GET(request: NextRequest) {
       diagnostics.parsedValue.directParse = {
         type: typeof parsed,
         isArray: Array.isArray(parsed),
-        preview: typeof parsed === 'object' 
+        preview: typeof parsed === 'object'
           ? JSON.stringify(parsed).substring(0, 100) + (JSON.stringify(parsed).length > 100 ? '...' : '')
           : String(parsed).substring(0, 100) + (String(parsed).length > 100 ? '...' : '')
       };
     } catch (error) {
-      diagnostics.parsedValue.directParseError = error instanceof Error 
-        ? error.message 
+      diagnostics.parsedValue.directParseError = error instanceof Error
+        ? error.message
         : String(error);
     }
 
@@ -101,29 +101,29 @@ export async function GET(request: NextRequest) {
       try {
         // Extract the inner string by removing the outer quotes and unescaping
         const innerString = rawValue.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
-        
+
         diagnostics.parsedValue.innerStringAttempt = {
           innerStringPreview: innerString.substring(0, 100) + (innerString.length > 100 ? '...' : ''),
           innerStringLength: innerString.length
         };
-        
+
         try {
           const parsedInner = JSON.parse(innerString);
           diagnostics.parsedValue.innerStringParse = {
             type: typeof parsedInner,
             isArray: Array.isArray(parsedInner),
-            preview: typeof parsedInner === 'object' 
+            preview: typeof parsedInner === 'object'
               ? JSON.stringify(parsedInner).substring(0, 100) + (JSON.stringify(parsedInner).length > 100 ? '...' : '')
               : String(parsedInner).substring(0, 100) + (String(parsedInner).length > 100 ? '...' : '')
           };
         } catch (innerError) {
-          diagnostics.parsedValue.innerStringParseError = innerError instanceof Error 
-            ? innerError.message 
+          diagnostics.parsedValue.innerStringParseError = innerError instanceof Error
+            ? innerError.message
             : String(innerError);
         }
       } catch (error) {
-        diagnostics.parsedValue.innerStringAttemptError = error instanceof Error 
-          ? error.message 
+        diagnostics.parsedValue.innerStringAttemptError = error instanceof Error
+          ? error.message
           : String(error);
       }
     }

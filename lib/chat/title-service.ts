@@ -4,9 +4,8 @@ import { cacheService } from '../cache/cache-service';
 import { openai } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 
-// Cache keys
+// Cache keys - used only for basic tracking, no locking or rate limiting
 const TITLE_GENERATION_ATTEMPTS_KEY = 'title_generation:attempts';
-const TITLE_GENERATION_LOCK_KEY = 'title_generation:lock';
 
 /**
  * Clean and validate a title from the AI response
@@ -48,7 +47,9 @@ async function getCurrentTitle(chatId: string, userId?: string): Promise<string 
 
         const durationMs = Math.round(performance.now() - startTime);
 
-        if (data?.title && data.title !== 'New Chat' && data.title !== 'Untitled Conversation') {
+        // Log if a non-default title already exists
+        const defaultTitles = ['New Chat', 'Untitled Conversation', 'New Conversation', null, undefined, ''];
+        if (data?.title && !defaultTitles.includes(data.title)) {
             titleLogger.titleExists({
                 chatId,
                 currentTitle: data.title,
@@ -123,44 +124,7 @@ async function updateTitleInDatabase(chatId: string, newTitle: string, userId?: 
 }
 
 /**
- * Simple counter implementation for rate limiting
- */
-async function incrementCounter(key: string, increment: number, ttlSeconds: number): Promise<number> {
-    try {
-        // Use Redis directly through the cacheService's Redis client
-        const redis = await (cacheService as any).redisPromise;
-        const value = await redis.incrby(key, increment);
-
-        // Set expiry if it doesn't exist yet
-        if (increment === 1) {
-            await redis.expire(key, ttlSeconds);
-        }
-
-        return value;
-    } catch (error) {
-        console.error('Error incrementing counter:', error);
-        return 0;
-    }
-}
-
-/**
- * Set key only if it doesn't exist (NX in Redis)
- */
-async function setNX(key: string, value: string, ttlSeconds: number): Promise<boolean> {
-    try {
-        // Use Redis directly through the cacheService's Redis client
-        const redis = await (cacheService as any).redisPromise;
-        const result = await redis.set(key, value, { nx: true, ex: ttlSeconds });
-        return result === 'OK';
-    } catch (error) {
-        console.error('Error setting NX:', error);
-        return false;
-    }
-}
-
-/**
  * Generate and save a title for a chat session based on first user message
- * Uses Redis for rate limiting and locking to prevent duplicate work
  */
 export async function generateAndSaveChatTitle(
     chatId: string,
@@ -173,119 +137,75 @@ export async function generateAndSaveChatTitle(
     }
 
     const startTime = performance.now();
-    let lockAcquired = false;
 
     try {
         titleLogger.attemptGeneration({ chatId, userId });
 
-        // Try to acquire lock to prevent multiple parallel generation attempts
-        const lockStartTime = performance.now();
-        // Use exists to check if lock is available before setting
-        const lockExists = await cacheService.exists(`${TITLE_GENERATION_LOCK_KEY}:${chatId}`);
-        lockAcquired = !lockExists;
-        if (lockAcquired) {
-            await cacheService.set(`${TITLE_GENERATION_LOCK_KEY}:${chatId}`, 'locked', { ttl: 30 });
-        } else {
-            titleLogger.lockAcquisitionFailed({ chatId, userId });
+        // Check if title is still default
+        const currentTitle = await getCurrentTitle(chatId, userId);
+        const defaultTitles = ['New Chat', 'Untitled Conversation', 'New Conversation', null, undefined, ''];
+
+        if (!defaultTitles.includes(currentTitle)) {
+            titleLogger.titleExists({
+                chatId,
+                currentTitle: currentTitle || 'unknown',
+                userId
+            });
             return;
         }
-        const lockDurationMs = Math.round(performance.now() - lockStartTime);
 
-        // Check rate limiting - maximum 10 generation attempts per minute
-        const cacheStartTime = performance.now();
-        // Since incrementCounter doesn't exist, implement manually with get/set
-        let currentAttempts = 0;
-        const counterKey = `${TITLE_GENERATION_ATTEMPTS_KEY}:global`;
-        const existingCounter = await cacheService.get<number>(counterKey);
-        if (existingCounter) {
-            currentAttempts = existingCounter + 1;
-        } else {
-            currentAttempts = 1;
-        }
-        await cacheService.set(counterKey, currentAttempts, { ttl: 60 });
-        const cacheDurationMs = Math.round(performance.now() - cacheStartTime);
+        // Truncate message for API call if needed
+        const truncatedMessage = firstUserMessageContent.length > 1000
+            ? firstUserMessageContent.substring(0, 1000) + '...'
+            : firstUserMessageContent;
 
-        titleLogger.cacheResult({
-            chatId,
-            hit: false,
-            key: `${TITLE_GENERATION_ATTEMPTS_KEY}:global`,
-            durationMs: cacheDurationMs,
-            userId
+        // Generate title using Vercel AI SDK with OpenAI
+        const result = await generateText({
+            model: openai('gpt-3.5-turbo'),
+            messages: [
+                {
+                    role: 'system',
+                    content: 'Create a title that summarizes the main topic or intent of the user message in 2-6 words. Do not use quotes in your response.'
+                },
+                {
+                    role: 'user',
+                    content: truncatedMessage
+                }
+            ],
+            maxTokens: 30,
+            temperature: 0.7
         });
 
-        if (currentAttempts && currentAttempts > 10) {
-            titleLogger.rateLimitExceeded({ chatId, userId });
-            return;
-        }
+        // Extract and clean the title
+        const cleanedTitle = cleanTitle(result.text || 'Chat Conversation');
 
-        try {
-            // Check if title is still default
-            const currentTitle = await getCurrentTitle(chatId, userId);
-            if (currentTitle !== 'New Chat' && currentTitle !== 'Untitled Conversation' && currentTitle !== null) {
-                return;
-            }
-
-            // Truncate message for API call if needed
-            const truncatedMessage = firstUserMessageContent.length > 1000
-                ? firstUserMessageContent.substring(0, 1000) + '...'
-                : firstUserMessageContent;
-
-            // Generate title using Vercel AI SDK with OpenAI
-            const result = await generateText({
-                model: openai('gpt-3.5-turbo'),
-                messages: [
-                    {
-                        role: 'system',
-                        content: 'Create a title that summarizes the main topic or intent of the user message in 2-6 words. Do not use quotes in your response.'
-                    },
-                    {
-                        role: 'user',
-                        content: truncatedMessage
-                    }
-                ],
-                maxTokens: 30,
-                temperature: 0.7
-            });
-
-            // Extract and clean the title
-            const cleanedTitle = cleanTitle(result.text || 'Chat Conversation');
-
-            const titleGenerationDurationMs = Math.round(performance.now() - startTime);
+        // Update the title in the database
+        const updated = await updateTitleInDatabase(chatId, cleanedTitle, userId);
+        if (updated) {
             titleLogger.titleGenerated({
                 chatId,
                 generatedTitle: cleanedTitle,
-                durationMs: titleGenerationDurationMs,
+                durationMs: Math.round(performance.now() - startTime),
                 userId
             });
 
-            // Update the title in the database
-            await updateTitleInDatabase(chatId, cleanedTitle, userId);
-        } finally {
-            // Release the lock when done
-            if (lockAcquired) {
-                await cacheService.delete(`${TITLE_GENERATION_LOCK_KEY}:${chatId}`);
-            }
+            // Log additional success information
+            titleLogger.titleUpdateResult({
+                chatId,
+                newTitle: cleanedTitle,
+                success: true,
+                durationMs: Math.round(performance.now() - startTime),
+                userId
+            });
         }
     } catch (error) {
-        const errorDurationMs = Math.round(performance.now() - startTime);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+
         titleLogger.titleGenerationFailed({
             chatId,
-            error: error instanceof Error ? error.message : String(error),
-            durationMs: errorDurationMs,
+            error: errorMessage,
+            durationMs: Math.round(performance.now() - startTime),
             userId
         });
-
-        // Attempt to set a default title if we failed to generate one
-        try {
-            const defaultTitle = 'Chat ' + new Date().toLocaleDateString();
-            await updateTitleInDatabase(chatId, defaultTitle, userId);
-        } catch (fallbackError) {
-            // Fallback error can be safely ignored
-        } finally {
-            // Make sure lock is released even if fallback fails
-            if (lockAcquired) {
-                await cacheService.delete(`${TITLE_GENERATION_LOCK_KEY}:${chatId}`);
-            }
-        }
     }
 } 
