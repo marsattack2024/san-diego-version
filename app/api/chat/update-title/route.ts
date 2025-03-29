@@ -67,11 +67,12 @@ export async function POST(request: NextRequest) {
 
     try {
         // Parse request body
-        let sessionId, content;
+        let sessionId, content, requestUserId;
         try {
             const body = await request.json();
             sessionId = body.sessionId;
             content = body.content;
+            requestUserId = body.userId; // Extract userId from request body if present
         } catch (err) {
             edgeLogger.error('Failed to parse request body', {
                 category: 'system',
@@ -97,75 +98,133 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Get user from Supabase auth - standard authentication approach
-        const supabase = await createClient();
-        const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-        // Handle authentication errors
-        if (authError || !user) {
-            edgeLogger.warn('Auth error for title generation', {
-                category: 'system',
-                sessionId,
-                error: authError?.message || 'No user found',
-                operationId
-            });
-
-            // Try to get the user ID from the database using the session ID
-            // This is a fallback for when the user isn't authenticated but we still want to generate a title
-            const { data: sessionData, error: sessionError } = await supabase
-                .from('sd_chat_sessions')
-                .select('user_id')
-                .eq('id', sessionId)
-                .single();
-
-            if (sessionError || !sessionData?.user_id) {
-                return addCorsHeaders(
-                    NextResponse.json({
-                        success: false,
-                        error: 'Unauthorized and could not find session'
-                    }, { status: 401 })
-                );
-            }
-
-            // Use the user_id from the session
-            const userId = sessionData.user_id;
-
-            edgeLogger.info('Generating title using session user_id', {
-                category: 'chat',
-                sessionId,
-                userId,
-                operationId
-            });
-
-            const title = await generateTitle(sessionId, content, userId);
-
-            if (!title) {
-                return addCorsHeaders(
-                    NextResponse.json({
-                        success: false,
-                        error: 'Failed to generate title'
-                    }, { status: 500 })
-                );
-            }
-
-            return addCorsHeaders(
-                NextResponse.json({
-                    success: true,
-                    chatId: sessionId,
-                    title
-                })
-            );
-        }
-
-        // Generate title with authenticated user
-        edgeLogger.info('Generating title for chat', {
-            category: 'chat',
+        // Check for service-to-service authentication headers
+        const headerUserId = request.headers.get('x-user-id');
+        const sessionContext = request.headers.get('x-session-context');
+        const authState = request.headers.get('x-auth-state');
+        const isServiceRequest = 
+            sessionContext === 'chat-engine-title-generation' && 
+            authState === 'authenticated' && 
+            headerUserId;
+        
+        // Log authentication approach for debugging
+        edgeLogger.debug('Title generation auth approach', {
+            category: 'system',
             sessionId,
-            userId: user.id,
+            isServiceRequest,
+            hasHeaderUserId: !!headerUserId,
+            hasBodyUserId: !!requestUserId,
+            sessionContext,
+            authState,
             operationId
         });
 
-        const title = await generateTitle(sessionId, content, user.id);
+        let authenticatedUserId: string | undefined;
+
+        // First try service-to-service authentication if applicable
+        if (isServiceRequest && headerUserId) {
+            authenticatedUserId = headerUserId;
+            edgeLogger.info('Using service-to-service authentication for title generation', {
+                category: 'system',
+                sessionId,
+                userId: authenticatedUserId,
+                source: 'service-headers',
+                operationId
+            });
+        } 
+        // If no service auth, try standard auth
+        else {
+            // Get user from Supabase auth - standard authentication approach
+            const supabase = await createClient();
+            const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+            // If standard auth succeeds, use that user
+            if (user && !authError) {
+                authenticatedUserId = user.id;
+                edgeLogger.info('Using standard authentication for title generation', {
+                    category: 'system',
+                    sessionId,
+                    userId: authenticatedUserId,
+                    source: 'supabase-auth',
+                    operationId
+                });
+            }
+            // Handle authentication errors - try fallback to request body or headers
+            else {
+                // Log the auth error
+                edgeLogger.warn('Standard auth error for title generation', {
+                    category: 'system',
+                    sessionId,
+                    error: authError?.message || 'No user found',
+                    operationId
+                });
+
+                // Try userId from request body or header as fallback
+                if (requestUserId || headerUserId) {
+                    authenticatedUserId = requestUserId || headerUserId;
+                    edgeLogger.info('Using fallback user ID for title generation', {
+                        category: 'system',
+                        sessionId,
+                        userId: authenticatedUserId,
+                        source: requestUserId ? 'request-body' : 'header',
+                        operationId
+                    });
+                } 
+                // Last resort: try to get the user ID from the database using the session ID
+                else {
+                    const supabase = await createClient();
+                    const { data: sessionData, error: sessionError } = await supabase
+                        .from('sd_chat_sessions')
+                        .select('user_id')
+                        .eq('id', sessionId)
+                        .single();
+
+                    if (sessionError || !sessionData?.user_id) {
+                        return addCorsHeaders(
+                            NextResponse.json({
+                                success: false,
+                                error: 'Unauthorized and could not find session'
+                            }, { status: 401 })
+                        );
+                    }
+                    
+                    authenticatedUserId = sessionData.user_id;
+                    edgeLogger.info('Using session user ID for title generation', {
+                        category: 'system',
+                        sessionId,
+                        userId: authenticatedUserId,
+                        source: 'database-session',
+                        operationId
+                    });
+                }
+            }
+        }
+
+        // At this point we should have an authenticated user ID one way or another
+        if (!authenticatedUserId) {
+            edgeLogger.error('Failed to authenticate user for title generation', {
+                category: 'system',
+                sessionId,
+                operationId
+            });
+            
+            return addCorsHeaders(
+                NextResponse.json({
+                    success: false,
+                    error: 'Authentication failed for title generation'
+                }, { status: 401 })
+            );
+        }
+
+        // Generate title with the authenticated user ID we obtained
+        edgeLogger.info('Generating title for chat', {
+            category: 'chat',
+            sessionId,
+            userId: authenticatedUserId,
+            operationId
+        });
+
+        const title = await generateTitle(sessionId, content, authenticatedUserId);
 
         if (!title) {
             return addCorsHeaders(

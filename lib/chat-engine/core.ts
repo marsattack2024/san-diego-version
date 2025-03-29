@@ -7,6 +7,7 @@ import { cookies } from 'next/headers';
 import { extractUrls } from '@/lib/utils/url-utils';
 import { openai } from '@ai-sdk/openai';
 import type { OpenAI } from 'openai';
+import { RequestCookie } from 'next/dist/compiled/@edge-runtime/cookies';
 
 // Import the centralized cache service and message history service
 import { cacheService } from '@/lib/cache/cache-service';
@@ -603,170 +604,328 @@ export class ChatEngine {
                         });
 
                         // NEW TITLE GENERATION CODE
-                        // Check if this is the first message in the conversation
-                        // We can do this by checking the message history length
-                        try {
-                            const supabase = await createClient();
-                            const { count, error: countError } = await supabase
-                                .from('sd_chat_histories')
-                                .select('id', { count: 'exact', head: true })
-                                .eq('session_id', sessionId);
+                        // Check that this is actually the first message before generating a title
+                        const isFirstMessage = async () => {
+                            try {
+                                const supabase = await createClient();
+                                const { count, error } = await supabase
+                                    .from('sd_messages')
+                                    .select('id', { count: 'exact', head: true })
+                                    .eq('session_id', sessionId);
 
-                            edgeLogger.debug('Title generation check - message count', {
-                                category: LOG_CATEGORIES.CHAT,
-                                operation: 'title_count_check',
-                                chatId: sessionId,
-                                count,
-                                hasCountError: !!countError,
-                                shouldGenerateTitle: !countError && count !== null && count <= 2
+                                // If this is the first or second message (including the current one)
+                                // The first is typically system, second is user's first message
+                                const shouldGenerateTitle = !error && count !== null && count <= 2;
+
+                                edgeLogger.debug('Title generation check - message count', {
+                                    category: 'chat',
+                                    operation: 'title_count_check',
+                                    chatId: sessionId,
+                                    count: count,
+                                    hasCountError: !!error,
+                                    shouldGenerateTitle
+                                });
+
+                                return shouldGenerateTitle;
+                            } catch (countError) {
+                                edgeLogger.warn('Failed to check message count for title generation', {
+                                    category: 'system',
+                                    error: countError instanceof Error ? countError.message : String(countError),
+                                    chatId: sessionId
+                                });
+                                // Default to false on error
+                                return false;
+                            }
+                        };
+
+                        // Only generate title for the first user message
+                        const shouldGenerateTitle = await isFirstMessage();
+                        if (!shouldGenerateTitle) {
+                            edgeLogger.debug('Skipping title generation - not the first message', {
+                                category: 'chat',
+                                operation: 'title_generation_skip',
+                                chatId: sessionId
                             });
+                            return;
+                        }
 
-                            // Force title generation for all messages during debugging
-                            if (true) { // Previously: !countError && count !== null && count <= 2
-                                // Find the first user message in the context
-                                const firstUserMessage = context.messages.find(m => m.role === 'user');
-                                if (firstUserMessage && firstUserMessage.content) {
-                                    try {
-                                        edgeLogger.info('Triggering title generation via API', {
-                                            category: LOG_CATEGORIES.CHAT,
-                                            operation: 'title_generation',
-                                            chatId: sessionId
-                                        });
+                        // Find the user message to base the title on
+                        const userMessage = context.messages.find(m => m.role === 'user');
+                        if (!userMessage || !userMessage.content) {
+                            edgeLogger.warn('Cannot generate title - no user message with content found', {
+                                category: 'chat',
+                                operation: 'title_generation_skip',
+                                chatId: sessionId
+                            });
+                            return;
+                        }
 
-                                        // Create absolute URL for Edge Runtime compatibility
-                                        const baseUrl = process.env.VERCEL_URL
-                                            ? `https://${process.env.VERCEL_URL}`
-                                            : process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+                        // Extract user message content
+                        const messageContent = typeof userMessage.content === 'string'
+                            ? userMessage.content
+                            : 'New Conversation';
 
-                                        // Call the title update API endpoint with absolute URL
-                                        edgeLogger.debug('Title generation API call details', {
-                                            category: LOG_CATEGORIES.CHAT,
-                                            operation: 'title_api_call',
+                        edgeLogger.info('Triggering title generation via API', {
+                            category: 'chat',
+                            operation: 'title_generation',
+                            chatId: sessionId
+                        });
+
+                        // Create absolute URL for edge runtime compatibility
+                        const baseUrl = process.env.VERCEL_URL
+                            ? `https://${process.env.VERCEL_URL}`
+                            : process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+
+                        edgeLogger.debug('Title generation API call details', {
+                            category: 'chat',
+                            operation: 'title_api_call',
+                            chatId: sessionId,
+                            baseUrl,
+                            fullUrl: `${baseUrl}/api/chat/update-title`,
+                            userId: context.userId || 'unknown'
+                        });
+
+                        // Use service-to-service authenticated fetch pattern for title generation
+                        // Create auth session headers to ensure proper authentication across services
+                        const authHeaders: Record<string, string> = {
+                            'Content-Type': 'application/json',
+                            'Cache-Control': 'no-cache',
+                            // Include operation ID for tracing
+                            'x-operation-id': `title_gen_${Math.random().toString(36).substring(2, 8)}`,
+                            // Add user ID in headers to ensure proper authentication
+                            'x-user-id': context.userId || '',
+                            // Add session context for auth verification
+                            'x-session-context': 'chat-engine-title-generation',
+                            // Add secure token (if needed in the future)
+                            'x-auth-state': 'authenticated'
+                        };
+
+                        // PRIMARY APPROACH: Direct database update - most reliable method
+                        try {
+                            const directSupabase = await createClient();
+
+                            // First, directly update the title in the database
+                            // This bypasses the API and ensures the title is updated
+                            // Use a simpler title generation approach without external dependencies
+                            const cleanedTitle = messageContent
+                                .substring(0, 50)
+                                .split(' ')
+                                .slice(0, 6)
+                                .join(' ') + '...';
+
+                            // Update the database directly
+                            const { error } = await directSupabase
+                                .from('sd_chat_sessions')
+                                .update({
+                                    title: cleanedTitle,
+                                    updated_at: new Date().toISOString()
+                                })
+                                .eq('id', sessionId);
+
+                            if (error) {
+                                edgeLogger.error('Direct title update failed', {
+                                    category: 'system',
+                                    error: error.message,
+                                    chatId: sessionId,
+                                });
+                            } else {
+                                edgeLogger.info('Direct title update succeeded', {
+                                    category: 'system',
+                                    title: cleanedTitle,
+                                    chatId: sessionId,
+                                });
+
+                                // Update zustand store with the new title
+                                try {
+                                    // Only attempt to update the store in browser environments
+                                    if (typeof window !== 'undefined') {
+                                        const { useChatStore } = await import('@/stores/chat-store');
+                                        const { updateConversationTitle } = useChatStore.getState();
+                                        updateConversationTitle(sessionId, cleanedTitle);
+
+                                        edgeLogger.info('Title generated and store updated successfully', {
+                                            category: 'system',
                                             chatId: sessionId,
-                                            baseUrl,
-                                            fullUrl: `${baseUrl}/api/chat/update-title`,
-                                            userId: context.userId || 'unknown'
+                                            title: cleanedTitle,
+                                            method: 'direct-database',
+                                            important: true
                                         });
+                                    }
+                                    // Since direct DB update succeeded, return early - no need for API call
+                                    return;
+                                } catch (storeError) {
+                                    edgeLogger.warn('Store update failed but DB update succeeded', {
+                                        category: 'system',
+                                        error: storeError instanceof Error ? storeError.message : String(storeError),
+                                    });
+                                }
+                            }
+                        } catch (directError) {
+                            edgeLogger.error('Direct title generation failed', {
+                                category: 'system',
+                                error: directError instanceof Error ? directError.message : String(directError),
+                                chatId: sessionId,
+                            });
+                        }
 
-                                        // Use service-to-service authenticated fetch pattern for title generation
-                                        // Create auth session headers to ensure proper authentication across services
-                                        const authHeaders = {
-                                            'Content-Type': 'application/json',
-                                            'Cache-Control': 'no-cache',
-                                            // Include operation ID for tracing
-                                            'x-operation-id': `title_gen_${Math.random().toString(36).substring(2, 8)}`,
-                                            // Add user ID in headers to ensure proper authentication
-                                            'x-user-id': context.userId || '',
-                                            // Add session context for auth verification
-                                            'x-session-context': 'chat-engine-title-generation',
-                                            // Add secure token (if needed in the future)
-                                            'x-auth-state': 'authenticated'
-                                        };
+                        // FALLBACK APPROACH: If direct update failed, try API approach
+                        edgeLogger.info('Direct database update failed, falling back to API approach', {
+                            category: 'system',
+                            chatId: sessionId,
+                        });
 
-                                        fetch(`${baseUrl}/api/chat/update-title`, {
-                                            method: 'POST',
-                                            headers: authHeaders,
-                                            credentials: 'include', // Use 'include' for cookie handling - consistent with historyService
-                                            mode: 'same-origin',    // Explicit same-origin policy to ensure cookies are sent
-                                            cache: 'no-store',      // Ensure fresh data - no caching
-                                            body: JSON.stringify({
-                                                sessionId,
-                                                content: firstUserMessage.content,
-                                                // Add userId directly in the body as well for redundancy
-                                                userId: context.userId
-                                            })
-                                        })
-                                            .then(async response => {
-                                                if (response.ok) {
-                                                    try {
-                                                        const data = await response.json();
-                                                        if (data.success && data.title) {
-                                                            edgeLogger.info('Title generated successfully via API', {
-                                                                category: LOG_CATEGORIES.CHAT,
-                                                                operation: 'title_generation_success',
-                                                                chatId: sessionId,
-                                                                title: data.title
-                                                            });
+                        let cookieHeader = ''; // Define cookieHeader variable at this scope
+                        try {
+                            // Need to import cookies as fallback
+                            const { cookies } = await import('next/headers');
 
-                                                            // Update Zustand store
-                                                            try {
-                                                                // Use dynamic import to avoid SSR issues
-                                                                const { useChatStore } = await import('@/stores/chat-store');
-                                                                const { updateConversationTitle } = useChatStore.getState();
-                                                                updateConversationTitle(sessionId, data.title);
+                            // Get session cookie directly, only in server context
+                            try {
+                                if (typeof window === 'undefined') {
+                                    const cookieStore = cookies();
+                                    const authCookies = (await cookieStore).getAll().filter((cookie: RequestCookie) =>
+                                        cookie.name.startsWith('sb-') && cookie.name.includes('-auth-token')
+                                    );
 
-                                                                edgeLogger.debug('Zustand store updated with new title', {
-                                                                    category: LOG_CATEGORIES.CHAT,
-                                                                    operation: 'title_update_store',
-                                                                    chatId: sessionId
-                                                                });
-                                                            } catch (storeError) {
-                                                                edgeLogger.warn('Failed to update Zustand store with new title', {
-                                                                    category: LOG_CATEGORIES.CHAT,
-                                                                    operation: 'title_update_store_error',
-                                                                    chatId: sessionId,
-                                                                    error: storeError instanceof Error ? storeError.message : String(storeError)
-                                                                });
-                                                            }
-                                                        }
-                                                    } catch (jsonError) {
-                                                        edgeLogger.error('Failed to parse title API JSON response', {
-                                                            category: LOG_CATEGORIES.CHAT,
-                                                            operation: 'title_generation_api_error',
-                                                            chatId: sessionId,
-                                                            error: jsonError instanceof Error ? jsonError.message : String(jsonError)
-                                                        });
-                                                    }
-                                                } else {
-                                                    // Enhanced error handling for non-OK responses
-                                                    try {
-                                                        // Try to get response text for more details
-                                                        const responseText = await response.text();
-                                                        edgeLogger.error('Title generation API failed', {
-                                                            category: LOG_CATEGORIES.CHAT,
-                                                            operation: 'title_generation_api_error',
-                                                            chatId: sessionId,
-                                                            status: response.status,
-                                                            statusText: response.statusText,
-                                                            responseText: responseText.substring(0, 200) // Limit to first 200 chars
-                                                        });
-                                                    } catch (textError) {
-                                                        edgeLogger.error('Title generation API failed and could not read response', {
-                                                            category: LOG_CATEGORIES.CHAT,
-                                                            operation: 'title_generation_api_error',
-                                                            chatId: sessionId,
-                                                            status: response.status,
-                                                            statusText: response.statusText
-                                                        });
-                                                    }
-                                                }
-                                            })
-                                            .catch(apiError => {
-                                                edgeLogger.error('Error calling title update API', {
-                                                    category: LOG_CATEGORIES.CHAT,
-                                                    operation: 'title_generation_api_error',
-                                                    chatId: sessionId,
-                                                    error: apiError instanceof Error ? apiError.message : String(apiError)
-                                                });
-                                            });
-                                    } catch (error) {
-                                        edgeLogger.error('Failed to trigger title generation', {
-                                            category: LOG_CATEGORIES.CHAT,
-                                            operation: 'title_generation_error',
-                                            chatId: sessionId,
-                                            error: error instanceof Error ? error.message : String(error)
+                                    if (authCookies.length > 0) {
+                                        cookieHeader = authCookies.map((c: RequestCookie) => `${c.name}=${c.value}`).join('; ');
+                                        edgeLogger.debug('Found auth cookies for title generation', {
+                                            category: 'auth',
+                                            cookieCount: authCookies.length
                                         });
                                     }
                                 }
+                            } catch (cookieError) {
+                                edgeLogger.warn('Error accessing cookies for title generation', {
+                                    category: 'auth',
+                                    error: cookieError instanceof Error ? cookieError.message : String(cookieError)
+                                });
                             }
-                        } catch (dbError) {
-                            edgeLogger.error('Error checking message count for title generation', {
-                                category: LOG_CATEGORIES.CHAT,
-                                operation: 'title_check_error',
-                                error: dbError instanceof Error ? dbError.message : String(dbError)
+                        } catch (importError) {
+                            edgeLogger.warn('Error importing cookies module', {
+                                category: 'system',
+                                error: importError instanceof Error ? importError.message : String(importError)
                             });
                         }
-                        // END TITLE GENERATION CODE
+
+                        // Create a direct supabase client for the title API call if needed
+                        try {
+                            const authClient = await createClient();
+
+                            // Get the JWT token directly from the authenticated client
+                            const { data: authData } = await authClient.auth.getSession();
+                            const jwt = authData?.session?.access_token;
+
+                            if (jwt) {
+                                edgeLogger.debug('Found JWT token for title generation', {
+                                    category: 'auth',
+                                    hasToken: true
+                                });
+                                // Add JWT to headers
+                                authHeaders['Authorization'] = `Bearer ${jwt}`;
+                            } else {
+                                edgeLogger.warn('No JWT token found for title generation', {
+                                    category: 'auth',
+                                    hasAuthData: !!authData,
+                                    hasSession: !!authData?.session
+                                });
+                            }
+                        } catch (authError) {
+                            edgeLogger.error('Error getting auth session for title generation', {
+                                category: 'auth',
+                                error: authError instanceof Error ? authError.message : String(authError)
+                            });
+                        }
+
+                        // Set up backup API fetch request
+                        // This is a backup approach only used if direct DB update fails
+                        // but leaving the API call logic in place for completeness
+                        fetch(`${baseUrl}/api/chat/update-title`, {
+                            method: 'POST',
+                            headers: {
+                                ...authHeaders,
+                                ...(cookieHeader ? { 'Cookie': cookieHeader } : {})
+                            },
+                            cache: 'no-store', // Ensure fresh data - no caching
+                            body: JSON.stringify({
+                                sessionId,
+                                content: messageContent,
+                                userId: context.userId
+                            })
+                        })
+                            .then(async response => {
+                                if (response.ok) {
+                                    try {
+                                        const data = await response.json();
+                                        if (data.success && data.title) {
+                                            edgeLogger.info('Title generated successfully via API', {
+                                                category: LOG_CATEGORIES.CHAT,
+                                                operation: 'title_generation_success',
+                                                chatId: sessionId,
+                                                title: data.title
+                                            });
+
+                                            // Update Zustand store
+                                            try {
+                                                // Use dynamic import to avoid SSR issues
+                                                const { useChatStore } = await import('@/stores/chat-store');
+                                                const { updateConversationTitle } = useChatStore.getState();
+                                                updateConversationTitle(sessionId, data.title);
+
+                                                edgeLogger.debug('Zustand store updated with new title', {
+                                                    category: LOG_CATEGORIES.CHAT,
+                                                    operation: 'title_update_store',
+                                                    chatId: sessionId
+                                                });
+                                            } catch (storeError) {
+                                                edgeLogger.warn('Failed to update Zustand store with new title', {
+                                                    category: LOG_CATEGORIES.CHAT,
+                                                    operation: 'title_update_store_error',
+                                                    chatId: sessionId,
+                                                    error: storeError instanceof Error ? storeError.message : String(storeError)
+                                                });
+                                            }
+                                        }
+                                    } catch (jsonError) {
+                                        edgeLogger.error('Failed to parse title API JSON response', {
+                                            category: LOG_CATEGORIES.CHAT,
+                                            operation: 'title_generation_api_error',
+                                            chatId: sessionId,
+                                            error: jsonError instanceof Error ? jsonError.message : String(jsonError)
+                                        });
+                                    }
+                                } else {
+                                    // Enhanced error handling for non-OK responses
+                                    try {
+                                        // Try to get response text for more details
+                                        const responseText = await response.text();
+                                        edgeLogger.error('Title generation API failed', {
+                                            category: LOG_CATEGORIES.CHAT,
+                                            operation: 'title_generation_api_error',
+                                            chatId: sessionId,
+                                            status: response.status,
+                                            statusText: response.statusText,
+                                            responseText: responseText.substring(0, 200) // Limit to first 200 chars
+                                        });
+                                    } catch (textError) {
+                                        edgeLogger.error('Title generation API failed and could not read response', {
+                                            category: LOG_CATEGORIES.CHAT,
+                                            operation: 'title_generation_api_error',
+                                            chatId: sessionId,
+                                            status: response.status,
+                                            statusText: response.statusText
+                                        });
+                                    }
+                                }
+                            })
+                            .catch(apiError => {
+                                edgeLogger.error('Error calling title update API', {
+                                    category: LOG_CATEGORIES.CHAT,
+                                    operation: 'title_generation_api_error',
+                                    chatId: sessionId,
+                                    error: apiError instanceof Error ? apiError.message : String(apiError)
+                                });
+                            });
                     } catch (error) {
                         edgeLogger.error('Failed to save assistant message in onFinish callback', {
                             operation: operationName,
