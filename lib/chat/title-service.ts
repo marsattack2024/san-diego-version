@@ -236,7 +236,7 @@ export async function generateAndSaveChatTitle(
                 messages: [
                     {
                         role: 'system',
-                        content: 'You are a helpful assistant that generates concise, descriptive titles for chat conversations. Create a title that summarizes the main topic or intent of the user message in 5-7 words. Do not use quotes in your response.'
+                        content: 'Create a title that summarizes the main topic or intent of the user message in 2-6 words. Do not use quotes in your response.'
                     },
                     {
                         role: 'user',

@@ -33,7 +33,25 @@ export interface HistoryMessageInput {
     content: string;
     userId?: string;
     messageId?: string;
-    tools?: Record<string, any>;
+    tools?: ToolsUsedData;
+}
+
+/**
+ * Interface defining the structure of tool usage data
+ */
+export interface ToolsUsedData {
+    // From text extraction
+    tools?: string[];
+
+    // From AI SDK tool calls
+    api_tool_calls?: Array<{
+        name?: string;
+        id: string;
+        type: string;
+    }>;
+
+    // Any additional tool information 
+    [key: string]: any;
 }
 
 export interface MessageSaveResult {
@@ -74,31 +92,31 @@ async function withRetry<T>(
     baseDelayMs: number = 200
 ): Promise<T> {
     let lastError: any;
-    
+
     for (let attempt = 0; attempt < maxRetries; attempt++) {
         try {
             return await operation();
         } catch (error) {
             lastError = error;
-            
+
             // Only retry on potentially transient errors
             if (error instanceof Error) {
                 const errorMessage = error.message.toLowerCase();
-                const isTransient = 
+                const isTransient =
                     errorMessage.includes('network') ||
                     errorMessage.includes('timeout') ||
                     errorMessage.includes('connection') ||
                     errorMessage.includes('rate limit') ||
                     error.name === 'AbortError';
-                
+
                 if (!isTransient) {
                     throw error; // Don't retry on non-transient errors
                 }
             }
-            
+
             // Exponential backoff with jitter
             const delayMs = baseDelayMs * Math.pow(2, attempt) + Math.random() * 100;
-            
+
             // Log retry attempt
             edgeLogger.warn(`Retrying database operation (${attempt + 1}/${maxRetries}) after ${delayMs.toFixed(0)}ms`, {
                 operation: 'database_retry',
@@ -107,12 +125,12 @@ async function withRetry<T>(
                 delayMs: Math.round(delayMs),
                 error: lastError instanceof Error ? lastError.message : String(lastError)
             });
-            
+
             // Wait before retrying
             await new Promise(resolve => setTimeout(resolve, delayMs));
         }
     }
-    
+
     // If we get here, all retries failed
     throw lastError;
 }
@@ -281,12 +299,12 @@ export class MessagePersistenceService {
                                 // Convert database errors to JS errors for the retry mechanism
                                 throw new Error(`Database insert failed: ${insertError.message}`);
                             }
-                            
+
                             return true;
                         });
-                        
+
                         // If we reach here, the insert succeeded with retries
-                        
+
                         // Update session timestamp as a fallback
                         const { error: updateSessionError } = await supabase
                             .from('sd_chat_sessions')

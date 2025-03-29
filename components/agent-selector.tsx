@@ -8,11 +8,46 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { agents } from '@/lib/ai/agents';
 import { cn } from '@/lib/utils';
 import { CheckCircleFillIcon, ChevronDownIcon } from './icons';
 import { useChatStore } from '@/stores/chat-store';
-import { type AgentType } from '@/lib/agents/prompts';
+import { type AgentType } from '@/lib/chat-engine/prompts';
+
+// Define Agent interface
+interface Agent {
+  id: AgentType;
+  name: string;
+  description: string;
+}
+
+// Define available agents
+const agents: Agent[] = [
+  {
+    id: 'default',
+    name: 'General Assistant',
+    description: 'General photography marketing assistant'
+  },
+  {
+    id: 'copywriting',
+    name: 'Copywriting',
+    description: 'Specialized in creating marketing copy and content'
+  },
+  {
+    id: 'google-ads',
+    name: 'Google Ads',
+    description: 'Expert in Google Ads campaign creation and optimization'
+  },
+  {
+    id: 'facebook-ads',
+    name: 'Facebook Ads',
+    description: 'Specialized in Facebook and Instagram ad campaigns'
+  },
+  {
+    id: 'quiz',
+    name: 'Quiz Creator',
+    description: 'Creates interactive quizzes for lead generation'
+  }
+];
 
 export function AgentSelector({
   className,
@@ -40,7 +75,7 @@ export function AgentSelector({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-[300px]">
-        {agents.map((agent) => {
+        {agents.map((agent: Agent) => {
           const { id } = agent;
           const isSelected = id === selectedAgentId;
 

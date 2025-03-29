@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage, StateStorage } from 'zustand/middleware';
 import { v4 as uuidv4 } from 'uuid';
 import { Message } from 'ai';
-import { type AgentType } from '@/lib/agents/prompts';
+import { type AgentType } from '@/lib/chat-engine/prompts';
 
 // Define a more comprehensive conversation type for Supabase integration
 export interface Conversation {

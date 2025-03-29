@@ -6,10 +6,16 @@ import { createClient } from '@/utils/supabase/server';
 import { cookies } from 'next/headers';
 import { extractUrls } from '@/lib/utils/url-utils';
 import { openai } from '@ai-sdk/openai';
+import type { OpenAI } from 'openai';
 
 // Import the centralized cache service and message history service
 import { cacheService } from '@/lib/cache/cache-service';
-import { MessagePersistenceService } from './message-persistence';
+import {
+    MessagePersistenceService,
+    MessageSaveResult,
+    HistoryMessageInput,
+    ToolsUsedData
+} from './message-persistence';
 
 /**
  * Chat Engine Configuration Interface
@@ -525,10 +531,43 @@ export class ChatEngine {
                     }
 
                     try {
-                        // Extract any tool usage information from the response
-                        const toolsUsed = text.includes('Tools and Resources Used')
+                        // Extract any tool usage information from the response text
+                        const textToolsUsed = text.includes('Tools and Resources Used')
                             ? self.extractToolsUsed(text)
                             : undefined;
+
+                        // Extract tool calls data from the AI SDK response
+                        let toolsUsed = textToolsUsed;
+
+                        // Cast response to access OpenAI-specific properties
+                        const openAIResponse = response as unknown as {
+                            choices?: Array<{
+                                message?: OpenAI.ChatCompletionMessage
+                            }>
+                        };
+
+                        // Safely check for tool calls with proper optional chaining
+                        const toolCalls = openAIResponse?.choices?.[0]?.message?.tool_calls;
+
+                        if (toolCalls && toolCalls.length > 0) {
+                            // Add or merge with existing tools data
+                            toolsUsed = {
+                                ...toolsUsed,
+                                api_tool_calls: toolCalls.map((tool: OpenAI.ChatCompletionMessageToolCall) => ({
+                                    name: tool.function?.name,
+                                    id: tool.id,
+                                    type: tool.type
+                                }))
+                            };
+
+                            edgeLogger.info('Captured tool calls from AI SDK', {
+                                operation: operationName,
+                                sessionId,
+                                toolCount: toolCalls.length,
+                                toolNames: toolCalls.map((t: OpenAI.ChatCompletionMessageToolCall) => t.function?.name).filter(Boolean),
+                                requestId
+                            });
+                        }
 
                         // Save the assistant message to the database
                         await self.saveAssistantMessage(context, text, toolsUsed);
@@ -873,13 +912,16 @@ export class ChatEngine {
 
         const messageId = crypto.randomUUID();
 
+        // Enhanced logging with detailed tool usage information
         edgeLogger.info('Saving assistant message', {
             operation: this.config.operationName,
             sessionId,
             userId,
             messageId,
             contentPreview: content.substring(0, 50) + (content.length > 50 ? '...' : ''),
-            toolsUsed: !!toolsUsed
+            hasToolsUsed: !!toolsUsed,
+            toolsCount: toolsUsed?.api_tool_calls?.length || 0,
+            toolNames: toolsUsed?.api_tool_calls?.map((t: { name?: string }) => t.name).filter(Boolean) || []
         });
 
         try {

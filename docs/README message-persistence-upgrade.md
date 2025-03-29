@@ -21,6 +21,7 @@ We consolidated message handling by creating a unified `MessagePersistenceServic
 1. Directly interacts with the Supabase database for both saving and loading messages
 2. Eliminates the need for Redis caching of conversation history
 3. Provides consistent conversation context directly from the source of truth
+4. Captures and stores tool usage data for analytics and debugging
 
 ## Recent Improvements
 
@@ -147,13 +148,44 @@ experimental_prepareRequestBody({ messages, id }) {
 
 The server then loads previous messages from the database, reducing bandwidth and improving performance.
 
-### Key Changes
+### 5. Tool Usage Tracking
+
+We've added comprehensive tool usage tracking in the message persistence system:
+
+```typescript
+/**
+ * Interface defining the structure of tool usage data
+ */
+export interface ToolsUsedData {
+    // From text extraction
+    tools?: string[];
+
+    // From AI SDK tool calls
+    api_tool_calls?: Array<{
+        name?: string;
+        id: string;
+        type: string;
+    }>;
+
+    // Any additional tool information 
+    [key: string]: any;
+}
+```
+
+This feature:
+- Captures both explicit tool calls from the AI SDK and text-based tool references
+- Stores structured data in the database for analysis and debugging
+- Integrates seamlessly with the existing message persistence flow
+- Provides insights into which tools are most frequently used
+
+## Key Changes
 
 1. **Created `message-persistence.ts`**:
    - Provides a unified interface for message operations
    - Handles both saving and loading messages directly from Supabase
    - Supports asynchronous non-blocking saves to prevent UI delays
    - Includes comprehensive error handling and logging
+   - Stores structured tool usage data in the `tools_used` JSONB column
 
 2. **Updated `core.ts` in ChatEngine**:
    - Replaced `MessageHistoryService` with `MessagePersistenceService`
@@ -161,6 +193,7 @@ The server then loads previous messages from the database, reducing bandwidth an
    - Ensured tools usage is properly extracted and saved with messages
    - Implemented configurable message persistence toggle
    - Added `consumeStream()` support for client disconnect resilience
+   - Added `extractToolsUsed` method to process text-based tool references
 
 3. **Enhanced API Route Handler**:
    - Added support for disabling persistence via request parameter
@@ -172,6 +205,7 @@ The server then loads previous messages from the database, reducing bandwidth an
 4. **Added Documentation**:
    - Created README for the chat engine
    - Documented the new message persistence system
+   - Added documentation for tool usage tracking
 
 ## Benefits
 
@@ -184,6 +218,7 @@ The server then loads previous messages from the database, reducing bandwidth an
 7. **Disconnect Resilience**: Messages are saved correctly even when clients disconnect
 8. **Network Efficiency**: Reduced bandwidth usage with single message optimization
 9. **Improved Maintainability**: Standardized error handling and logging patterns
+10. **Tool Usage Analytics**: Captured tool usage data for insights and debugging
 
 ## Implementation Details
 
@@ -198,7 +233,7 @@ class MessagePersistenceService {
     content: string;
     messageId?: string;
     userId?: string;
-    tools?: Record<string, any>;
+    tools?: ToolsUsedData;
   }): Promise<MessageSaveResult> { ... }
 
   // Load messages from the database
@@ -232,9 +267,38 @@ if (!this.config.messagePersistenceDisabled) {
 
 // In the AI completion's onFinish callback
 if (!this.config.messagePersistenceDisabled) {
-  // Extract tool usage and save assistant message
-  const toolsUsed = this.extractToolsUsed(text);
-  this.saveAssistantMessage(sessionId, userId, text, messageId, toolsUsed);
+  // Extract any tool usage information from the response text
+  const textToolsUsed = text.includes('Tools and Resources Used')
+    ? self.extractToolsUsed(text)
+    : undefined;
+
+  // Extract tool calls data from the AI SDK response
+  let toolsUsed = textToolsUsed;
+
+  // Cast response to access OpenAI-specific properties
+  const openAIResponse = response as unknown as {
+    choices?: Array<{
+      message?: OpenAI.ChatCompletionMessage
+    }>
+  };
+
+  // Safely check for tool calls with proper optional chaining
+  const toolCalls = openAIResponse?.choices?.[0]?.message?.tool_calls;
+
+  if (toolCalls && toolCalls.length > 0) {
+    // Add or merge with existing tools data
+    toolsUsed = {
+      ...toolsUsed,
+      api_tool_calls: toolCalls.map((tool: OpenAI.ChatCompletionMessageToolCall) => ({
+        name: tool.function?.name,
+        id: tool.id,
+        type: tool.type
+      }))
+    };
+  }
+
+  // Save the assistant message with tool usage data
+  this.saveAssistantMessage(context, text, toolsUsed);
 }
 
 // Ensure streaming completes even if client disconnects
@@ -260,6 +324,123 @@ if (response.body && 'consumeStream' in response) {
 }
 ```
 
+## Tool Usage Persistence
+
+The tool usage tracking system captures and stores information about which tools were used during AI interactions:
+
+### Data Structure
+
+The `tools_used` JSONB column in the `sd_chat_histories` table stores structured tool usage data:
+
+```typescript
+interface ToolsUsedData {
+  // Text-based tool references extracted from message content
+  tools?: string[];
+  
+  // Explicit tool calls from the AI SDK
+  api_tool_calls?: Array<{
+    name?: string;  // Name of the tool that was called
+    id: string;     // Unique identifier for the tool call
+    type: string;   // Type of tool (typically "function")
+  }>;
+  
+  // Additional metadata (extensible)
+  [key: string]: any;
+}
+```
+
+### Capturing Tool Usage
+
+Tool usage data is captured from two sources:
+
+1. **Text-based references**: When the assistant includes a "Tools and Resources Used" section in its response, the `extractToolsUsed` method parses this section to extract structured data.
+
+   ```typescript
+   private extractToolsUsed(text: string): Record<string, any> | undefined {
+     try {
+       // Look for the tools and resources section
+       const toolsSection = text.match(/--- Tools and Resources Used ---\s*([\s\S]*?)(?:\n\n|$)/);
+
+       if (toolsSection && toolsSection[1]) {
+         return {
+           tools: toolsSection[1]
+             .split('\n')
+             .filter(line => line.trim().startsWith('-'))
+             .map(line => line.trim())
+         };
+       }
+
+       return undefined;
+     } catch (error) {
+       // Safely handle errors without interrupting the message flow
+       edgeLogger.warn('Failed to extract tools used', {
+         error: error instanceof Error ? error.message : String(error)
+       });
+       return undefined;
+     }
+   }
+   ```
+
+2. **AI SDK tool calls**: The Vercel AI SDK provides structured data about tool calls in the `response` object. The `onFinish` callback extracts this data by accessing `response.choices[0].message.tool_calls`.
+
+   ```typescript
+   // Cast response to access OpenAI-specific properties
+   const openAIResponse = response as unknown as {
+     choices?: Array<{
+       message?: OpenAI.ChatCompletionMessage
+     }>
+   };
+
+   // Safely check for tool calls with proper optional chaining
+   const toolCalls = openAIResponse?.choices?.[0]?.message?.tool_calls;
+
+   if (toolCalls && toolCalls.length > 0) {
+     // Add or merge with existing tools data
+     toolsUsed = {
+       ...toolsUsed,
+       api_tool_calls: toolCalls.map((tool: OpenAI.ChatCompletionMessageToolCall) => ({
+         name: tool.function?.name,
+         id: tool.id,
+         type: tool.type
+       }))
+     };
+   }
+   ```
+
+### Storing Tool Usage Data
+
+The combined tool usage data is passed to the `saveAssistantMessage` method, which then calls `persistenceService.saveMessage` with the `tools` parameter. This data is stored in the `tools_used` JSONB column using either:
+
+1. The `save_message_and_update_session` RPC function (primary method)
+2. Direct database inserts (fallback method if RPC fails)
+
+### Benefits of Tool Usage Tracking
+
+1. **Analytics and Insights**: Understand which tools are most frequently used
+2. **Debugging**: Trace issues with specific tool interactions
+3. **User Experience**: Monitor and optimize tool utilization
+4. **Feature Development**: Identify underutilized tools and potential improvements
+5. **Performance Monitoring**: Track tool usage patterns and response times
+
+### Access and Querying
+
+Tool usage data can be queried using Supabase's JSONB query capabilities:
+
+```sql
+-- Find all messages where a specific tool was used
+SELECT * FROM sd_chat_histories 
+WHERE tools_used->'api_tool_calls' @> '[{"name": "knowledgeBase"}]';
+
+-- Count usage of different tools
+SELECT 
+  jsonb_array_elements(tools_used->'api_tool_calls')->>'name' as tool_name,
+  COUNT(*) as usage_count
+FROM sd_chat_histories 
+WHERE tools_used->'api_tool_calls' IS NOT NULL
+GROUP BY tool_name
+ORDER BY usage_count DESC;
+```
+
 ## Future Improvements
 
 1. **User Profile Integration**: Enhance message persistence with user profile context
@@ -270,6 +451,8 @@ if (response.body && 'consumeStream' in response) {
 6. **Performance Metrics**: Add detailed performance tracking for message operations
 7. **Batch Operations**: Support bulk message operations for improved efficiency
 8. **Advanced Error Recovery**: Implement more sophisticated retry and recovery mechanisms
+9. **Tool Usage Dashboard**: Create a visualization interface for tool usage analytics
+10. **Tool Performance Metrics**: Track execution time and success rates for different tools
 
 ## Migration Notes
 
