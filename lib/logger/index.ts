@@ -1,12 +1,17 @@
 import { edgeLogger } from './edge-logger';
 import { clientLogger } from './client-logger';
-import { LogContext, getContext, withContext } from './context';
+import { chatLogger } from './chat-logger';
+import { titleLogger } from './title-logger';
+import { LogContext, getContext, withContext, startRequest, endRequest } from './context';
 
 // Export types
 export type { LogContext };
 
 // Export context utilities
-export { getContext, withContext };
+export { getContext, withContext, startRequest, endRequest };
+
+// Export specialized loggers
+export { chatLogger, titleLogger };
 
 // Export consolidated loggers
 export const logger = {
@@ -15,6 +20,10 @@ export const logger = {
   
   // Client-side logging
   client: clientLogger,
+  
+  // Specialized loggers
+  chat: chatLogger,
+  title: titleLogger,
   
   // Convenience methods that automatically use the right logger based on environment
   debug: (message: string, context = {}) => {
@@ -51,7 +60,11 @@ export const logger = {
   
   // Operation tracking (server-side only)
   trackOperation: edgeLogger.trackOperation,
-  startBatch: edgeLogger.startBatch
+  startBatch: edgeLogger.startBatch,
+  
+  // Request timing helpers
+  startRequest,
+  endRequest
 };
 
 // Default export for convenience

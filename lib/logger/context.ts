@@ -8,6 +8,9 @@ export interface LogContext {
   path?: string;
   startTime?: number;
   metadata?: Record<string, any>;
+  requestStartTime?: number;
+  requestEndTime?: number;
+  totalRequestDuration?: number;
 }
 
 export const asyncLocalStorage = new AsyncLocalStorage<LogContext>();
@@ -32,4 +35,30 @@ export function createTimedContext(context: Omit<LogContext, 'startTime'>): LogC
 export function getElapsedTime(): number | undefined {
   const context = getContext();
   return context.startTime ? Math.round(performance.now() - context.startTime) : undefined;
-} 
+}
+
+// Helper to start request timing tracking
+export function startRequest(context: Omit<LogContext, 'requestStartTime'>): LogContext {
+  const newContext = {
+    ...context,
+    requestStartTime: Date.now(),
+    requestId: context.requestId || crypto.randomUUID().substring(0, 8)
+  };
+  return newContext;
+}
+
+// Helper to end request timing tracking
+export function endRequest(additionalContext: Partial<LogContext> = {}): LogContext {
+  const context = getContext();
+  const now = Date.now();
+  const totalRequestDuration = context.requestStartTime 
+    ? now - context.requestStartTime 
+    : undefined;
+    
+  return {
+    ...context,
+    ...additionalContext,
+    requestEndTime: now,
+    totalRequestDuration
+  };
+}

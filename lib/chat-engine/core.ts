@@ -17,6 +17,10 @@ import {
     ToolsUsedData
 } from './message-persistence';
 
+// Import chat logger for end-to-end request timing
+import { chatLogger } from '../logger/chat-logger';
+import { withContext } from '../logger/context';
+
 /**
  * Chat Engine Configuration Interface
  * Defines all configurable aspects of the chat engine
@@ -516,7 +520,7 @@ export class ChatEngine {
                     }
                 },
                 // Add onFinish callback to save the assistant message
-                async onFinish({ text, response }) {
+                async onFinish({ text, response, usage }) {
                     // Skip if message persistence is disabled
                     if (messagePersistenceDisabled || !persistenceService || !userId) {
                         edgeLogger.info('Skipping assistant message persistence', {
@@ -571,6 +575,24 @@ export class ChatEngine {
 
                         // Save the assistant message to the database
                         await self.saveAssistantMessage(context, text, toolsUsed);
+                        
+                        // Complete end-to-end request tracking with total time
+                        chatLogger.requestCompleted({
+                            responseLength: text.length,
+                            hasToolsUsed: !!toolsUsed,
+                            toolsCount: toolsUsed?.api_tool_calls?.length || 0,
+                            toolNames: toolsUsed?.api_tool_calls?.map((t: any) => t.name).filter(Boolean),
+                            additionalData: {
+                                operation: operationName,
+                                sessionId,
+                                modelName: self.config.model,
+                                tokenUsage: usage ? {
+                                    promptTokens: usage.promptTokens,
+                                    completionTokens: usage.completionTokens,
+                                    totalTokens: usage.totalTokens
+                                } : undefined
+                            }
+                        });
 
                         edgeLogger.info('Successfully saved assistant message in onFinish', {
                             operation: operationName,
@@ -725,66 +747,94 @@ export class ChatEngine {
         // Set up timeout handling
         const { promise: timeoutPromise, abort: abortTimeout } = this.createTimeoutHandler();
 
-        try {
-            // Prepare chat context
-            let chatMessages: Message[];
+        // Extract message ID for tracking
+        let messageId: string;
+        if (typeof message === 'string') {
+            messageId = crypto.randomUUID();
+        } else if (message && typeof message === 'object' && 'id' in message) {
+            messageId = message.id as string;
+        } else if (messages && messages.length > 0 && 'id' in messages[messages.length - 1]) {
+            messageId = messages[messages.length - 1].id as string;
+        } else {
+            messageId = crypto.randomUUID();
+        }
 
-            // Handle different message formats
-            if (message && typeof message === 'string') {
-                // Single message format
-                chatMessages = [{
-                    id: crypto.randomUUID(),
-                    role: 'user',
-                    content: message
-                }];
-            } else if (messages && Array.isArray(messages)) {
-                // Array of messages format
-                chatMessages = messages;
-            } else if (message && typeof message === 'object') {
-                // Single message object format (from Vercel AI SDK)
-                chatMessages = [message as Message];
-            } else {
-                return this.handleCors(
-                    new Response(
-                        JSON.stringify({ error: 'Invalid message format' }),
-                        { status: 400, headers: { 'Content-Type': 'application/json' } }
-                    ),
-                    req
+        // Use userId from auth or from body.userId (for testing/bypass)
+        const contextUserId = userId || (body.userId as string) || (this.config.body?.userId as string);
+
+        // Start end-to-end request tracking with chat logger
+        const logContext = chatLogger.requestReceived({
+            sessionId: id || sessionId,
+            userId: contextUserId,
+            messageId,
+            agentType: body.agentId,
+            deepSearchEnabled: body.deepSearchEnabled
+        });
+
+        // Use withContext to maintain timing context throughout the request lifecycle
+        return withContext(logContext, async () => {
+            try {
+                // Prepare chat context
+                let chatMessages: Message[];
+
+                // Handle different message formats
+                if (message && typeof message === 'string') {
+                    // Single message format
+                    chatMessages = [{
+                        id: messageId,
+                        role: 'user',
+                        content: message
+                    }];
+                } else if (messages && Array.isArray(messages)) {
+                    // Array of messages format
+                    chatMessages = messages;
+                } else if (message && typeof message === 'object') {
+                    // Single message object format (from Vercel AI SDK)
+                    chatMessages = [message as Message];
+                } else {
+                    chatLogger.error('Invalid message format', 'Format validation failed', { 
+                        messageType: typeof message
+                    });
+                    return this.handleCors(
+                        new Response(
+                            JSON.stringify({ error: 'Invalid message format' }),
+                            { status: 400, headers: { 'Content-Type': 'application/json' } }
+                        ),
+                        req
+                    );
+                }
+
+                if (contextUserId && !userId) {
+                    edgeLogger.info('Using userId from request body for context', {
+                        operation: this.config.operationName,
+                        userId: contextUserId,
+                        source: userId ? 'auth' : body.userId ? 'body' : 'config'
+                    });
+                }
+
+                const context = await this.createContext(
+                    chatMessages,
+                    id || sessionId,
+                    contextUserId
                 );
-            }
 
-            // Use userId from auth or from body.userId (for testing/bypass)
-            const contextUserId = userId || (body.userId as string) || (this.config.body?.userId as string);
+                // Process the request
+                const response = await this.processRequest(context);
 
-            if (contextUserId && !userId) {
-                edgeLogger.info('Using userId from request body for context', {
-                    operation: this.config.operationName,
-                    userId: contextUserId,
-                    source: userId ? 'auth' : body.userId ? 'body' : 'config'
-                });
-            }
+                // Cancel the timeout since we've completed successfully
+                abortTimeout();
 
-            const context = await this.createContext(
-                chatMessages,
-                id || sessionId,
-                contextUserId
-            );
-
-            // Process the request
-            const response = await this.processRequest(context);
-
-            // Cancel the timeout since we've completed successfully
-            abortTimeout();
-
-            // Add CORS headers if needed
-            return this.handleCors(response, req);
+                // Add CORS headers if needed
+                return this.handleCors(response, req);
         } catch (error) {
             // Cancel the timeout and return error response
             abortTimeout();
 
-            edgeLogger.error('Error handling chat request', {
+            // Log the error with chat logger for end-to-end timing
+            chatLogger.error('Error handling chat request', error, {
                 operation: this.config.operationName,
-                error: error instanceof Error ? error.message : String(error)
+                path: new URL(req.url).pathname,
+                agentType: body.agentId
             });
 
             return this.handleCors(
@@ -801,6 +851,7 @@ export class ChatEngine {
                 req
             );
         }
+    });
     }
 
     /**
