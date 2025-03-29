@@ -25,13 +25,6 @@ export const detectAndScrapeUrlsSchema = z.object({
 });
 
 /**
- * Schema for storing resources in the knowledge base (legacy support)
- */
-export const addResourceSchema = z.object({
-    content: z.string().describe('The resource content to add to the knowledge base')
-});
-
-/**
  * Schema for Perplexity search
  * Used for running a search query through Perplexity
  */
@@ -74,6 +67,5 @@ export const toolSchemas = {
     perplexitySearchSchema,
     websiteSummarySchema,
     validateUrlSchema,
-    addResourceSchema,
     multiUrlSchema,
 }; 

@@ -148,7 +148,10 @@ export async function callPuppeteerScraper(url: string): Promise<PuppeteerRespon
     edgeLogger.info('[PUPPETEER SCRAPER] Cache hit', { 
       url: fullUrl, 
       cacheHit: true,
-      accessCount: cachedResult.accessCount
+      accessCount: cachedResult.accessCount,
+      operation: 'web_scraper_cache_hit',
+      category: 'CACHE',
+      contentLength: cachedResult.content?.length || 0
     });
     return cachedResult;
   }

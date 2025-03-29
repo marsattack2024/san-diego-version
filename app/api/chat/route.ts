@@ -1,6 +1,6 @@
 import { validateChatRequest } from '@/lib/chat/validator';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { LOG_CATEGORIES } from '../../../lib/logger/constants';
+import { LOG_CATEGORIES, type LogCategory } from '@/lib/logger/constants';
 import { type AgentType } from '@/lib/agents/prompts';
 import { createClient } from '@/utils/supabase/server';
 import { cookies } from 'next/headers';
@@ -25,9 +25,10 @@ export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
 // Define tool schemas using Zod for better type safety
-const addResourceSchema = z.object({
-  content: z.string().describe('The information to store')
-});
+// This schema is no longer needed since we don't use this tool
+// const addResourceSchema = z.object({
+//   content: z.string().describe('The information to store')
+// });
 
 // Removed comprehensiveScraperSchema since we're not using it anymore with the middleware approach
 
@@ -68,7 +69,6 @@ export async function POST(req: Request) {
 
     // Add detailed logging to track the deepSearchEnabled flag state
     edgeLogger.info('Chat API received request with Deep Search settings', {
-      category: 'tools',
       operation: 'deep_search_request_received',
       deepSearchEnabled: !!body.deepSearchEnabled,
       deepSearchEnabledType: typeof body.deepSearchEnabled,
@@ -85,7 +85,6 @@ export async function POST(req: Request) {
 
     // Additional logging after validation to see if the flag changed
     edgeLogger.debug('Request validated with Deep Search settings', {
-      category: 'tools',
       operation: 'deep_search_request_validated',
       deepSearchEnabled,
       validatedDeepSearchEnabled: !!deepSearchEnabled,
@@ -94,7 +93,7 @@ export async function POST(req: Request) {
 
     // Check required environment variables
     if (!process.env.OPENAI_API_KEY) {
-      edgeLogger.error('Missing OpenAI API key', { category: 'system' });
+      edgeLogger.error('Missing OpenAI API key', { operation: 'system' });
       return new Response('Missing OpenAI API key', { status: 500 });
     }
 
@@ -104,7 +103,7 @@ export async function POST(req: Request) {
     // Simplified environment check
     const envCheck = checkEnvironment();
     edgeLogger.info('Environment check', {
-      category: LOG_CATEGORIES.SYSTEM,
+      operation: 'environment_check',
       valid: envCheck.valid,
       summary: envCheck.summary
     });
@@ -335,7 +334,6 @@ export async function POST(req: Request) {
           edgeLogger.info('Running Deep Search', {
             operation: 'deep_search_start',
             operationId,
-            category: LOG_CATEGORIES.TOOLS,
             queryLength: lastUserMessage.content.length,
             queryPreview: lastUserMessage.content.substring(0, 20) + '...',
             deepSearchEnabled: true
@@ -354,7 +352,6 @@ export async function POST(req: Request) {
             edgeLogger.info('Starting Perplexity DeepSearch call', {
               operation: 'deep_search_api_call',
               operationId,
-              category: LOG_CATEGORIES.TOOLS,
               queryLength: lastUserMessage.content.length
             });
 
@@ -726,43 +723,76 @@ export async function POST(req: Request) {
         const { webScraperSchema, detectAndScrapeUrlsSchema, getInformationSchema } = await import('@/lib/chat/tool-schemas');
         const { formatScrapedContent } = await import('@/lib/chat/tools');
 
+        // Import the vectorSearchTool
+        const { vectorSearchTool } = await import('@/lib/agents/tools/vector-search-tool');
+
         // Import the toolManager singleton
         const { toolManager } = await import('@/lib/chat/tool-manager');
 
         // Define AI SDK tools
         aiSdkTools = {
+          // Use the comprehensive vectorSearchTool for knowledge base search
           getInformation: tool({
             description: 'Search the photography knowledge base for relevant information on marketing and business topics',
             parameters: getInformationSchema,
             execute: async ({ query }) => {
               const startTime = performance.now();
+              const operationId = `kbsearch-${Date.now().toString(36)}`;
 
               try {
-                const result = await chatTools.getInformation.execute({ query }, {
-                  toolCallId: 'ai-initiated-kb-search',
+                edgeLogger.info('Knowledge base search starting via vectorSearchTool', {
+                  operation: 'kb_search_start',
+                  operationId,
+                  queryLength: query.length,
+                  queryPreview: query.substring(0, 20) + '...'
+                });
+
+                // Call the proper vectorSearchTool which has all the caching and metrics
+                const result = await vectorSearchTool.execute({
+                  query,
+                  limit: 5,
+                  similarityThreshold: 0.65,
+                  formatOption: 'llm',
+                  includeMetadata: true
+                }, {
+                  toolCallId: operationId,
                   messages: []
                 });
 
+                const formattedResults = result.content || '';
                 const duration = Math.round(performance.now() - startTime);
-                edgeLogger.info('Knowledge base search completed', {
+
+                // Get metrics with defaults if not available
+                const metrics = result.metrics || {};
+                const fromCache = 'fromCache' in metrics ? metrics.fromCache : false;
+                const avgSimilarity = 'averageSimilarity' in metrics ?
+                  metrics.averageSimilarity.toFixed(2) : 'N/A';
+
+                edgeLogger.info('Knowledge base search completed via vectorSearchTool', {
+                  operation: 'kb_search_complete',
+                  operationId,
                   queryLength: query.length,
                   durationMs: duration,
-                  resultLength: typeof result === 'string' ? result.length : 0
+                  documentCount: result.documents?.length || 0,
+                  resultLength: formattedResults.length,
+                  fromCache,
+                  avgSimilarity
                 });
 
                 // Register the tool usage for validation
                 toolManager.registerToolUsage('Knowledge Base');
-                if (typeof result === 'string') {
-                  toolManager.registerToolResult('Knowledge Base', result);
-                }
+                toolManager.registerToolResult('Knowledge Base', formattedResults);
 
-                return result;
+                return formattedResults;
               } catch (error) {
                 const duration = Math.round(performance.now() - startTime);
                 edgeLogger.error('Knowledge base search failed', {
+                  operation: 'kb_search_error',
+                  operationId,
                   queryLength: query.length,
                   durationMs: duration,
-                  error: formatError(error)
+                  error: formatError(error),
+                  important: true
                 });
 
                 throw error;
@@ -785,65 +815,202 @@ export async function POST(req: Request) {
                 const fullUrl = ensureProtocol(url);
                 const validUrl = validateAndSanitizeUrl(fullUrl);
 
-                // Check the Redis cache first
-                const cacheKey = `scrape:${validUrl}`;
-                let scraperResult = null;
+                // Import the required type
+                type PuppeteerResponseData = {
+                  url: string;
+                  title: string;
+                  description: string;
+                  content: string;
+                  [key: string]: any;
+                };
+
+                // Initialize Redis client
+                const redis = Redis.fromEnv();
+
+                // Normalize URL for consistent cache keys
+                const normalizedUrl = validUrl.toLowerCase().trim().replace(/\/$/, '');
+                const cacheKey = `scrape:${normalizedUrl}`;
+                const operationId = `webscraper-${Date.now().toString(36)}`;
+
+                // Check if we have a cache entry for this URL
+                edgeLogger.info('Checking Redis cache for URL', {
+                  category: LOG_CATEGORIES.SYSTEM,
+                  operation: 'web_scraper_cache_check',
+                  operationId,
+                  url: validUrl,
+                  cacheKey
+                });
+
+                let scraperResult: PuppeteerResponseData | null = null;
+                let cachedContentStr: string | null = null;
 
                 try {
-                  const redis = Redis.fromEnv();
-                  const cachedContent = await redis.get(cacheKey);
-                  if (cachedContent && typeof cachedContent === 'string') {
+                  cachedContentStr = await redis.get(cacheKey);
+
+                  if (cachedContentStr) {
+                    edgeLogger.info('Redis cache hit for URL', {
+                      category: LOG_CATEGORIES.SYSTEM,
+                      operation: 'web_scraper_cache_hit',
+                      operationId,
+                      url: validUrl,
+                      contentLength: typeof cachedContentStr === 'string' ? cachedContentStr.length : 'unknown',
+                      valueType: typeof cachedContentStr,
+                      cacheHit: true,
+                      cacheSource: 'redis'
+                    });
+
                     try {
-                      const parsedContent = JSON.parse(cachedContent);
-                      if (parsedContent && typeof parsedContent.content === 'string') {
-                        scraperResult = parsedContent;
-                        edgeLogger.info('Redis cache hit for scraper tool', {
-                          url: validUrl,
-                          contentLength: parsedContent.content.length,
-                          cacheSource: 'redis'
-                        });
+                      // Only attempt to parse if it's actually a string
+                      if (typeof cachedContentStr === 'string') {
+                        const parsedContent = JSON.parse(cachedContentStr);
+                        if (parsedContent &&
+                          typeof parsedContent === 'object' &&
+                          typeof parsedContent.content === 'string') {
+                          scraperResult = parsedContent;
+                          edgeLogger.info('Successfully parsed cached scraper result', {
+                            category: LOG_CATEGORIES.SYSTEM,
+                            operation: 'web_scraper_cache_parse',
+                            operationId,
+                            contentLength: parsedContent.content.length,
+                            resultFields: Object.keys(parsedContent),
+                            cacheHit: true,
+                            fromCache: true
+                          });
+                        } else {
+                          edgeLogger.warn('Invalid scraper cache structure', {
+                            category: LOG_CATEGORIES.SYSTEM,
+                            operation: 'web_scraper_cache_invalid',
+                            operationId,
+                            fields: parsedContent ? Object.keys(parsedContent) : 'none'
+                          });
+                        }
+                      } else if (typeof cachedContentStr === 'object' && cachedContentStr !== null) {
+                        // Redis might have auto-parsed the JSON already
+                        const objWithContent = cachedContentStr as { content?: string };
+                        if (objWithContent && typeof objWithContent.content === 'string') {
+                          scraperResult = cachedContentStr as PuppeteerResponseData;
+                          edgeLogger.info('Using pre-parsed cached scraper result', {
+                            category: LOG_CATEGORIES.SYSTEM,
+                            operation: 'web_scraper_cache_auto_parsed',
+                            operationId,
+                            contentLength: objWithContent.content.length,
+                            cacheHit: true,
+                            fromCache: true
+                          });
+                        }
                       }
                     } catch (parseError) {
-                      edgeLogger.error('Error parsing cached content in tool', {
-                        error: formatError(parseError)
+                      edgeLogger.error('Error parsing cached scraper content', {
+                        category: LOG_CATEGORIES.SYSTEM,
+                        operation: 'web_scraper_cache_parse_error',
+                        operationId,
+                        error: formatError(parseError),
+                        cachedContentSample: typeof cachedContentStr === 'string'
+                          ? cachedContentStr.substring(0, 100) + '...'
+                          : `type: ${typeof cachedContentStr}`,
+                        important: true
                       });
                     }
+                  } else {
+                    edgeLogger.warn('Redis cache miss for URL', {
+                      category: LOG_CATEGORIES.SYSTEM,
+                      operation: 'web_scraper_cache_miss',
+                      operationId,
+                      url: validUrl
+                    });
                   }
                 } catch (cacheError) {
-                  edgeLogger.error('Error checking Redis cache in tool', {
-                    error: formatError(cacheError)
+                  edgeLogger.error('Error checking Redis cache for URL', {
+                    category: LOG_CATEGORIES.SYSTEM,
+                    operation: 'web_scraper_cache_error',
+                    operationId,
+                    error: formatError(cacheError),
+                    important: true
                   });
                 }
 
-                // If not in cache, call the scraper
+                // If not in cache, scrape the URL
                 if (!scraperResult) {
-                  // Call the scraper
-                  scraperResult = await callPuppeteerScraper(validUrl);
-
-                  // Store in Redis cache
                   try {
-                    const redis = Redis.fromEnv();
-                    const jsonString = JSON.stringify(scraperResult);
-                    await redis.set(cacheKey, jsonString, { ex: 60 * 60 * 6 }); // 6 hours TTL
-                    edgeLogger.info('Stored scraped content in Redis from tool', {
-                      url: validUrl,
-                      contentLength: typeof scraperResult.content === 'string' ? scraperResult.content.length : 0
+                    // User is authenticated and content is not in cache, so scrape it
+                    scraperResult = await callPuppeteerScraper(validUrl);
+
+                    // Store the scraperResult in Redis cache (6 hour TTL)
+                    try {
+                      if (scraperResult && typeof scraperResult === 'object' &&
+                        typeof (scraperResult as any).content === 'string' && (scraperResult as any).content.length > 0) {
+
+                        // Create a cache-friendly structure
+                        const cacheableResult = {
+                          content: (scraperResult as any).content,
+                          title: (scraperResult as any).title || 'No title',
+                          description: (scraperResult as any).description || 'No description',
+                          url: validUrl,
+                          timestamp: Date.now()
+                        };
+
+                        // Store in Redis cache with explicit JSON stringification
+                        const jsonString = JSON.stringify(cacheableResult);
+                        const ttl = 6 * 60 * 60; // 6 hours in seconds
+
+                        await redis.set(cacheKey, jsonString, { ex: ttl });
+
+                        edgeLogger.info('Stored URL content in Redis cache', {
+                          category: LOG_CATEGORIES.SYSTEM,
+                          operation: 'web_scraper_cache_store',
+                          operationId,
+                          url: validUrl,
+                          contentLength: (scraperResult as any).content.length,
+                          jsonStringLength: jsonString.length,
+                          ttl
+                        });
+
+                        // Verify the cache entry was stored correctly
+                        const verifyCacheEntry = await redis.get(cacheKey);
+                        edgeLogger.debug('Verified cache storage', {
+                          category: LOG_CATEGORIES.SYSTEM,
+                          operation: 'web_scraper_cache_verify',
+                          operationId,
+                          stored: !!verifyCacheEntry,
+                          storedType: typeof verifyCacheEntry
+                        });
+                      }
+                    } catch (storageError) {
+                      edgeLogger.error('Error storing URL content in Redis cache', {
+                        category: LOG_CATEGORIES.SYSTEM,
+                        operation: 'web_scraper_cache_store_error',
+                        operationId,
+                        error: formatError(storageError),
+                        important: true
+                      });
+                    }
+                  } catch (scrapeError) {
+                    edgeLogger.error('Error scraping URL', {
+                      category: LOG_CATEGORIES.SYSTEM,
+                      operation: 'web_scraper_error',
+                      operationId,
+                      error: formatError(scrapeError),
+                      important: true
                     });
-                  } catch (storageError) {
-                    edgeLogger.error('Error storing in Redis cache from tool', {
-                      error: formatError(storageError)
-                    });
+                    // Return an error message to be included in the tool response
+                    return {
+                      error: true,
+                      content: `Error scraping URL: ${url} - ${scrapeError instanceof Error ? scrapeError.message : String(scrapeError)}`
+                    };
                   }
                 }
 
                 // Format the content for the AI
-                const formattedContent = formatScrapedContent(scraperResult);
+                const formattedContent = formatScrapedContent(scraperResult as any);
 
                 const duration = Math.round(performance.now() - startTime);
                 edgeLogger.info('Web scraper tool completed', {
+                  operation: 'web_scraper_complete',
+                  operationId,
                   url: validUrl,
                   durationMs: duration,
-                  contentLength: formattedContent.length
+                  contentLength: formattedContent.length,
+                  fromCache: !!cachedContentStr
                 });
 
                 // Register the tool as used for validation purposes

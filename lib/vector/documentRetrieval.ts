@@ -1,9 +1,11 @@
 import { logger } from '../logger';
+import { redisCache } from './rag-cache';
+import { THRESHOLDS } from '../logger/edge-logger';
+import { edgeLogger } from '../logger/edge-logger';
+import { LOG_CATEGORIES, OPERATION_TYPES } from '../logger/constants';
 import type { RetrievedDocument } from './types';
 import { supabase } from '../db';
 import { createEmbedding } from './embeddings';
-import { redisCache } from './rag-cache';
-import { THRESHOLDS } from '../logger/edge-logger';
 
 // Cache statistics for monitoring
 const cacheStats = {
@@ -18,27 +20,6 @@ setInterval(() => {
     ...cacheStats
   });
 }, 5 * 60 * 1000); // Log every 5 minutes
-
-interface DocumentSearchOptions {
-  limit?: number;
-  similarityThreshold?: number;
-  metadataFilter?: Record<string, any>;
-  sessionId?: string;
-  skipCache?: boolean; // Added option to bypass cache when needed
-}
-
-export interface DocumentSearchMetrics {
-  count: number;
-  averageSimilarity: number;
-  highestSimilarity: number;
-  lowestSimilarity: number;
-  retrievalTimeMs: number;
-  isSlowQuery: boolean;
-  usedFallbackThreshold?: boolean;
-  fromCache?: boolean;
-  semanticMatch?: boolean;
-  error?: string;
-}
 
 interface SupabaseDocument {
   id: string;
@@ -194,8 +175,26 @@ export async function findSimilarDocumentsOptimized(
   // Use consistent cache key with await
   const cacheKey = await generateConsistentCacheKey(queryText, options);
 
+  // Log the start of the RAG operation with cache check
+  edgeLogger.info('Starting RAG operation with cache check', {
+    operation: OPERATION_TYPES.RAG_SEARCH,
+    ragOperationId,
+    queryLength: queryText.length,
+    queryPreview: queryText.substring(0, 20) + '...',
+    cacheKey: `global:rag:${cacheKey}`
+  });
+
   try {
     const cachedResults = await redisCache.getRAG('global', cacheKey);
+
+    // Log cache check attempt
+    edgeLogger.debug('RAG cache check completed', {
+      operation: 'rag_cache_check',
+      ragOperationId,
+      cacheHit: !!cachedResults,
+      valueType: cachedResults ? typeof cachedResults : 'null'
+    });
+
     if (cachedResults) {
       try {
         // Since our get method now handles JSON parsing, this should either be 
@@ -217,21 +216,28 @@ export async function findSimilarDocumentsOptimized(
           parsedResults.timestamp
         ) {
           const durationMs = Math.round(performance.now() - startTime);
-          const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
-          const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
 
-          // Single consolidated log for cache hit
-          logger.info('RAG operation completed', {
+          // Log cache hit with comprehensive details
+          edgeLogger.info('RAG cache hit', {
+            operation: 'rag_cache_hit',
+            ragOperationId,
+            durationMs,
+            resultsCount: parsedResults.documents.length,
+            cacheAge: Date.now() - parsedResults.timestamp,
+            fromCache: true,
+            status: 'completed_from_cache',
+            cacheSource: 'redis'
+          });
+
+          // Also log to the vector logger for backwards compatibility
+          logger.info('RAG operation completed from cache', {
             category: 'tools',
             operation: 'rag_search',
             ragOperationId,
             durationMs,
             resultsCount: parsedResults.documents.length,
-            slow: isSlow,
-            important: isImportant,
             status: 'completed_from_cache',
-            fromCache: true,
-            level: 'info'
+            fromCache: true
           });
 
           return {
@@ -242,24 +248,51 @@ export async function findSimilarDocumentsOptimized(
               fromCache: true
             }
           };
+        } else {
+          // Log invalid cache structure
+          edgeLogger.warn('Invalid RAG cache structure', {
+            operation: 'rag_cache_invalid',
+            ragOperationId,
+            fields: parsedResults ? Object.keys(parsedResults) : 'none'
+          });
         }
-      } catch (error) {
-        logger.debug('Cache structure invalid or parse error', {
-          category: 'tools',
-          operation: 'rag_search',
-          error: error instanceof Error ? error.message : String(error)
+      } catch (parseError) {
+        // Log parsing error
+        edgeLogger.error('Error parsing RAG cached content', {
+          operation: 'rag_cache_parse_error',
+          ragOperationId,
+          error: parseError instanceof Error ? parseError.message : String(parseError),
+          cachedContentSample: typeof cachedResults === 'string'
+            ? cachedResults.substring(0, 100) + '...'
+            : `type: ${typeof cachedResults}`
         });
       }
+    } else {
+      // Log cache miss at WARNING level - 100% sampling per logging rules
+      edgeLogger.warn('RAG cache miss', {
+        operation: 'rag_cache_miss',
+        ragOperationId,
+        queryLength: queryText.length,
+        queryPreview: queryText.substring(0, 20) + '...'
+      });
     }
   } catch (error) {
-    logger.debug('Error retrieving from RAG cache', {
-      category: 'tools',
-      operation: 'rag_search',
-      error: error instanceof Error ? error.message : String(error)
+    // Log cache retrieval error
+    edgeLogger.error('Error checking RAG Redis cache', {
+      operation: 'rag_cache_error',
+      ragOperationId,
+      error: error instanceof Error ? error.message : String(error),
+      important: true
     });
   }
 
-  // Perform vector search for cache miss
+  // Cache miss or error - perform vector search
+  edgeLogger.info('Performing vector search after cache miss', {
+    operation: 'vector_search_start',
+    ragOperationId,
+    queryLength: queryText.length
+  });
+
   const documents = await findSimilarDocuments(queryText, options);
   const durationMs = Math.round(performance.now() - startTime);
   const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
@@ -284,7 +317,29 @@ export async function findSimilarDocumentsOptimized(
     const serializedResults = JSON.stringify(cacheableResults);
     await redisCache.setRAG('global', cacheKey, serializedResults);
 
+    // Log cache storage operation
+    edgeLogger.info('Stored RAG results in Redis cache', {
+      operation: 'rag_cache_set',
+      ragOperationId,
+      contentLength: serializedResults.length,
+      documentCount: documents.length,
+      ttl: 12 * 60 * 60, // 12 hours
+      cacheKey: `global:rag:${cacheKey}`
+    });
+
     // Single consolidated log for cache miss
+    edgeLogger.info('RAG operation completed with fresh search', {
+      operation: OPERATION_TYPES.RAG_SEARCH,
+      ragOperationId,
+      durationMs,
+      resultsCount: documents.length,
+      slow: isSlow,
+      important: isImportant,
+      status: documents.length > 0 ? 'completed' : 'no_matches',
+      fromCache: false
+    });
+
+    // Also log to the vector logger for backwards compatibility
     logger.info('RAG operation completed', {
       category: 'tools',
       operation: 'rag_search',
@@ -299,12 +354,12 @@ export async function findSimilarDocumentsOptimized(
     });
 
   } catch (error) {
-    logger.error('RAG cache set failed', {
-      category: 'tools',
-      operation: 'cache_set',
+    // Log cache storage error
+    edgeLogger.error('RAG cache set failed', {
+      operation: 'rag_cache_set_error',
+      ragOperationId,
       error: error instanceof Error ? error.message : String(error),
-      important: true,
-      level: 'error'
+      important: true
     });
   }
 
@@ -327,4 +382,25 @@ export async function retrieveDocuments(
 
   const { documents } = await findSimilarDocumentsOptimized(query, searchOptions);
   return documents;
+}
+
+interface DocumentSearchOptions {
+  limit?: number;
+  similarityThreshold?: number;
+  metadataFilter?: Record<string, any>;
+  sessionId?: string;
+  skipCache?: boolean; // Added option to bypass cache when needed
+}
+
+export interface DocumentSearchMetrics {
+  count: number;
+  averageSimilarity: number;
+  highestSimilarity: number;
+  lowestSimilarity: number;
+  retrievalTimeMs: number;
+  isSlowQuery: boolean;
+  usedFallbackThreshold?: boolean;
+  fromCache?: boolean;
+  semanticMatch?: boolean;
+  error?: string;
 } 

@@ -118,18 +118,18 @@ const PurePreviewMessage = ({
                 >
                   {/* Remove the marker from the content before rendering */}
                   <Markdown>
-                    {typeof message.content === 'string' 
-                      ? message.content.replace(/<DeepSearchMarker count="[^"]+" \/>/, '') 
+                    {typeof message.content === 'string'
+                      ? message.content.replace(/<DeepSearchMarker count="[^"]+" \/>/, '')
                       : message.content as string}
                   </Markdown>
-                  
+
                   {/* Show thinking indicator for streaming assistant messages */}
                   {message.role === 'assistant' && isLoading && (
-                    <ThinkingMessage 
+                    <ThinkingMessage
                       className="ml-1 inline-flex animate-pulse"
                     />
                   )}
-                  
+
                   {/* Display RAG results only */}
                   {message.role === 'assistant' && (
                     <div className="flex items-center flex-wrap gap-2 mt-2">
@@ -166,9 +166,9 @@ const PurePreviewMessage = ({
                       <div key={toolCallId}>
                         {toolName === 'getInformation' ? (
                           <RagResultCount count={result.found ? result.documents.length : 0} />
-                        ) : toolName === 'deepSearch' || toolName === 'webScraper' || toolName === 'detectAndScrapeUrls' || 
-                           toolName === 'comprehensiveScraper' || toolName === 'addResource' || 
-                           toolName.includes('Scraper') || toolName.includes('Search') ? (
+                        ) : toolName === 'deepSearch' || toolName === 'webScraper' || toolName === 'detectAndScrapeUrls' ||
+                          toolName === 'comprehensiveScraper' ||
+                          toolName.includes('Scraper') || toolName.includes('Search') ? (
                           null // Don't show any UI for these tools
                         ) : (
                           <div className="text-xs text-muted-foreground">

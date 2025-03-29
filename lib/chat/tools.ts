@@ -4,6 +4,10 @@ import { truncateContent } from '@/lib/chat/prompt-builder';
 import { extractUrls, ensureProtocol } from '@/lib/chat/url-utils';
 import { tool } from 'ai';
 import { z } from 'zod';
+import {
+  detectAndScrapeUrlsSchema,
+  webScraperSchema
+} from './tool-schemas';
 
 // Format error helper (inline implementation to avoid dependency)
 function formatError(error: unknown): string {
@@ -42,131 +46,17 @@ const THRESHOLDS = {
   IMPORTANT_THRESHOLD: 5000 // 5 seconds
 };
 
-// Define the tools object
+// Define the tools object using the Vercel AI SDK tool pattern
 export const chatTools = {
-  /**
-   * Knowledge Base Tool - Uses RAG system to retrieve relevant information
-   */
-  getInformation: {
-    execute: async (params: KnowledgeBaseParams, context: ToolContext) => {
-      try {
-        const { query } = params;
-        const { toolCallId } = context;
-
-        // For tracking operation duration
-        const startTime = Date.now();
-
-        // Log the operation start
-        edgeLogger.info('Knowledge base search started', {
-          category: LOG_CATEGORIES.TOOLS,
-          operation: 'knowledge_base_search',
-          toolCallId,
-          queryLength: query.length,
-          queryPreview: query.substring(0, 20) + (query.length > 20 ? '...' : '')
-        });
-
-        // Generate a specialized RAG prompt
-        const ragPrompt = query;
-
-        // Mock implementation for search - in a real app this would call the vector search
-        // This is a placeholder until we implement the actual search
-        const searchResults: SearchResult[] = [
-          {
-            id: '1',
-            content: 'Sample content from the knowledge base that matches the query.',
-            similarity: 0.85
-          },
-          {
-            id: '2',
-            content: 'Additional information that might be relevant to the user question.',
-            similarity: 0.78
-          }
-        ];
-
-        // Format the results
-        let formattedResult: string;
-
-        if (searchResults.length === 0) {
-          formattedResult = "No relevant information found in our knowledge base for this query.";
-        } else {
-          // Process the results
-          const resultCount = searchResults.length;
-          const totalRetrieved = searchResults.length;
-
-          // Extract content from the search results
-          const formattedContent = searchResults
-            .map((doc: SearchResult, index: number) => {
-              return `Document ${index + 1} (Similarity Score: ${doc.similarity.toFixed(2)}):\n${doc.content}\n`;
-            })
-            .join('\n---\n\n');
-
-          // Create the complete formatted response
-          formattedResult = `Found ${resultCount} most relevant documents (out of ${totalRetrieved} retrieved):
-          
-${formattedContent}
-
-Remember to cite this information when answering the user's query.`;
-        }
-
-        // Log operation completion
-        const durationMs = Date.now() - startTime;
-        const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
-        const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
-
-        if (isSlow) {
-          edgeLogger.warn('Knowledge base search completed', {
-            category: LOG_CATEGORIES.TOOLS,
-            operation: 'knowledge_base_search_completed',
-            toolCallId,
-            durationMs,
-            resultLength: formattedResult.length,
-            resultCount: searchResults.length || 0,
-            slow: true,
-            important: isImportant,
-            status: 'completed'
-          });
-        } else {
-          edgeLogger.info('Knowledge base search completed', {
-            category: LOG_CATEGORIES.TOOLS,
-            operation: 'knowledge_base_search_completed',
-            toolCallId,
-            durationMs,
-            resultLength: formattedResult.length,
-            resultCount: searchResults.length || 0,
-            slow: false,
-            important: false,
-            status: 'completed'
-          });
-        }
-
-        // Truncate the result if it's too large, to avoid hitting model limits
-        const truncatedResult = truncateContent(formattedResult, 15000, 'Knowledge Base');
-
-        // Return the formatted result
-        return truncatedResult;
-      } catch (error) {
-        // Log any errors
-        edgeLogger.error('Knowledge base search failed', {
-          category: LOG_CATEGORIES.TOOLS,
-          operation: 'knowledge_base_search_error',
-          error: formatError(error),
-          important: true
-        });
-
-        // Rethrow to let the caller handle the error
-        throw error;
-      }
-    }
-  },
-
   /**
    * URL Detection Tool - Extracts and validates URLs from text
    */
-  detectAndScrapeUrls: {
-    execute: async (params: UrlDetectionParams, context: ToolContext) => {
+  detectAndScrapeUrls: tool({
+    description: 'Extracts and validates URLs from text, then scrapes the first URL found to retrieve its content',
+    parameters: detectAndScrapeUrlsSchema,
+    execute: async ({ text }, { toolCallId }) => {
       try {
-        const { text } = params;
-        const { toolCallId } = context;
+        const startTime = Date.now();
 
         // Extract URLs from the text
         const extractedUrls = extractUrls(text);
@@ -226,6 +116,15 @@ ${result.content || result}
           scrapedContent = `Failed to retrieve content from ${primaryUrl}. Error: ${formatError(scrapingError)}`;
         }
 
+        const duration = Date.now() - startTime;
+        edgeLogger.info('URL detection and scraping completed', {
+          operation: 'url_detection_complete',
+          durationMs: duration,
+          urlsFound: validatedUrls.length,
+          contentLength: scrapedContent.length,
+          toolCallId
+        });
+
         // Return both the URLs and the content
         return {
           urls: validatedUrls,
@@ -244,16 +143,16 @@ ${result.content || result}
         throw error;
       }
     }
-  },
+  }),
 
   /**
    * Web Scraper Tool - Scrapes content from a URL
    */
-  webScraper: {
-    execute: async (params: WebScraperParams, context: ToolContext) => {
+  webScraper: tool({
+    description: 'Scrapes content from a URL. Use this tool when you need to extract information from a specific webpage.',
+    parameters: webScraperSchema,
+    execute: async ({ url }, { toolCallId }) => {
       try {
-        const { url } = params;
-        const { toolCallId } = context;
         const startTime = Date.now();
 
         // Log scraping start
@@ -331,26 +230,15 @@ ${result.content || result}
         edgeLogger.error('Web scraping failed', {
           category: LOG_CATEGORIES.TOOLS,
           operation: 'web_scraping_error',
-          url: params.url,
+          url,
           error: formatError(error),
           important: true,
           stack: error instanceof Error ? error.stack : undefined
         });
 
         // Return a formatted error message that the model can understand
-        return `Failed to scrape content from ${params.url}. Error: ${formatError(error)}. Please try a different URL or approach.`;
+        return `Failed to scrape content from ${url}. Error: ${formatError(error)}. Please try a different URL or approach.`;
       }
-    }
-  },
-
-  // For compatibility with existing code
-  addResource: tool({
-    description: 'Store new information in the knowledge base',
-    parameters: z.object({
-      content: z.string().describe('The information to store')
-    }),
-    execute: async ({ content }) => {
-      return "Information has been stored in the knowledge base.";
     }
   })
 };
@@ -363,41 +251,30 @@ export function formatScrapedContent(result: any): string {
       return result;
     }
 
-    // Handle object results with proper error checking
+    // Handle object results
     if (result && typeof result === 'object') {
-      // Extract content properties with fallbacks
-      const title = result.title || 'Web Content';
-      const url = result.url || 'Not provided';
-
-      // Handle content specifically - this is the most critical part
-      let content = '';
-
-      if (typeof result.content === 'string') {
-        content = result.content;
-      } else if (result.content && typeof result.content === 'object') {
-        // Try to convert nested content object to string
-        try {
-          content = JSON.stringify(result.content);
-        } catch (e) {
-          content = 'Unable to parse content object';
-        }
-      } else {
-        content = 'No content retrieved';
+      // If it's a record with content, format it nicely
+      if ('content' in result && typeof result.content === 'string') {
+        const title = result.title ? `# ${result.title}\n\n` : '';
+        const url = result.url ? `URL: ${result.url}\n\n` : '';
+        return `${title}${url}${result.content}`.trim();
       }
 
-      // Format the result consistently
-      return `
-## ${title}
-URL: ${url}
-
-${content}
-      `.trim();
+      // Fall back to JSON stringify if we don't recognize the format
+      return JSON.stringify(result, null, 2);
     }
 
-    // Last resort fallback for unexpected formats
-    return `Web content: ${JSON.stringify(result, null, 2)}`;
+    // Fallback for any other type
+    return String(result);
   } catch (error) {
-    // Absolute last fallback to prevent failures
-    return `Error formatting web content: ${error instanceof Error ? error.message : String(error)}`;
+    edgeLogger.error('Error formatting scraped content', {
+      category: LOG_CATEGORIES.SYSTEM,
+      error: formatError(error)
+    });
+
+    // Provide a safe fallback
+    return typeof result === 'string'
+      ? result
+      : 'Error formatting scraped content. Please try another approach.';
   }
 }

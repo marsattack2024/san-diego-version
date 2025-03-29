@@ -1,6 +1,6 @@
 import { Redis } from '@upstash/redis';
 import { edgeLogger } from '../logger/edge-logger';
-import { LOG_CATEGORIES } from '../logger/constants';
+import { OPERATION_TYPES } from '../logger/constants';
 import type { RetrievedDocument } from './types.js';
 
 // Cache configuration
@@ -23,40 +23,21 @@ async function hashKey(input: string): Promise<string> {
   return hashHex.slice(0, 16);
 }
 
-// Initialize Redis client with proper error handling
+// Initialize Redis client with Redis.fromEnv() for compatibility
 async function initializeRedisClient() {
-  // Check for required environment variables
-  const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
-
-  // Log environment status
-  edgeLogger.info('Initializing Redis client', {
-    category: LOG_CATEGORIES.SYSTEM,
-    envVarsPresent: {
-      REDIS_URL: !!url,
-      REDIS_TOKEN: !!token
-    }
-  });
-
-  // Validate environment variables
-  if (!url || !token) {
-    const missingVars = [];
-    if (!url) missingVars.push('KV_REST_API_URL/UPSTASH_REDIS_REST_URL');
-    if (!token) missingVars.push('KV_REST_API_TOKEN/UPSTASH_REDIS_REST_TOKEN');
-
-    const error = `Missing required environment variables: ${missingVars.join(', ')}`;
-    edgeLogger.error(error, {
-      category: LOG_CATEGORIES.SYSTEM
-    });
-    throw new Error(error);
-  }
-
   try {
-    // Initialize with explicit configuration
-    const redis = new Redis({
-      url,
-      token
+    // Log environment status
+    edgeLogger.info('Initializing Redis client with Redis.fromEnv()', {
+      category: 'system',
+      envVarsPresent: {
+        KV_REST_API_URL: !!process.env.KV_REST_API_URL,
+        UPSTASH_REDIS_REST_URL: !!process.env.UPSTASH_REDIS_REST_URL,
+        REDIS_URL: !!process.env.REDIS_URL
+      }
     });
+
+    // Use Redis.fromEnv() to be consistent with other parts of the app
+    const redis = Redis.fromEnv();
 
     // Test connection before returning
     await redis.set('connection-test', 'ok', { ex: 60 });
@@ -66,18 +47,16 @@ async function initializeRedisClient() {
       throw new Error('Connection test failed');
     }
 
-    edgeLogger.info('Upstash Redis connected', {
-      category: LOG_CATEGORIES.SYSTEM,
-      url
+    edgeLogger.info('Upstash Redis connected using Redis.fromEnv()', {
+      category: 'system'
     });
 
     await redis.del('connection-test');
     return redis;
   } catch (error) {
     edgeLogger.error('Failed to initialize Redis client', {
-      category: LOG_CATEGORIES.SYSTEM,
-      error: error instanceof Error ? error.message : String(error),
-      url
+      category: 'system',
+      error: error instanceof Error ? error.message : String(error)
     });
     throw error;
   }
@@ -131,13 +110,13 @@ export const redisCache = {
       }
 
       edgeLogger.debug('Cache set', {
-        category: LOG_CATEGORIES.SYSTEM,
+        category: 'system',
         key,
         ttl: ttl || CACHE_CONFIG.ttl
       });
     } catch (error) {
       edgeLogger.error('Cache set error', {
-        category: LOG_CATEGORIES.SYSTEM,
+        category: 'system',
         error: error instanceof Error ? error.message : String(error),
         key
       });
@@ -153,12 +132,36 @@ export const redisCache = {
     try {
       const redis = await redisClientPromise;
       const value = await redis.get(key);
+      const hit = value !== null;
 
-      edgeLogger.debug('Cache get', {
-        category: LOG_CATEGORIES.SYSTEM,
+      // Log cache access at the appropriate level
+      if (hit) {
+        // Log cache hit at INFO level (10% sampling)
+        edgeLogger.info('Cache hit', {
+          category: 'system',
+          operation: OPERATION_TYPES.CACHE_ACCESS,
+          key,
+          hit: true,
+          valueType: typeof value,
+          durationMs: 0 // We don't track this, but added for consistency
+        });
+      } else {
+        // Log cache miss at WARN level (100% sampling)
+        edgeLogger.warn('Cache miss', {
+          category: 'system',
+          operation: OPERATION_TYPES.CACHE_ACCESS,
+          key,
+          hit: false
+        });
+      }
+
+      // Debug information is preserved at debug level
+      edgeLogger.debug('Cache get details', {
+        category: 'system',
         key,
-        hit: value !== null,
-        valueType: typeof value
+        hit,
+        valueType: typeof value,
+        valueLength: typeof value === 'string' ? value.length : 'n/a'
       });
 
       if (value === null || value === undefined) {
@@ -176,7 +179,7 @@ export const redisCache = {
           return value;
         } catch (parseError) {
           edgeLogger.warn('Cache parse error', {
-            category: LOG_CATEGORIES.SYSTEM,
+            category: 'system',
             key,
             error: parseError instanceof Error ? parseError.message : String(parseError)
           });
@@ -188,9 +191,11 @@ export const redisCache = {
       return value;
     } catch (error) {
       edgeLogger.error('Cache get error', {
-        category: LOG_CATEGORIES.SYSTEM,
+        category: 'system',
+        operation: OPERATION_TYPES.CACHE_ACCESS,
         error: error instanceof Error ? error.message : String(error),
-        key
+        key,
+        important: true
       });
       return null;
     }
@@ -199,7 +204,26 @@ export const redisCache = {
   // Specialized methods with tenant support
   async getRAG(tenantId: string, query: string): Promise<string | null> {
     const key = `${tenantId}:rag:${await hashKey(query)}`;
-    return this.get(key);
+    const startTime = performance.now();
+    const result = await this.get(key);
+    const durationMs = Math.round(performance.now() - startTime);
+
+    // Additional detailed RAG-specific logging with operation ID
+    const ragOperationId = `rag-${Date.now().toString(36)}`;
+    if (result !== null) {
+      // For RAG, we want an additional specific log with the RAG_SEARCH operation
+      edgeLogger.info('RAG cache hit', {
+        category: 'system',
+        operation: OPERATION_TYPES.RAG_SEARCH,
+        ragOperationId,
+        key,
+        durationMs,
+        cacheHit: true,
+        fromCache: true
+      });
+    }
+
+    return result;
   },
 
   async setRAG(tenantId: string, query: string, result: any): Promise<void> {
