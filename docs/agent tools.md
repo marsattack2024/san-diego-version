@@ -61,6 +61,48 @@ webScraper: tool({
 })
 ```
 
+The Web Scraper implementation (`lib/agents/tools/web-scraper-tool.ts`) uses Redis for caching scraped content:
+
+- Leverages an LRU cache with a TTL of 6 hours for efficient memory usage
+- Automatically validates and sanitizes URLs for security
+- Includes robust error handling and timeout mechanisms
+- Logs comprehensive metrics about cache hits/misses and scraping performance
+- Handles various response formats from the external Puppeteer service
+
+## Website Summarizer
+
+The Website Summarizer (`lib/agents/tools/website-summarizer.ts`) is used to generate concise summaries of photography business websites. Unlike the Web Scraper Tool and Knowledge Base Tool, it's not exposed as an AI SDK tool but rather used directly in our API routes.
+
+```typescript
+export async function generateWebsiteSummary(
+  url: string,
+  options: {
+    maxWords?: number;
+  } = {}
+): Promise<{
+  summary: string;
+  url: string;
+  title: string;
+  timeTaken: number;
+  wordCount: number;
+  error?: string;
+}> {
+  // Implementation details
+}
+```
+
+Key features:
+- Reuses the same web scraper infrastructure as the AI SDK tool
+- Benefits from the shared Redis caching system for scraped content
+- Uses OpenAI's GPT-3.5 Turbo to generate human-like summaries
+- Configurable word count limit (defaults to 600 words)
+- Comprehensive error handling and logging
+- Timeout protection for serverless environments (15 second maximum)
+
+The Website Summarizer is primarily used in:
+- `/api/profile/update-summary/route.ts`: For generating summaries of users' business websites
+- These summaries are stored in user profiles and used as context for AI interactions
+
 ## Preprocessing Features
 
 ### Deep Search
@@ -126,12 +168,23 @@ const result = await streamText({
 });
 ```
 
+## Redis Caching Integration
+
+All tools benefit from our Redis caching system:
+
+1. **Web Scraper**: Cached scraped content reduces load on external services
+2. **Knowledge Base**: Cached vector search results improve response times
+3. **Website Summarizer**: Indirectly benefits from cached web content
+
+See the `redis-caching.md` documentation for more details about our Redis implementation.
+
 ## Benefits of This Approach
 
 1. **Intelligent Tool Selection**: The model decides when to use tools based on the query's needs
 2. **User Control**: Deep Search remains explicitly controlled by user toggles
 3. **Optimized Token Usage**: URLs are only scraped when necessary, saving tokens for complex queries
 4. **Enhanced Response Accuracy**: The model can choose to scrape specific URLs rather than all detected ones
+5. **Efficient Resource Usage**: Shared Redis caching reduces redundant API calls and processing
 
 ## Cross-Application Tool Sharing
 

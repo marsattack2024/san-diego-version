@@ -41,6 +41,14 @@ The Vercel AI SDK generates responses for user queries. To avoid redundant API c
                           │ (URLs)       │      │ (Perplexity)   │
                           │              │      │                │
                           └──────────────┘      └────────────────┘
+                                 ▲
+                                 │
+                          ┌──────┴───────┐
+                          │              │
+                          │ Website      │
+                          │ Summarizer   │
+                          │              │
+                          └──────────────┘
 ```
 
 ## Configuration
@@ -519,6 +527,61 @@ edgeLogger.info('Stored scraped content in Redis cache', {
 
 These improvements ensure greater reliability and consistency in the caching mechanism for scraped web content, applying the same patterns used in the RAG caching system.
 
+## Website Summarizer Cache Integration
+
+The Website Summarizer (`lib/agents/tools/website-summarizer.ts`) indirectly benefits from our Redis caching implementation through its dependency on the Web Scraper tool.
+
+### Caching Architecture
+
+While the Website Summarizer doesn't implement its own Redis caching layer, it leverages the existing caching infrastructure:
+
+1. **Shared Scraper Function**: The summarizer calls `callPuppeteerScraper()` from the web-scraper-tool.ts, which already implements Redis caching.
+
+2. **Cache Hit Path**:
+   ```
+   generateWebsiteSummary()
+     ↓
+   callPuppeteerScraper()
+     ↓
+   [CACHE HIT] → Return cached content → Generate summary with AI
+   ```
+
+3. **Cache Miss Path**:
+   ```
+   generateWebsiteSummary()
+     ↓
+   callPuppeteerScraper()
+     ↓
+   [CACHE MISS] → Call Puppeteer API → Store in cache → Generate summary with AI
+   ```
+
+### Performance Benefits
+
+The shared caching system provides significant benefits to the Website Summarizer:
+
+1. **Reduced API Calls**: If a website was previously scraped by either the Web Scraper tool or the Website Summarizer, subsequent requests will use the cached content.
+
+2. **Faster Summaries**: For previously visited websites, the scraping step (often the slowest part of the process) is skipped.
+
+3. **Improved Reliability**: Fewer external API calls mean fewer potential points of failure in the summarization process.
+
+### Cache Usage Logs
+
+When the Website Summarizer benefits from a cache hit, you'll see logs similar to:
+
+```
+🔵 00:08:30 [PUPPETEER SCRAPER] Cache hit
+  url=https://boudoirbyamy.net/
+  cacheHit=true
+  accessCount=2
+  operation=web_scraper_cache_hit
+  category=CACHE
+  contentLength=7708
+  level=info
+```
+
+This demonstrates how different components of our application share the same caching infrastructure for efficiency.
+
 ## Recent Fixes and Improvements
 
 We recently fixed several critical issues with the Redis cache implementation:
@@ -537,6 +600,11 @@ We recently fixed several critical issues with the Redis cache implementation:
    - Created specialized debugging endpoints for cache inspection and repair
    - Added comprehensive test route with different data types
    - Enhanced logs with type information and value previews
+
+4. **Cross-Tool Integration**:
+   - Ensured consistent cache usage across RAG tools, web scraper, and website summarizer
+   - Standardized the cache data structures for better interoperability
+   - Improved documentation on cache sharing between tools
 
 ## Testing and Debugging Tools
 
