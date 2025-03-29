@@ -362,52 +362,7 @@ export class MessagePersistenceService {
                 action: 'load_messages'
             });
 
-            // Try the RPC function first
-            try {
-                const { data: messages, error: rpcError } = await supabase
-                    .rpc('get_chat_messages', {
-                        p_session_id: sessionId,
-                        p_limit: limit
-                    });
-
-                if (!rpcError && messages && Array.isArray(messages)) {
-                    // Map the RPC results to Message objects
-                    const formattedMessages = messages.map(msg => ({
-                        id: msg.id,
-                        role: msg.role as "user" | "assistant",
-                        content: msg.content,
-                        createdAt: new Date(msg.created_at),
-                        tools: msg.tools_used
-                    }));
-
-                    edgeLogger.info('Messages loaded successfully via RPC', {
-                        operation: this.operationName,
-                        sessionId,
-                        count: formattedMessages.length,
-                        executionTimeMs: Date.now() - startTime
-                    });
-
-                    return formattedMessages;
-                }
-
-                // Log the RPC error but continue with the fallback query
-                if (rpcError) {
-                    edgeLogger.warn('RPC get_chat_messages failed, using fallback query', {
-                        operation: this.operationName,
-                        sessionId,
-                        error: rpcError.message,
-                        code: rpcError.code
-                    });
-                }
-            } catch (rpcException) {
-                edgeLogger.warn('Exception in RPC get_chat_messages, using fallback query', {
-                    operation: this.operationName,
-                    sessionId,
-                    error: rpcException instanceof Error ? rpcException.message : String(rpcException)
-                });
-            }
-
-            // Fallback: Direct query approach
+            // Direct query approach (removing RPC attempt since it doesn't exist)
             const { data: historyData, error } = await supabase
                 .from('sd_chat_histories')
                 .select('*')

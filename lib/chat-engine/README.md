@@ -11,6 +11,55 @@ The Chat Engine follows a modular design with these key components:
 - **Message Persistence (`message-persistence.ts`)**: Direct database integration for saving and retrieving messages
 - **Cache Service (`cache-service.ts`)**: Redis-based caching for performance optimization
 
+## Recent Improvements
+
+### 1. Client Disconnect Handling
+
+The Chat Engine now implements Vercel AI SDK's `consumeStream()` pattern to ensure message processing continues even if clients disconnect. This enhances reliability by:
+
+```typescript
+// Consume the stream in the background to ensure all callbacks are triggered
+// even if the client disconnects from the HTTP response
+result.consumeStream();
+
+edgeLogger.info('Stream consumption enabled to ensure processing completes', {
+    operation: this.config.operationName,
+    sessionId: context.sessionId
+});
+```
+
+This pattern ensures that message persistence, logging, and other callbacks complete successfully regardless of client connection status, improving the overall robustness of the chat system.
+
+### 2. Single Message Optimization
+
+The Chat Engine optimizes network traffic by implementing Vercel AI SDK's `experimental_prepareRequestBody` to only send the last message to the server:
+
+```typescript
+experimental_prepareRequestBody({ messages, id }) {
+  // Get the last message
+  const lastMessage = messages.length > 0 ? messages[messages.length - 1] : null;
+
+  // Return optimized payload
+  return {
+    message: lastMessage,
+    id,
+    deepSearchEnabled: deepSearchEnabled === true,
+    agentId: selectedAgentId
+  };
+}
+```
+
+The server then loads previous messages from the database and appends the new message, reducing bandwidth usage and improving performance.
+
+### 3. Redundant Error Handling
+
+The Message Persistence service has been refactored to remove redundant error handling patterns and implement consistent logging:
+
+- Added a centralized `logError` helper function that standardizes error logging across the service
+- Consolidated Supabase client creation in a reusable `createSupabaseClient` method
+- Improved error handling for RPC failures with proper fallback mechanisms
+- Enhanced execution time tracking for performance monitoring
+
 ## Message Persistence
 
 The Chat Engine uses a direct Supabase database integration for message persistence. The `MessagePersistenceService` handles:
@@ -18,6 +67,7 @@ The Chat Engine uses a direct Supabase database integration for message persiste
 1. **Saving messages**: Both user and assistant messages are saved to the `sd_chat_histories` table through the `save_message_and_update_session` RPC function
 2. **Loading messages**: Historical messages are loaded directly from the database for conversation context
 3. **Transaction safety**: The RPC function handles session creation/updates and message insertion in a single transaction
+4. **Client disconnect resilience**: Messages are saved even if the client disconnects mid-conversation
 
 ### How It Works
 
