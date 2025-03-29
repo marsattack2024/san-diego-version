@@ -9,7 +9,7 @@
 import { Redis } from '@upstash/redis';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { CACHE_TTL, CACHE_NAMESPACES, NAMESPACES } from './constants';
+import { CACHE_TTL, CACHE_NAMESPACES } from './constants';
 
 /**
  * Interface for the Cache Service
@@ -396,7 +396,7 @@ export class CacheService implements CacheServiceInterface {
       
       if (cachedData) {
         edgeLogger.info('Cache hit for deep search query', { 
-          category: LOG_CATEGORIES.CACHE, 
+          category: LOG_CATEGORIES.SYSTEM, 
           service: 'cache-service', 
           query,
           key
@@ -405,7 +405,7 @@ export class CacheService implements CacheServiceInterface {
       }
       
       edgeLogger.info('Cache miss for deep search query', { 
-        category: LOG_CATEGORIES.CACHE, 
+        category: LOG_CATEGORIES.SYSTEM, 
         service: 'cache-service',
         query,
         key
@@ -413,7 +413,7 @@ export class CacheService implements CacheServiceInterface {
       return null;
     } catch (error) {
       edgeLogger.error('Error retrieving deep search results from cache', {
-        category: LOG_CATEGORIES.CACHE,
+        category: LOG_CATEGORIES.SYSTEM,
         service: 'cache-service',
         error: error instanceof Error ? error.message : String(error)
       });
@@ -438,14 +438,14 @@ export class CacheService implements CacheServiceInterface {
       await this.set(key, results, { ttl: CACHE_TTL.DEEP_SEARCH });
       
       edgeLogger.info('Cached deep search results', {
-        category: LOG_CATEGORIES.CACHE,
+        category: LOG_CATEGORIES.SYSTEM,
         service: 'cache-service',
         query,
         key
       });
     } catch (error) {
       edgeLogger.error('Error caching deep search results', {
-        category: LOG_CATEGORIES.CACHE,
+        category: LOG_CATEGORIES.SYSTEM,
         service: 'cache-service',
         error: error instanceof Error ? error.message : String(error)
       });

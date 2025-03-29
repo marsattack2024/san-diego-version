@@ -1,148 +1,131 @@
-#!/usr/bin/env node
-
 /**
- * Make Admin Script
- * 
- * This script makes a user an admin by directly setting the is_admin flag in their profile
- * to true. It uses the Supabase service role key to bypass RLS.
- * 
- * Usage: node make-admin.js <user_email>
- * 
- * Example: node make-admin.js user@example.com
+ * Admin User Management Script
+ * Create or update admin users in Supabase
  */
 
-import { createClient } from '@supabase/supabase-js';
-import dotenv from 'dotenv';
-import path from 'path';
 import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
+import { createAdminClient, findUserByEmail, getAdminUsers, setUserRole } from './lib/supabase/supabase-admin.ts';
 
-// Load environment variables from nearest .env file
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, '../.env.local') });
+// Get the directory of the current module
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-// Check for required environment variables
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
+// Determine action based on command line arguments
+const email = process.argv[2];
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    console.error('Error: Required environment variables are missing.');
-    console.error('Make sure NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set in .env.local');
-    process.exit(1);
-}
-
-// Get email from command line arguments
-const userEmail = process.argv[2];
-
-if (!userEmail) {
-    console.error('Error: User email is required.');
-    console.error('Usage: node make-admin.js <user_email>');
-    process.exit(1);
-}
-
-// Initialize Supabase client with service role to bypass RLS
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-async function makeUserAdmin(email) {
-    console.log(`Looking up user: ${email}`);
-
-    try {
-        // Find the user by email
-        const { data: userData, error: userError } = await supabase
-            .from('auth.users')
-            .select('id, email')
-            .eq('email', email)
-            .single();
-
-        if (userError) {
-            // If we can't directly query auth.users, use RPC function
-            console.log('Falling back to find_user_by_email RPC...');
-            const { data: rpcData, error: rpcError } = await supabase
-                .rpc('find_user_by_email', { email_address: email });
-
-            if (rpcError || !rpcData) {
-                console.error('Error finding user:', rpcError?.message || 'User not found');
-                process.exit(1);
-            }
-
-            userData = rpcData;
-        }
-
-        if (!userData) {
-            console.error(`User with email ${email} not found.`);
-            process.exit(1);
-        }
-
-        console.log(`Found user: ${userData.email} (${userData.id})`);
-
-        // Check if user already has a profile
-        const { data: profileData, error: profileError } = await supabase
-            .from('sd_user_profiles')
-            .select('user_id, is_admin')
-            .eq('user_id', userData.id)
-            .maybeSingle();
-
-        if (profileError && !profileError.message.includes('No rows found')) {
-            console.error('Error checking profile:', profileError.message);
-            process.exit(1);
-        }
-
-        // If profile exists, update it
-        if (profileData) {
-            if (profileData.is_admin) {
-                console.log('User is already an admin in profile.');
-            } else {
-                console.log('Updating existing profile to set is_admin = true');
-                const { error: updateError } = await supabase
-                    .from('sd_user_profiles')
-                    .update({ is_admin: true })
-                    .eq('user_id', userData.id);
-
-                if (updateError) {
-                    console.error('Error updating profile:', updateError.message);
-                    process.exit(1);
-                }
-            }
-        } else {
-            // Create a minimal profile with is_admin = true
-            console.log('Creating new profile with is_admin = true');
-            const { error: insertError } = await supabase
-                .from('sd_user_profiles')
-                .insert({
-                    user_id: userData.id,
-                    full_name: email.split('@')[0], // Simple default full name
-                    is_admin: true
-                });
-
-            if (insertError) {
-                console.error('Error creating profile:', insertError.message);
-                process.exit(1);
-            }
-        }
-
-        // Also ensure there's an entry in the roles table for backward compatibility
-        console.log('Ensuring admin role exists in sd_user_roles table');
-        const { error: roleError } = await supabase
-            .from('sd_user_roles')
-            .insert({
-                user_id: userData.id,
-                role: 'admin'
-            })
-            .on_conflict(['user_id', 'role'])
-            .do_nothing();
-
-        if (roleError) {
-            console.error('Error adding admin role:', roleError.message);
-            process.exit(1);
-        }
-
-        console.log('✅ Success! User is now an admin.');
-        console.log('The changes will take effect the next time the user logs in or their session refreshes.');
-
-    } catch (error) {
-        console.error('Unexpected error:', error.message);
-        process.exit(1);
+/**
+ * List all admin users
+ */
+async function listAdminUsers() {
+  console.log('\n📋 Current Admin Users');
+  console.log('=====================');
+  
+  try {
+    const adminUsers = await getAdminUsers();
+    
+    if (adminUsers.length === 0) {
+      console.log('No admin users found.');
+      return;
     }
+    
+    // Display admin users in a table format
+    console.log(`Found ${adminUsers.length} admin users:\n`);
+    
+    // Format and print each admin user
+    adminUsers.forEach((user, index) => {
+      console.log(`${index + 1}. ${user.email}`);
+      console.log(`   ID: ${user.id}`);
+      console.log(`   Created: ${new Date(user.created_at || '').toLocaleString()}`);
+      if (user.last_sign_in_at) {
+        console.log(`   Last sign in: ${new Date(user.last_sign_in_at).toLocaleString()}`);
+      }
+      console.log('');
+    });
+    
+  } catch (error) {
+    console.error(`❌ Error listing admin users: ${error.message}`);
+    process.exit(1);
+  }
 }
 
-// Execute the function
-makeUserAdmin(userEmail); 
+/**
+ * Make a user an admin by email
+ */
+async function makeUserAdmin(email) {
+  console.log(`\n👑 Making User Admin: ${email}`);
+  console.log('==========================' + '='.repeat(email.length));
+  
+  try {
+    // Find the user by email
+    const user = await findUserByEmail(email);
+    
+    if (!user) {
+      console.error(`❌ User not found with email: ${email}`);
+      process.exit(1);
+    }
+    
+    console.log(`Found user: ${user.email} (${user.id})`);
+    console.log(`Current role: ${user.role || 'none'}`);
+    
+    if (user.role === 'admin') {
+      console.log('✅ User is already an admin.');
+      return;
+    }
+    
+    // Set the user as admin
+    const result = await setUserRole(user.id, 'admin');
+    
+    if (result.success) {
+      console.log(`✅ ${result.message}`);
+    } else {
+      console.error(`❌ ${result.message}`);
+      process.exit(1);
+    }
+    
+  } catch (error) {
+    console.error(`❌ Error making user admin: ${error.message}`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Main function
+ */
+async function main() {
+  try {
+    // Verify Supabase connection by creating client (will throw if env vars are missing)
+    createAdminClient();
+    
+    if (email) {
+      await makeUserAdmin(email);
+    } else {
+      await listAdminUsers();
+      
+      // Display usage information
+      console.log('\n📌 Usage');
+      console.log('=======');
+      console.log('To make a user an admin:');
+      console.log('  node scripts/make-admin.js <email>');
+      console.log('\nExample:');
+      console.log('  node scripts/make-admin.js user@example.com');
+    }
+  } catch (error) {
+    console.error(`\n❌ Script execution failed: ${error.message}`);
+    
+    if (error.message.includes('Supabase URL and key are required')) {
+      console.log('\nPlease ensure the following environment variables are set:');
+      console.log('- SUPABASE_URL');
+      console.log('- SUPABASE_KEY (service role key)');
+      console.log('\nYou can set these in a .env file or through your environment.');
+    }
+    
+    process.exit(1);
+  }
+}
+
+// Run the script
+main().catch(error => {
+  console.error('Unhandled error:', error);
+  process.exit(1);
+}); 

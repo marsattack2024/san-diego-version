@@ -51,6 +51,9 @@ The `tests/helpers/` directory contains reusable testing utilities:
 - Sets a default log level of `error` for tests to keep output clean
 - Provides typed access to all environment variables with defaults
 - Validates required variables and enforces test-specific API keys
+- Includes runtime environment detection for Edge and Vercel
+- Implements automatic type conversion for boolean and numeric values
+- Handles missing critical variables with placeholder values for testing
 
 ### Logger Mocking (`mock-logger.ts`) 
 
@@ -352,21 +355,25 @@ We're in the process of migrating our test suite to the standardized Vitest fram
    - File: `/tests/unit/lib/cache/cache-service.test.ts`
    - Coverage: Basic operations, TTL handling, domain-specific methods, key normalization, error handling
 
-### In Progress Migrations
+5. ✅ **Environment Tests**: Testing environment variable loading and validation
+   - File: `/tests/unit/lib/env-loader.test.ts`
+   - Coverage: Required variables, default values, validation failure, runtime detection, type conversion
 
-1. 🔄 **Environment Tests**: Testing environment variable loading and validation
-   - Legacy File: `/scripts/tests/env-test.ts`
-   - Target: `/tests/unit/lib/env-loader.test.ts`
+6. ✅ **Perplexity Service Tests**: Testing the Perplexity API integration
+   - File: `/tests/unit/services/perplexity.test.ts`
+   - Coverage: Initialization, caching, error handling, API interactions
 
-2. 🔄 **Perplexity Service Tests**: Testing the Perplexity API integration
-   - Legacy File: `/scripts/tests/perplexity.test.ts`
-   - Target: `/tests/unit/services/perplexity.test.ts`
+7. ✅ **Deep Search Tool Tests**: Testing the deep search tool with the Perplexity API
+   - File: `/tests/unit/chat-engine/deep-search.test.ts`
+   - Coverage: Search execution, query formatting, error handling, logging
 
 ### Still to Migrate
 
 1. ⏳ **API Route Tests**: Testing Next.js API routes
 2. ⏳ **Authentication Tests**: Testing auth flow and middleware
 3. ⏳ **Vector Service Tests**: Testing vector operations and embeddings
+4. ⏳ **Supabase RPC Tests**: Testing Supabase RPC function calls
+   - Legacy File: `/scripts/tests/supabase-rpc-test.ts`
 
 ## Best Practices
 
@@ -377,9 +384,148 @@ We're in the process of migrating our test suite to the standardized Vitest fram
 5. **Focused Assertions**: Each test should verify one specific behavior
 6. **Verify Logging**: Check that appropriate messages are logged
 7. **Clean Setup/Teardown**: Reset mocks and state before/after tests
+8. **Environment Variables**: Test both presence and absence of critical environment variables
+   - Explicitly set environment variables with `vi.stubEnv()` instead of modifying `process.env` directly
+   - Use `vi.resetModules()` to ensure clean environment between tests
+   - Test validation logic for missing critical variables
+   - Verify behavior with type conversion (strings to numbers/booleans)
 
 ## Known Issues & Workarounds
 
 - **Type Issues with LOG_CATEGORIES**: When using the mock logger in tests, you may encounter TypeScript errors about string literals vs the LogCategory type. Use a local constants object with the same values as a workaround.
 - **ESM Compatibility**: Some older libraries might have CommonJS compatibility issues. Use dynamic imports or ESM-compatible alternatives when possible.
 - **Edge Runtime Testing**: For Edge API routes, ensure mocks are compatible with the Edge runtime restrictions (no Node.js specific APIs).
+
+## Testing Standards
+
+This document outlines the standardized testing methodology for the San Diego project.
+
+### Testing Framework
+
+- **Vitest**: We use Vitest as our primary testing framework
+- **Test Types**: Unit tests, integration tests, and end-to-end tests
+- **Test Structure**: Tests are organized by type and module
+
+### Directory Structure
+
+```
+tests/
+├── unit/             # Unit tests for individual components
+│   ├── components/   # React component tests
+│   ├── lib/          # Utility function tests
+│   ├── services/     # Service module tests
+│   └── helpers/      # Test helper functions
+├── integration/      # Integration tests for multiple components
+└── e2e/              # End-to-end tests for full application workflows
+```
+
+### Naming Conventions
+
+- **Test Files**: `[component-name].test.ts` or `[component-name].test.tsx`
+- **Test Suites**: Use descriptive names that match the component or module being tested
+- **Test Cases**: Should clearly describe the specific behavior being tested
+
+### Mocking Standards
+
+- Use Vitest's mocking capabilities (`vi.mock()`, `vi.fn()`)
+- Define mocks before importing the modules that use them
+- For modules with default exports, include proper default export in mocks
+- Reusable mocks should be defined in the `tests/helpers` directory
+
+```typescript
+// Example of proper module mocking with default export
+vi.mock('crypto', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    default: {
+      // Default export properties
+      randomUUID: vi.fn().mockImplementation(() => 'mocked-uuid')
+    },
+    // Named exports
+    randomUUID: vi.fn().mockImplementation(() => 'mocked-uuid')
+  };
+});
+```
+
+### Test Helpers
+
+- **Mock Logger**: Use `setupLoggerMock()` and `mockLogger` from `@/tests/helpers/mock-logger` 
+- **Test Data Generation**: Create utility functions for generating test data
+- **Response Type Definitions**: Define types that match external service responses
+
+### Best Practices
+
+1. **Arrange-Act-Assert**: Structure tests with clear setup, action, and verification phases
+2. **Isolated Tests**: Each test should be independent and not rely on side effects from other tests
+3. **Reset Mocks**: Use `beforeEach` to reset mocks between tests
+4. **Type Safety**: Use proper type annotations for mocked responses
+5. **Error Handling**: Test both success and error cases
+6. **Avoid Nesting**: Keep test nesting to a minimum for readability
+
+### Environment Variables in Tests
+
+- Use `vi.stubEnv()` to mock environment variables in tests
+- Reset environment variables in `afterEach` hooks
+- For required environment variables, test validation failure scenarios
+
+```typescript
+beforeEach(() => {
+  vi.stubEnv('API_KEY', 'test-key');
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+```
+
+### Testing External Services
+
+#### Supabase Testing
+
+When testing Supabase functionality, follow these standards:
+
+1. **Mock the Supabase Client**:
+   ```typescript
+   vi.mock('@supabase/supabase-js', () => {
+     const mockRpc = vi.fn();
+     // Define other mock methods
+     return {
+       createClient: vi.fn(() => ({
+         rpc: mockRpc,
+         // Other mocked methods
+       }))
+     };
+   });
+   ```
+
+2. **Testing RPC Functions**:
+   - Mock successful and error responses for RPC calls
+   - Verify the RPC function was called with expected parameters
+   - Test handling of error responses
+
+3. **User Authentication**:
+   - Mock the auth admin functions for user management
+   - Test user fetching, creation, and error handling
+
+4. **Example Tests**:
+   - `save_message_and_update_session`: Tests for saving user and assistant messages
+   - Database queries: Tests for fetching data and handling query errors
+
+See the standardized implementation in `tests/unit/services/supabase-rpc.test.ts` for a complete example.
+
+### Redis Cache Testing
+
+- Mock Redis client using Vitest mocks
+- Test cache hit/miss scenarios
+- Verify key generation and TTL settings
+
+### Migration Status
+
+- [x] Environment Loader Tests
+- [x] Redis Caching Tests
+- [x] Perplexity Service Tests 
+- [x] Deep Search Tests
+- [x] Supabase RPC Tests
+- [ ] Web Scraper Tests
+- [ ] Document Retrieval Tests
+- [ ] Integration Tests

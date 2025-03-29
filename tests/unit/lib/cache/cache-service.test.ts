@@ -191,11 +191,11 @@ describe('CacheService', () => {
       
       expect(retrieved).toEqual(results);
       
-      // Check for key normalization in logs
-      const cacheLogs = mockLogger.getLogsByCategory(LOG_CATEGORIES.CACHE);
-      expect(cacheLogs.some(log => 
+      // Check for key normalization in logs using getLogsContaining instead
+      const normalizationLogs = mockLogger.getLogsContaining('normalized');
+      expect(normalizationLogs.some((log: {message: string; metadata?: any}) => 
         log.message.includes('normalized') || 
-        log.metadata.normalizedKey !== undefined
+        (log.metadata && log.metadata.normalizedKey !== undefined)
       )).toBe(true);
     });
     
@@ -228,6 +228,26 @@ describe('CacheService', () => {
       
       // Restore original implementation
       redis.get = originalGet;
+    });
+
+    it('should log cache operation metrics', async () => {
+      // Call get multiple times to trigger stats logging
+      for (let i = 0; i < 25; i++) {
+        await cacheService.get('test-key-' + i);
+      }
+      
+      // Check for cache stats log
+      const statsLogs = mockLogger.getLogsContaining('Cache stats');
+      expect(statsLogs.length).toBeGreaterThan(0);
+      
+      // Verify cache hit/miss tracking in deep search methods
+      await cacheService.getDeepSearchResults('test-query');
+      
+      // Use getLogsContaining instead of getLogsByCategory
+      const deepSearchLogs = mockLogger.getLogsContaining('deep search query');
+      expect(deepSearchLogs.some((log: {message: string}) => 
+        log.message.includes('Cache miss for deep search query')
+      )).toBe(true);
     });
   });
 }); 

@@ -4,15 +4,20 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const originalEnv = { ...process.env };
 
 describe('Environment Loader', () => {
-  // Reset environment variables before each test
+  // Mock console methods before each test
   beforeEach(() => {
     vi.resetModules();
     process.env = { ...originalEnv };
+    
+    // Mock console methods
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 
-  // Restore environment variables after each test
+  // Restore environment variables and console methods after each test
   afterEach(() => {
     process.env = { ...originalEnv };
+    vi.restoreAllMocks();
   });
 
   describe('Required Environment Variables', () => {
@@ -41,6 +46,33 @@ describe('Environment Loader', () => {
       // Verify default value is used
       expect(env).toHaveProperty('NODE_ENV');
       expect(env.NODE_ENV).toBe('development'); // Default value
+    });
+    
+    it('should handle validation failure when critical variables are missing', async () => {
+      // Explicitly unset critical API key and capture original
+      const originalKey = process.env.OPENAI_API_KEY;
+      vi.stubEnv('OPENAI_API_KEY', undefined);
+      
+      // Remove it from process.env as well to ensure it's truly missing
+      delete process.env.OPENAI_API_KEY;
+      
+      // Import should still succeed with environment initialization
+      const { env } = await import('@/scripts/lib/env-loader');
+      
+      // Verify key exists (placeholder or real key)
+      expect(env).toHaveProperty('OPENAI_API_KEY');
+      expect(typeof env.OPENAI_API_KEY).toBe('string');
+      expect(env.OPENAI_API_KEY.length).toBeGreaterThan(0);
+      
+      // Verify additional behavior
+      expect(env.IS_EDGE_RUNTIME).toBe(false);
+      expect(env).toHaveProperty('NODE_ENV');
+      expect(typeof env.NODE_ENV).toBe('string');
+      
+      // Restore original key if it existed
+      if (originalKey) {
+        vi.stubEnv('OPENAI_API_KEY', originalKey);
+      }
     });
   });
   
@@ -99,16 +131,21 @@ describe('Environment Loader', () => {
   
   describe('Type Safety', () => {
     it('should provide type-safe access to environment variables', async () => {
-      // Set numeric value
+      // Set numeric value directly in process.env
       vi.stubEnv('PORT', '3000');
       
       // Import the env loader
-      const { env } = await import('@/scripts/lib/env-loader');
+      const { env, loadEnvironment } = await import('@/scripts/lib/env-loader');
+      
+      // Need to explicitly add PORT to required variables
+      const customEnv = loadEnvironment({
+        requiredVars: [...(env as any).requiredVars || [], 'PORT']
+      });
       
       // Verify type conversion
-      expect(env).toHaveProperty('PORT');
-      expect(typeof env.PORT).toBe('number');
-      expect(env.PORT).toBe(3000);
+      expect(customEnv).toHaveProperty('PORT');
+      expect(typeof customEnv.PORT).toBe('number');
+      expect(customEnv.PORT).toBe(3000);
     });
     
     it('should handle boolean environment variables', async () => {
@@ -117,13 +154,18 @@ describe('Environment Loader', () => {
       vi.stubEnv('CACHE_ENABLED', 'false');
       
       // Import the env loader
-      const { env } = await import('@/scripts/lib/env-loader');
+      const { env, loadEnvironment } = await import('@/scripts/lib/env-loader');
+      
+      // Need to explicitly add boolean variables to required variables
+      const customEnv = loadEnvironment({
+        requiredVars: [...(env as any).requiredVars || [], 'DEBUG', 'CACHE_ENABLED']
+      });
       
       // Verify boolean conversion
-      expect(typeof env.DEBUG).toBe('boolean');
-      expect(env.DEBUG).toBe(true);
-      expect(typeof env.CACHE_ENABLED).toBe('boolean');
-      expect(env.CACHE_ENABLED).toBe(false);
+      expect(typeof customEnv.DEBUG).toBe('boolean');
+      expect(customEnv.DEBUG).toBe(true);
+      expect(typeof customEnv.CACHE_ENABLED).toBe('boolean');
+      expect(customEnv.CACHE_ENABLED).toBe(false);
     });
   });
 }); 
