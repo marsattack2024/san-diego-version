@@ -12,12 +12,38 @@ import { detectAgentType } from '@/lib/chat-engine/agent-router';
 import { createToolSet } from '@/lib/chat-engine/tools/registry';
 import { prompts } from '@/lib/chat-engine/prompts';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { validateChatRequest } from '@/lib/chat/validator';
+// Remove validator import
+// import { validateChatRequest } from '@/lib/chat/validator';
 
 // Maintain existing runtime directives
 export const runtime = 'edge';
 export const maxDuration = 120;
 export const dynamic = 'force-dynamic';
+
+/**
+ * Helper to safely convert various representations of boolean values
+ * Handles true/false, "true"/"false", 1/0, "1"/"0" and similar variations
+ */
+function parseBooleanValue(value: any): boolean {
+  // Handle direct boolean values
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  // Handle string representations ("true", "false", "1", "0")
+  if (typeof value === 'string') {
+    const lowercaseValue = value.toLowerCase().trim();
+    return lowercaseValue === 'true' || lowercaseValue === '1' || lowercaseValue === 'yes';
+  }
+
+  // Handle numeric values (1, 0)
+  if (typeof value === 'number') {
+    return value === 1;
+  }
+
+  // Default to false for null, undefined, or any other type
+  return false;
+}
 
 export async function POST(req: Request) {
   const startTime = Date.now();
@@ -26,8 +52,31 @@ export async function POST(req: Request) {
     // Extract the request body
     const body = await req.json();
 
-    // Use the validated chat request which handles both formats
-    const { messages: clientMessages, id: sessionId, deepSearchEnabled = false, agentId: requestedAgentId = 'default' } = validateChatRequest(body);
+    // Handle validation directly instead of using the validator
+    // Process the messages from either format (array or single message)
+    let clientMessages = [];
+
+    if (body.messages && Array.isArray(body.messages)) {
+      clientMessages = body.messages;
+    } else if (body.message && typeof body.message === 'object') {
+      edgeLogger.info('Using optimized single message format', {
+        category: 'chat',
+        messageId: body.message.id
+      });
+      clientMessages = [body.message];
+    } else {
+      return new Response(
+        JSON.stringify({ error: 'Invalid request: messages required' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Parse deepSearchEnabled flag
+    const deepSearchEnabled = parseBooleanValue(body.deepSearchEnabled);
+
+    // Get sessionId and agentId
+    const sessionId = body.id;
+    const requestedAgentId = body.agentId || 'default';
 
     // Basic validation
     if (!clientMessages || !Array.isArray(clientMessages) || clientMessages.length === 0) {

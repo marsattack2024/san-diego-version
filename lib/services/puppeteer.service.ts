@@ -8,12 +8,11 @@
 
 import { edgeLogger } from '../logger/edge-logger';
 import { LOG_CATEGORIES } from '../logger/constants';
-import { LRUCache } from 'lru-cache';
+import { chatEngineCache } from '../chat-engine/cache-service';
+import { validateAndSanitizeUrl } from '@/lib/utils/url-utils';
 
 // Constants
 const SCRAPER_ENDPOINT = process.env.SCRAPER_ENDPOINT || 'https://us-central1-puppeteer-n8n.cloudfunctions.net/puppeteerFunction';
-const CACHE_MAX_SIZE = 100; // Maximum number of items in cache
-const CACHE_TTL = 1000 * 60 * 60 * 24; // 24 hours
 
 // Types
 export interface ScrapedContent {
@@ -47,21 +46,10 @@ export interface ScraperStats {
  * Handles web scraping operations and caching
  */
 class PuppeteerService {
-    private cache: LRUCache<string, PuppeteerResponseData>;
-
     constructor() {
-        // Initialize LRU cache
-        this.cache = new LRUCache<string, PuppeteerResponseData>({
-            max: CACHE_MAX_SIZE,
-            ttl: CACHE_TTL,
-            allowStale: false
-        });
-
         edgeLogger.info('Puppeteer service initialized', {
             category: LOG_CATEGORIES.TOOLS,
-            operation: 'puppeteer_service_init',
-            cacheMax: CACHE_MAX_SIZE,
-            cacheTTL: CACHE_TTL
+            operation: 'puppeteer_service_init'
         });
     }
 
@@ -71,43 +59,11 @@ class PuppeteerService {
      * @returns Sanitized URL or null if invalid
      */
     public validateAndSanitizeUrl(url: string): string | null {
-        try {
-            // Check if URL is already well-formed
-            const normalizedUrl = url.trim();
-
-            // Add protocol if missing
-            let processedUrl = normalizedUrl;
-            if (!normalizedUrl.startsWith('http://') && !normalizedUrl.startsWith('https://')) {
-                processedUrl = 'https://' + normalizedUrl;
-            }
-
-            // Test URL validity with URL constructor
-            const urlObj = new URL(processedUrl);
-            const sanitizedUrl = urlObj.toString();
-
-            // Ban list check
-            const bannedDomains = ['localhost', '127.0.0.1', 'internal', '.local'];
-            const isBanned = bannedDomains.some(domain => urlObj.hostname.includes(domain));
-            if (isBanned) {
-                edgeLogger.error('Web scraping - banned domain detected', {
-                    category: LOG_CATEGORIES.TOOLS,
-                    operation: 'url_validation_failed',
-                    reason: 'banned_domain',
-                    url: sanitizedUrl
-                });
-                return null;
-            }
-
-            return sanitizedUrl;
-        } catch (error) {
-            edgeLogger.error('Web scraping - URL validation failed', {
-                category: LOG_CATEGORIES.TOOLS,
-                operation: 'url_validation_failed',
-                url,
-                error: error instanceof Error ? error.message : String(error)
-            });
-            return null;
-        }
+        // Use the centralized URL validation function
+        return validateAndSanitizeUrl(url, {
+            logErrors: true,
+            additionalBannedDomains: [] // Add any service-specific banned domains here
+        });
     }
 
     /**
@@ -127,8 +83,10 @@ class PuppeteerService {
             }
 
             // Check cache first
-            const cachedResult = this.cache.get(sanitizedUrl);
-            if (cachedResult) {
+            const cachedContent = await chatEngineCache.getScrapedContent(sanitizedUrl);
+            if (cachedContent) {
+                const cachedResult = JSON.parse(cachedContent) as PuppeteerResponseData;
+
                 edgeLogger.info('Web scraping cache hit', {
                     category: LOG_CATEGORIES.TOOLS,
                     operation: 'web_scraping_cache_hit',
@@ -156,7 +114,7 @@ class PuppeteerService {
             const result = await this.callPuppeteerScraper(sanitizedUrl);
 
             // Cache result
-            this.cache.set(sanitizedUrl, result);
+            await chatEngineCache.setScrapedContent(sanitizedUrl, JSON.stringify(result));
 
             const duration = Date.now() - startTime;
 

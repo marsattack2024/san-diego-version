@@ -1,14 +1,16 @@
 /**
  * Website Summarizer Tool
  * Scrapes a website and generates a summary using AI
- * Uses the Puppeteer scraper directly rather than using the existing tool
+ * Uses the web scraper tool for content extraction
  */
 
 import { z } from 'zod';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { formatScrapedContent } from '@/lib/chat/tools';
 import { generateText } from 'ai';
 import { openai } from '@ai-sdk/openai';
+import { webScraperTool } from '@/lib/chat-engine/tools/web-scraper';
+import { ensureProtocol } from '@/lib/utils/url-utils';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
 // Max duration setting for Hobby plan
 const MAX_DURATION_MS = 15000;
@@ -39,78 +41,63 @@ export async function generateWebsiteSummary(
   error?: string;
 }> {
   const startTime = performance.now();
-  let title = '';
+  let title = 'Unknown Title';
 
   try {
-    // Validate the URL
-    // We'll import these dynamically to avoid increasing the edge bundle size
-    const { validateAndSanitizeUrl } = await import('./web-scraper-tool');
-    const { ensureProtocol } = await import('@/lib/chat/url-utils');
-
-    // Process the URL to ensure it has protocol and validate it
+    // Process the URL to ensure it has protocol
     const fullUrl = ensureProtocol(url);
-    let validUrl: string;
-
-    try {
-      validUrl = validateAndSanitizeUrl(fullUrl);
-    } catch (error) {
-      edgeLogger.warn('Invalid URL for summarization', {
-        url: fullUrl,
-        error: error instanceof Error ? error.message : String(error)
-      });
-
-      return {
-        summary: `The URL ${url} appears to be invalid or unsafe. Please provide a valid website URL.`,
-        url: url,
-        title: 'Invalid URL',
-        timeTaken: Math.round(performance.now() - startTime),
-        wordCount: 0,
-        error: 'Invalid URL'
-      };
-    }
 
     edgeLogger.info('Starting website summarization', {
-      url: validUrl,
+      category: LOG_CATEGORIES.TOOLS,
+      operation: 'website_summarization_start',
+      url: fullUrl,
       maxWords: options.maxWords
     });
-
-    // Call the Puppeteer scraper directly
-    const { callPuppeteerScraper } = await import('./web-scraper-tool');
 
     // Set up a timeout for the scraping operation
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), MAX_DURATION_MS);
 
     try {
-      // Perform the scraping
-      const scraperResult = await callPuppeteerScraper(validUrl);
+      // Use the web scraper tool to get the content
+      const toolCallId = `summarizer-${Date.now()}`;
+
+      // Execute the web scraper tool
+      const scraperResult = await webScraperTool.execute(
+        { query: '', urls: [fullUrl] },
+        {
+          messages: [{ role: 'user', content: `Scrape this URL: ${fullUrl}` }],
+          toolCallId: toolCallId
+        }
+      );
+
       clearTimeout(timeoutId);
 
-      // Check if the result is valid
-      if (!scraperResult || typeof scraperResult !== 'object') {
-        throw new Error('Invalid scraper result');
+      if (!scraperResult || !scraperResult.content) {
+        throw new Error('Failed to retrieve content from URL');
       }
 
-      // Extract content and title from the result
-      const content = scraperResult.content || '';
-      title = scraperResult.title || 'Unknown Title';
+      // Try to extract title from the scraped content (typically in a heading)
+      const titleMatch = scraperResult.content.match(/## ([^✓✗]+)/);
+      if (titleMatch && titleMatch[1]) {
+        title = titleMatch[1].trim();
+      }
 
       // Log successful scraping
       edgeLogger.info('Website scraped successfully for summary', {
-        url: validUrl,
-        contentLength: content.length,
+        category: LOG_CATEGORIES.TOOLS,
+        operation: 'website_summarization_scraped',
+        url: fullUrl,
+        contentLength: scraperResult.content.length,
         title,
         timeTaken: Math.round(performance.now() - startTime)
       });
 
-      // Format the content for the AI
-      const formattedContent = formatScrapedContent(scraperResult);
-
       // Generate the summary
       const summary = await generateSummary(
-        formattedContent,
+        scraperResult.content,
         title,
-        validUrl,
+        fullUrl,
         options.maxWords || 600,
         startTime
       );
@@ -123,6 +110,8 @@ export async function generateWebsiteSummary(
     const timeTaken = Math.round(performance.now() - startTime);
 
     edgeLogger.error('Website summarization failed', {
+      category: LOG_CATEGORIES.TOOLS,
+      operation: 'website_summarization_error',
       url,
       error: error instanceof Error ? error.message : String(error),
       timeTaken
@@ -157,11 +146,12 @@ async function generateSummary(
 }> {
   try {
     edgeLogger.info('Starting summary generation', {
+      category: LOG_CATEGORIES.TOOLS,
+      operation: 'website_summarization_gen_start',
       contentLength: content.length,
       targetWordCount: maxWords
     });
 
-    // Prepare the prompt for the AI
     const prompt = `You are a professional summarization assistant. Summarize the following website content in approximately ${maxWords} words.
       Focus on the main offerings, value proposition, and key information a photography business owner would find valuable.
       Make the summary clear, informative, and easy to understand. Don't mention that you're summarizing the content.
@@ -173,7 +163,6 @@ async function generateSummary(
       
       Summary (approximately ${maxWords} words):`;
 
-    // Generate the summary using AI SDK directly
     const completion = await generateText({
       model: openai('gpt-3.5-turbo'),
       messages: [{ role: 'user', content: prompt }],
@@ -181,15 +170,13 @@ async function generateSummary(
       maxTokens: 800,
     });
 
-    // Get the summary text
     const summary = completion.text.trim();
-
-    // Calculate word count
     const wordCount = countWords(summary);
-
-    // Log results
     const timeTaken = Math.round(performance.now() - startTime);
+
     edgeLogger.info('Summary generation completed', {
+      category: LOG_CATEGORIES.TOOLS,
+      operation: 'website_summarization_complete',
       url,
       timeTaken,
       summaryLength: summary.length,
@@ -206,6 +193,8 @@ async function generateSummary(
     };
   } catch (error) {
     edgeLogger.error('Summary generation failed', {
+      category: LOG_CATEGORIES.TOOLS,
+      operation: 'website_summarization_gen_error',
       error: error instanceof Error ? error.message : String(error)
     });
 

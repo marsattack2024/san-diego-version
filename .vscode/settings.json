@@ -5,7 +5,7 @@
   "files.associations": {
     "*.css": "postcss"
   },
-  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.tsdk": "/Users/Humberto/.nvm/versions/node/v20.11.1/lib/node_modules/typescript/lib",
   "typescript.enablePromptUseWorkspaceTsdk": true,
   "editor.formatOnSave": true,
   "editor.codeActionsOnSave": {

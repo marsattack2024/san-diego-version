@@ -31,10 +31,10 @@ function generateChunks(input: string): string[] {
  */
 export async function createEmbedding(text: string): Promise<number[]> {
   const startTime = Date.now();
-  
+
   try {
     logger.info('Creating embedding', { text_length: text.length });
-    
+
     const { embedding } = await embed({
       model: openai.embedding(EMBEDDING_CONFIG.model),
       value: text,
@@ -43,7 +43,7 @@ export async function createEmbedding(text: string): Promise<number[]> {
     const duration = Date.now() - startTime;
     logger.info(
       'Successfully created embedding',
-      { 
+      {
         text_length: text.length,
         duration_ms: duration,
         model: EMBEDDING_CONFIG.model
@@ -54,7 +54,7 @@ export async function createEmbedding(text: string): Promise<number[]> {
   } catch (error) {
     logger.error(
       'Error creating embedding',
-      { 
+      {
         error: error instanceof Error ? error.message : String(error),
         text_length: text.length,
         duration_ms: Date.now() - startTime
@@ -73,18 +73,18 @@ export async function createEmbedding(text: string): Promise<number[]> {
  * @returns Promise resolving to array of relevant content with similarity scores
  */
 export async function findRelevantContent(
-  userQuery: string, 
-  limit = 5, 
+  userQuery: string,
+  limit = 5,
   similarityThreshold = 0.65
 ) {
   const startTime = Date.now();
-  
+
   try {
     logger.info('Finding relevant content', { query_length: userQuery.length });
-    
+
     // Create embedding for the query
     const embedding = await createEmbedding(userQuery);
-    
+
     // Search for similar content in Supabase
     // Note: Using the correct parameter order based on the error message
     const { data, error } = await supabase
@@ -93,32 +93,32 @@ export async function findRelevantContent(
         match_count: limit,
         filter: {}
       });
-    
+
     if (error) {
       throw error;
     }
-    
+
     // Transform the response to the expected format
     const results = (data || []).map((item: any) => ({
       name: item.content || item.id || 'Unknown content',
       similarity: typeof item.similarity === 'number' ? item.similarity : 0
     }));
-    
+
     const duration = Date.now() - startTime;
     logger.info(
       'Successfully found relevant content',
-      { 
+      {
         query_length: userQuery.length,
         result_count: results.length,
         duration_ms: duration
       }
     );
-    
+
     return results;
   } catch (error) {
     logger.error(
       'Error finding relevant content',
-      { 
+      {
         error: error instanceof Error ? error.message : String(error),
         query_length: userQuery.length,
         duration_ms: Date.now() - startTime
@@ -135,18 +135,18 @@ export async function findRelevantContent(
 async function simulateEmbedding(text: string, dimensions: number): Promise<number[]> {
   // Simulate API latency
   await new Promise(resolve => setTimeout(resolve, 200));
-  
+
   // Create a deterministic embedding based on the text
   // This is just for simulation - real embeddings would come from the API
   const embedding: number[] = [];
   const seed = hashString(text);
-  
+
   for (let i = 0; i < dimensions; i++) {
     // Generate a pseudo-random value between -1 and 1
     const value = Math.sin(seed * (i + 1)) / 2 + 0.5;
     embedding.push(value);
   }
-  
+
   // Normalize the embedding to unit length
   const magnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
   return embedding.map(val => val / magnitude);
@@ -170,10 +170,10 @@ function hashString(str: string): number {
  */
 export async function createEmbeddingBatch(texts: string[]): Promise<number[][]> {
   const startTime = Date.now();
-  
+
   try {
     logger.info('Creating embeddings batch', { batch_size: texts.length });
-    
+
     const { embeddings } = await embedMany({
       model: openai.embedding(EMBEDDING_CONFIG.model),
       values: texts,
@@ -182,7 +182,7 @@ export async function createEmbeddingBatch(texts: string[]): Promise<number[][]>
     const duration = Date.now() - startTime;
     logger.info(
       'Successfully created embeddings batch',
-      { 
+      {
         batch_size: texts.length,
         duration_ms: duration,
         model: EMBEDDING_CONFIG.model
@@ -193,7 +193,7 @@ export async function createEmbeddingBatch(texts: string[]): Promise<number[][]>
   } catch (error) {
     logger.error(
       'Error creating embeddings batch',
-      { 
+      {
         error: error instanceof Error ? error.message : String(error),
         batch_size: texts.length,
         duration_ms: Date.now() - startTime
@@ -213,34 +213,34 @@ export async function generateEmbeddings(
   value: string
 ): Promise<Array<{ embedding: number[]; content: string }>> {
   const startTime = Date.now();
-  
+
   try {
     const chunks = generateChunks(value);
     logger.info('Creating embeddings batch', { chunk_count: chunks.length });
-    
+
     const { embeddings } = await embedMany({
       model: openai.embedding(EMBEDDING_CONFIG.model),
       values: chunks,
     });
-    
+
     const duration = Date.now() - startTime;
     logger.info(
       'Successfully created embeddings batch',
-      { 
+      {
         chunk_count: chunks.length,
         duration_ms: duration,
         model: EMBEDDING_CONFIG.model
       }
     );
-    
-    return embeddings.map((embedding, i) => ({ 
-      content: chunks[i], 
-      embedding 
+
+    return embeddings.map((embedding, i) => ({
+      content: chunks[i],
+      embedding
     }));
   } catch (error) {
     logger.error(
       'Error creating embeddings batch',
-      { 
+      {
         error: error instanceof Error ? error.message : String(error),
         duration_ms: Date.now() - startTime
       }

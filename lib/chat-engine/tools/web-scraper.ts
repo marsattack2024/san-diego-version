@@ -10,7 +10,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { extractUrls } from '@/lib/chat/url-utils';
+import { extractUrls } from '@/lib/utils/url-utils';
 import { puppeteerService } from '../../services/puppeteer.service';
 
 // Define tool parameters schema using Zod

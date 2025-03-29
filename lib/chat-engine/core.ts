@@ -4,7 +4,7 @@ import { LOG_CATEGORIES } from '../logger/constants';
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/utils/supabase/server';
 import { cookies } from 'next/headers';
-import { extractUrls } from '@/lib/chat/url-utils';
+import { extractUrls } from '@/lib/utils/url-utils';
 import { openai } from '@ai-sdk/openai';
 
 // Import the centralized cache service and message history service

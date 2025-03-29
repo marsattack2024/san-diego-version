@@ -8,7 +8,6 @@
 
 import { knowledgeBaseTool } from './knowledge-base';
 import { webScraperTool } from './web-scraper';
-import { ragTool } from './rag-tool';
 import { deepSearchTool } from './deep-search';
 import { Tool } from 'ai';
 import { edgeLogger } from '@/lib/logger/edge-logger';
@@ -20,8 +19,7 @@ import { LOG_CATEGORIES } from '@/lib/logger/constants';
  */
 export const standardTools: Record<string, Tool<any, any>> = {
     getInformation: knowledgeBaseTool,
-    scrapeWebContent: webScraperTool,
-    getContext: ragTool // RAG tool following Vercel AI SDK pattern
+    scrapeWebContent: webScraperTool
 };
 
 /**
@@ -38,8 +36,7 @@ export const fullChatTools: Record<string, Tool<any, any>> = {
  * Only includes the essential tools for simplicity and performance
  */
 export const widgetTools: Record<string, Tool<any, any>> = {
-    getInformation: knowledgeBaseTool,
-    getContext: ragTool
+    getInformation: knowledgeBaseTool
 };
 
 /**
@@ -51,13 +48,11 @@ export function createToolSet(options: {
     useKnowledgeBase?: boolean;
     useWebScraper?: boolean;
     useDeepSearch?: boolean;
-    useRagTool?: boolean;
 }): Record<string, Tool<any, any>> {
     const {
         useKnowledgeBase = true,
         useWebScraper = false,
-        useDeepSearch = false,
-        useRagTool = true
+        useDeepSearch = false
     } = options;
 
     const toolSet: Record<string, Tool<any, any>> = {};
@@ -68,8 +63,7 @@ export function createToolSet(options: {
         operation: 'create_tool_set',
         useKnowledgeBase,
         useWebScraper,
-        useDeepSearch,
-        useRagTool
+        useDeepSearch
     });
 
     // Add knowledge base tool if enabled
@@ -80,11 +74,6 @@ export function createToolSet(options: {
     // Add web scraper tool if enabled
     if (useWebScraper) {
         toolSet.scrapeWebContent = webScraperTool;
-    }
-
-    // Add RAG tool if enabled
-    if (useRagTool) {
-        toolSet.getContext = ragTool;
     }
 
     // Add Deep Search tool ONLY if explicitly enabled

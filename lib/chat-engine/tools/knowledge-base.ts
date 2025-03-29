@@ -9,7 +9,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { findSimilarDocumentsOptimized } from '@/lib/vector/documentRetrieval';
+import { findSimilarDocumentsOptimized } from '@/lib/services/vector/document-retrieval';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
 // Define tool parameters schema using Zod
