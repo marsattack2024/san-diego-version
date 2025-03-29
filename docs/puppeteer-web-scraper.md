@@ -1,594 +1,134 @@
-# Puppeteer Web Scraper & Redis Caching Documentation
+# Puppeteer Web Scraper & Redis Caching Implementation
 
 ## Overview
 
-The web scraper system is a robust, cloud-based solution that extracts content from web pages using Puppeteer, with a multi-layer caching strategy implemented with Upstash Redis. URLs are detected in user messages and processed automatically, ensuring reliable content extraction for AI responses without requiring explicit tool calls.
+Our web scraper system extracts content from web pages using Puppeteer in a cloud-based function, with Redis caching to optimize performance. The system automatically detects URLs in user messages and enhances AI responses with relevant website content.
 
-## Architecture
+## Architecture Components
 
-### Core Components
+### 1. Web Scraper Tool
 
-1. **Cloud Scraper Function**
-   - Hosted on Google Cloud Functions
-   - Uses Puppeteer for JavaScript-rendered content extraction
-   - Endpoint configured via `SCRAPER_ENDPOINT` environment variable
-   - Includes internal caching to reduce duplicate requests
-   - Handles HTML parsing, content extraction, and sanitization
-
-2. **Direct Route Implementation**
-   - Located in `app/api/chat/route.ts`
-   - Processes URLs automatically within the API request handler
-   - Integrates Redis caching with proper JSON serialization
-   - Implements timeout protection (15s) and comprehensive error handling
-   - Adds scraped content directly to AI system prompts
-
-3. **Redis Caching Layer**
-   - Uses Upstash Redis (Edge-compatible)
-   - Provides distributed caching across serverless functions
-   - Stores serialized JSON with 6-hour TTL
-   - Implements proper error handling and fallbacks
-
-### Detailed Processing Flow
-
-1. **URL Detection & Processing**
-   - Uses `extractUrls` utility to identify URLs in user messages
-   - Validates and sanitizes URLs before processing
-   - Uses `ensureProtocol` to normalize URLs to valid format
-   - Limits processing to avoid overwhelming responses (currently 1 URL per message)
-
-2. **Redis Caching Implementation**
-   ```typescript
-   // Redis instance creation
-   const redis = Redis.fromEnv();
-   
-   // Cache key generation 
-   const cacheKey = `scrape:${validUrl}`;
-   
-   // Retrieval with type checking
-   const cachedContentStr = await redis.get(cacheKey);
-   if (cachedContentStr) {
-     try {
-       const parsedContent = JSON.parse(cachedContentStr as string);
-       
-       // Validate required fields
-       if (parsedContent && 
-           typeof parsedContent === 'object' && 
-           parsedContent.content && 
-           parsedContent.title && 
-           parsedContent.url) {
-         result = parsedContent;
-       }
-     } catch (parseError) {
-       // Error handling with logging
-     }
-   }
-   
-   // Storage with TTL
-   await redis.set(cacheKey, JSON.stringify(result), { ex: 60 * 60 * 6 });
-   ```
-
-3. **Scraper Call Implementation**
-   ```typescript
-   // Function to call the Puppeteer scraper with timeout protection
-   const scrapingPromise = callPuppeteerScraper(validUrl);
-   const timeoutPromise = new Promise<never>((_, reject) => {
-     setTimeout(() => reject(new Error('Scraping timed out')), 15000);
-   });
-   
-   const scraperResult = await Promise.race([scrapingPromise, timeoutPromise]);
-   ```
-
-4. **Content Formatting & AI Integration**
-   ```typescript
-   function formatScrapedContent(content: any): string {
-     const { title, description, content: mainContent, url } = content;
-     
-     return `
-   # SCRAPED CONTENT FROM URL: ${url}
-   
-   ## Title: ${title || 'Untitled Page'}
-   
-   ${description ? `## Description:\n${description}\n` : ''}
-   
-   ## Main Content:
-   ${mainContent}
-   
-   ---
-   SOURCE: ${url}
-   `.trim();
-   }
-   
-   // Enhance the system message with the scraped content
-   aiMessages[0].content += `\n\n${'='.repeat(80)}\n` +
-     `## IMPORTANT: SCRAPED WEB CONTENT FROM USER'S URLS\n` +
-     `The following content has been automatically extracted from URLs in the user's message.\n` +
-     `You MUST use this information as your primary source when answering questions about these URLs.\n` +
-     `Do not claim you cannot access the content - it is provided below and you must use it.\n` +
-     `${'='.repeat(80)}\n\n` +
-     formattedContent +
-     `\n\n${'='.repeat(80)}\n`;
-   ```
-
-## Redis Caching System Details
-
-### Configuration
-
-The Redis caching layer uses Upstash Redis, configured via environment variables:
+The web scraper is implemented as a Vercel AI SDK tool:
 
 ```typescript
-// Environment variables required
-// UPSTASH_REDIS_REST_URL - The Redis REST API URL
-// UPSTASH_REDIS_REST_TOKEN - Authentication token for Redis
-
-// Redis instance creation
-const redis = Redis.fromEnv();
+export const webScraperTool = tool({
+  description: 'Scrape content from a web page when URLs are provided',
+  parameters: z.object({
+    url: z.string().describe('The URL to scrape content from')
+  }),
+  execute: async ({ url }) => {
+    // Sanitize and validate URL
+    const validUrl = validateAndSanitizeUrl(url);
+    
+    // Check cache first
+    const cachedContent = await getScrapedContentFromCache(validUrl);
+    if (cachedContent) {
+      return cachedContent;
+    }
+    
+    // Call the scraper service if no cache hit
+    const result = await puppeteerService.scrapeUrl(validUrl);
+    
+    // Cache the result for future use
+    await cacheScrapedContent(validUrl, result);
+    
+    return formatScrapedContent(result);
+  }
+});
 ```
 
-### Data Structures
-
-1. **Cache Keys**
-   - Format: `scrape:${validUrl}`
-   - Prefix `scrape:` for namespace separation
-   - Full sanitized URL as unique identifier
-
-2. **Cache Values**
-   - JSON serialized objects with structure:
-   ```typescript
-   interface ScrapedContent {
-     url: string;            // Original URL
-     title: string;          // Page title
-     description?: string;   // Meta description (optional)
-     content: string;        // Main content
-     timestamp?: string;     // When scraped
-   }
-   ```
-
-### Cache Operations
-
-1. **Read Operations**
-   - Get string value: `await redis.get(cacheKey)`
-   - Parse JSON with error handling
-   - Validate required fields
-   - Fall back to scraping on any error
-
-2. **Write Operations**
-   - Format content object
-   - Validate all required fields exist
-   - Stringify with `JSON.stringify(result)`
-   - Store with TTL: `await redis.set(cacheKey, jsonString, { ex: 60 * 60 * 6 })`
-
-3. **Error Handling**
-   - Type checking for cached content
-   - JSON parse error handling
-   - Redis operation error handling
-   - Structured logging for diagnostics
-
-4. **Fallback Mechanism**
-   - Cache miss → Call scraper
-   - Parse error → Call scraper
-   - Redis error → Call scraper
-   - Scraper error → Return error in logs, continue without content
-
-### Cache Validation
-
-The system implements multi-stage validation:
+### 2. Puppeteer Service
 
 ```typescript
-// Stage 1: Type checking
-if (typeof cachedContentStr === 'string') {
-  // Stage 2: Parse JSON
-  try {
-    const parsedContent = JSON.parse(cachedContentStr);
+class PuppeteerService {
+  async scrapeUrl(url: string): Promise<ScrapedContent> {
+    // Determine API endpoint based on environment
+    const endpoint = process.env.SCRAPER_ENDPOINT || 
+      'https://cloud-function-scraper.googleapis.com/scrape';
     
-    // Stage 3: Validate object structure
-    if (parsedContent && 
-        typeof parsedContent === 'object' && 
-        parsedContent.content && 
-        parsedContent.title && 
-        parsedContent.url) {
-      // Valid content, use it
-      result = parsedContent;
-    } else {
-      throw new Error('Missing required fields in cached content');
+    // Call the Puppeteer scraper with timeout protection
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+      signal: AbortSignal.timeout(15000) // 15-second timeout
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Scraping failed: ${response.status}`);
     }
-  } catch (parseError) {
-    // Log error and continue to scraping
+    
+    const result = await response.json();
+    return this.processScrapedContent(result);
+  }
+  
+  private processScrapedContent(data: any): ScrapedContent {
+    // Extract and format the relevant content
+    return {
+      title: data.title || 'Untitled Page',
+      description: data.description || '',
+      content: data.content || '',
+      url: data.url
+    };
   }
 }
 ```
 
-### Cache Analytics
+### 3. Redis Caching Layer
 
-The system logs detailed cache operations:
-
-1. **Cache Hits**
-   ```
-   Redis cache hit for URL (url=example.com, cacheHit=true, contentLength=12345, cacheSource=redis)
-   ```
-
-2. **Cache Misses**
-   ```
-   No Redis cache hit - calling puppeteer scraper (url=example.com)
-   ```
-
-3. **Cache Errors**
-   ```
-   Error parsing cached content (url=example.com, error=Unexpected token in JSON, cachedContentSample=...)
-   ```
-
-4. **Cache Storage**
-   ```
-   Stored scraped content in Redis cache (url=example.com, contentLength=12345, storedAt=2023-07-01T12:34:56.789Z)
-   ```
-
-## Puppeteer Scraper Details
-
-### Cloud Function Implementation
-
-The Puppeteer scraper runs as a separate cloud function with these key features:
-
-1. **Browser Management**
-   - Creates headless Chrome browser
-   - Reuses browser instance when possible
-   - Implements connection pooling
-   - Provides graceful shutdown
-
-2. **Page Navigation**
-   - Sets appropriate user agent
-   - Handles timeouts and navigation errors
-   - Manages page resources efficiently
-   - Enforces maximum page size limits
-
-3. **Content Extraction**
-   ```typescript
-   // General extraction strategy
-   const title = await page.title();
-   const description = await page.$eval('meta[name="description"]', 
-     el => el.getAttribute('content')).catch(() => '');
-   
-   // Main content extraction
-   const content = await page.evaluate(() => {
-     // Complex content extraction logic
-     // Prioritizes main content areas
-     // Removes navigation, ads, etc.
-     // Formats content for readability
-   });
-   
-   return {
-     url,
-     title,
-     description,
-     content,
-     timestamp: new Date().toISOString()
-   };
-   ```
-
-4. **Error Handling**
-   - Navigation timeouts
-   - Content extraction failures
-   - Resource limitations
-   - Browser crashes
-
-### Content Processing
-
-1. **HTML Cleaning**
-   - Removes script tags
-   - Eliminates tracking pixels
-   - Filters out navigation elements
-   - Preserves important content
-
-2. **Content Prioritization**
-   - Main article content
-   - Headers and subheaders
-   - Lists and structured data
-   - Important images (described in text)
-
-3. **Format Standardization**
-   - Converts to plain text
-   - Preserves heading structure
-   - Maintains paragraph breaks
-   - Retains list formatting
-
-### Security Considerations
-
-1. **URL Validation**
-   ```typescript
-   function validateAndSanitizeUrl(url: string): string {
-     // Parse URL to check components
-     try {
-       const parsedUrl = new URL(url);
-       
-       // Only allow http and https protocols
-       if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-         throw new Error('Invalid protocol');
-       }
-       
-       // Block private/internal networks
-       const hostname = parsedUrl.hostname;
-       if (hostname === 'localhost' || 
-           hostname.startsWith('127.') || 
-           hostname.startsWith('192.168.') ||
-           hostname.startsWith('10.') ||
-           hostname.endsWith('.local')) {
-         throw new Error('Private networks not allowed');
-       }
-       
-       // Return sanitized URL
-       return parsedUrl.toString();
-     } catch (error) {
-       throw new Error(`Invalid URL: ${error.message}`);
-     }
-   }
-   ```
-
-2. **Content Sanitization**
-   - Removes JavaScript
-   - Sanitizes HTML
-   - Prevents XSS attacks
-   - Limits response size
-
-## Edge Runtime Compatibility
-
-Both the scraper implementation and Redis caching are designed for Edge runtime:
-
-1. **Memory Efficiency**
-   - Single URL processing per request
-   - Streaming response handling
-   - Proper resource cleanup
-   - Memory usage monitoring
-
-2. **Timeout Management**
-   - Maximum 15-second scraper timeout
-   - Graceful timeout handling
-   - User-friendly timeout messages
-   - Background processing termination
-
-3. **Error Resilience**
-   - Isolated try/catch blocks
-   - Typed error handling
-   - Fallback mechanisms at each stage
-   - Clear error diagnostics
-
-## Performance Optimizations
-
-### Redis Caching Strategy
-
-1. **TTL Management**
-   - 6-hour cache duration balances freshness and performance
-   - High-traffic URLs benefit from caching
-   - Automatic cache expiration handles content changes
-
-2. **Minimizing Network Operations**
-   - First-check caching reduces scraper calls
-   - JSON validation prevents unnecessary scraper fallbacks
-   - Proper error handling preserves scraper resources
-
-3. **Content Size Optimization**
-   - Limits content size to essential information
-   - Focuses on main content areas
-   - Omits unnecessary styling and media
-   - Balances completeness with prompt size constraints
-
-### Scraper Efficiency
-
-1. **Resource Management**
-   - Efficient browser instance reuse
-   - Connection pooling
-   - Memory usage constraints
-   - CPU usage optimization
-
-2. **Selective Content Extraction**
-   - Targets high-value content
-   - Ignores advertisements
-   - Skips navigation elements
-   - Prioritizes meaningful text
-
-## Monitoring and Debugging
-
-### Logging Strategy
-
-1. **Structured Logs**
-   - Operation type and status
-   - URL and content details
-   - Timing information
-   - Error context and stack traces
-
-2. **Performance Metrics**
-   - Cache hit/miss ratio
-   - Scraping operation timing
-   - Content size statistics
-   - Error frequency and types
-
-3. **Diagnostic Patterns**
-   - Cache validation failures
-   - Scraper timeouts
-   - Redis connectivity issues
-   - Content extraction problems
-
-### Troubleshooting Common Issues
-
-1. **Empty or Invalid Cache Content**
-   - Check Redis connectivity
-   - Verify JSON serialization
-   - Validate content structure
-   - Inspect cache key formation
-
-2. **Scraper Failures**
-   - Check scraper endpoint availability
-   - Verify URL validation
-   - Inspect timeout settings
-   - Monitor resource constraints
-
-3. **Content Quality Issues**
-   - Review content extraction logic
-   - Check HTML structure handling
-   - Validate formatting function
-   - Inspect specific URL patterns
-
-## Implementation Examples
-
-### Full URL Processing Flow
+The Redis caching implementation follows these best practices:
 
 ```typescript
-// 1. Extract URLs from user message
-const urls = extractUrls(lastUserMessage.content);
+// Cache key format
+const cacheKey = `scrape:${normalizedUrl}`;
 
-// 2. Process the first URL (limiting to avoid overwhelming)
-if (urls.length > 0) {
+// Store content with TTL (6 hours)
+async function cacheScrapedContent(url: string, content: ScrapedContent): Promise<void> {
   try {
-    // 3. Normalize and validate URL
-    const fullUrl = ensureProtocol(urls[0]);
-    const validUrl = validateAndSanitizeUrl(fullUrl);
-    
-    // 4. Check Redis cache
-    const cacheKey = `scrape:${validUrl}`;
     const redis = Redis.fromEnv();
-    let result;
     
-    try {
-      const cachedContentStr = await redis.get(cacheKey);
-      if (cachedContentStr) {
-        // 5a. Process cached content if available
-        try {
-          const parsedContent = JSON.parse(cachedContentStr as string);
-          if (isValidContent(parsedContent)) {
-            result = parsedContent;
-            logCacheHit(validUrl, result);
-          }
-        } catch (parseError) {
-          logCacheParseError(validUrl, parseError, cachedContentStr);
-        }
-      }
-    } catch (cacheError) {
-      logCacheRetrievalError(validUrl, cacheError);
-    }
+    // Ensure we're storing a serializable object
+    const cacheableContent = {
+      url: content.url,
+      title: content.title,
+      description: content.description || '',
+      content: content.content,
+      timestamp: Date.now()
+    };
     
-    // 6. Fall back to scraper if needed
-    if (!result) {
-      logCacheMiss(validUrl);
-      
-      // 7. Call scraper with timeout protection
-      result = await callScraperWithTimeout(validUrl);
-      
-      // 8. Cache the result
-      try {
-        await redis.set(cacheKey, JSON.stringify(result), { ex: 60 * 60 * 6 });
-        logCacheStorage(validUrl, result);
-      } catch (storageError) {
-        logCacheStorageError(validUrl, storageError);
-      }
-    }
+    // Proper serialization
+    const jsonString = JSON.stringify(cacheableContent);
     
-    // 9. Format content for AI
-    const formattedContent = formatScrapedContent(result);
+    // Store with 6-hour TTL
+    await redis.set(cacheKey, jsonString, { ex: 60 * 60 * 6 });
     
-    // 10. Add to system prompt
-    enhanceSystemPrompt(aiMessages, formattedContent);
-    
+    edgeLogger.info('Stored scraped content in Redis cache', {
+      url,
+      contentLength: content.content.length,
+      jsonStringLength: jsonString.length,
+      ttl: 60 * 60 * 6
+    });
   } catch (error) {
-    logUrlProcessingError(urls[0], error);
+    // Log error but continue execution
+    edgeLogger.error('Failed to cache scraped content', {
+      url,
+      error: error instanceof Error ? error.message : String(error)
+    });
   }
 }
 ```
 
-### Complete Redis Error Handling
+## Recent Improvements
+
+### 1. JSON Serialization Fixes
+
+We've implemented robust serialization and parsing to address previous issues:
 
 ```typescript
-// Full cache handling with all edge cases
-try {
-  const cachedContentStr = await redis.get(cacheKey);
-  
-  // Type checking for cached content
-  if (typeof cachedContentStr !== 'string') {
-    edgeLogger.warn('Invalid cached content type', {
-      url: validUrl,
-      type: typeof cachedContentStr,
-      valuePreview: String(cachedContentStr).substring(0, 50)
-    });
-    throw new Error('Invalid cache content type');
-  }
-  
-  // Empty cache check
-  if (cachedContentStr.length === 0) {
-    edgeLogger.warn('Empty cached content', {
-      url: validUrl
-    });
-    throw new Error('Empty cache content');
-  }
-  
-  // Parse JSON with proper error handling
-  try {
-    const parsedContent = JSON.parse(cachedContentStr);
-    
-    // Full validation of all required fields
-    if (!parsedContent) {
-      throw new Error('Null parsed content');
-    }
-    
-    if (typeof parsedContent !== 'object') {
-      throw new Error(`Invalid content type: ${typeof parsedContent}`);
-    }
-    
-    if (!parsedContent.url) {
-      throw new Error('Missing URL field');
-    }
-    
-    if (!parsedContent.title) {
-      throw new Error('Missing title field');
-    }
-    
-    if (!parsedContent.content) {
-      throw new Error('Missing content field');
-    }
-    
-    if (typeof parsedContent.content !== 'string' || parsedContent.content.length === 0) {
-      throw new Error('Invalid content field');
-    }
-    
-    // Valid content - use it
-    result = parsedContent;
-    
-    edgeLogger.info('Redis cache hit for URL', {
-      url: validUrl,
-      cacheHit: true,
-      contentLength: result.content.length,
-      cacheSource: 'redis',
-      title: result.title.substring(0, 50)
-    });
-  } catch (parseError) {
-    edgeLogger.error('Error parsing cached content', {
-      url: validUrl,
-      error: parseError instanceof Error ? parseError.message : String(parseError),
-      cachedContentSample: typeof cachedContentStr === 'string' 
-        ? cachedContentStr.substring(0, 100) + '...' 
-        : `type: ${typeof cachedContentStr}`
-    });
-    // Continue with scraping
-  }
-} catch (cacheError) {
-  edgeLogger.error('Error checking Redis cache', {
-    url: validUrl,
-    error: cacheError instanceof Error ? cacheError.message : String(cacheError)
-  });
-  // Continue with scraping
-}
-```
-
-## Redis Caching Fixes
-
-Recent updates have resolved issues with Redis caching for the web scraper, addressing JSON serialization problems and preventing the common "[object Object]" validation errors.
-
-### JSON Serialization Improvements
-
-The most critical fix addresses improper object serialization, which previously could cause cache validation failures:
-
-```typescript
-// BEFORE: Potentially problematic - direct storage of result object
+// BEFORE: Problematic serialization approach
 await redis.set(cacheKey, result, { ex: 60 * 60 * 6 });
-// or
-await redis.set(cacheKey, JSON.stringify(result), { ex: 60 * 60 * 6 });
 
-// AFTER: Improved approach - consistent object structure and explicit serialization
+// AFTER: Improved type-safe serialization
 const cacheableResult = {
   url: result.url,
   title: result.title,
@@ -601,126 +141,189 @@ const jsonString = JSON.stringify(cacheableResult);
 await redis.set(cacheKey, jsonString, { ex: 60 * 60 * 6 });
 ```
 
-### Type-Aware Serialization
+### 2. Type-Safe Cache Validation
 
-We now handle different response types properly:
+Improved cache validation ensures we only use properly formatted data:
 
 ```typescript
-// Type-aware handling of different response formats
-if (typeof scraperResult === 'string') {
-  // If it's a JSON string, parse it
-  result = JSON.parse(scraperResult);
-  edgeLogger.info('Parsed string result from scraper', {
-    resultType: 'json-string',
-    parsed: true
-  });
-} else if (scraperResult && typeof scraperResult === 'object') {
-  // If it's already an object, use it directly
-  result = scraperResult;
-  edgeLogger.info('Using object result from scraper', {
-    resultType: 'object'
-  });
+// Multi-stage validation approach
+if (typeof cachedContentStr === 'string') {
+  try {
+    const parsedContent = JSON.parse(cachedContentStr);
+    
+    // Explicit type checking for required fields
+    if (parsedContent && 
+        typeof parsedContent === 'object' && 
+        typeof parsedContent.content === 'string' && 
+        typeof parsedContent.title === 'string' && 
+        typeof parsedContent.url === 'string') {
+      
+      return parsedContent;
+    } else {
+      throw new Error('Invalid cache structure');
+    }
+  } catch (parseError) {
+    edgeLogger.error('Error parsing cached content', {
+      error: parseError.message,
+      sample: cachedContentStr.substring(0, 100)
+    });
+  }
 }
 ```
 
-### Data Validation
+### 3. Error Resilience
 
-Improved validation when retrieving cached content:
+Enhanced error handling at multiple levels:
 
 ```typescript
-// Ensure we're working with a string before parsing
-const parsedContent = typeof cachedContentStr === 'string' 
-  ? JSON.parse(cachedContentStr) 
-  : cachedContentStr; // If it's already an object, use it directly
-
-// Validate the parsed content has the required fields with explicit type checking
-if (parsedContent && 
-    typeof parsedContent === 'object' && 
-    typeof parsedContent.content === 'string' && 
-    typeof parsedContent.title === 'string' && 
-    typeof parsedContent.url === 'string') {
-  // Use the valid cached content
-} else {
-  // Handle invalid cache structure
+// Resilient cache retrieval
+async function getScrapedContentFromCache(url: string): Promise<ScrapedContent | null> {
+  try {
+    const redis = Redis.fromEnv();
+    const cacheKey = `scrape:${url}`;
+    
+    const cachedContent = await redis.get(cacheKey);
+    if (!cachedContent) return null;
+    
+    // Type-safe validation and parsing
+    const parsedContent = validateCachedContent(cachedContent);
+    
+    if (parsedContent) {
+      edgeLogger.info('Cache hit for scraped content', {
+        url,
+        cacheAge: Date.now() - (parsedContent.timestamp || 0)
+      });
+      return parsedContent;
+    }
+  } catch (error) {
+    // Log but continue to scraping
+    edgeLogger.warn('Error retrieving from cache', {
+      url,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+  
+  return null;
 }
 ```
 
-### Enhanced Error Reporting
+### 4. Timeout Management
 
-We've added detailed error logging to pinpoint issues:
-
-```typescript
-// When parsing fails, include helpful diagnostic information
-edgeLogger.error('Error parsing cached content', {
-  url: validUrl,
-  error: parseError instanceof Error ? parseError.message : String(parseError),
-  cachedContentSample: typeof cachedContentStr === 'string' 
-    ? cachedContentStr.substring(0, 100) + '...' 
-    : `type: ${typeof cachedContentStr}`
-});
-```
-
-### Cache Key Strategy
-
-A simple cache key format ensures consistent storage and retrieval:
+Implemented proper timeout handling for the scraper:
 
 ```typescript
-const cacheKey = `scrape:${validUrl}`;
+// Function to call the Puppeteer scraper with timeout protection
+async function callScraperWithTimeout(url: string): Promise<ScrapedContent> {
+  // Create a timeout promise
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('Scraping timed out')), 15000);
+  });
+  
+  // Create the actual scraping promise
+  const scrapingPromise = puppeteerService.scrapeUrl(url);
+  
+  // Race the promises
+  try {
+    return await Promise.race([scrapingPromise, timeoutPromise]);
+  } catch (error) {
+    if (error.message === 'Scraping timed out') {
+      edgeLogger.warn('Scraping operation timed out', { url });
+    }
+    throw error;
+  }
+}
 ```
 
-### Cache Diagnostics
+## AI Integration
 
-New logging patterns help identify cache hits and misses:
+We integrate scraped content directly into the system prompt for AI models:
 
 ```typescript
-// Cache hit logging
-edgeLogger.info('Redis cache hit for URL', {
-  url: validUrl,
-  cacheHit: true,
-  contentLength: result.content.length,
-  cacheSource: 'redis'
-});
+// Format scraped content for the AI
+function formatScrapedContent(content: ScrapedContent): string {
+  return `
+# SCRAPED CONTENT FROM URL: ${content.url}
 
-// Cache miss logging
-edgeLogger.info('No Redis cache hit - calling puppeteer scraper', { 
-  url: validUrl 
-});
+## Title: ${content.title}
+
+${content.description ? `## Description:\n${content.description}\n` : ''}
+
+## Main Content:
+${content.content}
+
+---
+SOURCE: ${content.url}
+`.trim();
+}
+
+// Add to system prompt
+function enhanceSystemPrompt(messages: Message[], content: string): void {
+  // Find the system message (usually first message)
+  const systemMessage = messages.find(m => m.role === 'system');
+  
+  if (systemMessage && typeof systemMessage.content === 'string') {
+    systemMessage.content += `\n\n${'='.repeat(40)}\n` +
+      `## SCRAPED WEB CONTENT FROM USER'S URLS:\n` +
+      `The following content has been automatically extracted from URLs in the user's message.\n` +
+      `Use this information as your primary source when answering questions about these URLs.\n` +
+      `${'='.repeat(40)}\n\n` +
+      content +
+      `\n\n${'='.repeat(40)}\n`;
+  }
+}
 ```
 
-### Storage and Retrieval Process
+## Implementation in the Chat Engine
 
-The complete flow for storing and retrieving scraped content:
+In the chat engine, URL detection is integrated with message processing:
 
-1. **Check Cache**: First try to retrieve content using the URL as a key
-2. **Validate Response**: Ensure cached content has the required structure
-3. **Scrape If Needed**: If cache miss or validation fails, perform scraping
-4. **Format Result**: Ensure the result has a consistent structure
-5. **Store in Cache**: Serialize and store with appropriate TTL
-6. **Format Content**: Format the final content for AI consumption
+```typescript
+async function processUrls(messages: Message[]): Promise<void> {
+  // Get the last user message
+  const lastUserMessage = messages.find(m => m.role === 'user' && m.content);
+  if (!lastUserMessage || typeof lastUserMessage.content !== 'string') return;
+  
+  // Extract URLs from the message
+  const urls = extractUrls(lastUserMessage.content);
+  if (urls.length === 0) return;
+  
+  // Process the first URL (limit to avoid overwhelming response)
+  const url = urls[0];
+  
+  try {
+    // Attempt to scrape content
+    const content = await webScraperService.scrapeUrl(url);
+    
+    // Format and add to system prompt
+    const formattedContent = formatScrapedContent(content);
+    enhanceSystemPrompt(messages, formattedContent);
+  } catch (error) {
+    edgeLogger.error('Failed to process URL', {
+      url,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+```
 
-This improved caching system ensures scraped content is properly stored and retrieved, eliminating the "[object Object]" validation errors that previously occurred.
+## Best Practices
+
+1. **URL Validation**: Always sanitize and validate URLs before processing
+2. **Cache First**: Check cache before making external requests
+3. **Proper Serialization**: Ensure clean JSON serialization/deserialization
+4. **Type Safety**: Implement strict type checking for cached content
+5. **Error Handling**: Implement comprehensive error handling at all levels
+6. **Timeouts**: Set appropriate timeouts for external services
+7. **Fallbacks**: Gracefully handle failures in the scraping process
+8. **Logging**: Implement detailed logging for debugging and monitoring
 
 ## Future Enhancements
 
-1. **Multi-URL Processing**
-   - Process multiple URLs in parallel
-   - Aggregate content with proper attribution
-   - Implement priority-based URL selection
-
-2. **Content Quality Improvements**
-   - Better extraction of structured data
-   - Image description generation
-   - Table content preservation
-   - Code block formatting
-
-3. **Advanced Caching**
-   - Content versioning
-   - Partial content updates
-   - Stale-while-revalidate pattern
-   - Per-URL TTL optimization
-
-4. **Performance Enhancements**
-   - Worker thread implementation
-   - Smart queue management
-   - Domain-based rate limiting
-   - Preemptive caching for common URLs
+1. **Multi-URL Support**: Process multiple URLs in parallel
+2. **Selective Content Extraction**: Extract only the most relevant sections
+3. **Summarization**: Add automatic summarization for long pages
+4. **Structured Data Extraction**: Add support for extracting structured data
+5. **Image Processing**: Add support for describing images in scraped content
+6. **Domain-Specific Extractors**: Create specialized extractors for common sites
+7. **Cache Prefetching**: Implement proactive cache warming for common URLs
+8. **Content Updates**: Add mechanism to detect and refresh stale cached content
