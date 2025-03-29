@@ -409,6 +409,8 @@ export class ChatEngine {
             const sessionId = context.sessionId;
             const messagePersistenceDisabled = this.config.messagePersistenceDisabled;
             const persistenceService = this.persistenceService;
+            // Store reference to 'this' for use in callbacks
+            const self = this;
 
             // For saving assistant message - find the last user message to ensure persistence in same order
             const lastUserMessage = context.messages.find(m => m.role === 'user');
@@ -477,6 +479,44 @@ export class ChatEngine {
                         });
                     }
                 },
+                // Add onFinish callback to save the assistant message
+                async onFinish({ text, response }) {
+                    // Skip if message persistence is disabled
+                    if (messagePersistenceDisabled || !persistenceService || !userId) {
+                        edgeLogger.info('Skipping assistant message persistence', {
+                            operation: operationName,
+                            sessionId,
+                            disabled: messagePersistenceDisabled,
+                            hasPersistenceService: !!persistenceService,
+                            hasUserId: !!userId
+                        });
+                        return;
+                    }
+
+                    try {
+                        // Extract any tool usage information from the response
+                        const toolsUsed = text.includes('Tools and Resources Used') 
+                            ? self.extractToolsUsed(text) 
+                            : undefined;
+                        
+                        // Save the assistant message to the database
+                        await self.saveAssistantMessage(context, text, toolsUsed);
+                        
+                        edgeLogger.info('Successfully saved assistant message in onFinish', {
+                            operation: operationName,
+                            sessionId,
+                            contentLength: text.length,
+                            hasToolsUsed: !!toolsUsed
+                        });
+                    } catch (error) {
+                        edgeLogger.error('Failed to save assistant message in onFinish callback', {
+                            operation: operationName,
+                            error: error instanceof Error ? error.message : String(error),
+                            sessionId,
+                            userId
+                        });
+                    }
+                }
             });
 
             // Consume the stream in the background to ensure all callbacks are triggered
