@@ -1,12 +1,8 @@
 import { titleLogger } from '../logger/title-logger';
 import { createClient } from '../../utils/supabase/server';
 import { cacheService } from '../cache/cache-service';
-import OpenAI from 'openai';
-
-// Initialize OpenAI client
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
-});
+import { openai } from '@ai-sdk/openai';
+import { generateText } from 'ai';
 
 // Cache keys
 const TITLE_GENERATION_ATTEMPTS_KEY = 'title_generation:attempts';
@@ -17,7 +13,7 @@ const TITLE_GENERATION_LOCK_KEY = 'title_generation:lock';
  */
 function cleanTitle(rawTitle: string): string {
     // Remove quotes that GPT often adds
-    let cleanedTitle = rawTitle?.trim().replace(/^["']|["']$/g, '') || '';
+    let cleanedTitle = rawTitle.trim().replace(/^["']|["']$/g, '');
 
     // Truncate if too long (50 chars max)
     if (cleanedTitle.length > 50) {
@@ -35,7 +31,8 @@ function cleanTitle(rawTitle: string): string {
 /**
  * Fetch the current title from the database
  */
-async function getCurrentTitle(chatId: string): Promise<string | null> {
+async function getCurrentTitle(chatId: string, userId?: string): Promise<string | null> {
+    const startTime = performance.now();
     try {
         const supabase = await createClient();
 
@@ -49,13 +46,26 @@ async function getCurrentTitle(chatId: string): Promise<string | null> {
             throw new Error(`Failed to fetch current title: ${error.message}`);
         }
 
+        const durationMs = Math.round(performance.now() - startTime);
+
+        if (data?.title && data.title !== 'New Chat' && data.title !== 'Untitled Conversation') {
+            titleLogger.titleExists({
+                chatId,
+                currentTitle: data.title,
+                userId
+            });
+        }
+
         return data?.title || null;
     } catch (error) {
+        const durationMs = Math.round(performance.now() - startTime);
         titleLogger.titleUpdateResult({
             chatId,
             newTitle: 'Error fetching current title',
             success: false,
-            error: error instanceof Error ? error.message : String(error)
+            error: error instanceof Error ? error.message : String(error),
+            durationMs,
+            userId
         });
         return null;
     }
@@ -64,7 +74,8 @@ async function getCurrentTitle(chatId: string): Promise<string | null> {
 /**
  * Update the title in the database
  */
-async function updateTitleInDatabase(chatId: string, newTitle: string): Promise<boolean> {
+async function updateTitleInDatabase(chatId: string, newTitle: string, userId?: string): Promise<boolean> {
+    const startTime = performance.now();
     try {
         const supabase = await createClient();
 
@@ -87,13 +98,25 @@ async function updateTitleInDatabase(chatId: string, newTitle: string): Promise<
             // Ignore cache invalidation errors, non-critical
         }
 
+        const durationMs = Math.round(performance.now() - startTime);
+        titleLogger.titleUpdateResult({
+            chatId,
+            newTitle,
+            success: true,
+            durationMs,
+            userId
+        });
+
         return true;
     } catch (error) {
+        const durationMs = Math.round(performance.now() - startTime);
         titleLogger.titleUpdateResult({
             chatId,
             newTitle,
             success: false,
-            error: error instanceof Error ? error.message : String(error)
+            error: error instanceof Error ? error.message : String(error),
+            durationMs,
+            userId
         });
         return false;
     }
@@ -141,44 +164,63 @@ async function setNX(key: string, value: string, ttlSeconds: number): Promise<bo
  */
 export async function generateAndSaveChatTitle(
     chatId: string,
-    firstUserMessageContent: string
+    firstUserMessageContent: string,
+    userId?: string
 ): Promise<void> {
     // Skip if no message content
     if (!firstUserMessageContent || firstUserMessageContent.trim().length === 0) {
         return;
     }
 
+    const startTime = performance.now();
+    let lockAcquired = false;
+
     try {
-        titleLogger.attemptGeneration({ chatId });
-
-        // Check rate limiting - maximum 10 generation attempts per minute
-        const currentAttempts = await incrementCounter(
-            `${TITLE_GENERATION_ATTEMPTS_KEY}:global`,
-            1,
-            60
-        );
-
-        if (currentAttempts && currentAttempts > 10) {
-            titleLogger.titleGenerationFailed({
-                chatId,
-                error: 'Rate limit exceeded for title generation'
-            });
-            return;
-        }
+        titleLogger.attemptGeneration({ chatId, userId });
 
         // Try to acquire lock to prevent multiple parallel generation attempts
-        const lockAcquired = await setNX(`${TITLE_GENERATION_LOCK_KEY}:${chatId}`, 'locked', 30);
-        if (!lockAcquired) {
-            titleLogger.titleGenerationFailed({
-                chatId,
-                error: 'Another title generation is already in progress'
-            });
+        const lockStartTime = performance.now();
+        // Use exists to check if lock is available before setting
+        const lockExists = await cacheService.exists(`${TITLE_GENERATION_LOCK_KEY}:${chatId}`);
+        lockAcquired = !lockExists;
+        if (lockAcquired) {
+            await cacheService.set(`${TITLE_GENERATION_LOCK_KEY}:${chatId}`, 'locked', { ttl: 30 });
+        } else {
+            titleLogger.lockAcquisitionFailed({ chatId, userId });
+            return;
+        }
+        const lockDurationMs = Math.round(performance.now() - lockStartTime);
+
+        // Check rate limiting - maximum 10 generation attempts per minute
+        const cacheStartTime = performance.now();
+        // Since incrementCounter doesn't exist, implement manually with get/set
+        let currentAttempts = 0;
+        const counterKey = `${TITLE_GENERATION_ATTEMPTS_KEY}:global`;
+        const existingCounter = await cacheService.get<number>(counterKey);
+        if (existingCounter) {
+            currentAttempts = existingCounter + 1;
+        } else {
+            currentAttempts = 1;
+        }
+        await cacheService.set(counterKey, currentAttempts, { ttl: 60 });
+        const cacheDurationMs = Math.round(performance.now() - cacheStartTime);
+
+        titleLogger.cacheResult({
+            chatId,
+            hit: false,
+            key: `${TITLE_GENERATION_ATTEMPTS_KEY}:global`,
+            durationMs: cacheDurationMs,
+            userId
+        });
+
+        if (currentAttempts && currentAttempts > 10) {
+            titleLogger.rateLimitExceeded({ chatId, userId });
             return;
         }
 
         try {
             // Check if title is still default
-            const currentTitle = await getCurrentTitle(chatId);
+            const currentTitle = await getCurrentTitle(chatId, userId);
             if (currentTitle !== 'New Chat' && currentTitle !== 'Untitled Conversation' && currentTitle !== null) {
                 return;
             }
@@ -188,9 +230,9 @@ export async function generateAndSaveChatTitle(
                 ? firstUserMessageContent.substring(0, 1000) + '...'
                 : firstUserMessageContent;
 
-            // Generate title using OpenAI
-            const completion = await openai.chat.completions.create({
-                model: 'gpt-3.5-turbo',
+            // Generate title using Vercel AI SDK with OpenAI
+            const result = await generateText({
+                model: openai('gpt-3.5-turbo'),
                 messages: [
                     {
                         role: 'system',
@@ -201,45 +243,49 @@ export async function generateAndSaveChatTitle(
                         content: truncatedMessage
                     }
                 ],
-                max_tokens: 30,
+                maxTokens: 30,
                 temperature: 0.7
             });
 
             // Extract and clean the title
-            const generatedTitle = completion.choices[0].message.content;
-            const cleanedTitle = cleanTitle(generatedTitle || 'Chat Conversation');
+            const cleanedTitle = cleanTitle(result.text || 'Chat Conversation');
 
+            const titleGenerationDurationMs = Math.round(performance.now() - startTime);
             titleLogger.titleGenerated({
                 chatId,
-                generatedTitle: cleanedTitle
+                generatedTitle: cleanedTitle,
+                durationMs: titleGenerationDurationMs,
+                userId
             });
 
             // Update the title in the database
-            const success = await updateTitleInDatabase(chatId, cleanedTitle);
-
-            if (success) {
-                titleLogger.titleUpdateResult({
-                    chatId,
-                    newTitle: cleanedTitle,
-                    success: true
-                });
-            }
+            await updateTitleInDatabase(chatId, cleanedTitle, userId);
         } finally {
             // Release the lock when done
-            await cacheService.delete(`${TITLE_GENERATION_LOCK_KEY}:${chatId}`);
+            if (lockAcquired) {
+                await cacheService.delete(`${TITLE_GENERATION_LOCK_KEY}:${chatId}`);
+            }
         }
     } catch (error) {
+        const errorDurationMs = Math.round(performance.now() - startTime);
         titleLogger.titleGenerationFailed({
             chatId,
-            error: error instanceof Error ? error.message : String(error)
+            error: error instanceof Error ? error.message : String(error),
+            durationMs: errorDurationMs,
+            userId
         });
 
         // Attempt to set a default title if we failed to generate one
         try {
             const defaultTitle = 'Chat ' + new Date().toLocaleDateString();
-            await updateTitleInDatabase(chatId, defaultTitle);
+            await updateTitleInDatabase(chatId, defaultTitle, userId);
         } catch (fallbackError) {
             // Fallback error can be safely ignored
+        } finally {
+            // Make sure lock is released even if fallback fails
+            if (lockAcquired) {
+                await cacheService.delete(`${TITLE_GENERATION_LOCK_KEY}:${chatId}`);
+            }
         }
     }
 } 

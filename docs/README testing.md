@@ -371,3 +371,182 @@ Based on our examination of the codebase, we have tests for:
 - **Type Issues with LOG_CATEGORIES**: When using the mock logger in tests, you may encounter TypeScript errors about string literals vs the LogCategory type. Use a local constants object with the same values as a workaround.
 - **ESM Compatibility**: Some older libraries might have CommonJS compatibility issues. Use dynamic imports or ESM-compatible alternatives when possible.
 - **Edge Runtime Testing**: For Edge API routes, ensure mocks are compatible with the Edge runtime restrictions (no Node.js specific APIs).
+
+## Title Generation Service Testing Guide
+
+### Overview
+
+This guide outlines the testing approach for the title generation service, which uses OpenAI to generate contextual titles for chat conversations after the first message exchange.
+
+### Test File Structure
+
+Test file: `tests/unit/services/title-service.test.ts`
+
+```
+tests/
+├── unit/
+│   ├── services/
+│   │   └── title-service.test.ts  # Unit tests for title generation
+```
+
+### Mock Requirements
+
+For comprehensive testing of the title generation service, we need to mock:
+
+1. **OpenAI Client**: Mock the chat completions API to return predictable titles
+2. **Supabase Client**: Mock database operations for title retrieval and updates
+3. **Cache Service**: Mock Redis operations for rate limiting and locking
+4. **Logger**: Intercept logs to verify correct logging patterns
+5. **Fetch API**: Mock fetch calls for cache invalidation
+
+### Key Test Cases
+
+1. **Core Functionality**
+   - Successfully generate and save a title for a new conversation
+   - Validate the appropriate system prompt is used for title generation
+   - Ensure database update operations occur with the correct parameters
+
+2. **Error Handling**
+   - Test behavior when OpenAI API fails (should use fallback title)
+   - Test behavior when database operations fail
+   - Verify appropriate error logging with correct categories and metadata
+
+3. **Rate Limiting**
+   - Verify respecting rate limits when maximum attempts is reached
+   - Test that no OpenAI API calls occur when rate limited
+   - Confirm appropriate warning logs are generated
+
+4. **Locking Mechanism**
+   - Test lock acquisition success path
+   - Test behavior when lock acquisition fails (already in progress)
+   - Verify lock is released even when errors occur
+
+5. **Existing Title Check**
+   - Verify no title generation occurs when a non-default title exists
+   - Ensure appropriate logs are created when skipping generation
+
+6. **Performance Testing**
+   - Test that title generation completes within acceptable time limits
+   - Verify slow operations are properly flagged in logs
+
+### Example Test Implementation
+
+This code pattern follows our established testing practices:
+
+```typescript
+// Mock setup BEFORE importing the module under test
+setupLoggerMock();
+
+// Mock OpenAI with predictable responses
+vi.mock('openai', () => {
+  return {
+    default: vi.fn().mockImplementation(() => ({
+      chat: {
+        completions: {
+          create: vi.fn().mockResolvedValue({
+            choices: [{
+              message: {
+                content: 'Generated Title Example'
+              }
+            }]
+          })
+        }
+      }
+    }))
+  };
+});
+
+// Mock cache service
+vi.mock('@/lib/cache/cache-service', () => {
+  return {
+    cacheService: {
+      get: vi.fn(),
+      set: vi.fn(),
+      delete: vi.fn(),
+      exists: vi.fn()
+    }
+  };
+});
+
+// Then import the module
+import { generateAndSaveChatTitle } from '@/lib/chat/title-service';
+
+describe('Title Generation Service', () => {
+  const chatId = 'test-chat-id';
+  const userId = '5c80df74-1e2b-4435-89eb-b61b740120e9';
+  const userMessage = 'How do I improve my JavaScript skills?';
+  
+  beforeEach(() => {
+    // Reset mocks before each test
+    vi.clearAllMocks();
+    mockLogger.reset();
+  });
+  
+  it('should generate a title successfully', async () => {
+    // Test implementation...
+  });
+  
+  // Additional tests...
+});
+```
+
+### Key Test Assertions
+
+Make sure to test these key aspects:
+
+1. **Correct OpenAI Parameters**
+   - Verify model selection ('gpt-3.5-turbo')
+   - Check system prompt content for title generation guidance
+   - Validate user message is passed correctly
+
+2. **Database Interactions**
+   - Verify the correct table is accessed ('sd_chat_sessions')
+   - Ensure title update uses the generated title
+   - Check for appropriate error handling
+
+3. **Logging Verification**
+   - Verify all expected log entries with correct categories
+   - Check for appropriate log levels based on operation outcome
+   - Validate that performance metrics (durationMs) are included
+   - Ensure user IDs are properly masked
+
+4. **Redis Lock Management**
+   - Verify lock acquisition and release
+   - Test proper lock timeout configuration
+   - Ensure locks are released in finally blocks
+
+### Setup Helper Functions
+
+The test file should include appropriate setup like:
+
+```typescript
+function setupSuccessfulMocks() {
+  // Setup successful response paths
+  vi.mocked(cacheService.exists).mockResolvedValue(false);
+  vi.mocked(cacheService.set).mockResolvedValue('OK');
+  
+  // Mock database operations
+  const mockSupabaseClient = createClient();
+  vi.mocked(mockSupabaseClient.from().update).mockReturnValue({
+    eq: vi.fn().mockResolvedValue({ error: null })
+  });
+}
+
+function setupFailedOpenAIMock() {
+  // Configure OpenAI to fail for specific tests
+  const openaiInstance = new OpenAI();
+  openaiInstance.chat.completions.create = vi.fn().mockRejectedValue(
+    new Error('API Error')
+  );
+}
+```
+
+### Common Pitfalls
+
+1. **Order of Mocks**: Always set up mocks before importing the module under test
+2. **Missing Reset**: Ensure `vi.clearAllMocks()` and `mockLogger.reset()` are called in `beforeEach`
+3. **Incomplete Assertion**: Verify both the result and side effects (logs, database calls)
+4. **String vs. Enum**: When checking log categories, use the LOG_CATEGORIES enum values, not string literals
+5. **Missing Error Tests**: Include explicit tests for error paths, not just happy paths
+
+By following these guidelines, we ensure comprehensive testing of the title generation service with appropriate coverage of all functionality, error handling, and integration points.
