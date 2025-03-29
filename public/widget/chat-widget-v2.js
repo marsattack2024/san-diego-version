@@ -1,52 +1,52 @@
 "use strict"; (() => {
-    (function () {
-        // Avoid loading the widget multiple times
-        if (window.marlanChatWidgetLoaded) {
-            console.warn("Marlan Chat Widget already loaded. Skipping initialization.");
-            return;
-        }
+  (function () {
+    // Avoid loading the widget multiple times
+    if (window.marlanChatWidgetLoaded) {
+      console.warn("Marlan Chat Widget already loaded. Skipping initialization.");
+      return;
+    }
 
-        window.marlanChatWidgetLoaded = true;
+    window.marlanChatWidgetLoaded = true;
 
-        // Default configuration
-        let config = {
-            position: "bottom-right",
-            title: "Ask Marlan",
-            primaryColor: "#0070f3",
-            greeting: "I'm your Mastermind AI companion! I can answer marketing and tech questions right now! What can I help with?",
-            placeholder: "Type your message...",
-            apiEndpoint: "https://marlan.photographytoprofits.com/api/widget-chat",
-            width: "360px",
-            height: "500px",
-            zIndex: 9999
-        };
+    // Default configuration
+    let config = {
+      position: "bottom-right",
+      title: "Ask Marlan",
+      primaryColor: "#0070f3",
+      greeting: "I'm your Mastermind AI companion! I can answer marketing and tech questions right now! What can I help with?",
+      placeholder: "Type your message...",
+      apiEndpoint: "https://marlan.photographytoprofits.com/api/widget-chat",
+      width: "360px",
+      height: "500px",
+      zIndex: 9999
+    };
 
-        // Widget DOM elements
-        let elements = {
-            container: null,
-            bubble: null,
-            header: null,
-            messagesContainer: null,
-            inputContainer: null,
-            input: null,
-            sendButton: null,
-            resetButton: null
-        };
+    // Widget DOM elements
+    let elements = {
+      container: null,
+      bubble: null,
+      header: null,
+      messagesContainer: null,
+      inputContainer: null,
+      input: null,
+      sendButton: null,
+      resetButton: null
+    };
 
-        // Chat session state
-        let state = {
-            messages: [],
-            sessionId: null,
-            isOpen: false,
-            isStreaming: false,
-            abortController: null
-        };
+    // Chat session state
+    let state = {
+      messages: [],
+      sessionId: null,
+      isOpen: false,
+      isStreaming: false,
+      abortController: null
+    };
 
-        // Add styles to the document
-        function injectStyles() {
-            const style = document.createElement("style");
-            style.id = "marlan-chat-widget-styles";
-            style.innerHTML = `
+    // Add styles to the document
+    function injectStyles() {
+      const style = document.createElement("style");
+      style.id = "marlan-chat-widget-styles";
+      style.innerHTML = `
       .marlan-chat-widget-container {
         position: fixed;
         z-index: ${config.zIndex};
@@ -283,332 +283,391 @@
         left: 20px;
       }
       `;
-            document.head.appendChild(style);
+      document.head.appendChild(style);
+    }
+
+    // Create DOM elements for the widget
+    function createWidgetElements() {
+      // Create container
+      elements.container = document.createElement("div");
+      elements.container.className = `marlan-chat-widget-container ${config.position}`;
+      elements.container.style.display = "none";
+
+      // Create header
+      elements.header = document.createElement("div");
+      elements.header.className = "marlan-chat-widget-header";
+
+      const title = document.createElement("h2");
+      title.className = "marlan-chat-widget-title";
+      title.textContent = config.title;
+
+      const closeButton = document.createElement("button");
+      closeButton.className = "marlan-chat-widget-close";
+      closeButton.innerHTML = "&#x2715;";
+      closeButton.addEventListener("click", toggleWidget);
+
+      elements.header.appendChild(title);
+      elements.header.appendChild(closeButton);
+
+      // Create messages container
+      elements.messagesContainer = document.createElement("div");
+      elements.messagesContainer.className = "marlan-chat-widget-messages";
+
+      // Create input container
+      elements.inputContainer = document.createElement("div");
+      elements.inputContainer.className = "marlan-chat-widget-input-container";
+
+      const inputRow = document.createElement("div");
+      inputRow.className = "marlan-chat-widget-input-row";
+
+      elements.input = document.createElement("textarea");
+      elements.input.className = "marlan-chat-widget-input";
+      elements.input.placeholder = config.placeholder;
+      elements.input.rows = 1;
+      elements.input.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage();
         }
 
-        // Create DOM elements for the widget
-        function createWidgetElements() {
-            // Create container
-            elements.container = document.createElement("div");
-            elements.container.className = `marlan-chat-widget-container ${config.position}`;
-            elements.container.style.display = "none";
+        // Auto-resize textarea
+        setTimeout(() => {
+          elements.input.style.height = "auto";
+          elements.input.style.height = Math.min(elements.input.scrollHeight, 120) + "px";
+        }, 0);
+      });
 
-            // Create header
-            elements.header = document.createElement("div");
-            elements.header.className = "marlan-chat-widget-header";
+      elements.sendButton = document.createElement("button");
+      elements.sendButton.className = "marlan-chat-widget-send";
+      elements.sendButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>`;
+      elements.sendButton.addEventListener("click", sendMessage);
 
-            const title = document.createElement("h2");
-            title.className = "marlan-chat-widget-title";
-            title.textContent = config.title;
+      inputRow.appendChild(elements.input);
+      inputRow.appendChild(elements.sendButton);
 
-            const closeButton = document.createElement("button");
-            closeButton.className = "marlan-chat-widget-close";
-            closeButton.innerHTML = "&#x2715;";
-            closeButton.addEventListener("click", toggleWidget);
+      const resetContainer = document.createElement("div");
+      resetContainer.className = "marlan-chat-widget-reset-container";
 
-            elements.header.appendChild(title);
-            elements.header.appendChild(closeButton);
+      elements.resetButton = document.createElement("button");
+      elements.resetButton.className = "marlan-chat-widget-reset";
+      elements.resetButton.textContent = "Reset conversation";
+      elements.resetButton.addEventListener("click", resetConversation);
 
-            // Create messages container
-            elements.messagesContainer = document.createElement("div");
-            elements.messagesContainer.className = "marlan-chat-widget-messages";
+      resetContainer.appendChild(elements.resetButton);
 
-            // Create input container
-            elements.inputContainer = document.createElement("div");
-            elements.inputContainer.className = "marlan-chat-widget-input-container";
+      elements.inputContainer.appendChild(inputRow);
+      elements.inputContainer.appendChild(resetContainer);
 
-            const inputRow = document.createElement("div");
-            inputRow.className = "marlan-chat-widget-input-row";
+      // Create bubble button
+      elements.bubble = document.createElement("div");
+      elements.bubble.className = `marlan-chat-widget-bubble ${config.position}`;
+      elements.bubble.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`;
+      elements.bubble.addEventListener("click", toggleWidget);
 
-            elements.input = document.createElement("textarea");
-            elements.input.className = "marlan-chat-widget-input";
-            elements.input.placeholder = config.placeholder;
-            elements.input.rows = 1;
-            elements.input.addEventListener("keydown", function (e) {
-                if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    sendMessage();
-                }
+      // Assemble the widget
+      elements.container.appendChild(elements.header);
+      elements.container.appendChild(elements.messagesContainer);
+      elements.container.appendChild(elements.inputContainer);
 
-                // Auto-resize textarea
-                setTimeout(() => {
-                    elements.input.style.height = "auto";
-                    elements.input.style.height = Math.min(elements.input.scrollHeight, 120) + "px";
-                }, 0);
-            });
+      // Add to document
+      document.body.appendChild(elements.container);
+      document.body.appendChild(elements.bubble);
+    }
 
-            elements.sendButton = document.createElement("button");
-            elements.sendButton.className = "marlan-chat-widget-send";
-            elements.sendButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>`;
-            elements.sendButton.addEventListener("click", sendMessage);
+    // Add a message to the chat
+    function addMessage(content, role = "assistant") {
+      const message = document.createElement("div");
+      message.className = `marlan-chat-widget-message ${role}`;
+      message.innerHTML = content.replace(/\n/g, "<br>");
+      elements.messagesContainer.appendChild(message);
+      elements.messagesContainer.scrollTop = elements.messagesContainer.scrollHeight;
 
-            inputRow.appendChild(elements.input);
-            inputRow.appendChild(elements.sendButton);
+      // Save message to state
+      state.messages.push({ role, content });
+    }
 
-            const resetContainer = document.createElement("div");
-            resetContainer.className = "marlan-chat-widget-reset-container";
+    // Show typing indicator
+    function showTypingIndicator() {
+      const typing = document.createElement("div");
+      typing.id = "marlan-chat-widget-typing";
+      typing.className = "marlan-chat-widget-typing";
 
-            elements.resetButton = document.createElement("button");
-            elements.resetButton.className = "marlan-chat-widget-reset";
-            elements.resetButton.textContent = "Reset conversation";
-            elements.resetButton.addEventListener("click", resetConversation);
+      for (let i = 0; i < 3; i++) {
+        const dot = document.createElement("div");
+        dot.className = "marlan-chat-widget-typing-dot";
+        typing.appendChild(dot);
+      }
 
-            resetContainer.appendChild(elements.resetButton);
+      elements.messagesContainer.appendChild(typing);
+      elements.messagesContainer.scrollTop = elements.messagesContainer.scrollHeight;
+    }
 
-            elements.inputContainer.appendChild(inputRow);
-            elements.inputContainer.appendChild(resetContainer);
+    // Remove typing indicator
+    function removeTypingIndicator() {
+      const typing = document.getElementById("marlan-chat-widget-typing");
+      if (typing) typing.remove();
+    }
 
-            // Create bubble button
-            elements.bubble = document.createElement("div");
-            elements.bubble.className = `marlan-chat-widget-bubble ${config.position}`;
-            elements.bubble.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>`;
-            elements.bubble.addEventListener("click", toggleWidget);
+    // Toggle widget visibility
+    function toggleWidget() {
+      if (elements.container.style.display !== "none") {
+        elements.container.classList.remove("open");
+        setTimeout(() => {
+          elements.container.style.display = "none";
+        }, 300);
+      } else {
+        elements.container.style.display = "flex";
+        setTimeout(() => {
+          elements.container.classList.add("open");
+          elements.input.focus();
+        }, 10);
+      }
 
-            // Assemble the widget
-            elements.container.appendChild(elements.header);
-            elements.container.appendChild(elements.messagesContainer);
-            elements.container.appendChild(elements.inputContainer);
+      state.isOpen = elements.container.style.display !== "none";
+    }
 
-            // Add to document
-            document.body.appendChild(elements.container);
-            document.body.appendChild(elements.bubble);
-        }
+    // Generate or retrieve session ID
+    function getSessionId() {
+      if (state.sessionId) return state.sessionId;
 
-        // Add a message to the chat
-        function addMessage(content, role = "assistant") {
-            const message = document.createElement("div");
-            message.className = `marlan-chat-widget-message ${role}`;
-            message.innerHTML = content.replace(/\n/g, "<br>");
-            elements.messagesContainer.appendChild(message);
-            elements.messagesContainer.scrollTop = elements.messagesContainer.scrollHeight;
+      let sessionId = localStorage.getItem("marlan-chat-session-id");
+      if (!sessionId) {
+        sessionId = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+          const r = Math.random() * 16 | 0;
+          return (c === "x" ? r : (r & 0x3 | 0x8)).toString(16);
+        });
+        localStorage.setItem("marlan-chat-session-id", sessionId);
+      }
 
-            // Save message to state
-            state.messages.push({ role, content });
-        }
+      state.sessionId = sessionId;
+      return sessionId;
+    }
 
-        // Show typing indicator
-        function showTypingIndicator() {
-            const typing = document.createElement("div");
-            typing.id = "marlan-chat-widget-typing";
-            typing.className = "marlan-chat-widget-typing";
+    // Add welcome message
+    function addWelcomeMessage() {
+      if (config.greeting) {
+        const welcomeMessage = document.createElement("div");
+        welcomeMessage.className = "text-center py-6 text-gray-500";
+        welcomeMessage.textContent = config.greeting;
+        elements.messagesContainer.appendChild(welcomeMessage);
+      }
+    }
 
-            for (let i = 0; i < 3; i++) {
-                const dot = document.createElement("div");
-                dot.className = "marlan-chat-widget-typing-dot";
-                typing.appendChild(dot);
-            }
+    // Reset conversation
+    function resetConversation() {
+      // Clear messages in UI
+      elements.messagesContainer.innerHTML = "";
 
-            elements.messagesContainer.appendChild(typing);
-            elements.messagesContainer.scrollTop = elements.messagesContainer.scrollHeight;
+      // Add welcome message
+      addWelcomeMessage();
+
+      // Clear messages in state
+      state.messages = [];
+
+      // Generate new session ID
+      localStorage.removeItem("marlan-chat-session-id");
+      state.sessionId = null;
+      getSessionId();
+    }
+
+    // Send a message to the API
+    async function sendMessage() {
+      const message = elements.input.value.trim();
+      if (!message || state.isStreaming) return;
+
+      // Add user message to UI
+      addMessage(message, "user");
+
+      // Clear input
+      elements.input.value = "";
+      elements.input.style.height = "auto";
+
+      // Show typing indicator
+      showTypingIndicator();
+
+      // Set streaming state
+      state.isStreaming = true;
+      elements.sendButton.disabled = true;
+
+      // Get session ID
+      const sessionId = getSessionId();
+
+      // Cancel any ongoing requests
+      if (state.abortController) {
+        state.abortController.abort();
+      }
+
+      // Create new abort controller
+      state.abortController = new AbortController();
+
+      try {
+        // Make API request
+        const response = await fetch(config.apiEndpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            message,
+            sessionId
+          }),
+          signal: state.abortController.signal
+        });
+
+        if (!response.ok) {
+          throw new Error(`API error: ${response.status}`);
         }
 
         // Remove typing indicator
-        function removeTypingIndicator() {
-            const typing = document.getElementById("marlan-chat-widget-typing");
-            if (typing) typing.remove();
+        removeTypingIndicator();
+
+        // Get response as text stream
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let assistantMessage = "";
+
+        // Create message container
+        const messageEl = document.createElement("div");
+        messageEl.className = "marlan-chat-widget-message assistant";
+        elements.messagesContainer.appendChild(messageEl);
+
+        // Process stream
+        while (true) {
+          const { done, value } = await reader.read();
+
+          if (done) {
+            break;
+          }
+
+          // Decode chunk
+          const chunk = decoder.decode(value, { stream: true });
+          assistantMessage += chunk;
+
+          // Update UI
+          messageEl.innerHTML = assistantMessage.replace(/\n/g, "<br>");
+          elements.messagesContainer.scrollTop = elements.messagesContainer.scrollHeight;
         }
 
-        // Toggle widget visibility
-        function toggleWidget() {
-            if (elements.container.style.display !== "none") {
-                elements.container.classList.remove("open");
-                setTimeout(() => {
-                    elements.container.style.display = "none";
-                }, 300);
-            } else {
-                elements.container.style.display = "flex";
-                setTimeout(() => {
-                    elements.container.classList.add("open");
-                    elements.input.focus();
-                }, 10);
-            }
+        // Save assistant message to state
+        state.messages.push({ role: "assistant", content: assistantMessage });
 
-            state.isOpen = elements.container.style.display !== "none";
+      } catch (error) {
+        // Handle errors
+        console.error("Error sending message:", error);
+
+        // Remove typing indicator
+        removeTypingIndicator();
+
+        // Show error in UI
+        if (error.name !== "AbortError") {
+          const errorEl = document.createElement("div");
+          errorEl.className = "marlan-chat-widget-error";
+          errorEl.textContent = "Sorry, something went wrong. Please try again.";
+          elements.messagesContainer.appendChild(errorEl);
+          elements.messagesContainer.scrollTop = elements.messagesContainer.scrollHeight;
         }
+      } finally {
+        // Reset state
+        state.isStreaming = false;
+        elements.sendButton.disabled = false;
+        state.abortController = null;
+      }
+    }
 
-        // Generate or retrieve session ID
-        function getSessionId() {
-            if (state.sessionId) return state.sessionId;
+    // Function to warm up the API endpoint
+    async function warmupAPI() {
+      try {
+        // Determine the base URL from the apiEndpoint
+        const apiUrl = new URL(config.apiEndpoint);
+        const baseUrl = `${apiUrl.protocol}//${apiUrl.host}`;
+        const pingUrl = `${baseUrl}/api/ping?source=widget_load`;
 
-            let sessionId = localStorage.getItem("marlan-chat-session-id");
-            if (!sessionId) {
-                sessionId = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
-                    const r = Math.random() * 16 | 0;
-                    return (c === "x" ? r : (r & 0x3 | 0x8)).toString(16);
-                });
-                localStorage.setItem("marlan-chat-session-id", sessionId);
-            }
+        // Make the warmup request
+        await fetch(pingUrl, {
+          method: 'GET',
+          headers: {
+            'Cache-Control': 'no-cache, no-store',
+            'Pragma': 'no-cache'
+          }
+        });
 
-            state.sessionId = sessionId;
-            return sessionId;
+        console.log("Widget API warmed up");
+      } catch (error) {
+        // Silent fail - if ping fails, the first message will just be slower
+        console.log("Widget warmup failed, continuing with initialization");
+      }
+    }
+
+    // Initialize the widget
+    function init(customConfig = {}) {
+      // Override default config with custom config
+      if (window.marlinChatConfig) {
+        Object.assign(config, window.marlinChatConfig);
+      }
+
+      Object.assign(config, customConfig);
+
+      // Ensure api endpoint has trailing slash
+      if (!config.apiEndpoint.endsWith('/')) {
+        config.apiEndpoint = `${config.apiEndpoint}/`;
+      }
+
+      // Set container position
+      let positionStyle = {};
+      switch (config.position) {
+        case 'bottom-right':
+          positionStyle = { bottom: '20px', right: '20px' };
+          break;
+        case 'bottom-left':
+          positionStyle = { bottom: '20px', left: '20px' };
+          break;
+        case 'top-right':
+          positionStyle = { top: '20px', right: '20px' };
+          break;
+        case 'top-left':
+          positionStyle = { top: '20px', left: '20px' };
+          break;
+        default:
+          positionStyle = { bottom: '20px', right: '20px' };
+      }
+
+      // Apply config to elements
+      injectStyles();
+      createWidgetElements();
+
+      // Position elements
+      Object.keys(positionStyle).forEach(prop => {
+        elements.container.style[prop] = positionStyle[prop];
+        elements.bubble.style[prop] = positionStyle[prop];
+      });
+
+      // Retrieve or generate session ID
+      state.sessionId = getSessionId();
+
+      // Add welcome message
+      addWelcomeMessage();
+
+      // Warm up the API in the background
+      warmupAPI();
+
+      console.log("Marlan Chat Widget initialized");
+    }
+
+    // Expose API
+    window.MarlanChatWidget = {
+      init,
+      toggle: toggleWidget,
+      reset: resetConversation
+    };
+
+    // Auto-initialize if query arguments are passed
+    const existingObj = window.marlanChat;
+    if (existingObj && Array.isArray(existingObj.q)) {
+      existingObj.q.forEach(args => {
+        if (args[0] === "init") {
+          init(args[1] || {});
         }
-
-        // Add welcome message
-        function addWelcomeMessage() {
-            if (config.greeting) {
-                const welcomeMessage = document.createElement("div");
-                welcomeMessage.className = "text-center py-6 text-gray-500";
-                welcomeMessage.textContent = config.greeting;
-                elements.messagesContainer.appendChild(welcomeMessage);
-            }
-        }
-
-        // Reset conversation
-        function resetConversation() {
-            // Clear messages in UI
-            elements.messagesContainer.innerHTML = "";
-
-            // Add welcome message
-            addWelcomeMessage();
-
-            // Clear messages in state
-            state.messages = [];
-
-            // Generate new session ID
-            localStorage.removeItem("marlan-chat-session-id");
-            state.sessionId = null;
-            getSessionId();
-        }
-
-        // Send a message to the API
-        async function sendMessage() {
-            const message = elements.input.value.trim();
-            if (!message || state.isStreaming) return;
-
-            // Add user message to UI
-            addMessage(message, "user");
-
-            // Clear input
-            elements.input.value = "";
-            elements.input.style.height = "auto";
-
-            // Show typing indicator
-            showTypingIndicator();
-
-            // Set streaming state
-            state.isStreaming = true;
-            elements.sendButton.disabled = true;
-
-            // Get session ID
-            const sessionId = getSessionId();
-
-            // Cancel any ongoing requests
-            if (state.abortController) {
-                state.abortController.abort();
-            }
-
-            // Create new abort controller
-            state.abortController = new AbortController();
-
-            try {
-                // Make API request
-                const response = await fetch(config.apiEndpoint, {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({
-                        message,
-                        sessionId
-                    }),
-                    signal: state.abortController.signal
-                });
-
-                if (!response.ok) {
-                    throw new Error(`API error: ${response.status}`);
-                }
-
-                // Remove typing indicator
-                removeTypingIndicator();
-
-                // Get response as text stream
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let assistantMessage = "";
-
-                // Create message container
-                const messageEl = document.createElement("div");
-                messageEl.className = "marlan-chat-widget-message assistant";
-                elements.messagesContainer.appendChild(messageEl);
-
-                // Process stream
-                while (true) {
-                    const { done, value } = await reader.read();
-
-                    if (done) {
-                        break;
-                    }
-
-                    // Decode chunk
-                    const chunk = decoder.decode(value, { stream: true });
-                    assistantMessage += chunk;
-
-                    // Update UI
-                    messageEl.innerHTML = assistantMessage.replace(/\n/g, "<br>");
-                    elements.messagesContainer.scrollTop = elements.messagesContainer.scrollHeight;
-                }
-
-                // Save assistant message to state
-                state.messages.push({ role: "assistant", content: assistantMessage });
-
-            } catch (error) {
-                // Handle errors
-                console.error("Error sending message:", error);
-
-                // Remove typing indicator
-                removeTypingIndicator();
-
-                // Show error in UI
-                if (error.name !== "AbortError") {
-                    const errorEl = document.createElement("div");
-                    errorEl.className = "marlan-chat-widget-error";
-                    errorEl.textContent = "Sorry, something went wrong. Please try again.";
-                    elements.messagesContainer.appendChild(errorEl);
-                    elements.messagesContainer.scrollTop = elements.messagesContainer.scrollHeight;
-                }
-            } finally {
-                // Reset state
-                state.isStreaming = false;
-                elements.sendButton.disabled = false;
-                state.abortController = null;
-            }
-        }
-
-        // Initialize the widget
-        function init(customConfig = {}) {
-            // Merge custom config with defaults
-            config = { ...config, ...customConfig };
-
-            // Inject styles
-            injectStyles();
-
-            // Create DOM elements
-            createWidgetElements();
-
-            // Add welcome message
-            addWelcomeMessage();
-
-            // Get session ID
-            getSessionId();
-
-            console.log("Marlan Chat Widget initialized");
-        }
-
-        // Expose API
-        window.MarlanChatWidget = {
-            init,
-            toggle: toggleWidget,
-            reset: resetConversation
-        };
-
-        // Auto-initialize if query arguments are passed
-        const existingObj = window.marlanChat;
-        if (existingObj && Array.isArray(existingObj.q)) {
-            existingObj.q.forEach(args => {
-                if (args[0] === "init") {
-                    init(args[1] || {});
-                }
-            });
-        }
-    })();
+      });
+    }
+  })();
 })(); 

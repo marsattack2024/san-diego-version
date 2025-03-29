@@ -90,6 +90,27 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
         return error.message || "Something went wrong. Please try again later.";
     };
 
+    // Ping the widget API on initial load to warm up the serverless function
+    useEffect(() => {
+        const warmupAPI = async () => {
+            try {
+                const pingUrl = '/api/ping?source=widget_init';
+                await fetch(pingUrl, {
+                    method: 'GET',
+                    headers: {
+                        'Cache-Control': 'no-cache, no-store',
+                        'Pragma': 'no-cache'
+                    }
+                });
+                console.log('Widget API warmed up');
+            } catch (error) {
+                // Silent fail - if ping fails, the first message will just be slower
+            }
+        };
+
+        warmupAPI();
+    }, []);
+
     return (
         <div
             className="fixed z-50 font-sans"

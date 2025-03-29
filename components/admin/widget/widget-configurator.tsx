@@ -159,6 +159,26 @@ export function AdminWidgetConfigurator({
     }
   }
 
+  // Add this function near the top of the component
+  const copyToClipboard = (text: string, event: React.MouseEvent<HTMLButtonElement>) => {
+    const button = event.currentTarget;
+    const originalText = button.textContent;
+
+    navigator.clipboard.writeText(text)
+      .then(() => {
+        // Change button text temporarily
+        button.textContent = "Copied!";
+
+        // Reset button text after 2 seconds
+        setTimeout(() => {
+          button.textContent = originalText;
+        }, 2000);
+      })
+      .catch(err => {
+        console.error('Failed to copy: ', err);
+      });
+  };
+
   return (
     <div className="space-y-8 w-full max-w-full overflow-hidden">
       <Tabs defaultValue="settings" value={activeTab} onValueChange={setActiveTab}>
@@ -274,10 +294,7 @@ export function AdminWidgetConfigurator({
                         className="absolute top-2 right-2"
                         variant="outline"
                         size="sm"
-                        onClick={() => {
-                          navigator.clipboard.writeText(standardEmbed);
-                          alert('Embed code copied to clipboard!');
-                        }}
+                        onClick={(e) => copyToClipboard(standardEmbed, e)}
                       >
                         Copy
                       </Button>
@@ -298,10 +315,7 @@ export function AdminWidgetConfigurator({
                         className="absolute top-2 right-2"
                         variant="outline"
                         size="sm"
-                        onClick={() => {
-                          navigator.clipboard.writeText(gtmEmbed);
-                          alert('GTM code copied to clipboard!');
-                        }}
+                        onClick={(e) => copyToClipboard(gtmEmbed, e)}
                       >
                         Copy
                       </Button>
@@ -322,10 +336,7 @@ export function AdminWidgetConfigurator({
                         className="absolute top-2 right-2"
                         variant="outline"
                         size="sm"
-                        onClick={() => {
-                          navigator.clipboard.writeText(directEmbed);
-                          alert('Direct embed code copied to clipboard!');
-                        }}
+                        onClick={(e) => copyToClipboard(directEmbed, e)}
                       >
                         Copy
                       </Button>

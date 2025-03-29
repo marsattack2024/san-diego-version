@@ -193,4 +193,105 @@ To ensure existing implementations continue to work:
 - All styles are isolated with unique class names to prevent conflicts
 - The widget respects user preferences (dark mode, reduced motion, etc.)
 - Implements efficient token usage in API calls
-- Uses LRU caching for frequently accessed knowledge 
+- Uses LRU caching for frequently accessed knowledge
+
+## Edge Runtime and Wakeup System
+
+The widget API is implemented using Next.js Edge Runtime for global low-latency deployment and faster startup times. To mitigate cold starts when the widget is embedded on external sites, a multi-layered wakeup system is implemented:
+
+### Cold Start Mitigation Strategy
+
+Our approach follows Vercel AI SDK best practices for minimizing cold start impact:
+
+1. **Proactive Warming**:
+   - The widget automatically pings the API when it first loads (before user interaction)
+   - The wakeup.js script maintains warm functions through periodic pings
+   - API routes explicitly set `runtime = 'edge'` for faster cold starts than serverless functions
+
+2. **Graceful Recovery**:
+   - The `useAppChat` hook implements automatic retry for the first message if a cold start causes a failure
+   - Error states in the UI are clear and informative when cold starts occur
+   - Exponential backoff prevents overwhelming the API during recovery
+
+3. **Optimized Response Handling**:
+   - The Vercel AI SDK's streaming capabilities show partial responses while the rest is being generated
+   - Appropriate timeouts prevent hanging requests during cold starts
+   - `onFinish` and `onError` callbacks provide visibility into request completion
+
+### Wakeup Ping Implementation
+
+1. **API Ping Endpoint** (`/api/ping`):
+   - Provides a lightweight endpoint for checking service health
+   - Wakes up related services (including the widget API) on each request
+   - Returns status information about connected services
+
+2. **Component Initialization** (in ChatWidgetV2):
+   - First load triggers a warmup request
+   - Silent failure ensures the UI isn't affected if the ping fails
+
+3. **Standalone Widget Script** (chat-widget-v2.js):
+   - Pings the API during initialization
+   - Extracts the base URL from the configured API endpoint
+
+4. **Wakeup Script** (`/widget/wakeup.js`):
+   - Optional script that can be embedded on high-traffic pages
+   - Sends periodic pings to keep the widget API warm
+   - Implements exponential backoff for error handling
+   - Reduces cold starts for users interacting with the widget
+
+### Embedding the Wakeup Script
+
+```html
+<!-- Marlan Chat Widget Wakeup Script -->
+<script src="https://marlan.photographytoprofits.com/widget/wakeup.js" async defer></script>
+```
+
+### Configuration Options
+
+The wakeup script can be configured with custom options:
+
+```html
+<script>
+  window.marlanWakeupConfig = {
+    pingInterval: 120000, // 2 minutes
+    debug: true           // Enable console logs
+  };
+</script>
+<script src="https://marlan.photographytoprofits.com/widget/wakeup.js" async defer></script>
+```
+
+### Usage Recommendations
+
+For optimal performance on external sites:
+
+1. **Include both scripts** on high-traffic pages:
+   ```html
+   <!-- Widget wakeup script - keeps the API warm -->
+   <script src="https://marlan.photographytoprofits.com/widget/wakeup.js" async defer></script>
+   
+   <!-- Main widget script - loads the chat interface -->
+   <script>
+     window.marlinChatConfig = {
+       position: 'bottom-right',
+       title: 'Ask Marlan',
+       // other configuration...
+     };
+     
+     var script = document.createElement('script');
+     script.src = 'https://marlan.photographytoprofits.com/widget/chat-widget.js';
+     script.async = true;
+     script.defer = true;
+     document.head.appendChild(script);
+   </script>
+   ```
+
+2. **Place the wakeup script** on your site's most frequently visited page to keep the API warm for all users
+
+## Multiple Domain Support
+
+The widget API includes proper CORS support for the following domains:
+- https://marlan.photographytoprofits.com
+- https://programs.thehighrollersclub.io
+- http://localhost:3000 (for development)
+
+Additional domains can be added by setting the `WIDGET_ALLOWED_ORIGINS` environment variable. 

@@ -24,25 +24,16 @@ export default function AdminWidgetPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full max-w-full overflow-hidden">
-        <div>
-          <h2 className="text-xl font-semibold mb-4">Widget Configuration</h2>
-          <AdminWidgetConfigurator
-            config={config}
-            onConfigChange={handleConfigUpdate}
-          />
-        </div>
-
-        <div className="border rounded-lg p-4">
-          <h2 className="text-xl font-semibold mb-4">Live Preview</h2>
-          <p className="text-sm text-muted-foreground mb-6">
-            This preview shows how the widget will appear on your website. Make changes in the configuration panel to see them reflected here.
-          </p>
-          <div className="flex items-center justify-center min-h-[400px] relative">
-            <ChatWidgetV2 config={config} />
-          </div>
-        </div>
+      <div>
+        <h2 className="text-xl font-semibold mb-4">Widget Configuration</h2>
+        <AdminWidgetConfigurator
+          config={config}
+          onConfigChange={handleConfigUpdate}
+        />
       </div>
+
+      {/* The widget will appear at its natural position based on config */}
+      <ChatWidgetV2 config={config} />
     </div>
   );
 }

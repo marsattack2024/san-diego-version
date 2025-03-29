@@ -107,21 +107,53 @@ export function useAppChat({
 
         // Save the current input to a variable as it will be cleared during submission
         const currentInput = chatHelpers.input;
+        const isFirstMessage = chatHelpers.messages.length === 0;
 
-        // Use the original submit handler
-        await chatHelpers.handleSubmit(e, options);
+        try {
+            // Use the original submit handler
+            await chatHelpers.handleSubmit(e, options);
 
-        // Update the session with the new message
-        if (sessionId && currentInput.trim()) {
-            const session = getSession();
+            // Update the session with the new message
+            if (sessionId && currentInput.trim()) {
+                const session = getSession();
 
-            // Find the message we just added (should be the last user message)
-            const userMessage = [...chatHelpers.messages].reverse()
-                .find(msg => msg.role === 'user' && msg.content === currentInput);
+                // Find the message we just added (should be the last user message)
+                const userMessage = [...chatHelpers.messages].reverse()
+                    .find(msg => msg.role === 'user' && msg.content === currentInput);
 
-            if (userMessage) {
-                const updatedSession = addMessageToSession(session, userMessage);
-                saveSession(updatedSession);
+                if (userMessage) {
+                    const updatedSession = addMessageToSession(session, userMessage);
+                    saveSession(updatedSession);
+                }
+            }
+        } catch (error) {
+            // If this is the first message and there's an error, it might be a cold start issue
+            if (isFirstMessage) {
+                console.warn("Error sending first message, attempting to warm up the API...");
+
+                try {
+                    // Try to ping the API to warm it up
+                    await fetch('/api/ping?source=error_recovery', {
+                        method: 'GET',
+                        headers: { 'Cache-Control': 'no-cache' }
+                    });
+
+                    // Wait a moment for the API to initialize
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+
+                    // Try submitting again with the same input
+                    if (currentInput.trim()) {
+                        chatHelpers.setInput(currentInput);
+                        // We need to create a synthetic event since we don't have the original
+                        const syntheticEvent = {
+                            preventDefault: () => { }
+                        } as React.FormEvent<HTMLFormElement>;
+
+                        await chatHelpers.handleSubmit(syntheticEvent, options);
+                    }
+                } catch (retryError) {
+                    console.error("Failed to recover from cold start", retryError);
+                }
             }
         }
     };
