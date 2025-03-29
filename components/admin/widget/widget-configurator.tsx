@@ -9,27 +9,39 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ChatWidgetConfig, DEFAULT_CONFIG } from '@/components/chat-widget/types'
 import { EmbedSnippet } from '@/components/chat-widget/embed-snippet'
-import { useChatWidget } from '@/components/chat-widget'
 import { getSiteUrl } from '@/lib/widget/env-validator'
 
-export function AdminWidgetConfigurator() {
-  const { state, setConfig, toggleWidget } = useChatWidget()
-  const [activeTab, setActiveTab] = useState('config')
-  const [showEmbed, setShowEmbed] = useState(false)
+interface AdminWidgetConfiguratorProps {
+  config?: ChatWidgetConfig;
+  onConfigChange?: (newConfig: Partial<ChatWidgetConfig>) => void;
+}
+
+export function AdminWidgetConfigurator({
+  config = DEFAULT_CONFIG,
+  onConfigChange
+}: AdminWidgetConfiguratorProps) {
+  const [widgetConfig, setWidgetConfig] = useState<ChatWidgetConfig>({ ...DEFAULT_CONFIG, ...config });
+  const [activeTab, setActiveTab] = useState('settings');
+  const [showEmbed, setShowEmbed] = useState(false);
 
   // Base URL for widget
   const baseUrl = 'https://marlan.photographytoprofits.com';
+
+  // Update local state when props change
+  useEffect(() => {
+    setWidgetConfig({ ...DEFAULT_CONFIG, ...config });
+  }, [config]);
 
   // Standard embed code
   const standardEmbed = `<!-- Marlan Chat Widget -->
 <script>
 (function() {
   window.marlinChatConfig = {
-    position: '${state.config.position}',
-    title: '${state.config.title}',
-    primaryColor: '${state.config.primaryColor}',
-    greeting: '${state.config.greeting}',
-    placeholder: '${state.config.placeholder}',
+    position: '${widgetConfig.position}',
+    title: '${widgetConfig.title}',
+    primaryColor: '${widgetConfig.primaryColor}',
+    greeting: '${widgetConfig.greeting}',
+    placeholder: '${widgetConfig.placeholder}',
     apiEndpoint: '${baseUrl}/api/widget-chat'
   };
   
@@ -49,11 +61,11 @@ export function AdminWidgetConfigurator() {
   window.marlinChatLoaded = true;
   
   window.marlinChatConfig = {
-    position: '${state.config.position}',
-    title: '${state.config.title}',
-    primaryColor: '${state.config.primaryColor}',
-    greeting: '${state.config.greeting}',
-    placeholder: '${state.config.placeholder}',
+    position: '${widgetConfig.position}',
+    title: '${widgetConfig.title}',
+    primaryColor: '${widgetConfig.primaryColor}',
+    greeting: '${widgetConfig.greeting}',
+    placeholder: '${widgetConfig.placeholder}',
     apiEndpoint: '${baseUrl}/api/widget-chat'
   };
   
@@ -96,11 +108,11 @@ export function AdminWidgetConfigurator() {
 <script>
 (function() {
   window.marlinChatConfig = {
-    position: '${state.config.position}',
-    title: '${state.config.title}',
-    primaryColor: '${state.config.primaryColor}',
-    greeting: '${state.config.greeting}',
-    placeholder: '${state.config.placeholder}',
+    position: '${widgetConfig.position}',
+    title: '${widgetConfig.title}',
+    primaryColor: '${widgetConfig.primaryColor}',
+    greeting: '${widgetConfig.greeting}',
+    placeholder: '${widgetConfig.placeholder}',
     apiEndpoint: '${baseUrl}/api/widget-chat',
     container: 'marlin-chat-container'
   };
@@ -138,12 +150,18 @@ export function AdminWidgetConfigurator() {
 
   // Handle input changes
   const handleChange = (key: keyof ChatWidgetConfig, value: any) => {
-    setConfig({ [key]: value })
+    const newConfig = { ...widgetConfig, [key]: value };
+    setWidgetConfig(newConfig);
+
+    // Notify parent component about the change
+    if (onConfigChange) {
+      onConfigChange({ [key]: value });
+    }
   }
 
   return (
     <div className="space-y-8 w-full max-w-full overflow-hidden">
-      <Tabs defaultValue="settings">
+      <Tabs defaultValue="settings" value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="settings">Settings</TabsTrigger>
           <TabsTrigger value="embed">Embed Code</TabsTrigger>
@@ -165,7 +183,7 @@ export function AdminWidgetConfigurator() {
                     <Label htmlFor="title">Widget Title</Label>
                     <Input
                       id="title"
-                      value={state.config.title}
+                      value={widgetConfig.title}
                       onChange={(e) => handleChange('title', e.target.value)}
                       placeholder="Chat Widget"
                     />
@@ -175,7 +193,7 @@ export function AdminWidgetConfigurator() {
                     <Label htmlFor="greeting">Greeting Message</Label>
                     <Input
                       id="greeting"
-                      value={state.config.greeting}
+                      value={widgetConfig.greeting}
                       onChange={(e) => handleChange('greeting', e.target.value)}
                       placeholder="I'm your Mastermind AI companion! I can answer marketing and tech questions right now! What can I help with?"
                     />
@@ -185,7 +203,7 @@ export function AdminWidgetConfigurator() {
                     <Label htmlFor="placeholder">Input Placeholder</Label>
                     <Input
                       id="placeholder"
-                      value={state.config.placeholder}
+                      value={widgetConfig.placeholder}
                       onChange={(e) => handleChange('placeholder', e.target.value)}
                       placeholder="Type your message..."
                     />
@@ -197,7 +215,7 @@ export function AdminWidgetConfigurator() {
                   <div>
                     <Label htmlFor="position">Position</Label>
                     <Select
-                      value={state.config.position}
+                      value={widgetConfig.position}
                       onValueChange={(value) => handleChange('position', value)}
                     >
                       <SelectTrigger>
@@ -217,7 +235,7 @@ export function AdminWidgetConfigurator() {
                     <Input
                       id="primaryColor"
                       type="color"
-                      value={state.config.primaryColor}
+                      value={widgetConfig.primaryColor}
                       onChange={(e) => handleChange('primaryColor', e.target.value)}
                     />
                   </div>

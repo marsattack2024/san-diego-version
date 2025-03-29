@@ -1,8 +1,8 @@
 'use client'
 
 import { ChatWidgetConfig } from './types'
-import { ChatWidget } from './chat-widget'
-import { ChatWidgetProvider, useChatWidget } from './chat-widget-provider'
+import { ChatWidgetV2 } from './chat-widget-v2'
+import { useAppChat } from './use-app-chat'
 
 interface ChatWidgetRootProps {
   config?: Partial<ChatWidgetConfig>
@@ -10,18 +10,13 @@ interface ChatWidgetRootProps {
 
 // Root component for external use
 export function ChatWidgetRoot({ config = {} }: ChatWidgetRootProps) {
-  return (
-    <ChatWidgetProvider initialConfig={config}>
-      <ChatWidget />
-    </ChatWidgetProvider>
-  )
+  return <ChatWidgetV2 config={config} />
 }
 
 // Re-export components and hooks for flexibility
 export {
-  ChatWidget,
-  ChatWidgetProvider,
-  useChatWidget
+  ChatWidgetV2,
+  useAppChat
 }
 
 // Export types

@@ -32,19 +32,19 @@ export function EmbedSnippet({
 
   // Create the embed code snippet
   const scriptCode = `
-<!-- Chat Widget Embed Code -->
+<!-- Marlan AI Chat Widget Embed Code -->
 <script>
 (function(w, d, s, o, f, js, fjs) {
-  w['ChatWidgetObject'] = o;
+  w['MarlanChatWidget'] = o;
   w[o] = w[o] || function() { (w[o].q = w[o].q || []).push(arguments) };
   js = d.createElement(s), fjs = d.getElementsByTagName(s)[0];
   js.id = o; js.src = f; js.async = 1; fjs.parentNode.insertBefore(js, fjs);
-}(window, document, 'script', 'chatWidget', '${finalUrl}/widget.js'));
+}(window, document, 'script', 'marlanChat', '${finalUrl}/widget/chat-widget.js'));
 
-// Configure widget
-chatWidget('config', ${JSON.stringify(widgetConfig, null, 2)});
+// Initialize widget with configuration
+marlanChat('init', ${JSON.stringify(widgetConfig, null, 2)});
 </script>
-<!-- End Chat Widget Embed Code -->
+<!-- End Marlan AI Chat Widget Embed Code -->
 `.trim()
 
   // Copy code to clipboard
@@ -60,7 +60,7 @@ chatWidget('config', ${JSON.stringify(widgetConfig, null, 2)});
   return (
     <div className="space-y-4">
       <p className="text-sm text-gray-500">
-        Copy and paste this code snippet before the /body tag to embed the chat widget on the bottom left of your page.
+        Copy and paste this code snippet before the closing &lt;/body&gt; tag to embed the Marlan AI chat widget on your website.
       </p>
 
       <div className="relative">
