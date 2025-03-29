@@ -14,7 +14,10 @@
     "supabase": "npx supabase",
     "setup-supabase": "node scripts/setup-supabase.js",
     "deploy": "node scripts/deploy-vercel.js",
-    "test:perplexity": "tsx scripts/tests/perplexity.test.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest run --coverage",
     "setup:first-admin": "node scripts/setup/setup-first-admin.js",
     "prepare": "husky && husky install",
     "type-check": "tsc --noEmit",
@@ -129,6 +132,8 @@
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "@types/uuid": "^9.0.7",
+    "@vitest/coverage-v8": "^1.4.0",
+    "@vitest/ui": "^1.4.0",
     "autoprefixer": "^10.4.20",
     "eslint": "^8",
     "eslint-config-next": "15.2.0",
@@ -142,6 +147,7 @@
     "stylelint-config-standard": "^37.0.0",
     "supabase": "^2.15.8",
     "tailwindcss": "^3.3.0",
-    "tsx": "^4.19.3"
+    "tsx": "^4.19.3",
+    "vitest": "^1.4.0"
   }
 }

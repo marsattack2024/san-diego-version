@@ -1,112 +1,214 @@
-Okay, let's establish a clean, standardized testing pattern for your Next.js project as of Saturday morning in South Miami. It's very common for `scripts` folders to accumulate various things over time, so wanting to structure your actual tests properly is a great idea.
+# Testing Framework
 
-The pattern you're describing – having a central place for common setup, variables, or helpers – is excellent practice. It promotes consistency and reduces boilerplate in your test files.
+This document outlines the testing approach for the application, based on our implementation of a standardized testing structure using Vitest.
 
-Given your stack (Next.js 15.2, TypeScript, Supabase, Vercel AI SDK, ESM), here's a proposed structure and plan:
+## Framework Overview
 
-**1. Choose a Test Runner**
+We've selected **Vitest** as our primary testing framework, offering:
 
-You need a standard tool to discover, run, and report on your tests. For a modern Next.js/TypeScript/ESM project, popular choices are:
+- Native ESM support (crucial for our Next.js 15.2 project)
+- Fast parallel test execution
+- TypeScript integration
+- Intuitive mocking capabilities
+- Code coverage reporting
 
-* **Vitest:** Modern, fast, ESM-first, Jest-compatible API. Generally works well even though Next.js doesn't use Vite internally. Often requires less configuration than Jest for ESM/TS.
-* **Jest:** The long-standing standard, very mature. Next.js has built-in configuration support (`next/jest`). Can sometimes require more setup for ESM.
+## Directory Structure
 
-**Recommendation:** **Vitest** is often preferred for new ESM projects due to its speed and simpler configuration, but **Jest** is also a perfectly valid and well-supported choice if you prefer its ecosystem or Next.js's specific Jest integration. *Pick one and stick with it.*
-
-**2. Standardized Folder Structure**
-
-Instead of mixing tests within the `scripts` folder, create a dedicated top-level folder for tests:
+Tests are organized in a standardized structure that mirrors the source code:
 
 ```
-your-project-root/
-├── app/
-├── lib/
-├── scripts/          <-- Keep OPERATIONAL scripts here (dev, deploy, db setup, etc.)
-├── tests/            <-- NEW: All automated tests go here
-│   ├── unit/         <-- Unit tests (testing isolated functions/modules)
-│   │   ├── lib/
-│   │   │   └── cache/
-│   │   │       └── cache-service.test.ts
-│   │   └── ... (mirror your src structure)
-│   ├── integration/  <-- Integration tests (testing modules working together)
-│   │   ├── services/
-│   │   │   └── document-retrieval.int.test.ts
-│   │   └── api/
-│   │       └── chat.int.test.ts
-│   ├── e2e/          <-- (Optional) End-to-end tests (e.g., using Playwright)
-│   ├── setup.ts      <-- Global setup/teardown for the test runner
-│   ├── helpers/      <-- Your "core basic file" lives here
-│   │   ├── index.ts  <-- Barrel file to export helpers
-│   │   ├── mock-data.ts
-│   │   ├── mock-clients.ts (e.g., mock Supabase, mock AI SDK)
-│   │   └── test-utils.ts (e.g., createTestUser, loadTestEnv)
-│   └── fixtures/     <-- (Optional) Larger test data files
-├── public/
-├── .env.test         <-- Environment variables specifically for tests
-├── package.json
-├── tsconfig.json
-└── vitest.config.ts  <-- OR jest.config.js
+tests/
+├── unit/                # Unit tests for individual components
+│   ├── lib/             # Tests for library code
+│   └── components/      # Tests for UI components
+│
+├── integration/         # Integration tests across components
+│   ├── api/             # API route tests
+│   └── services/        # Service integration tests
+│
+├── helpers/             # Shared testing utilities
+│   ├── env-loader.ts    # Environment variable handling
+│   ├── mock-logger.ts   # Mock implementation of the logger
+│   ├── mock-clients.ts  # Mock implementations of external services
+│   └── test-utils.ts    # Core testing utilities
+│
+├── setup.ts             # Global setup/teardown for all tests
+└── README.md            # Test documentation
 ```
 
-**3. The "Core Basic File" Pattern (`tests/helpers/`)**
+## Core Testing Utilities
 
-This is where you put your reusable testing logic:
+The `tests/helpers/` directory contains reusable testing utilities:
 
-* **`tests/helpers/mock-clients.ts`:** Create mock implementations or use mocking libraries (like `vi.mock` in Vitest or `jest.mock`) for external services:
-    * Mock Supabase Client (`createClient`): Return controlled data, check function calls without hitting the actual database.
-    * Mock Vercel AI SDK (`streamText`): Return predefined responses or errors.
-    * Mock Upstash Redis (`new Redis()`): Use an in-memory map or a mock library.
-* **`tests/helpers/test-utils.ts`:** Common utility functions used across tests:
-    * Function to load environment variables from `.env.test`.
-    * Helper to create mock HTTP requests/responses.
-    * Functions to generate common test data objects.
-* **`tests/helpers/mock-data.ts`:** Predefined data structures used in multiple tests.
-* **`tests/helpers/index.ts`:** Use a barrel file to export everything from the helpers directory for easy importing in tests:
-    ```typescript
-    // tests/helpers/index.ts
-    export * from './mock-clients';
-    export * from './test-utils';
-    export * from './mock-data';
-    ```
-* **Usage in Tests:**
-    ```typescript
-    // tests/unit/lib/cache/cache-service.test.ts
-    import { describe, it, expect, vi, beforeEach } from 'vitest';
-    import { mockRedisClient } from '@/tests/helpers'; // Use alias if configured
-    import { CacheService } from '@/lib/cache/cache-service';
+### Environment Management (`env-loader.ts`)
 
-    // Mock the Redis dependency BEFORE importing the service
-    vi.mock('@upstash/redis', () => ({
-      Redis: vi.fn(() => mockRedisClient), // Use your mock client
-    }));
+- Automatically loads environment variables from `.env.test`, falling back to `.env`
+- Sets a default log level of `error` for tests to keep output clean
+- Provides typed access to all environment variables with defaults
+- Validates required variables and enforces test-specific API keys
 
-    describe('CacheService', () => {
-      beforeEach(() => {
-        mockRedisClient.flushall(); // Reset mock before each test
-      });
+### Logger Mocking (`mock-logger.ts`) 
 
-      it('should set and get a value', async () => {
-        // ... test using CacheService, which now uses mockRedisClient
-      });
+- Mocks the logger to prevent console clutter during test runs
+- Captures log messages for verification in tests
+- Provides helper methods for asserting log messages, categories, and importance
+- Proper setup requires:
+
+```typescript
+import { setupLoggerMock, mockLogger } from '@/tests/helpers/mock-logger';
+
+// Setup mocks BEFORE importing modules that use logging
+setupLoggerMock();
+
+// Now import the module under test
+import { MyService } from '@/lib/services/my-service';
+```
+
+### External Service Mocks (`mock-clients.ts`)
+
+- Mock implementations of Redis, Supabase, OpenAI, and AI SDK
+- In-memory Redis implementation for testing cache operations
+- Supabase client with mock auth, database, and storage methods
+- AI client mocks with controllable responses and streaming
+
+## Logging Standards in Tests
+
+To ensure clean test output and proper verification of logging:
+
+### 1. Control Log Output
+
+- **Mock the Logger**: Always use our `mock-logger.ts` implementation
+- **Reset Between Tests**: Clear the logger state in `beforeEach`
+- **Set Log Level**: Tests default to ERROR level; override with `TEST_LOG_LEVEL` env var
+
+### 2. Test Logging Behavior
+
+Verify that code logs correctly using the mock logger:
+
+```typescript
+// Verify a debug message was logged with specific category
+expect(mockLogger.debug).toHaveBeenCalledWith(
+  expect.stringContaining('Cache hit'),
+  expect.objectContaining({
+    category: LOG_CATEGORIES.CACHE,
+    key: 'test-key'
+  })
+);
+
+// Check for logs with a specific category
+expect(mockLogger.hasLogWithCategory('error', LOG_CATEGORIES.CACHE)).toBe(true);
+
+// Get and verify important logs
+const importantLogs = mockLogger.getImportantLogs();
+expect(importantLogs.length).toBeGreaterThan(0);
+```
+
+### 3. Follow Log Format Standards
+
+When logging in application code (which will be tested), follow these guidelines:
+
+- **Use Categories**: Always include the appropriate `LOG_CATEGORIES` constant
+- **Structure Messages**: Begin with an action verb, keep concise
+- **Use Metadata**: Put variable data in metadata rather than message strings
+- **Mark Important Logs**: Use `important: true` for critical issues
+- **Include Errors**: Add error objects directly in error logs
+
+## Running Tests
+
+```bash
+# Run all tests
+npm test
+
+# Run tests in watch mode
+npm run test:watch
+
+# Run tests with UI
+npm run test:ui
+
+# Run tests with coverage
+npm run test:coverage
+```
+
+## Example Test Pattern
+
+```typescript
+import { describe, expect, it, beforeEach, vi } from 'vitest';
+import { setupLoggerMock, mockLogger } from '@/tests/helpers/mock-logger';
+
+// Set up mocks before importing modules that use them
+setupLoggerMock();
+
+// Import the code to test
+import { CacheService } from '@/lib/cache/cache-service';
+
+describe('CacheService', () => {
+  let cacheService: CacheService;
+  
+  beforeEach(async () => {
+    // Reset the logger mock to start fresh
+    mockLogger.reset();
+    
+    // Initialize the service
+    cacheService = new CacheService();
+  });
+  
+  describe('#get', () => {
+    it('should return cached value when available', async () => {
+      // Arrange
+      const key = 'test-key';
+      const value = { data: 'test' };
+      await cacheService.set(key, value);
+      
+      // Act
+      const result = await cacheService.get(key);
+      
+      // Assert
+      expect(result).toEqual(value);
+      
+      // Verify logging
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        expect.stringContaining('Cache hit'),
+        expect.objectContaining({
+          category: LOG_CATEGORIES.CACHE,
+          key
+        })
+      );
     });
-    ```
+  });
+});
+```
 
-**4. Test Runner Configuration**
+## Next Steps
 
-* Create a config file (e.g., `vitest.config.ts`).
-* Configure aliases (e.g., `@/*` pointing to `src/*` or `lib/*`) to match your `tsconfig.json` for easier imports.
-* Set up test environment (e.g., `jsdom`, `node`).
-* Point to global setup files if needed (e.g., `tests/setup.ts` for code that runs once before all tests).
-* Define test file patterns (e.g., `tests/**/*.test.ts`).
+The testing framework implementation is now complete. Here are the next steps:
 
-**5. Migrating Your Current Files**
+1. **Fix Linter Errors in Mock-Clients.ts**:
+   - Fix the Redis category type issue to use the proper LOG_CATEGORIES enum
+   - Resolve the mockResolvedValue implementation issue
 
-1.  **Install Test Runner:** `npm install -D vitest @vitest/ui` (or `jest`). Add test scripts to `package.json`.
-2.  **Set up Config:** Create `vitest.config.ts` (or `jest.config.js`).
-3.  **Create `tests/` structure:** Create the `tests/` folder and subfolders (`unit`, `integration`, `helpers`).
-4.  **Identify & Move Helpers:** Move relevant code from `scripts/lib/test-utils.ts` and `scripts/lib/env-loader.ts` into the new `tests/helpers/` structure. Adapt them as needed.
-5.  **Identify & Move Tests:** Go through `scripts/tests/` and potentially the root `scripts/` (like `test-admin-status.ts`). Move actual test files into `tests/unit/` or `tests/integration/`, renaming them to `*.test.ts`.
-6.  **Refactor Tests:** Rewrite the tests using the chosen runner's API (`describe`, `it`, `expect`, `vi`/`jest` for mocking). Update imports to use the new helpers from `tests/helpers/`.
-7.  **Clean Up `scripts/`:** Keep only the necessary operational scripts (like `dev.js`, `deploy-vercel.js`, `setup-supabase.js`). Delete the old test files (`scripts/tests/*`), old helpers (`scripts/lib/*`), and any other obsolete scripts. Update `scripts/README.md` to reflect the remaining scripts.
+2. **Complete Test-Utils.ts Implementation**:
+   - Add utilities for test timeouts and retries
+   - Implement common test data generators
 
-This approach provides a standard, maintainable structure that separates tests from operational scripts and allows for efficient reuse of testing logic.
+3. **Migrate Legacy Tests**:
+   - Convert existing tests from `/legacy-scripts/` to the new format
+   - Update imports to use the new helpers
+
+4. **Add More Tests**:
+   - Create integration tests for API routes
+   - Add unit tests for key services (perplexity, RAG, etc.)
+   - Add tests for UI components
+
+5. **CI Integration**:
+   - Update CI pipeline to run tests
+   - Configure test reporting and coverage thresholds
+
+## Best Practices
+
+1. **Test Isolation**: Each test should be independent
+2. **Mock External Dependencies**: Don't make real API calls in tests
+3. **Clear Structure**: Use `describe` blocks to group related tests
+4. **Descriptive Names**: Test names should clearly describe what's being tested
+5. **Focused Assertions**: Each test should verify one specific behavior
+6. **Verify Logging**: Check that appropriate messages are logged
+7. **Clean Setup/Teardown**: Reset mocks and state before/after tests
