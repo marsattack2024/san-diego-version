@@ -1,678 +1,135 @@
-# Redis Caching System Documentation
+# Redis Caching System
 
-## Overview
-
-This document outlines the Redis caching implementation used in our application. We use Upstash Redis for its serverless-friendly architecture, low latency, and per-request pricing model. The caching system is designed to optimize AI interactions by reducing duplicate API calls, database queries, and web requests, while providing consistent fallback mechanisms for reliability.
+Our application uses [Upstash Redis](https://upstash.com/) for its serverless-friendly architecture and simple integration with Next.js applications. This document outlines our Redis caching design, current implementation, and standardization plan.
 
 ## Current Architecture Analysis
 
-The current Redis caching implementation has evolved with two parallel approaches:
+The current architecture uses Redis in several different ways:
 
-1. **Low-level Direct Redis Client** (`redisCache` from `/lib/cache/redis-client.ts`):
-   - Used directly by `document-retrieval.ts` for RAG results caching
-   - Has specialized methods for different data types
-   - Includes fallback to in-memory storage when Redis is unavailable
-   - Implements detailed logging and metrics
+1. **Direct Redis Client (`redisCache`)**: Used in `document-retrieval.ts` for caching RAG results.
+2. **ChatEngineCache Service**: Built on top of `redisCache`, used in `puppeteer.service.ts` for web scraper content caching.
+3. **Debug Endpoints**: Endpoints for inspecting cache values in `app/api/debug/cache/route.ts`.
+4. **Missing Caching Opportunities**: Services like `perplexity.service.ts` and `deep-search.ts` could benefit from caching.
 
-2. **High-level Cache Service** (`chatEngineCache` from `/lib/chat-engine/cache-service.ts`):
-   - Built on top of `redisCache`
-   - Adds namespacing and consistent key generation
-   - Used by `puppeteer.service.ts` and `core.ts`
-   - Provides domain-specific methods with proper TTL management
+Key issues with the current implementation:
+- Multiple interfaces to Redis (`redisCache` directly and `chatEngineCache`)
+- Inconsistent key generation and TTL management
+- Duplicate cache logic across files
+- No standardized approach to serialization/deserialization
 
-### Issues with Current Implementation
+## MVP Plan: Single CacheService
 
-1. **Inconsistent Usage**: Some services use `redisCache` directly while others use `chatEngineCache`
-2. **Duplicate Cache Implementations**: Similar caching logic is duplicated across files
-3. **Inconsistent Key Generation**: Different key generation strategies between implementations
-4. **Lack of Standardized TTLs**: TTL constants defined in multiple places
-5. **Redundant Boilerplate**: Error handling and logging duplicated across files
-6. **No Clear Contract**: Lack of defined TypeScript interfaces for cache operations
+We will create a single `CacheService` to consolidate caching logic:
 
-## Standardization Plan
+1. **Eliminate direct `redisCache` usage** across the codebase
+2. **Single responsibility** for all caching operations
+3. **Consistent key/TTL management**
+4. **Standardized error handling** and logging
 
-To address these issues, we will implement a standardized caching approach across the entire application.
+### Files to Create/Modify
 
-### Phase 1: Unified Cache Service Creation
+**New Files:**
+- `/lib/cache/cache-service.ts`: The `CacheService` class
+- `/lib/cache/constants.ts`: TTL values and key prefixes
 
-#### Goals
-- Create a truly application-agnostic cache service abstraction
-- Provide comprehensive, strongly-typed interfaces
-- Ensure proper error handling, logging, and fallback mechanisms
+**Modifications:**
+- `document-retrieval.ts`: Replace direct Redis usage with `cacheService`
+- `puppeteer.service.ts`: Migrate from `chatEngineCache` to `cacheService`
+- `route.ts`: Update debug endpoints to use `cacheService`
+- Optional: Add caching to `perplexity.service.ts`
 
-#### Implementation Steps
+## Implementation Plan
 
-1. **Create a new `CacheService` class**
-   - Location: `/lib/cache/cache-service.ts`
-   - Designed to be application-agnostic with no chat-specific assumptions
-   - Implements all necessary low-level and domain-specific caching operations
-   - Supports dependency injection pattern
+### Phase 1: Core Service Implementation
+- Create `CacheService` with get/set/delete methods
+- Implement key transformation strategy
+- Define TTLs and prefixes in constants
 
-2. **Define Clear TypeScript Interfaces**
-   - Create a `CacheServiceInterface` to define the contract
-   - Provide comprehensive type safety for all operations
-   - Document expected behavior for all methods
+### Phase 2: Migration
+- Update existing code to use new service
+- Remove `redisCache` direct usage
 
-3. **Centralize Constants and Helpers**
-   - Move all TTL values to `/lib/cache/constants.ts`
-   - Implement standardized key generation with appropriate hash algorithms
-   - Document all namespacing conventions
+### Phase 3: Basic Testing
+- Add tests for `CacheService`
+- Verify caching behavior in dev environment
 
-4. **Implement Robust Error Handling**
-   - Create specific `CacheError` types for different failure modes
-   - Provide comprehensive logging for all operations
-   - Implement circuit breaker pattern for transient failures
+### Phase 4: Documentation & Cleanup
+- Update documentation
+- Remove deprecated code
 
-5. **Add Monitoring and Metrics**
-   - Implement detailed stats tracking
-   - Provide configurable logging levels
-   - Support OpenTelemetry for performance monitoring
+## Key Transformation Strategy
 
-#### Example Implementation: Core Interface
+To reliably transform complex inputs into consistent cache keys:
 
-```typescript
-// lib/cache/interfaces.ts
-export interface CacheServiceInterface {
-  // Generic CRUD operations
-  get<T>(key: string, options?: CacheOptions): Promise<T | null>;
-  set<T>(key: string, value: T, options?: CacheOptions): Promise<void>;
-  delete(key: string, options?: CacheOptions): Promise<void>;
-  exists(key: string, options?: CacheOptions): Promise<boolean>;
+1. **Normalization**: Standardize input format (such as query parameters)
+2. **Serialization**: Convert to string with `JSON.stringify`
+3. **Hashing**: Generate SHA-1 hash and truncate to reasonable length
+
+### Implementation Considerations
+
+#### 1. SHA-1 Hash Truncation
+
+We truncate SHA-1 hashes to 64 bits (16 hex characters) for cache keys. Important considerations:
+
+- **Security Trade-off**: Full SHA-1 hashes are 160 bits (40 hex characters). Truncating to 64 bits significantly reduces collision resistance.
+- **Acceptable for Caching**: This is a reasonable trade-off for cache keys, as collision consequences are limited to cache misses rather than security breaches.
+- **Collision Probability**: With 64-bit truncation, collision probability becomes significant only after ~5 billion distinct keys.
+- **Future Enhancement**: If needed, we can increase to 96 bits (24 hex characters) for better collision resistance with minimal key length impact.
+
+#### 2. Edge Runtime Compatibility
+
+For crypto operations in Edge Functions (Vercel's serverless environment):
+
+- **Use Web Crypto API**: The Node.js `crypto` module is not fully available in Edge Functions. Instead of:
+  ```typescript
+  import { createHash } from 'crypto';
+  const hash = createHash('sha1').update(input).digest('hex');
+  ```
   
-  // Domain-specific operations
-  getEmbedding(query: string): Promise<number[] | null>;
-  setEmbedding(query: string, embedding: number[]): Promise<void>;
-  
-  getRagResults<T>(query: string, options?: any): Promise<T | null>;
-  setRagResults<T>(query: string, result: T, options?: any): Promise<void>;
-  
-  getScrapedContent(url: string): Promise<string | null>;
-  setScrapedContent(url: string, content: string): Promise<void>;
-  
-  getDeepSearchResults<T>(query: string): Promise<T | null>;
-  setDeepSearchResults<T>(query: string, results: T): Promise<void>;
-  
-  // Additional domain methods as needed
-}
-
-export interface CacheOptions {
-  namespace?: string;
-  ttl?: number;
-  tags?: string[];
-}
-
-export class CacheError extends Error {
-  constructor(
-    message: string,
-    public readonly operation: string,
-    public readonly key: string,
-    public readonly cause?: Error
-  ) {
-    super(message);
-    this.name = 'CacheError';
+  Use the Web Crypto API:
+  ```typescript
+  async function sha1Hash(input: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(input);
+    const hashBuffer = await crypto.subtle.digest('SHA-1', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   }
-}
-```
+  ```
 
-### Phase 2: Test Suite Development
+- **Cross-environment Compatibility**: This approach works in both Node.js and Edge runtimes.
 
-#### Goals
-- Ensure reliability of the new cache service
-- Validate behavior for all edge cases
-- Enable test-driven development for future iterations
+#### 3. JSON Serialization Stability
 
-#### Implementation Steps
+When using `JSON.stringify` for complex objects:
 
-1. **Create Unit Test Suite**
-   - Test all basic operations (get, set, delete)
-   - Validate key generation consistency
-   - Test TTL behavior and namespace isolation
-   - Verify error handling for various failure modes
-
-2. **Implement Integration Tests**
-   - Test Redis connection and fallback mechanisms
-   - Validate serialization/deserialization of complex objects
-   - Test performance characteristics
-
-3. **Create Mock Implementation**
-   - Provide a testable in-memory implementation
-   - Simulate various error conditions
-   - Support testing without Redis dependency
-
-#### Example Test Case
-
-```typescript
-// lib/cache/__tests__/cache-service.test.ts
-describe('CacheService', () => {
-  let cacheService: CacheService;
+- **Object Key Order**: Since ES2015, JavaScript engines maintain consistent property order:
+  1. Integer keys (sorted numerically)
+  2. String keys (in insertion order)
+  3. Symbol keys (in insertion order)
   
-  beforeEach(() => {
-    // Initialize with a test-specific namespace
-    cacheService = new CacheService('test');
-  });
-  
-  afterEach(async () => {
-    // Clean up test keys
-    const testKeys = await cacheService.keys('test:*');
-    await Promise.all(testKeys.map(key => cacheService.delete(key)));
-  });
-  
-  test('set and get operations work correctly', async () => {
-    const key = 'test-key';
-    const value = { data: 'test-value' };
-    
-    await cacheService.set(key, value);
-    const retrieved = await cacheService.get<typeof value>(key);
-    
-    expect(retrieved).toEqual(value);
-  });
-  
-  test('handles TTL correctly', async () => {
-    const key = 'ttl-test';
-    await cacheService.set(key, 'value', { ttl: 1 }); // 1 second TTL
-    
-    // Should exist immediately
-    expect(await cacheService.exists(key)).toBe(true);
-    
-    // Wait for TTL to expire
-    await new Promise(resolve => setTimeout(resolve, 1100));
-    
-    // Should not exist after TTL expires
-    expect(await cacheService.exists(key)).toBe(false);
-  });
-  
-  // Additional test cases for other functionality...
-});
-```
-
-### Phase 3: Migration Strategy
-
-#### Goals
-- Transition services away from direct `redisCache` usage
-- Maintain backward compatibility during transition
-- Ensure consistent caching behavior across the application
-
-#### Implementation Steps
-
-1. **Create Application Cache Service Factory**
-   - Provide a factory function to create properly configured cache service instances
-   - Support both singleton pattern and dependency injection
-   - Ensure consistent configuration across the application
-
-2. **Update Vector Search First**
-   - Modify `document-retrieval.ts` to use the new `CacheService`
-   - Adapt existing calls to use standardized methods
-   - Verify performance and correctness
-
-3. **Update Chat Engine Components**
-   - Modify `chat-engine/core.ts` to use the new `CacheService`
-   - Update tool implementations to use standardized methods
-   - Maintain backward compatibility
-
-4. **Handle Backward Compatibility**
-   - Create shims/adapters for existing code
-   - Add deprecation warnings to direct `redisCache` usage
-   - Maintain support for both patterns during transition
-
-#### Example Implementation: Vector Search Migration
-
-```typescript
-// lib/services/vector/document-retrieval.ts
-import { getCacheService } from '@/lib/cache/factory';
-
-// Get the application cache service (either singleton or injected)
-const cacheService = getCacheService();
-
-export async function findSimilarDocumentsOptimized(
-  queryText: string,
-  options: DocumentSearchOptions = {}
-): Promise<{ documents: RetrievedDocument[], metrics: DocumentSearchMetrics }> {
-  try {
-    // Using the standardized method for RAG results
-    const cachedResults = await cacheService.getRagResults<{
-      documents: RetrievedDocument[],
-      metrics: DocumentSearchMetrics
-    }>(queryText, options);
-    
-    if (cachedResults) {
-      return cachedResults;
+- **Ensuring Stability**: For options objects that may have properties added in different orders:
+  ```typescript
+  // To ensure consistent serialization for objects with varying property order
+  function stableStringify(obj: Record<string, any>): string {
+    if (typeof obj !== 'object' || obj === null) {
+      return JSON.stringify(obj);
     }
     
-    // Perform the search operation
-    const result = await performSearch(queryText, options);
+    // Sort keys lexicographically for top-level properties
+    const sortedKeys = Object.keys(obj).sort();
+    const result: Record<string, any> = {};
     
-    // Cache using standardized method
-    await cacheService.setRagResults(queryText, result, options);
-    
-    return result;
-  } catch (error) {
-    // Handle and log errors
-    if (error instanceof CacheError) {
-      // Handle cache-specific errors
+    for (const key of sortedKeys) {
+      result[key] = obj[key];
     }
     
-    // Fall back to uncached search
-    return performSearch(queryText, options);
+    return JSON.stringify(result);
   }
-}
-```
-
-### Phase 4: Implementation and Cleanup
-
-#### Goals
-- Complete the transition to the standardized cache service
-- Remove deprecated code and patterns
-- Ensure consistent documentation and usage examples
-
-#### Implementation Steps
-
-1. **Finalize Service Implementation**
-   - Address any issues found during migration
-   - Optimize performance-critical paths
-   - Ensure all edge cases are handled
-
-2. **Remove Deprecated Code**
-   - Gradually remove direct `redisCache` usage
-   - Clean up redundant implementations
-   - Remove unnecessary compatibility layers
-
-3. **Update Documentation**
-   - Update this document with final architecture
-   - Create usage examples for common scenarios
-   - Document best practices and patterns
-
-4. **Implement Monitoring Dashboards**
-   - Create monitoring dashboards for cache performance
-   - Set up alerts for cache failures
-   - Track cache hit ratios and performance metrics
-
-#### Cache Factory Implementation
-
-```typescript
-// lib/cache/factory.ts
-import { CacheService, CacheServiceInterface } from './cache-service';
-
-// Singleton instance (for non-DI use cases)
-let globalCacheService: CacheServiceInterface | null = null;
-
-/**
- * Get the application cache service
- * Supports both singleton pattern and dependency injection
- */
-export function getCacheService(options?: {
-  namespace?: string;
-  forceNew?: boolean;
-}): CacheServiceInterface {
-  const { namespace = 'app', forceNew = false } = options || {};
+  ```
   
-  // Return existing singleton unless forced to create new
-  if (!forceNew && globalCacheService) {
-    return globalCacheService;
-  }
-  
-  // Create new instance with application defaults
-  const cacheService = new CacheService(namespace);
-  
-  // Store singleton if not forcing new instance
-  if (!forceNew) {
-    globalCacheService = cacheService;
-  }
-  
-  return cacheService;
-}
-```
-
-## Cache Service Architecture
-
-Our standardized `CacheService` follows best practices for caching in serverless environments:
-
-### Core Components
-
-```
-┌─────────────────┐      ┌───────────────────┐      ┌────────────────┐
-│                 │      │                   │      │                │
-│ Application     │◄────►│ Cache Service     │◄────►│ Redis/Fallback │
-│ Services        │      │ (CacheService)    │      │ (Implementation)│
-│                 │      │                   │      │                │
-└─────────────────┘      └───────────────────┘      └────────────────┘
-        │                        ▲                           ▲
-        │                        │                           │
-        ▼                        │                           │
-┌─────────────────┐              │                           │
-│                 │              │                           │
-│ API Route       │              │                           │
-│ Handlers        │              │                           │
-│                 │              │                           │
-└─────────────────┘              │                           │
-                                 │                           │
-                                 │                           │
-                          ┌──────┴───────┐      ┌────────────┴───────┐
-                          │              │      │                    │
-                          │ Vector       │      │ Tools              │
-                          │ Services     │      │ (KB, DS, WS)       │
-                          │              │      │                    │
-                          └──────────────┘      └────────────────────┘
-```
-
-1. **Cache Service Interface** (`lib/cache/interfaces.ts`): Defines the contract for all cache operations.
-
-2. **Cache Service Implementation** (`lib/cache/cache-service.ts`): Provides the concrete implementation with appropriate error handling and fallback mechanisms.
-
-3. **Cache Factory** (`lib/cache/factory.ts`): Creates properly configured cache service instances with application defaults.
-
-4. **Cache Constants** (`lib/cache/constants.ts`): Centralizes TTL values, namespace conventions, and other configuration.
-
-### Key Principles
-
-1. **Dependency Injection**: Services accept a `CacheServiceInterface` in their constructor.
-2. **Namespace Isolation**: Different services use different namespaces to avoid key collisions.
-3. **Centralized TTL Management**: TTL values are defined in one place for consistency.
-4. **Standardized Key Generation**: Key generation follows consistent patterns.
-5. **Comprehensive Error Handling**: Cache errors are properly typed and handled.
-
-### Example Usage
-
-```typescript
-// In a service class
-export class DocumentService {
-  constructor(
-    private cacheService: CacheServiceInterface = getCacheService({ namespace: 'documents' })
-  ) {}
-  
-  async getDocument(id: string): Promise<Document | null> {
-    // Try cache first
-    const cached = await this.cacheService.get<Document>(`doc:${id}`);
-    if (cached) {
-      return cached;
-    }
-    
-    // Fetch from database
-    const document = await this.database.findDocument(id);
-    if (document) {
-      // Cache for future requests
-      await this.cacheService.set(`doc:${id}`, document, { ttl: CACHE_TTL.DOCUMENT });
-    }
-    
-    return document;
-  }
-}
-```
-
-## Configuration
-
-### Environment Variables
-
-The system requires the following environment variables:
-- `UPSTASH_REDIS_REST_URL` - The Upstash Redis REST API URL 
-- `UPSTASH_REDIS_REST_TOKEN` - The authentication token for Upstash Redis
-
-**Optional Configuration Variables**:
-- `CACHE_ENABLED` - Set to 'false' to disable caching (default: true)
-- `CACHE_DEFAULT_TTL` - Default TTL in seconds (default: 43200 - 12 hours)
-- `CACHE_LOG_LEVEL` - Logging level for cache operations (default: 'info')
-
-### Cache TTL Settings
-
-```typescript
-// lib/cache/constants.ts
-export const CACHE_TTL = {
-  EMBEDDINGS: 7 * 24 * 60 * 60, // 7 days
-  DOCUMENT: 24 * 60 * 60,       // 1 day
-  RAG_RESULTS: 12 * 60 * 60,    // 12 hours
-  SCRAPER: 12 * 60 * 60,        // 12 hours
-  DEEP_SEARCH: 1 * 60 * 60,     // 1 hour (shorter for dynamic web content)
-  PROMPT: 30 * 24 * 60 * 60,    // 30 days
-  CONTEXT: 24 * 60 * 60,        // 1 day
-  MESSAGE: 7 * 24 * 60 * 60,    // 7 days
-  SESSION: 30 * 24 * 60 * 60,   // 30 days
-  SHORT: 1 * 60 * 60,           // 1 hour
-};
-```
-
-## Key Caching Implementations
-
-### 1. RAG (Retrieval Augmented Generation) Caching
-
-The knowledge base tool uses Redis caching to avoid redundant vector searches:
-
-#### Cache Keys for RAG:
-
-```
-app:rag:{hash_of_query_and_options}
-```
-
-#### Implementation:
-
-```typescript
-// Using standardized cache service
-async getRagResults<T>(query: string, options?: any): Promise<T | null> {
-  const key = await this.generateCacheKey(
-    JSON.stringify({
-      query: query.toLowerCase().trim(),
-      options
-    })
-  );
-  
-  return this.get<T>(`rag:${key}`);
-}
-
-async setRagResults<T>(query: string, results: T, options?: any): Promise<void> {
-  const key = await this.generateCacheKey(
-    JSON.stringify({
-      query: query.toLowerCase().trim(),
-      options
-    })
-  );
-  
-  await this.set<T>(`rag:${key}`, results, { ttl: CACHE_TTL.RAG_RESULTS });
-}
-```
-
-### 2. Web Scraper URL Caching
-
-#### Cache Keys for Web Scraper:
-
-```
-app:scrape:{hash_of_normalized_url}
-```
-
-#### Implementation:
-
-```typescript
-async getScrapedContent(url: string): Promise<string | null> {
-  const normalized = normalizeUrl(url);
-  const key = await this.generateCacheKey(normalized);
-  
-  return this.get<string>(`scrape:${key}`);
-}
-
-async setScrapedContent(url: string, content: string): Promise<void> {
-  const normalized = normalizeUrl(url);
-  const key = await this.generateCacheKey(normalized);
-  
-  await this.set<string>(`scrape:${key}`, content, { ttl: CACHE_TTL.SCRAPER });
-}
-```
-
-### 3. DeepSearch Caching
-
-#### Cache Keys for DeepSearch:
-
-```
-app:deepsearch:{hash_of_query}
-```
-
-#### Implementation:
-
-```typescript
-async getDeepSearchResults<T>(query: string): Promise<T | null> {
-  const key = await this.generateCacheKey(query.toLowerCase().trim());
-  
-  return this.get<T>(`deepsearch:${key}`);
-}
-
-async setDeepSearchResults<T>(query: string, results: T): Promise<void> {
-  const key = await this.generateCacheKey(query.toLowerCase().trim());
-  
-  await this.set<T>(`deepsearch:${key}`, results, { ttl: CACHE_TTL.DEEP_SEARCH });
-}
-```
-
-## Error Handling and Resilience
-
-The `CacheService` implements comprehensive error handling:
-
-1. **Typed Errors**: Specific error types for different failure modes.
-2. **Graceful Degradation**: Falls back to direct operations when cache fails.
-3. **Automatic Retry**: Implements retry logic for transient failures.
-4. **Circuit Breaker**: Temporarily disables cache operations after multiple failures.
-5. **In-Memory Fallback**: Provides in-memory caching when Redis is unavailable.
-
-### Error Handling Implementation
-
-```typescript
-async get<T>(key: string, options?: CacheOptions): Promise<T | null> {
-  const fullKey = this.generateFullKey(key, options?.namespace);
-  
-  try {
-    const result = await this.client.get(fullKey);
-    
-    // Record metrics
-    this.recordMetric(result ? 'hit' : 'miss');
-    
-    // Log at appropriate level
-    this.logger.debug('Cache get operation', {
-      operation: 'cache_get',
-      key: fullKey,
-      hit: !!result,
-      namespace: options?.namespace
-    });
-    
-    return result as T;
-  } catch (error) {
-    // Log error
-    this.logger.error('Cache get error', {
-      operation: 'cache_get_error',
-      key: fullKey,
-      error: error instanceof Error ? error.message : String(error)
-    });
-    
-    // Record error metric
-    this.recordMetric('error');
-    
-    // Increment failure count for circuit breaker
-    this.failures++;
-    
-    // Check circuit breaker
-    if (this.failures > this.failureThreshold) {
-      this.disableCache(30000); // Disable for 30s
-    }
-    
-    // Bubble up typed error
-    throw new CacheError(
-      `Failed to get from cache: ${error instanceof Error ? error.message : String(error)}`,
-      'get',
-      fullKey,
-      error instanceof Error ? error : undefined
-    );
-  }
-}
-```
-
-## Monitoring and Metrics
-
-The `CacheService` provides detailed metrics to monitor performance:
-
-### Key Metrics
-
-1. **Hit Rate**: Percentage of cache hits vs. total operations.
-2. **Error Rate**: Percentage of operations that result in errors.
-3. **Average Latency**: Average time for cache operations.
-4. **Cache Size**: Approximation of cache size by key count and TTL.
-5. **Key Distribution**: Distribution of keys by namespace and TTL.
-
-### Logging Implementation
-
-```typescript
-private recordMetric(type: 'hit' | 'miss' | 'error'): void {
-  this.metrics[type]++;
-  
-  const totalOps = this.metrics.hit + this.metrics.miss;
-  const hitRate = totalOps > 0 ? this.metrics.hit / totalOps : 0;
-  const errorRate = totalOps > 0 ? this.metrics.error / totalOps : 0;
-  
-  // Log metrics periodically
-  if (totalOps % 100 === 0 || Date.now() - this.lastMetricsLog > 60000) {
-    this.logger.info('Cache metrics', {
-      operation: 'cache_metrics',
-      namespace: this.namespace,
-      hits: this.metrics.hit,
-      misses: this.metrics.miss,
-      errors: this.metrics.error,
-      hitRate: Math.round(hitRate * 100),
-      errorRate: Math.round(errorRate * 100),
-      averageLatency: this.metrics.totalLatency / totalOps
-    });
-    
-    // Reset for next period
-    this.lastMetricsLog = Date.now();
-  }
-}
-```
-
-## Best Practices
-
-When working with the Redis caching system:
-
-1. **Use the Factory Function**: Always get cache instances via `getCacheService()`.
-2. **Implement Domain-Specific Methods**: Extend `CacheService` for domain-specific needs.
-3. **Use Appropriate Namespaces**: Keep namespaces consistent for related data.
-4. **Handle Cache Errors**: Always catch and handle `CacheError` types.
-5. **Consider TTL Carefully**: Choose appropriate TTL values based on data volatility.
-6. **Use Consistent Key Generation**: Follow standardized key generation patterns.
-7. **Test Cache Behavior**: Include cache scenarios in your tests.
-8. **Monitor Cache Performance**: Set up alerts for cache issues.
-
-### Example: Proper Error Handling
-
-```typescript
-try {
-  const cachedResult = await cacheService.getRagResults(query, options);
-  if (cachedResult) {
-    return cachedResult;
-  }
-  
-  // Perform actual operation
-  const result = await performOperation();
-  
-  // Cache for future use
-  await cacheService.setRagResults(query, result, options);
-  
-  return result;
-} catch (error) {
-  // Only log cache errors, don't fail the operation
-  if (error instanceof CacheError) {
-    logger.warn('Cache operation failed, continuing without cache', {
-      operation: error.operation,
-      key: error.key,
-      error: error.message
-    });
-  }
-  
-  // Fall back to direct operation
-  return performOperation();
-}
-```
-
-## Implementation Timeline
-
-1. **Phase 1 (Week 1-2)**: Create the unified cache service and test suite
-2. **Phase 2 (Week 3)**: Update vector search and tool implementations
-3. **Phase 3 (Week 4)**: Migrate chat engine components and update documentation
-4. **Phase 4 (Ongoing)**: Monitor, optimize, and refine based on production performance
+- **When to Use**: Apply this approach for query options or other objects where property order might vary between calls.
 
 ## Conclusion
 
-This standardization plan provides a comprehensive approach to unifying Redis caching across our application. The implementation will be phased to ensure minimal disruption while providing immediate benefits in code maintainability, performance, and reliability.
-
-By following these guidelines, we ensure consistent caching behavior, improved error handling, and better observability across all components of the system. 
+The MVP plan aims to standardize Redis caching with minimal complexity, providing immediate benefits while establishing a foundation for future enhancements. The key transformation strategy addresses the critical concerns of generating reliable cache keys from complex inputs while ensuring compatibility across runtime environments.
