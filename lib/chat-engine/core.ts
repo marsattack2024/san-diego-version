@@ -271,6 +271,11 @@ export class ChatEngine {
                 ...modelMessages
             ];
 
+            // Store config values in local variables for callback access
+            const operationName = this.config.operationName;
+            const sessionId = context.sessionId;
+            const userId = context.userId;
+
             // Call the AI model using Vercel AI SDK
             // Tools are now properly registered and will be called by the AI as needed
             const result = await streamText({
@@ -280,7 +285,40 @@ export class ChatEngine {
                 temperature: this.config.temperature,
                 tools: this.config.tools, // Pass the tools object directly
                 // Enable multi-step tool use for more complex interactions
-                maxSteps: 5
+                maxSteps: 5,
+                // Add callbacks for monitoring and logging
+                onChunk({ chunk }) {
+                    // Monitor different types of chunks for logging
+                    if (chunk.type === 'tool-call') {
+                        edgeLogger.info('Tool call detected', {
+                            operation: operationName,
+                            toolName: chunk.toolName,
+                            toolCallId: chunk.toolCallId,
+                            sessionId
+                        });
+                    }
+                },
+                onFinish({ text, finishReason, usage }) {
+                    // Log completion metrics
+                    edgeLogger.info('Chat completion finished', {
+                        operation: operationName,
+                        finishReason,
+                        completionTokens: usage?.completionTokens,
+                        promptTokens: usage?.promptTokens,
+                        totalTokens: usage?.totalTokens,
+                        sessionId,
+                        userId
+                    });
+                },
+                onError({ error }) {
+                    // Log any error that occurs during streaming
+                    edgeLogger.error('Streaming error encountered', {
+                        operation: operationName,
+                        error: error instanceof Error ? error.message : String(error),
+                        sessionId,
+                        userId
+                    });
+                }
             });
 
             // Get the streamable response
@@ -295,7 +333,7 @@ export class ChatEngine {
                 );
             }
 
-            // Log completion
+            // Log request processing successful
             edgeLogger.info('Chat request processed successfully', {
                 operation: this.config.operationName,
                 durationMs: Date.now() - context.startTime,
