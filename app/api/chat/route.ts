@@ -288,20 +288,25 @@ export async function POST(req: Request) {
       operationName: `chat_${agentType}`,
       cacheEnabled: true,
       messageHistoryLimit: 50,
-      // Explicitly enable DeepSearch at the engine level if supported by the agent
+      // Enable DeepSearch at the engine level if supported by the agent
       useDeepSearch: shouldUseDeepSearch,
+      // Use enhanced system prompt following AI SDK standards
+      systemPrompt: prompts.buildSystemPrompt(agentType, shouldUseDeepSearch),
       // Configure message persistence
       messagePersistenceDisabled: disableMessagePersistence,
       // Pass prompts system
       prompts,
       // Set agent type
       agentType,
-      // Pass additional configuration for tools
+      // Pass additional configuration for tools following AI SDK patterns
       body: {
         deepSearchEnabled: shouldUseDeepSearch, // Pass for safety check in execute function
         sessionId,
         userId: persistenceUserId, // Pass the authenticated user ID for message persistence
-        agentType
+        agentType,
+        // AI SDK standard configuration for multi-step agents
+        maxSteps: 5, // Allow up to 5 steps for complex reasoning chains
+        toolChoice: shouldUseDeepSearch ? 'auto' : 'none' // Set toolChoice based on DeepSearch availability
       }
     };
 

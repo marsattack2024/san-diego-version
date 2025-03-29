@@ -424,7 +424,7 @@ export class ChatEngine {
                         : JSON.stringify(lastUserMessage.content)
                 ).catch(error => {
                     edgeLogger.error('Failed to save user message (non-blocking)', {
-                        operation: this.config.operationName,
+                        operation: operationName,
                         error: error instanceof Error ? error.message : String(error),
                         sessionId,
                         messageId: lastUserMessage.id,
@@ -433,71 +433,50 @@ export class ChatEngine {
                 });
             }
 
-            // Call the AI model using Vercel AI SDK
-            // Tools are now properly registered and will be called by the AI as needed
+            // Stream response with appropriate configuration
             const result = await streamText({
-                model: openai(this.config.model as any),
-                messages: messagesWithSystem,
-                maxTokens: this.config.maxTokens,
+                model: openai(this.config.model || 'gpt-4o'),
+                messages: [...context.previousMessages || [], ...context.messages],
+                system: this.config.systemPrompt,
+                tools: this.config.tools,
                 temperature: this.config.temperature,
-                tools: this.config.tools, // Pass the tools object directly
-                // Enable multi-step tool use for more complex interactions
-                maxSteps: 5,
-                // Add callbacks for monitoring and logging
-                onChunk({ chunk }: { chunk: any }) {
-                    // Monitor different types of chunks for logging
-                    if (chunk.type === 'tool-call') {
-                        edgeLogger.info('Tool call detected', {
+                maxTokens: this.config.maxTokens,
+                maxSteps: 5, // Allow multiple steps for complex tool interactions
+                toolChoice: this.config.useDeepSearch ? 'auto' : 'none', // Enable tools conditionally based on configuration
+                onStepFinish({ text, toolCalls, toolResults, finishReason, usage }) {
+                    // Log essential info about each step using AI SDK standard pattern
+                    edgeLogger.info('Step completed in multi-step execution', {
+                        operation: operationName,
+                        hasText: !!text && text.length > 0,
+                        textLength: text?.length || 0,
+                        toolCallCount: toolCalls?.length || 0,
+                        toolResultCount: toolResults?.length || 0,
+                        finishReason,
+                        usage: usage ? {
+                            completionTokens: usage.completionTokens,
+                            promptTokens: usage.promptTokens,
+                            totalTokens: usage.totalTokens
+                        } : undefined
+                    });
+                    
+                    // Log tool calls when present
+                    if (toolCalls && toolCalls.length > 0) {
+                        edgeLogger.info('Tool calls executed', {
                             operation: operationName,
-                            toolName: chunk.toolName,
-                            toolCallId: chunk.toolCallId,
-                            sessionId
+                            toolNames: toolCalls.map(call => call.toolName),
+                            step: 'tool_calls'
+                        });
+                    }
+                    
+                    // Log tool results when present
+                    if (toolResults && toolResults.length > 0) {
+                        edgeLogger.info('Tool results processed', {
+                            operation: operationName,
+                            toolResultCount: toolResults.length,
+                            step: 'tool_results'
                         });
                     }
                 },
-                onFinish: async ({ text, finishReason, usage }: { text: string, finishReason: string, usage?: { completionTokens?: number, promptTokens?: number, totalTokens?: number } }) => {
-                    // Log completion metrics
-                    edgeLogger.info('Chat completion finished', {
-                        operation: operationName,
-                        finishReason,
-                        completionTokens: usage?.completionTokens,
-                        promptTokens: usage?.promptTokens,
-                        totalTokens: usage?.totalTokens,
-                        sessionId,
-                        userId
-                    });
-
-                    // Save assistant message if user is authenticated and persistence is enabled
-                    if (userId && !messagePersistenceDisabled && persistenceService) {
-                        // Extract tool usage from the assistant's response
-                        const toolsUsed = this.extractToolsUsed(text);
-
-                        // Save the assistant message
-                        try {
-                            await this.saveAssistantMessage(
-                                context,
-                                text,
-                                toolsUsed
-                            );
-                        } catch (saveError) {
-                            edgeLogger.error('Failed to save assistant message', {
-                                operation: operationName,
-                                error: saveError instanceof Error ? saveError.message : String(saveError),
-                                sessionId,
-                                userId
-                            });
-                        }
-                    }
-                },
-                onError({ error }: { error: any }) {
-                    // Log any error that occurs during streaming
-                    edgeLogger.error('Streaming error encountered', {
-                        operation: operationName,
-                        error: error instanceof Error ? error.message : String(error),
-                        sessionId,
-                        userId
-                    });
-                }
             });
 
             // Consume the stream in the background to ensure all callbacks are triggered

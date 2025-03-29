@@ -54,11 +54,11 @@ export const agentRoutingSchema = z.object({
 });
 ```
 
-This follows the example in the Vercel AI SDK documentation where they use `generateObject` to classify customer queries.
+This follows the exact example in the Vercel AI SDK documentation where they use `generateObject` to classify inputs.
 
 ## Agent-Specific Configuration
 
-Each agent type is mapped directly to its configuration, following Vercel's pattern:
+Each agent type has a dedicated configuration that includes:
 
 ```typescript
 // Get system prompt using the prompts module
@@ -72,8 +72,7 @@ const configurations: Record<AgentType, Omit<AgentConfig, 'systemPrompt'>> = {
     toolOptions: {
       useKnowledgeBase: true,
       useWebScraper: true,
-      useDeepSearch: true,
-      useRagTool: true
+      useDeepSearch: true, 
     }
   },
   'google-ads': {
@@ -83,10 +82,9 @@ const configurations: Record<AgentType, Omit<AgentConfig, 'systemPrompt'>> = {
       useKnowledgeBase: true,
       useWebScraper: true,
       useDeepSearch: true,
-      useRagTool: true
     }
   },
-  // Other agent configurations...
+  // Other agent configurations follow the same pattern
 };
 
 return {
@@ -94,8 +92,6 @@ return {
   ...configurations[agentType]
 };
 ```
-
-This direct mapping is similar to Vercel's example where they map classification results to specific model configurations.
 
 ## Integration with Chat Engine
 
@@ -119,20 +115,59 @@ const tools = createToolSet({
   useKnowledgeBase: agentConfig.toolOptions.useKnowledgeBase,
   useWebScraper: agentConfig.toolOptions.useWebScraper,
   useDeepSearch: shouldUseDeepSearch, // Only include if explicitly enabled
-  useRagTool: agentConfig.toolOptions.useRagTool
 });
 
 // Create a configured chat engine for the detected agent
-const engine = createChatEngine({
+const engineConfig: ChatEngineConfig = {
   tools,
-  systemPrompt: prompts.buildSystemPrompt(agentType, shouldUseDeepSearch),
-  temperature: agentConfig.temperature,
+  model: agentConfig.model || 'gpt-4o',
+  temperature: agentConfig.temperature || 0.7,
+  maxTokens: 16000,
   operationName: `chat_${agentType}`,
-  // Other configuration options
+  cacheEnabled: true,
+  messageHistoryLimit: 50,
+  // Enable DeepSearch at the engine level if supported by the agent
+  useDeepSearch: shouldUseDeepSearch,
+  // Use enhanced system prompt with tool-specific instructions
+  systemPrompt: prompts.buildSystemPrompt(agentType, shouldUseDeepSearch),
+  // Additional configuration
+  body: {
+    deepSearchEnabled: shouldUseDeepSearch,
+    sessionId,
+    userId: persistenceUserId,
+    agentType,
+    // AI SDK standard configuration for multi-step agents
+    maxSteps: 5,
+    toolChoice: shouldUseDeepSearch ? 'auto' : 'none'
+  }
+};
+
+// Create and use the chat engine
+const engine = new ChatEngine(engineConfig);
+return engine.handleRequest(req);
+```
+
+## Logging and Monitoring
+
+The system includes comprehensive logging to track agent selection and usage:
+
+```typescript
+// Log the AI routing decision
+edgeLogger.info('Agent routing decision', {
+  category: LOG_CATEGORIES.CHAT,
+  operation: 'agent_routing_decision',
+  selectedAgent,
+  reasoning: routingResult.object.reasoning.substring(0, 100) + '...'
 });
 
-// Let the engine handle the request
-return engine.handleRequest(req);
+// Log user ID and configuration for debugging
+edgeLogger.info('Chat engine configuration', {
+  operation: 'chat_engine_config',
+  sessionId,
+  userId: persistenceUserId,
+  agentType,
+  deepSearchEnabled: shouldUseDeepSearch
+});
 ```
 
 ## Error Handling and Fallback
@@ -165,23 +200,88 @@ try {
 }
 ```
 
+## Prompt System Integration
+
+Agent routing integrates with our prompt system to provide specialized prompts for each agent:
+
+```typescript
+// Prompt system
+export const AGENT_PROMPTS: Record<AgentType, string> = {
+  'default': '',  // No additional prompt for default agent
+  'copywriting': COPYWRITING_SYSTEM_PROMPT,
+  'google-ads': GOOGLE_ADS_SYSTEM_PROMPT,
+  'facebook-ads': FACEBOOK_ADS_SYSTEM_PROMPT,
+  'quiz': QUIZ_SYSTEM_PROMPT
+};
+
+// Get system prompt with tool instructions
+export function buildSystemPromptWithDeepSearch(agentType: AgentType, deepSearchEnabled = false): string {
+  // Get the base system prompt for the agent type
+  const basePrompt = buildSystemPrompt(agentType);
+
+  // Add tool descriptions and instructions
+  const withToolDescription = `${basePrompt}\n\n### AVAILABLE TOOLS:\n\n` +
+    `You have access to the following resources:\n` +
+    `- Knowledge Base: Retrieve information from our internal knowledge base\n` +
+    `- Web Scraper: Extract content from specific URLs provided by the user\n` +
+    `- Deep Search: Conduct in-depth research on complex topics using Perplexity AI\n\n` +
+    `Use these resources when appropriate to provide accurate responses.`;
+
+  // Add DeepSearch-specific instructions based on whether it's enabled
+  const deepsearchInstructions = deepSearchEnabled
+    ? `### DEEP SEARCH INSTRUCTIONS:\n\n` +
+      `DeepSearch is enabled for this conversation. Use it for factual questions...`
+    : `NOTE: DeepSearch is NOT enabled for this conversation. Do NOT use the deepSearch tool.`;
+  
+  return `${withToolDescription}\n\n${deepsearchInstructions}\n\n${attributionSection}`;
+}
+```
+
+## Tool Selection Based on Agent Type
+
+Different agent types have access to different tool sets:
+
+```typescript
+function getAgentConfig(agentType: AgentType): AgentConfig {
+  // Map agent types directly to tool configurations 
+  const configurations: Record<AgentType, Omit<AgentConfig, 'systemPrompt'>> = {
+    'copywriting': {
+      // Configuration...
+      toolOptions: {
+        useKnowledgeBase: true,
+        useWebScraper: true,
+        useDeepSearch: true,
+      }
+    },
+    'quiz': {
+      // Configuration...
+      toolOptions: {
+        useKnowledgeBase: true,
+        useWebScraper: false, // Reduced tool set for quiz agent
+        useDeepSearch: false,
+      }
+    },
+    // Other agents...
+  };
+
+  return {
+    systemPrompt: buildSystemPrompt(agentType),
+    ...configurations[agentType]
+  };
+}
+```
+
 ## Benefits of This Approach
 
-1. **Follows Vercel AI SDK Best Practices**: Directly implements the routing pattern from their documentation
+1. **Follows Vercel AI SDK Best Practices**: Directly implements the routing pattern from the documentation
 2. **Specialized Responses**: Each agent has optimized parameters for its domain
 3. **Clean Implementation**: Simple, direct mapping from classification to configuration
 4. **Maintainable Architecture**: Clear separation of routing logic from chat engine functionality
 5. **Tool Selection Flexibility**: Different agent types can use different tool sets
 6. **Contextual Deep Search**: Deep Search is only enabled when both the agent supports it and the user toggles it
 7. **Performance Optimization**: GPT-4o-mini for routing decisions provides a good balance of speed and accuracy
-
-## Future Enhancements
-
-1. **User Preference Memory**: Remember user's preferred agent type for future sessions
-2. **Hybrid Routing**: Combine AI-based routing with keyword-based scoring for optimal performance
-3. **Continuous Learning**: Periodically update routing model based on user feedback
-4. **Additional Agent Types**: Expand with more specialized agents for different photography niches
-5. **Tool Usage Analytics**: Track which tools each agent uses to optimize configurations
+8. **Consistent Logging**: Comprehensive logging for debugging and analytics
+9. **Graceful Fallbacks**: Automatic fallback to default agent if routing fails
 
 ## References
 
