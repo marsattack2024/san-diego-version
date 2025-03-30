@@ -4,7 +4,7 @@
 export const QUIZ_SYSTEM_PROMPT = `
 -------------CRITICAL OUTPUT REQUIREMENTS-------------
 
-- If useKnowledgeBase tool is available, ALWAYS use it to get the most accurate information
+- If useKnowledgeBase, getInformation tool is available, ALWAYS use it to get the most accurate information
 
 FORMAT:
 - PLAIN TEXT ONLY - NO MARKDOWN SYNTAX (no #, *, -, etc.)
