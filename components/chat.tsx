@@ -7,7 +7,7 @@ import useSWR, { useSWRConfig } from 'swr';
 import type { Vote } from '@/lib/db/schema';
 import { fetcher, generateUUID } from '@/lib/utils';
 import { MultimodalInput } from './multimodal-input';
-import { Messages } from './messages';
+import { VirtualizedChat } from './virtualized-chat';
 import { toast } from 'sonner';
 import { useChatStore } from '@/stores/chat-store';
 import { TooltipProvider } from './ui/tooltip';
@@ -27,24 +27,15 @@ export function Chat({
   const selectedAgentId = useChatStore(state => state.selectedAgentId);
   const updateConversationMetadata = useChatStore(state => state.updateConversationMetadata);
 
+  // Track when user sends a message to control scrolling behavior
+  const [hasUserSentMessage, setHasUserSentMessage] = useState(false);
+
   // Add ref for scroll container
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
 
-  // Simplified page load scrolling since the useScrollToBottom hook now handles most scrolling
-  useEffect(() => {
-    // Simple window load event handler to ensure proper initial scroll
-    const handlePageLoad = () => {
-      if (chatContainerRef.current) {
-        chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-      }
-    };
-
-    window.addEventListener('load', handlePageLoad);
-    return () => {
-      window.removeEventListener('load', handlePageLoad);
-    };
-  }, []);
+  // Removed redundant scroll handling
+  // The VirtualizedChat component now handles all scrolling
 
   // Update conversation metadata when agent changes
   useEffect(() => {
@@ -153,7 +144,7 @@ export function Chat({
     },
   });
 
-  // Simplified handleSubmit wrapper for UI consistency
+  // Enhanced handleSubmit wrapper that tracks user message submission for scrolling
   const handleSubmitWithSave = async (event?: { preventDefault?: (() => void) } | undefined, chatRequestOptions?: any) => {
     if (event?.preventDefault) {
       event.preventDefault();
@@ -174,6 +165,9 @@ export function Chat({
       // Store this ID for later reference
       const currentInput = input;
 
+      // Signal that user has sent a message - will trigger scroll to bottom
+      setHasUserSentMessage(true);
+      
       // Submit directly to AI with the current input
       // The server will handle saving both the user message and assistant response
       await handleSubmit(event, chatRequestOptions);
@@ -189,6 +183,11 @@ export function Chat({
             [userMessage.id]: messageId
           }));
         }
+        
+        // Reset the user message flag after a delay
+        setTimeout(() => {
+          setHasUserSentMessage(false);
+        }, 100);
       }, 100);
 
     } catch (error) {
@@ -211,11 +210,8 @@ export function Chat({
       }));
   }, [messages, id]);
 
-  // Removed redundant scroll handling since it's now handled by the improved useScrollToBottom hook
-  // The hook now uses three scroll mechanisms like the chat widget:
-  // 1. Unconditional scroll to bottom on message changes
-  // 2. scrollIntoView for the end element
-  // 3. Continuous scroll interval during streaming
+  // Removed scroll handling
+  // Using VirtualizedChat with react-virtuoso for better performance and scrolling
 
   // Add before the return statement to ensure proper scrolling when the input expands
   useEffect(() => {
@@ -264,7 +260,7 @@ export function Chat({
     <TooltipProvider delayDuration={0}>
       <div className="flex flex-col bg-primary-foreground h-full pt-14">
         <div ref={chatContainerRef} className="flex-1 overflow-y-auto pb-8">
-          <Messages
+          <VirtualizedChat
             chatId={id}
             isLoading={isLoading}
             messages={messages}
@@ -273,6 +269,7 @@ export function Chat({
             isReadonly={isReadonly}
             votes={processedVotes}
             isArtifactVisible={!!attachments.length}
+            hasUserSentMessage={hasUserSentMessage}
           />
         </div>
         <div

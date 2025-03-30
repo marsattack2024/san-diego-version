@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
+import { useScrollStore } from '@/stores/scroll-store';
 import { X, Send, MessageSquare, AlertCircle, RefreshCw, Loader } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAppChat } from './use-app-chat';
@@ -42,20 +44,21 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
         api: '/api/widget-chat',
     });
 
+    // Track when user sends a message (for scroll behavior)
+    const [hasUserSentMessage, setHasUserSentMessage] = useState(false);
+    
     // References for UI interactions
     const inputRef = useRef<HTMLTextAreaElement>(null);
-    const scrollRef = useRef<HTMLDivElement>(null);
-    const messagesEndRef = useRef<HTMLDivElement>(null);
-
-    // Auto scroll to bottom on new messages or status changes
-    useEffect(() => {
-        if (scrollRef.current && isOpen) {
-            scrollRef.current.scrollTo({
-                top: scrollRef.current.scrollHeight,
-                behavior: 'smooth'
-            });
-        }
-    }, [messages, isOpen, status]);
+    const virtuosoRef = useRef<VirtuosoHandle>(null);
+    
+    // Get scroll state and actions from the store
+    const { 
+        shouldAutoScroll, 
+        isStreaming, 
+        handleScrollPositionChange,
+        resetOnUserMessage,
+        setIsStreaming
+    } = useScrollStore();
 
     // Focus input when opening the widget
     useEffect(() => {
@@ -65,12 +68,40 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
             }, 100);
         }
     }, [isOpen]);
+    
+    // Update streaming state based on chat status
+    useEffect(() => {
+        setIsStreaming(status === 'streaming');
+    }, [status, setIsStreaming]);
+    
+    // Reset scroll behavior when user sends a message
+    useEffect(() => {
+        if (hasUserSentMessage) {
+            resetOnUserMessage();
+            // Programmatically scroll to bottom when user sends a message
+            if (virtuosoRef.current && messages.length > 0) {
+                virtuosoRef.current.scrollToIndex({
+                    index: messages.length - 1,
+                    behavior: 'smooth',
+                    align: 'end'
+                });
+            }
+            
+            // Reset the flag after a short delay
+            setTimeout(() => {
+                setHasUserSentMessage(false);
+            }, 100);
+        }
+    }, [hasUserSentMessage, messages.length, resetOnUserMessage]);
 
     // Handle text area input including Enter key submission
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             if (input.trim() && status === 'ready') {
+                // Mark that user is sending a message (for scroll behavior)
+                setHasUserSentMessage(true);
+                
                 const form = e.currentTarget.form;
                 if (form) handleSubmit(new SubmitEvent('submit', { bubbles: true }) as any);
             }
@@ -111,28 +142,7 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
         warmupAPI();
     }, []);
 
-    // Ensure messages end ref scrolls into view when status changes
-    useEffect(() => {
-        if (messagesEndRef.current && isOpen) {
-            messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-        }
-    }, [status, isOpen]);
-
-    // Add continuous scrolling during streaming
-    useEffect(() => {
-        if (status === 'streaming' && scrollRef.current && isOpen) {
-            const scrollInterval = setInterval(() => {
-                if (scrollRef.current) {
-                    scrollRef.current.scrollTo({
-                        top: scrollRef.current.scrollHeight,
-                        behavior: 'smooth'
-                    });
-                }
-            }, 500); // Check and scroll every 500ms during streaming
-
-            return () => clearInterval(scrollInterval);
-        }
-    }, [status, isOpen]);
+    // Scroll handling is now managed by Virtuoso
 
     return (
         <div
@@ -193,55 +203,72 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
                     </div>
 
                     {/* Messages area */}
-                    <ScrollArea className="flex-1 overflow-y-auto p-4" ref={scrollRef}>
+                    <div className="flex-1 overflow-hidden p-0">
                         {/* Welcome message */}
                         {messages.length === 0 && (
-                            <div className="text-center my-8 text-gray-500">
+                            <div className="text-center my-8 p-4 text-gray-500">
                                 <p>{widgetConfig.greeting || "Hello! How can I help you today?"}</p>
                             </div>
                         )}
 
-                        {/* Message list */}
-                        <div className="space-y-4">
-                            {messages.map((message) => {
-                                // Check if the message actually has displayable content
-                                const hasTextContent = !!message.content || (message.parts && message.parts.some(p => p.type === 'text' && p.text));
+                        {/* Message list using Virtuoso */}
+                        {messages.length > 0 && (
+                            <Virtuoso
+                                ref={virtuosoRef}
+                                style={{ height: '100%', width: '100%' }}
+                                data={messages}
+                                className="p-4"
+                                // Only follow output if shouldAutoScroll is true
+                                followOutput={shouldAutoScroll ? 'auto' : false}
+                                // Use smooth scrolling for better UX
+                                followOutputSmooth={true}
+                                // This is the key handler that updates our scroll state
+                                atBottomStateChange={(isAtBottom) => {
+                                    handleScrollPositionChange(isAtBottom);
+                                }}
+                                // Add custom threshold to consider "near bottom" 
+                                atBottomThreshold={150}
+                                // Make auto-scrolling smoother during streaming
+                                overscan={shouldAutoScroll && isStreaming ? 200 : 0}
+                                itemContent={(index, message) => {
+                                    // Check if the message actually has displayable content
+                                    const hasTextContent = !!message.content || (message.parts && message.parts.some(p => p.type === 'text' && p.text));
 
-                                // Skip rendering empty assistant messages (prevent gray line)
-                                if (message.role === 'assistant' && !hasTextContent) {
-                                    return null;
-                                }
+                                    // Skip rendering empty assistant messages (prevent gray line)
+                                    if (message.role === 'assistant' && !hasTextContent) {
+                                        return null;
+                                    }
 
-                                return (
-                                    <div
-                                        key={message.id}
-                                        className={cn(
-                                            "flex flex-col max-w-[80%] rounded-lg p-3 overflow-hidden",
-                                            message.role === 'user'
-                                                ? "ml-auto bg-primary/10 text-foreground"
-                                                : "mr-auto bg-muted text-foreground"
-                                        )}
-                                    >
-                                        <div className="whitespace-pre-wrap break-words w-full">
-                                            {/* If using parts API */}
-                                            {message.parts?.map((part, i) => (
-                                                part.type === 'text' ? <span key={i}>{part.text}</span> : null
-                                            )) || message.content}
+                                    return (
+                                        <div
+                                            className={cn(
+                                                "flex flex-col max-w-[80%] rounded-lg p-3 overflow-hidden mb-3",
+                                                message.role === 'user'
+                                                    ? "ml-auto bg-primary/10 text-foreground"
+                                                    : "mr-auto bg-muted text-foreground"
+                                            )}
+                                        >
+                                            <div className="whitespace-pre-wrap break-words w-full">
+                                                {/* If using parts API */}
+                                                {message.parts?.map((part, i) => (
+                                                    part.type === 'text' ? <span key={i}>{part.text}</span> : null
+                                                )) || message.content}
+                                            </div>
                                         </div>
-                                    </div>
-                                );
-                            })}
-
-                            <div ref={messagesEndRef} />
-                        </div>
-
-                        {/* Processing indicator moved outside space-y-4 container */}
-                        {status === 'streaming' && (
-                            <div className="mt-4 flex items-center gap-2" style={{ marginLeft: '8px' }}>
-                                <Loader className="h-3 w-3 animate-spin text-muted-foreground" />
-                                <span className="text-xs text-muted-foreground">Processing...</span>
-                            </div>
+                                    );
+                                }}
+                                components={{
+                                    Footer: () => status === 'streaming' ? (
+                                        <div className="mt-4 flex items-center gap-2 mb-4" style={{ marginLeft: '8px' }}>
+                                            <Loader className="h-3 w-3 animate-spin text-muted-foreground" />
+                                            <span className="text-xs text-muted-foreground">Processing...</span>
+                                        </div>
+                                    ) : null
+                                }}
+                            />
                         )}
+
+                        {/* Processing indicator now handled by Virtuoso Footer */}
 
                         {/* Error message moved outside space-y-4 as well */}
                         {error && (

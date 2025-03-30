@@ -509,7 +509,7 @@ export class ChatEngine {
                     edgeLogger.error('Failed to save user message (non-blocking)', {
                         operation: operationName,
                         error: error instanceof Error ? error.message : String(error),
-                        sessionId,
+                        sessionId: context.sessionId,
                         messageId: lastUserMessage.id,
                         userId: logUserId,
                         requestId
@@ -574,7 +574,7 @@ export class ChatEngine {
                     if (messagePersistenceDisabled || !persistenceService || !userId) {
                         edgeLogger.info('Skipping assistant message persistence', {
                             operation: operationName,
-                            sessionId,
+                            sessionId: context.sessionId,
                             disabled: messagePersistenceDisabled,
                             hasPersistenceService: !!persistenceService,
                             hasUserId: !!userId,
@@ -654,7 +654,7 @@ export class ChatEngine {
                             toolNames: toolsUsed?.api_tool_calls?.map((t: any) => t.name).filter(Boolean),
                             additionalData: {
                                 operation: operationName,
-                                sessionId,
+                                sessionId: context.sessionId,
                                 modelName: self.config.model,
                                 tokenUsage: usage ? {
                                     promptTokens: usage.promptTokens,
@@ -666,7 +666,7 @@ export class ChatEngine {
 
                         edgeLogger.info('Successfully saved assistant message in onFinish', {
                             operation: operationName,
-                            sessionId,
+                            sessionId: context.sessionId,
                             contentLength: text.length,
                             hasToolsUsed: !!toolsUsed,
                             requestId
@@ -973,7 +973,7 @@ export class ChatEngine {
                         edgeLogger.error('Failed to save assistant message in onFinish callback', {
                             operation: operationName,
                             error: error instanceof Error ? error.message : String(error),
-                            sessionId,
+                            sessionId: context.sessionId,
                             userId: logUserId,
                             requestId
                         });
