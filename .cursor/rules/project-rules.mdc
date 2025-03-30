@@ -9,6 +9,8 @@ Here's the improved version with Vercel AI SDK focus instead of OpenAI:
 
 ## Core Engineering Principles
 
+**when you are told to investigate code, ALWAYS search direct files and lines of code, do not assume documentation is correct or your memory is correct.
+
 - Provide actual TypeScript/React code snippets using ESM syntax when asked for fixes
 - Use import/export statements instead of require/module.exports in all code examples
 - Keep communication direct and concise, respecting your expertise with Next.js and React

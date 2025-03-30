@@ -268,6 +268,63 @@ The `context.ts` module provides a powerful mechanism for:
 - Supporting nested operations with proper parent-child relationships
 
 This allows for correlated logging across complex operations with minimal boilerplate code.
+
+## Widget Chat Logging
+
+The widget chat implementation has some logging differences compared to the main chat:
+
+1. **Anonymous Sessions:** Widget sessions typically use an anonymous user (`userId=anon...mous`)
+2. **Limited Persistence:** Message persistence is disabled for anonymous sessions
+3. **RAG Logging:** All RAG operations are fully logged at the document retrieval level
+4. **Cache Logging:** Cache hits and misses are logged in the cache service
+5. **Missing Tool Usage Logs:** Anonymous sessions don't log tool usage in the message persistence flow
+
+### Tracking RAG Performance in Widget
+
+To track RAG performance and cache effectiveness in widget sessions:
+
+1. **RAG Operation ID:** Track operations by their `ragOperationId`
+2. **Cache Hit Status:** Look for `fromCache: true` and `source: 'cache'` in RAG logs
+3. **Performance Metrics:** All RAG operations include `durationMs`, `retrievalTimeMs` metrics
+4. **Document Similarity:** RAG results include `topSimilarityScore`, `avgSimilarityScore`
+
+### Example: Widget RAG Cache Hit Log
+
+```
+🔵 Using cached RAG results (tools, 58ms, rag_search)
+  ragOperationId=rag-ltr95z
+  documentCount=3
+  documentIds=["doc123","doc456","doc789"]
+  topSimilarityScore=0.92
+  source=cache
+  durationMs=58
+  slow=false
+  important=false
+  status=completed_from_cache
+```
+
+### Main Chat vs Widget Log Comparison
+
+**Main Chat Flow (Authenticated User):**
+```
+1. Knowledge base search started
+2. RAG operation with cache check
+3. Using cached RAG results (if applicable)
+4. Knowledge base search completed
+5. Tool calls executed (in chat engine)
+6. Assistant message saved (with tool usage)
+```
+
+**Widget Chat Flow (Anonymous User):**
+```
+1. Knowledge base search started
+2. RAG operation with cache check
+3. Using cached RAG results (if applicable)
+4. Knowledge base search completed
+5. "Skipping assistant message persistence" (due to anonymous user)
+```
+
+The widget chat logs will not show the tool usage in the message persistence logs because message persistence is disabled for anonymous sessions. However, this doesn't affect the actual functionality of RAG or caching - both operate identically.
 Migration Notes
 Replace all console.log calls with appropriate logger methods (edgeLogger.debug, .info, .warn, .error).
 Ensure correct level and category are provided.

@@ -563,6 +563,41 @@ The standardization effort has been completed:
 ✅ The legacy `chatEngineCache` service has been removed  
 ✅ Performance monitoring and logging implemented
 
+## Anonymous Session Caching
+
+The application handles caching for anonymous sessions (such as the widget chat) with the same reliability as authenticated sessions:
+
+1. **Shared Cache Implementation:** Both authenticated and anonymous sessions use the same Redis caching layer
+2. **No User-Specific Cache Keys:** For anonymous sessions, the `tenantId` defaults to 'global'
+3. **Cache Hits Are Logged:** Even for anonymous sessions, cache hits are properly logged at the RAG operation level
+4. **Widget Chat Notes:** The widget chat uses anonymous sessions and skips message persistence, but fully utilizes the cache
+5. **Monitoring Anonymous Cache Usage:** Look for RAG operation logs with `fromCache: true` and `source: 'cache'`
+
+When troubleshooting cache issues for anonymous sessions, ensure you're looking at the right log category:
+- RAG operation logs will show cache hits/misses with `operation: 'rag_search'`
+- Cache service logs show general cache stats periodically
+- Message persistence logs won't show tool usage for anonymous sessions
+
+### Example Cache Hit Log for Anonymous Session
+
+```
+🔵 Using cached RAG results (tools)
+  ragOperationId=rag-ltr95z
+  documentCount=3
+  documentIds=["doc123","doc456","doc789"]
+  topSimilarityScore=0.92
+  source=cache
+  durationMs=58
+  slow=false
+  important=false
+  status=completed_from_cache
+```
+
+The cache effectiveness for anonymous sessions can be verified by:
+1. Looking for decreasing `durationMs` values in repeated similar queries
+2. Checking for `fromCache: true` in RAG operation logs
+3. Monitoring the overall cache hit rate in periodic cache stats
+
 ## Summary
 
 The Redis caching system provides a robust, efficient, and serverless-friendly solution for various caching needs in the application. It follows best practices for key generation, error handling, and TTL management while providing specialized methods for different use cases. The implementation ensures:

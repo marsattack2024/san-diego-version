@@ -965,3 +965,93 @@ const PERFORMANCE_CONFIG = {
 - Error pattern detection
 - Usage analytics
 - Cache efficiency metrics
+
+## Widget Implementation Notes
+
+The widget chat implementation uses the same RAG system as the main chat interface but handles sessions differently:
+
+1. **Anonymous Sessions:** Widget sessions are anonymous by default without requiring authentication
+2. **Simplified Persistence:** Message persistence is disabled for anonymous sessions
+3. **Identical RAG Performance:** The same Redis caching is used for all RAG operations
+4. **Logging Differences:** Tool usage is logged at the RAG operation level but not at the message persistence level
+5. **Cache Effectiveness:** Both implementations benefit from the cached results, visible in reduced latency for repeated queries
+
+### Technical Implementation Details
+
+The widget chat implementation in `app/api/widget-chat/route.ts` configures the chat engine with:
+
+```typescript
+const chatEngine = await createChatEngine({
+  tools: widgetTools,  // Uses the standard tools registry with widget-specific configuration
+  messages,
+  requiresAuth: false, // Key difference: No authentication requirement
+  cacheEnabled: true,  // Same caching functionality as main chat
+  sessionId: sessionId || `widget-${crypto.randomUUID()}`,
+  // Message persistence and history are disabled for anonymous users
+  saveChatHistory: false 
+});
+```
+
+This configuration ensures that the widget uses the same underlying RAG functionality but skips message persistence, which affects tool usage logging.
+
+### Core Flow Comparison
+
+**Main Chat Flow (Authenticated):**
+1. User sends query → Route handler processes request
+2. Chat engine creates with `tools: fullChatTools, requiresAuth: true`  
+3. Knowledge base tool executes and searches for documents
+4. Document retrieval checks cache → returns documents
+5. Tool usage is logged in `onToolCall` and message is saved with tool usage metadata
+6. Tool results appear in logs with operation IDs and metrics
+
+**Widget Chat Flow (Anonymous):**
+1. User sends query → Widget route handler processes request  
+2. Chat engine creates with `tools: widgetTools, requiresAuth: false, saveChatHistory: false`
+3. Knowledge base tool executes and searches for documents (identical to main chat)
+4. Document retrieval checks cache → returns documents (identical to main chat)
+5. Tool usage is logged in `onToolCall` but message persistence is skipped
+6. No tool usage appears in message persistence logs, but RAG operations are fully logged
+
+### Troubleshooting RAG in Widget
+
+When verifying RAG functionality in the widget implementation:
+
+1. **Check Operation Logs:** Look for these log patterns:
+   ```
+   Knowledge base search started (tools)
+   RAG operation with cache check (tools)
+   Using cached RAG results (tools) [if applicable]
+   Knowledge base search completed (tools)
+   ```
+
+2. **Monitor Cache Performance:** The cacheService logs cache hits/misses for both implementations:
+   ```
+   Cache stats (system)
+     hits=45
+     misses=23
+     hitRate=0.66
+   ```
+
+3. **Verify Document Similarity:** Both implementations return similarity scores:
+   ```
+   Knowledge base search completed (tools)
+     topSimilarityScore=0.88
+     documentCount=3
+   ```
+
+4. **Missing Message Logs:** The following log indicates why tool usage isn't in message persistence:
+   ```
+   Skipping assistant message persistence (chat)
+     disabled=false
+     hasUserId=false
+   ```
+
+### Implementation Advantages
+
+This implementation approach provides several benefits:
+
+1. **Shared Code Path:** Both widget and main chat use the same core RAG implementation
+2. **Consistent Caching:** All RAG operations benefit from the shared Redis cache
+3. **Simplified Authentication:** Widget users don't need authentication for basic RAG
+4. **Performance:** Skipping message persistence reduces database load for anonymous sessions
+5. **Minimal Maintenance:** Updates to the RAG system automatically benefit both implementations
