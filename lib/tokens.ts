@@ -47,8 +47,8 @@ export const typography = {
     listItemSpacing: 'py-1.5',
     // List container spacing in markdown content
     listContainerSpacing: 'my-3',
-    // Strong text styling - enhanced for better visibility
-    strongText: 'font-extrabold text-primary',
+    // Strong text styling - enhanced for better visibility with increased specificity
+    strongText: 'font-extrabold !text-primary',
     // Base message text size
     messageText: 'text-md'
 };

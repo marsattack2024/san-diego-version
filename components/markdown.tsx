@@ -32,7 +32,7 @@ const components: Partial<Components> = {
   },
   strong: ({ node, children, ...props }) => {
     return (
-      <span className="font-extrabold text-primary" {...props}>
+      <span className="font-extrabold !text-primary" {...props}>
         {children}
       </span>
     );

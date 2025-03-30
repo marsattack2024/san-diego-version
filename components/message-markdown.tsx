@@ -44,7 +44,7 @@ const messageComponents: Partial<Components> = {
     // Text formatting with proper bold styling
     strong: ({ node, children, ...props }) => {
         return (
-            <span className={typography.strongText} {...props}>
+            <span className={`${typography.strongText} [&]:text-primary font-extrabold`} {...props}>
                 {children}
             </span>
         );

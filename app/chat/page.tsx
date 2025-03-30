@@ -11,6 +11,9 @@ export const dynamic = 'force-dynamic';
 
 const log = clientLogger;
 
+// Track whether we've completed an initial store hydration
+let storeHydrated = false;
+
 export default function ChatPage() {
   const currentConversationId = useChatStore(state => state.currentConversationId);
   const conversations = useChatStore(state => state.conversations);
@@ -19,6 +22,27 @@ export default function ChatPage() {
   const [isInitialized, setIsInitialized] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
+  // Add state for tracking hydration
+  const [isStoreReady, setIsStoreReady] = useState(storeHydrated);
+
+  // Handle store hydration status
+  useEffect(() => {
+    // If store is already known to be hydrated, we're ready
+    if (storeHydrated) {
+      setIsStoreReady(true);
+      return;
+    }
+
+    // Otherwise, wait a moment and check for persisted state
+    // This gives Zustand persist middleware time to hydrate
+    const timer = setTimeout(() => {
+      storeHydrated = true;
+      setIsStoreReady(true);
+      log.debug('Chat store hydration check completed');
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, []);
 
   // Optimized history fetching using the history service
   const fetchHistory = useCallback(async () => {
@@ -40,7 +64,8 @@ export default function ChatPage() {
 
   // Check for a newChat parameter which forces creation of a new chat
   useEffect(() => {
-    if (historyLoading) return; // Wait for history to load
+    // Wait for both store and history to be ready
+    if (historyLoading || !isStoreReady) return;
 
     // Check if the URL contains the newChat parameter and timestamp
     if (typeof window !== 'undefined') {
@@ -82,7 +107,7 @@ export default function ChatPage() {
         setIsInitialized(true);
       }
     }
-  }, [currentConversationId, createConversation, history, historyLoading, router]);
+  }, [currentConversationId, createConversation, history, historyLoading, router, isStoreReady]);
 
   // Get current conversation
   const currentConversation = currentConversationId
@@ -90,7 +115,7 @@ export default function ChatPage() {
     : null;
 
   // If no conversation exists yet or we're still loading, show loading state
-  if (historyLoading || !isInitialized || (!currentConversationId && !currentConversation)) {
+  if (historyLoading || !isStoreReady || !isInitialized || (!currentConversationId && !currentConversation)) {
     return <div className="h-screen flex items-center justify-center">Loading...</div>;
   }
 

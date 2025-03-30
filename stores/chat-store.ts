@@ -72,8 +72,16 @@ interface ChatState {
 const createDebugStorage = (options?: { enabled?: boolean }): StateStorage => {
   const isDebugEnabled = options?.enabled ?? process.env.NODE_ENV !== 'production';
 
+  // Check if we're in a browser environment
+  const isBrowser = typeof window !== 'undefined';
+
   return {
     getItem: (name: string): string | null => {
+      // Return null during SSR
+      if (!isBrowser) {
+        return null;
+      }
+
       const value = localStorage.getItem(name);
       if (isDebugEnabled) {
         console.debug(`[ChatStore] Loading from storage: ${name.substring(0, 20)}...`);
@@ -81,12 +89,22 @@ const createDebugStorage = (options?: { enabled?: boolean }): StateStorage => {
       return value;
     },
     setItem: (name: string, value: string): void => {
+      // Do nothing during SSR
+      if (!isBrowser) {
+        return;
+      }
+
       if (isDebugEnabled) {
         console.debug(`[ChatStore] Saving to storage: ${name.substring(0, 20)}...`);
       }
       localStorage.setItem(name, value);
     },
     removeItem: (name: string): void => {
+      // Do nothing during SSR
+      if (!isBrowser) {
+        return;
+      }
+
       if (isDebugEnabled) {
         console.debug(`[ChatStore] Removing from storage: ${name.substring(0, 20)}...`);
       }
@@ -539,7 +557,7 @@ export const useChatStore = create<ChatState>()(
             try {
               // Use the history service to delete the chat from the database
               const success = await historyService.deleteChat(conversationId);
-              
+
               if (!success) {
                 console.error(`Failed to delete chat from database: ${conversationId}`);
                 // No need to revert the optimistic update, as refreshing history will restore the correct state
@@ -617,6 +635,17 @@ export const useChatStore = create<ChatState>()(
         deepSearchEnabled: state.deepSearchEnabled,
         // Don't persist full conversation data, fetch from API instead
       }),
+      // Add onRehydrateStorage callback to handle hydration state
+      onRehydrateStorage: (state) => {
+        // Return handler that will be called when hydration is complete or fails
+        return (rehydratedState, error) => {
+          if (error) {
+            console.error('Error rehydrating chat store:', error);
+          } else {
+            console.debug('[ChatStore] Hydration complete');
+          }
+        };
+      },
       migrate: (persistedState: any, version: number) => {
         if (version === 0) {
           const v0State = persistedState as ChatStateV0;
