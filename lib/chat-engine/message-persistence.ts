@@ -150,13 +150,13 @@ export class MessagePersistenceService {
             disabled: false,
             operationName: 'message_persistence',
             throwErrors: false,
-            messageHistoryLimit: 50,
+            messageHistoryLimit: 15,
             ...config
         };
 
         this.operationName = this.config.operationName || 'message_persistence';
         this.throwErrors = this.config.throwErrors === true;
-        this.messageHistoryLimit = this.config.messageHistoryLimit || 50;
+        this.messageHistoryLimit = this.config.messageHistoryLimit || 15;
 
         // Log initialization
         edgeLogger.info('Message persistence service initialized', {

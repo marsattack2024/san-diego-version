@@ -1,26 +1,27 @@
-import { CoreMessage, Message, StreamTextResult, Tool, ToolResult, ToolSet, streamText } from 'ai';
-import { edgeLogger } from '../logger/edge-logger';
-import { LOG_CATEGORIES } from '../logger/constants';
-import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/utils/supabase/server';
-import { cookies } from 'next/headers';
+import { CoreMessage, Message, StreamTextResult, Tool, ToolResult, ToolSet, streamText } from 'ai';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { NextRequest, NextResponse } from 'next/server';
+import { AgentType, buildSystemPrompt, buildSystemPromptWithDeepSearch } from './prompts';
+import { createToolSet } from '@/lib/tools/registry.tool';
 import { extractUrls } from '@/lib/utils/url-utils';
+import { MessagePersistenceService } from './message-persistence';
+import { chatLogger } from '@/lib/logger/chat-logger';
+import type OpenAI from 'openai';
 import { openai } from '@ai-sdk/openai';
-import type { OpenAI } from 'openai';
 import { RequestCookie } from 'next/dist/compiled/@edge-runtime/cookies';
-
-// Import the centralized cache service and message history service
-import { cacheService } from '@/lib/cache/cache-service';
-import {
-    MessagePersistenceService,
-    MessageSaveResult,
-    HistoryMessageInput,
-    ToolsUsedData
-} from './message-persistence';
-
-// Import chat logger for end-to-end request timing
-import { chatLogger } from '../logger/chat-logger';
+import { cookies } from 'next/headers';
 import { withContext } from '../logger/context';
+
+// Helper functions for user ID masking and operation ID generation
+const maskUserId = (userId: string): string => {
+    return userId ? userId.substring(0, 5) + '...' + userId.substring(userId.length - 4) : 'anonymous';
+};
+
+const generateOperationId = (prefix: string): string => {
+    return `${prefix}-${Math.random().toString(36).substring(2, 8)}`;
+};
 
 /**
  * Chat Engine Configuration Interface
@@ -104,6 +105,11 @@ export interface ChatEngineContext {
         totalProcessingTimeMs?: number;
         tokenCount?: number;
         cacheHits?: number;
+    };
+
+    // Session metadata
+    sessionMetadata?: {
+        title?: string;
     };
 }
 
@@ -319,7 +325,8 @@ export class ChatEngine {
             messages,
             previousMessages,
             urls,
-            metrics: {}
+            metrics: {},
+            sessionMetadata: {}
         };
     }
 
@@ -397,19 +404,55 @@ export class ChatEngine {
             // Generate a unique request ID for tracing this entire request lifecycle
             const requestId = crypto.randomUUID().substring(0, 8);
 
-            // Get userId from context or body
+            // Store userId for log masking (privacy protection)
             const userId = context.userId || (this.config.body?.userId as string);
+            const logUserId = maskUserId(userId);
 
-            // Use a more privacy-focused user ID in logs
-            const logUserId = userId ? (userId.substring(0, 3) + '...' + userId.substring(userId.length - 3)) : 'anonymous';
+            // Log the start of chat request processing
+            edgeLogger.info('Chat request started', {
+                category: LOG_CATEGORIES.CHAT,
+                operation: 'chat_request_start',
+                userId: logUserId,
+                messageId: context.messages[0]?.id,
+                agentType: this.config.agentType || 'default',
+                deepSearchEnabled: this.config.body?.deepSearchEnabled === true,
+                requestId
+            });
 
-            if (userId) {
-                edgeLogger.info('Using userId for persistence', {
-                    operation: this.config.operationName,
-                    sessionId: context.sessionId,
-                    userId: logUserId,
-                    requestId
-                });
+            // Try to fetch session metadata early to help with title generation decisions
+            if (context.sessionId && userId) {
+                try {
+                    const supabase = await createClient();
+                    const { data: sessionData } = await supabase
+                        .from('sd_chat_sessions')
+                        .select('title')
+                        .eq('id', context.sessionId)
+                        .single();
+
+                    if (sessionData) {
+                        // Initialize sessionMetadata if it doesn't exist
+                        context.sessionMetadata = context.sessionMetadata || {};
+                        context.sessionMetadata.title = sessionData.title;
+
+                        edgeLogger.debug('Fetched session metadata', {
+                            operation: this.config.operationName,
+                            sessionId: context.sessionId,
+                            hasTitle: !!sessionData.title,
+                            titlePreview: sessionData.title ?
+                                `${sessionData.title.substring(0, 30)}${sessionData.title.length > 30 ? '...' : ''}` :
+                                'none',
+                            requestId
+                        });
+                    }
+                } catch (error) {
+                    // Just log the error, don't interrupt the flow
+                    edgeLogger.warn('Failed to fetch session metadata', {
+                        operation: this.config.operationName,
+                        sessionId: context.sessionId,
+                        error: error instanceof Error ? error.message : String(error),
+                        requestId
+                    });
+                }
             }
 
             // Get recent history using the message persistence service
@@ -442,11 +485,13 @@ export class ChatEngine {
 
             // Store config values in local variables for callback access
             const operationName = this.config.operationName;
-            const sessionId = context.sessionId;
             const messagePersistenceDisabled = this.config.messagePersistenceDisabled;
             const persistenceService = this.persistenceService;
             // Store reference to 'this' for use in callbacks
             const self = this;
+
+            // For tracking tool calls across all steps
+            const allToolCalls: Array<any> = [];
 
             // For saving assistant message - find the last user message to ensure persistence in same order
             const lastUserMessage = context.messages.find(m => m.role === 'user');
@@ -502,6 +547,9 @@ export class ChatEngine {
 
                     // Log tool calls when present
                     if (toolCalls && toolCalls.length > 0) {
+                        // Store tool calls for later use in onFinish
+                        allToolCalls.push(...toolCalls);
+
                         edgeLogger.info('Tool calls executed', {
                             operation: operationName,
                             toolNames: toolCalls.map(call => call.toolName),
@@ -544,34 +592,55 @@ export class ChatEngine {
                         // Extract tool calls data from the AI SDK response
                         let toolsUsed = textToolsUsed;
 
-                        // Cast response to access OpenAI-specific properties
-                        const openAIResponse = response as unknown as {
-                            choices?: Array<{
-                                message?: OpenAI.ChatCompletionMessage
-                            }>
-                        };
-
-                        // Safely check for tool calls with proper optional chaining
-                        const toolCalls = openAIResponse?.choices?.[0]?.message?.tool_calls;
-
-                        if (toolCalls && toolCalls.length > 0) {
-                            // Add or merge with existing tools data
+                        // Add accumulated tool calls from all steps
+                        if (allToolCalls.length > 0) {
                             toolsUsed = {
                                 ...toolsUsed,
-                                api_tool_calls: toolCalls.map((tool: OpenAI.ChatCompletionMessageToolCall) => ({
-                                    name: tool.function?.name,
-                                    id: tool.id,
-                                    type: tool.type
+                                api_tool_calls: allToolCalls.map(call => ({
+                                    name: call.toolName,
+                                    id: call.toolCallId,
+                                    type: 'function'
                                 }))
                             };
 
-                            edgeLogger.info('Captured tool calls from AI SDK', {
+                            edgeLogger.info('Using accumulated tool calls from steps', {
                                 operation: operationName,
-                                sessionId,
-                                toolCount: toolCalls.length,
-                                toolNames: toolCalls.map((t: OpenAI.ChatCompletionMessageToolCall) => t.function?.name).filter(Boolean),
+                                sessionId: context.sessionId,
+                                toolCount: allToolCalls.length,
+                                toolNames: allToolCalls.map(t => t.toolName).filter(Boolean),
                                 requestId
                             });
+                        } else {
+                            // Fallback to the original method
+                            // Cast response to access OpenAI-specific properties
+                            const openAIResponse = response as unknown as {
+                                choices?: Array<{
+                                    message?: OpenAI.ChatCompletionMessage
+                                }>
+                            };
+
+                            // Safely check for tool calls with proper optional chaining
+                            const toolCalls = openAIResponse?.choices?.[0]?.message?.tool_calls;
+
+                            if (toolCalls && toolCalls.length > 0) {
+                                // Add or merge with existing tools data
+                                toolsUsed = {
+                                    ...toolsUsed,
+                                    api_tool_calls: toolCalls.map((tool: OpenAI.ChatCompletionMessageToolCall) => ({
+                                        name: tool.function?.name,
+                                        id: tool.id,
+                                        type: tool.type
+                                    }))
+                                };
+
+                                edgeLogger.info('Captured tool calls from AI SDK', {
+                                    operation: operationName,
+                                    sessionId: context.sessionId,
+                                    toolCount: toolCalls.length,
+                                    toolNames: toolCalls.map((t: OpenAI.ChatCompletionMessageToolCall) => t.function?.name).filter(Boolean),
+                                    requestId
+                                });
+                            }
                         }
 
                         // Save the assistant message to the database
@@ -604,16 +673,30 @@ export class ChatEngine {
                         });
 
                         // NEW TITLE GENERATION CODE
-                        // Check that this is actually the first message before generating a title
+                        // Check if this is the first message
                         const isFirstMessage = async () => {
                             try {
+                                // Skip title generation if we already have a non-default title in session metadata
+                                if (context.sessionMetadata?.title &&
+                                    context.sessionMetadata.title !== 'New Chat' &&
+                                    context.sessionMetadata.title !== 'New Conversation' &&
+                                    context.sessionMetadata.title !== 'Untitled Conversation') {
+                                    edgeLogger.debug('Skipping title generation - session already has non-default title', {
+                                        category: 'chat',
+                                        operation: 'title_generation_skip',
+                                        chatId: context.sessionId,
+                                        existingTitle: context.sessionMetadata.title
+                                    });
+                                    return false;
+                                }
+
                                 const supabase = await createClient();
 
                                 // First get history from sd_messages table
                                 const { count, error } = await supabase
                                     .from('sd_messages')
                                     .select('id', { count: 'exact', head: true })
-                                    .eq('session_id', sessionId);
+                                    .eq('session_id', context.sessionId);
 
                                 // If this is the first or second message in this conversation
                                 // The first is typically system, second is user's first message
@@ -624,7 +707,7 @@ export class ChatEngine {
                                 edgeLogger.debug('Title generation check - message count', {
                                     category: 'chat',
                                     operation: 'title_count_check',
-                                    chatId: sessionId,
+                                    chatId: context.sessionId,
                                     count: messageCount,
                                     rawCount: count,
                                     hasCountError: !!error,
@@ -637,7 +720,7 @@ export class ChatEngine {
                                     const { data: sessionData, error: sessionError } = await supabase
                                         .from('sd_chat_sessions')
                                         .select('title')
-                                        .eq('id', sessionId)
+                                        .eq('id', context.sessionId)
                                         .single();
 
                                     // If session exists and has default title, we should generate a new one
@@ -648,7 +731,7 @@ export class ChatEngine {
                                         edgeLogger.info('New session detected, will generate title', {
                                             category: 'chat',
                                             operation: 'title_check_new_session',
-                                            chatId: sessionId
+                                            chatId: context.sessionId
                                         });
 
                                         return true;
@@ -660,7 +743,7 @@ export class ChatEngine {
                                 edgeLogger.warn('Failed to check message count for title generation', {
                                     category: 'system',
                                     error: countError instanceof Error ? countError.message : String(countError),
-                                    chatId: sessionId
+                                    chatId: context.sessionId
                                 });
 
                                 // For new conversations, default to true when we can't determine count
@@ -675,7 +758,7 @@ export class ChatEngine {
                             edgeLogger.debug('Skipping title generation - not the first message', {
                                 category: 'chat',
                                 operation: 'title_generation_skip',
-                                chatId: sessionId
+                                chatId: context.sessionId
                             });
                             return;
                         }
@@ -686,7 +769,7 @@ export class ChatEngine {
                             edgeLogger.warn('Cannot generate title - no user message with content found', {
                                 category: 'chat',
                                 operation: 'title_generation_skip',
-                                chatId: sessionId
+                                chatId: context.sessionId
                             });
                             return;
                         }
@@ -699,7 +782,7 @@ export class ChatEngine {
                         edgeLogger.info('Triggering title generation via API', {
                             category: 'chat',
                             operation: 'title_generation',
-                            chatId: sessionId
+                            chatId: context.sessionId
                         });
 
                         // Create absolute URL for edge runtime compatibility
@@ -710,7 +793,7 @@ export class ChatEngine {
                         edgeLogger.debug('Title generation API call details', {
                             category: 'chat',
                             operation: 'title_api_call',
-                            chatId: sessionId,
+                            chatId: context.sessionId,
                             baseUrl,
                             fullUrl: `${baseUrl}/api/chat/update-title`,
                             userId: context.userId || 'unknown'
@@ -805,7 +888,7 @@ export class ChatEngine {
                             credentials: 'include',
                             cache: 'no-store', // Ensure fresh data - no caching
                             body: JSON.stringify({
-                                sessionId,
+                                sessionId: context.sessionId,
                                 content: messageContent,
                                 userId: context.userId
                             })
@@ -818,7 +901,7 @@ export class ChatEngine {
                                             edgeLogger.info('Title generated successfully via API', {
                                                 category: LOG_CATEGORIES.CHAT,
                                                 operation: 'title_generation_success',
-                                                chatId: sessionId,
+                                                chatId: context.sessionId,
                                                 title: data.title
                                             });
 
@@ -829,19 +912,19 @@ export class ChatEngine {
                                                     // Use dynamic import to avoid SSR issues
                                                     const { useChatStore } = await import('@/stores/chat-store');
                                                     const { updateConversationTitle } = useChatStore.getState();
-                                                    updateConversationTitle(sessionId, data.title);
+                                                    updateConversationTitle(context.sessionId, data.title);
 
                                                     edgeLogger.debug('Zustand store updated with new title', {
                                                         category: LOG_CATEGORIES.CHAT,
                                                         operation: 'title_update_store',
-                                                        chatId: sessionId
+                                                        chatId: context.sessionId
                                                     });
                                                 }
                                             } catch (storeError) {
                                                 edgeLogger.warn('Failed to update Zustand store with new title', {
                                                     category: LOG_CATEGORIES.CHAT,
                                                     operation: 'title_update_store_error',
-                                                    chatId: sessionId,
+                                                    chatId: context.sessionId,
                                                     error: storeError instanceof Error ? storeError.message : String(storeError)
                                                 });
                                             }
@@ -850,7 +933,7 @@ export class ChatEngine {
                                         edgeLogger.error('Failed to parse title API JSON response', {
                                             category: LOG_CATEGORIES.CHAT,
                                             operation: 'title_generation_api_error',
-                                            chatId: sessionId,
+                                            chatId: context.sessionId,
                                             error: jsonError instanceof Error ? jsonError.message : String(jsonError)
                                         });
                                     }
@@ -862,7 +945,7 @@ export class ChatEngine {
                                         edgeLogger.error('Title generation API failed', {
                                             category: LOG_CATEGORIES.CHAT,
                                             operation: 'title_generation_api_error',
-                                            chatId: sessionId,
+                                            chatId: context.sessionId,
                                             status: response.status,
                                             statusText: response.statusText,
                                             responseText: responseText.substring(0, 200) // Limit to first 200 chars
@@ -871,7 +954,7 @@ export class ChatEngine {
                                         edgeLogger.error('Title generation API failed and could not read response', {
                                             category: LOG_CATEGORIES.CHAT,
                                             operation: 'title_generation_api_error',
-                                            chatId: sessionId,
+                                            chatId: context.sessionId,
                                             status: response.status,
                                             statusText: response.statusText
                                         });
@@ -882,7 +965,7 @@ export class ChatEngine {
                                 edgeLogger.error('Error calling title update API', {
                                     category: LOG_CATEGORIES.CHAT,
                                     operation: 'title_generation_api_error',
-                                    chatId: sessionId,
+                                    chatId: context.sessionId,
                                     error: apiError instanceof Error ? apiError.message : String(apiError)
                                 });
                             });
