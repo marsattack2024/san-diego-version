@@ -17,7 +17,7 @@ export const spacing = {
         // Base padding for message bubbles
         padding: 'px-6 py-3.5',
         // Offset for action buttons relative to message
-        actionOffset: 'mt-0 mb-0'
+        actionOffset: 'mt-5 mb-2'
     },
     chat: {
         // Padding for the entire chat container

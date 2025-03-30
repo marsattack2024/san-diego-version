@@ -16,7 +16,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { MessageEditor } from './message-editor';
 import { MessageReasoning } from './message-reasoning';
 import { RagResultCount } from './rag-result-count';
-import { MessageMarkdown } from './message-markdown';
 import { styles, spacing } from '@/lib/tokens';
 
 const PurePreviewMessage = ({
@@ -127,7 +126,7 @@ const PurePreviewMessage = ({
                       : styles.messageContent.assistant
                   )}
                 >
-                  <MessageMarkdown
+                  <Markdown
                     className={cn({
                       'text-foreground': message.role === 'assistant',
                       'text-white': message.role === 'user',
@@ -135,7 +134,7 @@ const PurePreviewMessage = ({
                     })}
                   >
                     {formattedContent}
-                  </MessageMarkdown>
+                  </Markdown>
 
                   {message.role === 'assistant' && isLoading && (
                     <ThinkingMessage
@@ -291,9 +290,9 @@ export function ThinkingMessage({
 export function UserMessage({ message }: { message: string }) {
   return (
     <div className={styles.messageContent.user}>
-      <MessageMarkdown className="text-white">
+      <Markdown className="text-white">
         {message}
-      </MessageMarkdown>
+      </Markdown>
     </div>
   );
 }
@@ -302,9 +301,9 @@ export function UserMessage({ message }: { message: string }) {
 export function AssistantMessage({ message }: { message: string }) {
   return (
     <div className={styles.messageContent.assistant}>
-      <MessageMarkdown className="text-foreground">
+      <Markdown className="text-foreground">
         {message}
-      </MessageMarkdown>
+      </Markdown>
     </div>
   );
 }
