@@ -198,6 +198,20 @@ export function VirtualizedChat({
     );
   };
 
+  // Define the spacer Footer component
+  const ListFooter = () => {
+    // Add a spacer div to create proper space above the input bar
+    return <div className="h-24 w-full flex-shrink-0"></div>;
+  };
+
+  // Combine ThinkingItem and ListFooter for the Virtuoso Footer
+  const CombinedFooter = () => (
+    <>
+      <ThinkingItem />
+      <ListFooter />
+    </>
+  );
+
   // Loading header for older messages
   const LoadingHeader = () => {
     // Only show the header if:
@@ -236,7 +250,7 @@ export function VirtualizedChat({
             flex: 1,
             height: '100%',
             minHeight: 'calc(100vh - 14rem)', // Add minimum height to ensure messages area is visible
-            paddingBottom: '0px' // No additional padding needed since parent has pb-24
+            paddingBottom: '0px' // No additional padding needed since we use Footer
           } as React.CSSProperties}
           data={allMessages}
           className={styles.virtualizedChat}
@@ -265,7 +279,7 @@ export function VirtualizedChat({
           )}
           components={{
             Header: LoadingHeader,
-            Footer: ThinkingItem
+            Footer: CombinedFooter
           }}
         />
       )}

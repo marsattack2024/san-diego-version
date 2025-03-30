@@ -256,7 +256,7 @@ export function Chat({
   return (
     <TooltipProvider delayDuration={0}>
       <div className="flex flex-col bg-white h-full relative fixed-header-offset">
-        <div className="flex-1 h-full pb-24">
+        <div className="flex-1 h-full">
           <VirtualizedChat
             chatId={id}
             isLoading={isLoading}
