@@ -17,10 +17,10 @@ export const dynamic = 'force-dynamic';
 // GET handler to retrieve a specific chat and its messages
 export async function GET(
     req: Request,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) {
     const operationId = `get_chat_${Math.random().toString(36).substring(2, 10)}`;
-    const chatId = params.id;
+    const { id: chatId } = await params;
 
     edgeLogger.info('Chat GET request started', {
         category: 'chat',
@@ -152,10 +152,10 @@ export async function GET(
 // PATCH handler to update chat metadata
 export async function PATCH(
     request: NextRequest,
-    { params }: { params: { id: string } }
+    { params }: { params: Promise<{ id: string }> }
 ) {
     const operationId = `patch_chat_${Math.random().toString(36).substring(2, 10)}`;
-    const chatId = params.id;
+    const { id: chatId } = await params;
 
     edgeLogger.info('Chat PATCH request started', {
         category: 'chat',
