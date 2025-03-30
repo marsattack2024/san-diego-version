@@ -41,7 +41,7 @@ const components: Partial<Components> = {
       // @ts-expect-error
       <Link
         className="text-blue-500 hover:underline"
-        target="_blank"
+        target="_blank" // Opens links in new windows/tabs
         rel="noreferrer"
         {...props}
       >

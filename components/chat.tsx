@@ -31,39 +31,16 @@ export function Chat({
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const inputContainerRef = useRef<HTMLDivElement>(null);
 
-  // Ensure proper scroll position on page load
+  // Simplified page load scrolling since the useScrollToBottom hook now handles most scrolling
   useEffect(() => {
-    // Function to scroll to bottom with retry
-    const scrollToBottom = () => {
+    // Simple window load event handler to ensure proper initial scroll
+    const handlePageLoad = () => {
       if (chatContainerRef.current) {
-        // Force scroll all the way to the bottom
-        chatContainerRef.current.scrollTo({
-          top: chatContainerRef.current.scrollHeight,
-          behavior: 'auto'
-        });
-
-        // Try to ensure input is visible
-        const inputForm = document.querySelector('form');
-        if (inputForm) {
-          inputForm.scrollIntoView({ behavior: 'auto', block: 'end' });
-        }
+        chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
       }
     };
 
-    // Try multiple times with increasing delay to ensure scroll works
-    scrollToBottom();
-    setTimeout(scrollToBottom, 50);
-    setTimeout(scrollToBottom, 200);
-    setTimeout(scrollToBottom, 500);
-
-    // Also handle window load event
-    const handlePageLoad = () => {
-      scrollToBottom();
-      setTimeout(scrollToBottom, 100);
-    };
-
     window.addEventListener('load', handlePageLoad);
-
     return () => {
       window.removeEventListener('load', handlePageLoad);
     };
@@ -234,23 +211,11 @@ export function Chat({
       }));
   }, [messages, id]);
 
-  // More reliable scroll handling with useLayoutEffect
-  useLayoutEffect(() => {
-    const ensureProperScroll = () => {
-      if (!chatContainerRef.current || !inputContainerRef.current) return;
-
-      // Force scroll to bottom
-      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-    };
-
-    // Initial scroll
-    ensureProperScroll();
-
-    // And after a short delay to catch any post-render changes
-    const timeoutId = setTimeout(ensureProperScroll, 100);
-
-    return () => clearTimeout(timeoutId);
-  }, [messages.length]); // Depend on message count
+  // Removed redundant scroll handling since it's now handled by the improved useScrollToBottom hook
+  // The hook now uses three scroll mechanisms like the chat widget:
+  // 1. Unconditional scroll to bottom on message changes
+  // 2. scrollIntoView for the end element
+  // 3. Continuous scroll interval during streaming
 
   // Add before the return statement to ensure proper scrolling when the input expands
   useEffect(() => {

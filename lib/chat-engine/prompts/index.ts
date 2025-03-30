@@ -55,23 +55,24 @@ export function buildSystemPromptWithDeepSearch(agentType: AgentType, deepSearch
   // Add DeepSearch-specific instructions with enhanced attribution requirements
   const deepsearchInstructions = deepSearchEnabled
     ? `### DEEP SEARCH INSTRUCTIONS:\n\n` +
-      `DeepSearch is enabled for this conversation. When you use the deepSearch tool:\n` +
-      `1. You MUST directly incorporate the information retrieved from Deep Search into your response\n` +
-      `2. You MUST clearly attribute information from Deep Search by beginning sentences with phrases like 'According to Deep Search results...' or 'Web search results indicate...'\n` +
-      `3. You MUST always prefer Deep Search results over your pre-existing knowledge when answering factual questions\n` +
-      `4. For questions seeking current information (news, sports, etc.), ALWAYS use the deepSearch tool\n` +
-      `5. Break down complex questions into smaller parts and use the deepSearch tool for each part if necessary\n` +
-      `6. When citing specific information, include the source name and URL when available in the format: (Source: [name], URL: [url])`
+    `DeepSearch is enabled for this conversation. When you use the deepSearch tool:\n` +
+    `1. You MUST directly incorporate the information retrieved from Deep Search into your response\n` +
+    `2. You MUST clearly attribute information from Deep Search by beginning sentences with phrases like 'According to Deep Search results...' or 'Web search results indicate...'\n` +
+    `3. You MUST always prefer Deep Search results over your pre-existing knowledge when answering factual questions\n` +
+    `4. For questions seeking current information (news, sports, etc.), ALWAYS use the deepSearch tool\n` +
+    `5. Break down complex questions into smaller parts and use the deepSearch tool for each part if necessary\n` +
+    `6. When citing specific information, include the source name and URL when available in the format: (Source: [name], URL: [url])`
     : `NOTE: DeepSearch is NOT enabled for this conversation. Do NOT use the deepSearch tool.`;
-  
+
   // Add attribution format section
   const attributionSection = `### ATTRIBUTION FORMAT:\n\n` +
-    `At the end of your response, you MUST include a section that explicitly states which resources you used ` +
+    `At the end of your response, you MUST include a section that ACCURATELY states which resources you used ` +
     `(Knowledge Base, Web Scraper, or Deep Search). Format this section as:\n\n` +
     `---\n` +
-    `Resources used: [list resources]\n` +
+    `Resources used: [list ONLY the resources you ACTUALLY used]\n` +
     `[If Deep Search was used: Brief summary of key information retrieved with source attribution]\n` +
-    `---`;
+    `---\n\n` +
+    `IMPORTANT: If you did not use ANY tools, you MUST state "Resources used: None" - do NOT falsely claim to have used a resource.`;
 
   // Combine all sections following AI SDK system prompt patterns
   return `${withToolDescription}\n\n${deepsearchInstructions}\n\n${attributionSection}`;
@@ -166,7 +167,7 @@ export const prompts = {
   // Helper functions with standardized interfaces
   withToolResults: enhancePromptWithToolResults,
   buildSystemPrompt: buildSystemPromptWithDeepSearch,
-  
+
   // Convenience function to get plain system prompt for any agent
   getAgentSystemPrompt: (agentType: AgentType) => buildSystemPrompt(agentType)
 };

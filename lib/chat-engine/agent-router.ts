@@ -68,7 +68,7 @@ export async function detectAgentType(message: string, currentAgentType: AgentTy
     try {
         // Use the LLM to classify the message content, following Vercel AI SDK pattern
         const routingResult = await generateObject({
-            model: openai('gpt-4o'),
+            model: openai('gpt-4o-mini'),
             schema: agentRoutingSchema,
             prompt: `Analyze this user message and determine which specialized agent should handle it:
       

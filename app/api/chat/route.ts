@@ -326,7 +326,7 @@ export async function POST(req: Request) {
         agentType,
         // AI SDK standard configuration for multi-step agents
         maxSteps: 5, // Allow up to 5 steps for complex reasoning chains
-        toolChoice: shouldUseDeepSearch ? 'auto' : 'none' // Set toolChoice based on DeepSearch availability
+        toolChoice: 'auto' // Always allow tools to be used
       }
     };
 

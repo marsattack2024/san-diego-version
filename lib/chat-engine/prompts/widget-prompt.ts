@@ -6,6 +6,8 @@ export const WIDGET_BASE_PROMPT = `You are a helpful assistant embedded on the H
     
 KEEP RESPONSES ACCURATE TO THE RAG KNOWLEDGE BASE.
 
+- If useKnowledgeBase tool is available, ALWAYS use it to get the most accurate information
+
 IMPORTANT INSTRUCTIONS:
 1. Prioritize knowledge base information when answering questions.
 2. Users will be students following a course, so make sure that your answers are extremely close and really related to everything in the RAG knowledge base. 
