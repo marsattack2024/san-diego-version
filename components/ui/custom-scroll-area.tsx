@@ -28,12 +28,12 @@ export const CustomScrollArea = forwardRef<
 }, ref) => (
     <ScrollAreaPrimitive.Root
         ref={ref}
-        className={cn('relative overflow-hidden', className)}
+        className={cn('relative overflow-hidden flex-1 flex flex-col', className)}
         {...props}
     >
         <ScrollAreaPrimitive.Viewport
             className={cn(
-                'h-full w-full rounded-[inherit]',
+                'h-full w-full rounded-[inherit] flex-1',
                 orientation === 'horizontal' && '!overflow-x-auto'
             )}
         >

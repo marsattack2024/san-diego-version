@@ -64,7 +64,7 @@ export function PureChatHeader({
   };
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 flex h-14 items-center justify-between border-b bg-background px-4 shadow-lg">
+    <header className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between border-b bg-background px-4 shadow-lg" style={{ height: 'var(--header-height)' }}>
       <div className="flex items-center">
         <div className="flex items-center gap-2">
           <SidebarToggle />

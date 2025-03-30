@@ -15,7 +15,10 @@ export const virtuosoConfig = {
     // Style settings
     style: {
         height: '100%',
-        width: '100%'
+        width: '100%',
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column'
     },
 
     // Default CSS classes - using token system 

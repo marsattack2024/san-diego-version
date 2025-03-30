@@ -11,6 +11,16 @@ html, body {
   overflow: hidden;
 }
 
+/* Fixed header height variable */
+:root {
+  --header-height: 3.5rem; /* 14 * 0.25rem = 3.5rem */
+}
+
+/* Create a class for containers that need to offset for fixed header */
+.fixed-header-offset {
+  padding-top: var(--header-height);
+}
+
 @font-face {
   font-family: 'geist';
   src: local('Inter'), local('Segoe UI'), local('Helvetica Neue'), local('Arial'), sans-serif;
