@@ -9,29 +9,29 @@
 export const spacing = {
     message: {
         // Space between adjacent messages
-        verticalGap: 'mb-2',
+        verticalGap: 'mb-4',
         // Space between elements inside message
-        internalGap: 'gap-1',
+        internalGap: 'gap-3',
         // Content gap within message bubbles
-        contentGap: 'gap-0.5',
+        contentGap: 'gap-1',
         // Base padding for message bubbles
-        padding: 'px-4 py-2',
+        padding: 'px-5 py-3',
         // Offset for action buttons relative to message
-        actionOffset: 'mt-0.5'
+        actionOffset: 'mt-1'
     },
     chat: {
         // Padding for the entire chat container
-        containerPadding: 'pt-4 pb-2',
+        containerPadding: 'pt-10 pb-2',
         // Spacing between input container and messages
-        inputGap: 'pt-0.5 pb-2',
+        inputGap: 'pt-1 pb-3',
         // Spacing between input form elements
-        formGap: 'gap-1'
+        formGap: 'gap-2'
     },
     virtualized: {
         // Default gap between virtualized list items
-        itemGap: 'gap-1.5',
+        itemGap: 'gap-4',
         // Default padding for virtualized containers
-        containerPadding: 'pt-4 pb-1'
+        containerPadding: 'pt-10 pb-2'
     }
 };
 
@@ -40,15 +40,17 @@ export const spacing = {
  */
 export const typography = {
     // Line height for message content
-    messageLineHeight: 'leading-normal',
+    messageLineHeight: 'leading-relaxed',
     // Paragraph spacing in markdown content
-    paragraphSpacing: 'my-0.5',
+    paragraphSpacing: 'my-1',
     // List item spacing in markdown content
-    listItemSpacing: 'py-0.5',
+    listItemSpacing: 'py-1',
     // List container spacing in markdown content
-    listContainerSpacing: 'my-1.5',
+    listContainerSpacing: 'my-2',
     // Strong text styling
-    strongText: 'font-semibold'
+    strongText: 'font-bold',
+    // Base message text size
+    messageText: 'text-lg'
 };
 
 /**
@@ -56,13 +58,13 @@ export const typography = {
  */
 export const ui = {
     // Message action button styling
-    actionButton: 'py-0.5 px-1.5 h-fit',
+    actionButton: 'py-1 px-2 h-fit',
     // Message content container styling
     messageContainer: 'w-full mx-auto max-w-3xl px-4 md:px-6',
     // User message bubble styling
-    userMessage: 'bg-black text-white rounded-xl shadow-sm',
+    userMessage: 'bg-black text-white rounded-xl shadow-sm px-6 py-3 mr-2',
     // Assistant message bubble styling
-    assistantMessage: 'rounded-xl',
+    assistantMessage: 'rounded-xl px-6 py-3',
     // Custom scrollbar styling
     scrollbar: 'scrollbar-thin custom-scrollbar'
 };
@@ -72,13 +74,13 @@ export const ui = {
  */
 export const markdown = {
     // Base markdown container styling
-    container: 'prose-sm sm:prose-base max-w-none prose-p:my-0.5 prose-p:leading-normal',
+    container: 'prose-base max-w-none prose-p:my-1 prose-p:leading-relaxed',
     // List styling overrides
-    lists: 'prose-li:my-0.5 prose-ol:my-1.5 prose-ul:my-1.5',
+    lists: 'prose-li:my-1 prose-ol:my-2 prose-ul:my-2',
     // Heading styling overrides
-    headings: 'prose-headings:my-1 prose-headings:font-semibold',
+    headings: 'prose-headings:my-2 prose-headings:font-bold',
     // Code styling overrides
-    code: 'prose-code:px-1 prose-code:py-0.5 prose-code:text-sm',
+    code: 'prose-code:px-1.5 prose-code:py-0.5 prose-code:text-sm',
 };
 
 /**
@@ -91,7 +93,7 @@ export const styles = {
     messageFlex: `flex ${spacing.message.internalGap} w-full`,
     // Message content styles by role
     messageContent: {
-        user: `${ui.userMessage} ${spacing.message.padding}`,
+        user: `${ui.userMessage}`,
         assistant: `${ui.assistantMessage} ${spacing.message.padding}`
     },
     // Message actions container
@@ -103,5 +105,5 @@ export const styles = {
     // Input form
     inputForm: `mx-auto flex max-w-3xl flex-col ${spacing.chat.formGap} bg-background`,
     // Markdown custom styles for messages
-    markdownMessage: `${markdown.container} ${markdown.lists} ${markdown.headings} ${markdown.code}`
+    markdownMessage: `${markdown.container} ${markdown.lists} ${markdown.headings} ${markdown.code} ${typography.messageText}`
 }; 

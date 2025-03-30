@@ -5,7 +5,7 @@
 
 // Constants for virtualization
 export const BOTTOM_THRESHOLD = 200; // Increased threshold in pixels to consider "near bottom"
-export const DEFAULT_ITEM_HEIGHT = 90; // Increased default height for virtualized items 
+export const DEFAULT_ITEM_HEIGHT = 120; // Increased default height for virtualized items 
 export const OVERSCAN_COUNT = 10; // Increased number of items to render outside of the visible area
 
 /**
@@ -22,7 +22,7 @@ export const virtuosoConfig = {
     },
 
     // Default CSS classes - using token system 
-    className: 'flex flex-col min-w-0 gap-2 flex-1 h-full pt-4 pb-1',
+    className: 'flex flex-col min-w-0 gap-4 flex-1 h-full pt-10 pb-1',
 
     // Scroll behavior settings
     followOutput: 'auto',

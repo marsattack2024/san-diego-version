@@ -127,6 +127,8 @@ const NonMemoizedMessageMarkdown = ({
     return (
         <div className={cn(
             styles.markdownMessage,
+            typography.messageText,
+            'font-medium',
             className
         )}>
             <ReactMarkdown

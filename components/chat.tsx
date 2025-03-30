@@ -255,8 +255,8 @@ export function Chat({
   // Display the messages with the correct layout
   return (
     <TooltipProvider delayDuration={0}>
-      <div className="flex flex-col bg-white h-full relative">
-        <div className="flex-1 h-full">
+      <div className="flex flex-col bg-white h-full relative fixed-header-offset">
+        <div className="flex-1 h-full pb-20">
           <VirtualizedChat
             chatId={id}
             isLoading={isLoading}

@@ -9,6 +9,37 @@ This document outlines the styling architecture for the chat interface, providin
 3. **Parent Container Control**: Parent components control the spacing between child components
 4. **Specialized Markdown Rendering**: Chat messages use specialized Markdown components with appropriate spacing
 5. **Single Scroll Container**: Only one scrollable container should control a given area to prevent conflicts
+6. **Efficient Message Loading**: Chat messages are loaded progressively through virtualization and pagination
+
+## Component Hierarchy and Layout Structure
+
+Understanding the complete nesting structure is critical for proper styling:
+
+```
+app/chat/[id]/page.tsx or app/chat/page.tsx
+└── ChatClient or ChatPage
+    └── Chat (components/chat.tsx)
+        ├── Header Fixed (from app layout - affects top spacing)
+        │   └── <header> with height: var(--header-height)
+        ├── Main Content (components/chat.tsx)
+        │   └── <div className="flex flex-col bg-white h-full relative fixed-header-offset">
+        │       └── <div className="flex-1 h-full pb-20"> (padding-bottom to prevent content hidden by input)
+        │           └── VirtualizedChat (components/virtualized-chat.tsx)
+        │               └── CustomScrollArea (handles scrolling)
+        │                   └── Virtuoso (virtualized list)
+        │                       ├── LoadingHeader (for older messages)
+        │                       ├── PreviewMessage components
+        │                       └── ThinkingItem (for loading state)
+        └── Input Container (sticky at bottom)
+            └── <div className="sticky inset-x-0 bottom-0 z-10...">
+                └── <form>
+                    └── MultimodalInput
+```
+
+Key layout considerations:
+- The `fixed-header-offset` class adds `padding-top: var(--header-height)` which creates proper spacing below the fixed header
+- `pb-20` on the main content container prevents the last message from being hidden under the input
+- Only the `CustomScrollArea` inside `VirtualizedChat` should handle scrolling
 
 ## Design Token System
 
@@ -19,20 +50,20 @@ The design token system is defined in `lib/tokens.ts` and consists of several ca
 ```typescript
 export const spacing = {
   message: {
-    verticalGap: 'mb-2',        // Space between messages
-    internalGap: 'gap-1',       // Space between elements inside message
-    contentGap: 'gap-0.5',      // Gap within message content
-    padding: 'px-4 py-2',       // Message bubble padding
-    actionOffset: 'mt-0.5'      // Action buttons positioning
+    verticalGap: 'mb-4',        // Space between adjacent messages
+    internalGap: 'gap-3',       // Space between elements inside message
+    contentGap: 'gap-1',        // Gap within message content
+    padding: 'px-5 py-3',       // Default message bubble padding
+    actionOffset: 'mt-1'        // Action buttons positioning
   },
   chat: {
-    containerPadding: 'pt-4 pb-2',  // Chat container padding
-    inputGap: 'pt-0.5 pb-2',        // Space between input and messages
-    formGap: 'gap-1'                // Space between form elements
+    containerPadding: 'pt-10 pb-2',  // Chat container padding
+    inputGap: 'pt-1 pb-3',          // Space between input and messages
+    formGap: 'gap-2'                // Space between form elements
   },
   virtualized: {
-    itemGap: 'gap-1.5',             // Gap between virtualized items
-    containerPadding: 'pt-4 pb-1'   // Padding for virtualized containers
+    itemGap: 'gap-4',             // Gap between virtualized items
+    containerPadding: 'pt-10 pb-2' // Padding for virtualized containers
   }
 };
 ```
@@ -41,11 +72,12 @@ export const spacing = {
 
 ```typescript
 export const typography = {
-  messageLineHeight: 'leading-normal',
-  paragraphSpacing: 'my-0.5',
-  listItemSpacing: 'py-0.5',
-  listContainerSpacing: 'my-1.5',
-  strongText: 'font-semibold'
+  messageLineHeight: 'leading-relaxed',  // Proper line spacing in messages
+  paragraphSpacing: 'my-1',              // Spacing between paragraphs
+  listItemSpacing: 'py-1',               // Spacing in list items
+  listContainerSpacing: 'my-2',          // Spacing for list containers
+  strongText: 'font-bold',               // Strong text styling
+  messageText: 'text-lg'                 // Base message text size
 };
 ```
 
@@ -53,74 +85,86 @@ export const typography = {
 
 ```typescript
 export const ui = {
-  actionButton: 'py-0.5 px-1.5 h-fit',
-  messageContainer: 'w-full mx-auto max-w-3xl px-4 md:px-6',
-  userMessage: 'bg-black text-white rounded-xl shadow-sm',
-  assistantMessage: 'rounded-xl',
-  scrollbar: 'scrollbar-thin custom-scrollbar'
+  actionButton: 'py-1 px-2 h-fit',         // Message action button styling
+  messageContainer: 'w-full mx-auto max-w-3xl px-4 md:px-6',  // Container dimensions
+  userMessage: 'bg-black text-white rounded-xl shadow-sm px-6 py-3 mr-2',  // User message styling
+  assistantMessage: 'rounded-xl px-6 py-3',  // Assistant message styling
+  scrollbar: 'scrollbar-thin custom-scrollbar'  // Custom scrollbar styling
 };
 ```
 
-## Component Structure
+### Markdown Component Style Overrides
 
-### 1. Message Components
+```typescript
+export const markdown = {
+  container: 'prose-base max-w-none prose-p:my-1 prose-p:leading-relaxed',
+  lists: 'prose-li:my-1 prose-ol:my-2 prose-ul:my-2',
+  headings: 'prose-headings:my-2 prose-headings:font-bold',
+  code: 'prose-code:px-1.5 prose-code:py-0.5 prose-code:text-sm'
+};
+```
 
-The message components have been refactored to use the token system:
+## Combined Style Objects
 
-- `MessageMarkdown`: A specialized Markdown renderer for chat messages with proper spacing
-- Message bubble spacing uses the token system for consistent padding and gaps
-- Action buttons (copy, upvote, downvote) use consistent spacing
+For convenience, these tokens are combined into ready-to-use style objects:
 
-### 2. Virtualization Configuration
+```typescript
+export const styles = {
+  messageContainer: `${ui.messageContainer} ${spacing.message.verticalGap} group/message`,
+  messageFlex: `flex ${spacing.message.internalGap} w-full`,
+  messageContent: {
+    user: `${ui.userMessage}`,  // User message has inline padding
+    assistant: `${ui.assistantMessage} ${spacing.message.padding}`  // Assistant uses token padding
+  },
+  messageActions: `flex flex-row ${spacing.message.internalGap} ${spacing.message.actionOffset}`,
+  virtualizedChat: `flex flex-col min-w-0 ${spacing.virtualized.itemGap} flex-1 h-full ${spacing.virtualized.containerPadding}`,
+  inputContainer: `sticky inset-x-0 bottom-0 z-10 w-full bg-gradient-to-t from-background via-background to-transparent ${spacing.chat.inputGap}`,
+  inputForm: `mx-auto flex max-w-3xl flex-col ${spacing.chat.formGap} bg-background`,
+  markdownMessage: `${markdown.container} ${markdown.lists} ${markdown.headings} ${markdown.code} ${typography.messageText}`
+};
+```
 
-Virtualized list settings are centralized in `lib/virtualization-config.ts`:
+## Virtualization Configuration
+
+Settings for virtualized list rendering are centralized in `lib/virtualization-config.ts`:
 
 ```typescript
 export const virtuosoConfig = {
-  style: { height: '100%', width: '100%' },
-  className: 'flex flex-col min-w-0 gap-2 flex-1 h-full pt-4 pb-1',
-  followOutput: 'auto',
-  alignToBottom: true,
-  defaultItemHeight: DEFAULT_ITEM_HEIGHT,
-  atBottomThreshold: BOTTOM_THRESHOLD,
+  style: {
+    height: '100%',
+    width: '100%',
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column'
+  },
+  className: 'flex flex-col min-w-0 gap-4 flex-1 h-full pt-10 pb-1',
+  defaultItemHeight: DEFAULT_ITEM_HEIGHT,  // 120px default height
+  atBottomThreshold: BOTTOM_THRESHOLD,     // 200px threshold for "at bottom" detection
 };
 ```
 
-### 3. Scrollbar Customization
+## Critical CSS Dependencies and Overrides
 
-The custom scroll area component in `components/ui/custom-scroll-area.tsx` provides:
+Understanding these dependencies is critical for making changes:
 
-- Clean overlay scrollbars
-- Consistent styling matching the template
-- Proper scrollbar behavior across platforms
+1. **Header Height and Main Content Padding**:
+   - The fixed header uses `--header-height: 3.5rem` CSS variable
+   - The main content uses the `fixed-header-offset` class which adds `padding-top: var(--header-height)`
+   - This creates proper spacing without hardcoding values
 
-## Scroll Container Hierarchy
+2. **Message Content Padding**:
+   - User messages: `px-6 py-3 mr-2` is defined directly in the token
+   - Assistant messages: Uses the padding token `px-5 py-3`
 
-### Important: Preventing Nested Scrollable Containers
+3. **Input Container and Bottom Message Visibility**:
+   - Input uses `sticky inset-x-0 bottom-0 z-10`
+   - Main content area has `pb-20` to prevent last message from being hidden under input
+   - Virtuoso container has `paddingBottom: '120px'` for additional bottom spacing
+   - Combined, these ensure messages are always visible above the input area
 
-A critical aspect of the chat layout is proper scrolling container hierarchy:
-
-1. **Single Scroll Container Rule**: Only one component should handle scrolling in a given area
-   - In our case, the `CustomScrollArea` within `VirtualizedChat` handles all chat message scrolling
-   - Parent containers should NOT have `overflow-auto`, `overflow-scroll`, or similar classes
-
-2. **Container Hierarchy**:
-   ```
-   Chat (flex container)
-   └── Message Container (flex-1, h-full, NO overflow properties)
-       └── CustomScrollArea (handles all scrolling)
-           └── VirtualizedChat (displays messages)
-   └── Input Container (sticky)
-   ```
-
-3. **Height Propagation**:
-   - All parent containers must properly propagate height with `h-full` or `flex-1`
-   - The flex container must use `flex-col` to establish vertical direction
-
-If the chat area appears collapsed or doesn't fill the available space, check for:
-- Nested scrollable containers (look for multiple `overflow-auto` elements)
-- Missing height properties (`h-full` or `flex-1`)
-- Incorrect flex direction (`flex-col` needed for vertical layout)
+4. **Virtualized Container**:
+   - Uses combined token for padding: `pt-10 pb-2`
+   - Default item gap is `gap-4`
 
 ## Component Responsibility Guidelines
 
@@ -158,60 +202,39 @@ Only designate one container to handle scrolling in a given area:
 - Parent containers should use `flex-1` and `h-full` without overflow properties
 - Child containers inside scroll areas should use appropriate height settings
 
-## Common Styling Patterns
+### 6. Fixed Elements Rule
 
-### Message Container
+Fixed elements (like headers and input bars) require special attention:
+- Use CSS variables for dimensions that affect other elements
+- Add appropriate padding to the content area to prevent overlap
+- For fixed headers, use the `fixed-header-offset` class
+- For fixed input bars, add bottom padding to the content area
 
-```tsx
-<div className={styles.messageContainer}>
-  {/* Message content */}
-</div>
-```
+## Troubleshooting Common Issues
 
-### Message Content Bubble
+If layout issues occur, check for these common problems:
 
-```tsx
-<div className={cn(
-  styles.messageContent[message.role === 'user' ? 'user' : 'assistant']
-)}>
-  <MessageMarkdown>{message.content}</MessageMarkdown>
-</div>
-```
+1. **Message Spacing Issues**:
+   - Verify the correct `spacing.message.verticalGap` token is being used
+   - Check for overriding margin or padding on child elements
 
-### Action Buttons Container
+2. **Content Hidden Under Fixed Elements**:
+   - For header issues: Make sure `fixed-header-offset` is applied to the main content
+   - For input issues: Verify the content container has sufficient bottom padding
 
-```tsx
-<div className={styles.messageActions}>
-  {/* Action buttons */}
-</div>
-```
+3. **Scrolling Problems**:
+   - Ensure only one container has scrolling properties
+   - Check that parent containers use `h-full` or `flex-1` to propagate height
+   - Verify the virtualized list has appropriate minimum height
 
-### Correct Chat Layout Structure
+4. **Inconsistent Message Styling**:
+   - Confirm the styling token usage across different message components
+   - Check for hardcoded values that should be using tokens
+   - Verify that padding is applied at the correct level of the component tree
 
-```tsx
-<div className="flex flex-col h-full">
-  <div className="flex-1 h-full">
-    <CustomScrollArea className="h-full w-full">
-      <VirtualizedChat />
-    </CustomScrollArea>
-  </div>
-  <div className="sticky inset-x-0 bottom-0">
-    {/* Input form */}
-  </div>
-</div>
-```
-
-## Troubleshooting
-
-If spacing or layout issues occur, check for:
-
-1. **Component Overrides**: Ensure components aren't adding their own spacing
-2. **Virtualization Settings**: Check virtualization configuration
-3. **Markdown Spacing**: Verify `MessageMarkdown` component is being used
-4. **Token Consistency**: Ensure tokens are being used consistently
-5. **Nested Scrollable Containers**: Make sure only one container has overflow properties
-6. **Height Propagation**: Ensure `h-full` or `flex-1` is present on all parent containers
-7. **Flex Direction**: Verify `flex-col` is used for vertical layouts
+5. **Font Size or Spacing Issues**:
+   - Ensure the `typography.messageText` is being applied consistently
+   - Check for conflicting typography settings from the markdown styling
 
 ## Extending the System
 
