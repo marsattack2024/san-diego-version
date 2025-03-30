@@ -1,70 +1,111 @@
 # Chat UI Styling System Documentation
 
-This document outlines the styling architecture for the chat interface, providing a consistent approach to UI development that prevents styling conflicts and ensures a cohesive appearance.
+This document outlines the styling architecture for the chat interface, providing a clear guide to UI development with properly assigned responsibilities for spacing and styling.
 
 ## Core Principles
 
 1. **Centralized Design Tokens**: All spacing, typography, and UI constants are defined in a central location
 2. **Component Boundary Ownership**: Each component only controls its internal spacing
 3. **Parent Container Control**: Parent components control the spacing between child components
-4. **Specialized Markdown Rendering**: Chat messages use specialized Markdown components with appropriate spacing
-5. **Single Scroll Container**: Only one scrollable container should control a given area to prevent conflicts
-6. **Efficient Message Loading**: Chat messages are loaded progressively through virtualization and pagination
+4. **Clear Responsibility Assignment**: Each spacing concern has a designated owner component
+5. **Visual Documentation**: Spacing relationships are clearly visualized
 
-## Component Hierarchy and Layout Structure
+## Component Responsibility Map
 
-Understanding the complete nesting structure is critical for proper styling:
+To avoid confusion, each component has clearly defined responsibilities for spacing:
 
 ```
-app/chat/[id]/page.tsx or app/chat/page.tsx
-└── ChatClient or ChatPage
-    └── Chat (components/chat.tsx)
-        ├── Header Fixed (from app layout - affects top spacing)
-        │   └── <header> with height: var(--header-height)
-        ├── Main Content (components/chat.tsx)
-        │   └── <div className="flex flex-col bg-white h-full relative fixed-header-offset">
-        │       └── <div className="flex-1 h-full pb-20"> (padding-bottom to prevent content hidden by input)
-        │           └── VirtualizedChat (components/virtualized-chat.tsx)
-        │               └── CustomScrollArea (handles scrolling)
-        │                   └── Virtuoso (virtualized list)
-        │                       ├── LoadingHeader (for older messages)
-        │                       ├── PreviewMessage components
-        │                       └── ThinkingItem (for loading state)
-        └── Input Container (sticky at bottom)
-            └── <div className="sticky inset-x-0 bottom-0 z-10...">
-                └── <form>
-                    └── MultimodalInput
+┌─────────────────────────────────────────────┐
+│ Chat.tsx                                    │
+│  • Controls overall container layout        │
+│  • Manages fixed header offset (top)        │
+│  • Controls bottom padding above input      │
+│  ┌─────────────────────────────────────────┐│
+│  │ VirtualizedChat.tsx                     ││
+│  │  • Manages spacing between messages     ││
+│  │  • Controls bottom padding for list     ││
+│  │  ┌─────────────────────────────────────┐││
+│  │  │ Message.tsx                         │││
+│  │  │  • Controls internal message layout │││
+│  │  │  • Manages message bubble padding   │││
+│  │  │  • Controls spacing to action btns  │││
+│  │  │  ┌─────────────────────────────────┐│││
+│  │  │  │ MessageActions.tsx              ││││
+│  │  │  │  • Only controls internal layout││││
+│  │  │  │  • Button spacing only          ││││
+│  │  │  └─────────────────────────────────┘│││
+│  │  └─────────────────────────────────────┘││
+│  └─────────────────────────────────────────┘│
+│                                             │
+│ ┌───────────────────────────────────────┐   │
+│ │ Input Container                        │   │
+│ │  • Controls its own padding/spacing    │   │
+│ └───────────────────────────────────────┘   │
+└─────────────────────────────────────────────┘
 ```
 
-Key layout considerations:
-- The `fixed-header-offset` class adds `padding-top: var(--header-height)` which creates proper spacing below the fixed header
-- `pb-20` on the main content container prevents the last message from being hidden under the input
-- Only the `CustomScrollArea` inside `VirtualizedChat` should handle scrolling
+## Visual Spacing Guide
 
-## Design Token System
+Here's a visual representation of the key spacing areas in the chat interface:
 
-The design token system is defined in `lib/tokens.ts` and consists of several categories:
+```
+┌─────────────────────────────────────────────┐
+│                    HEADER                    │ ← Fixed position
+├─────────────────────────────────────────────┤
+│                                             │ ← fixed-header-offset class
+│                                             │   applies padding-top: var(--header-height)
+│  ┌─────────────────────────────────────┐    │
+│  │ ASSISTANT MESSAGE                    │    │ ← spacing.message.verticalGap (mb-3)
+│  │                                      │    │   controls space between messages
+│  └─────────────────────────────────────┘    │
+│                                             │
+│  ┌─────────────────────────────────────┐    │
+│  │ USER MESSAGE                         │    │ ← ui.userMessage includes
+│  │                                      │    │   px-6 py-3 for internal padding
+│  └─────────────────────────────────────┘    │
+│                                             │
+│  ┌─────────────────────────────────────┐    │
+│  │ ASSISTANT MESSAGE                    │    │
+│  │                                      │    │
+│  │                                      │    │
+│  └─────────────────────────────────────┘    │
+│    [Copy] [Upvote] [Downvote]               │ ← spacing.message.actionOffset (mt-1 mb-3)
+│                                             │   controls spacing around action buttons
+│                                             │
+│                                             │ ← pb-24 in Chat component 
+│                                             │   creates space before input
+│                                             │
+│                                             │ ← paddingBottom: 0px in Virtuoso
+│                                             │   since parent handles spacing
+├─────────────────────────────────────────────┤
+│                    INPUT                     │ ← Sticky position at bottom
+└─────────────────────────────────────────────┘
+```
+
+## Token System (lib/tokens.ts)
+
+The token system provides a centralized location for all styling values:
 
 ### Spacing Tokens
 
 ```typescript
 export const spacing = {
-  message: {
-    verticalGap: 'mb-4',        // Space between adjacent messages
-    internalGap: 'gap-3',       // Space between elements inside message
-    contentGap: 'gap-1',        // Gap within message content
-    padding: 'px-5 py-3',       // Default message bubble padding
-    actionOffset: 'mt-1'        // Action buttons positioning
-  },
-  chat: {
-    containerPadding: 'pt-10 pb-2',  // Chat container padding
-    inputGap: 'pt-1 pb-3',          // Space between input and messages
-    formGap: 'gap-2'                // Space between form elements
-  },
-  virtualized: {
-    itemGap: 'gap-4',             // Gap between virtualized items
-    containerPadding: 'pt-10 pb-2' // Padding for virtualized containers
-  }
+    message: {
+        verticalGap: 'mb-3',        // Space between messages (reduced from mb-4)
+        internalGap: 'gap-3',       // Space between elements inside message
+        contentGap: 'gap-1',        // Gap within message content
+        padding: 'px-5 py-3',       // Default message bubble padding
+        actionOffset: 'mt-1 mb-3'   // Action buttons positioning (reduced from mb-5)
+    },
+    chat: {
+        containerPadding: 'pt-10 pb-2',  // Chat container padding
+        inputGap: 'pt-1 pb-3',          // Space between input and messages
+        formGap: 'gap-2'                // Space between form elements
+    },
+    virtualized: {
+        itemGap: 'gap-4',             // Gap between virtualized items
+        containerPadding: 'pt-10 pb-1'  // Padding for virtualized containers
+    }
 };
 ```
 
@@ -85,11 +126,11 @@ export const typography = {
 
 ```typescript
 export const ui = {
-  actionButton: 'py-1 px-2 h-fit',         // Message action button styling
-  messageContainer: 'w-full mx-auto max-w-3xl px-4 md:px-6',  // Container dimensions
-  userMessage: 'bg-black text-white rounded-xl shadow-sm px-6 py-3 mr-2',  // User message styling
-  assistantMessage: 'rounded-xl px-6 py-3',  // Assistant message styling
-  scrollbar: 'scrollbar-thin custom-scrollbar'  // Custom scrollbar styling
+    actionButton: 'py-1.5 px-2.5 h-fit',  // More clickable message buttons
+    messageContainer: 'w-full mx-auto max-w-3xl px-4 md:px-6',
+    userMessage: 'bg-black text-white rounded-xl shadow-sm px-6 py-3 mr-2 mb-0.5',
+    assistantMessage: 'rounded-xl px-6 py-3 mb-0.5', // Small margin for spacing
+    scrollbar: 'scrollbar-thin custom-scrollbar'
 };
 ```
 
@@ -104,258 +145,211 @@ export const markdown = {
 };
 ```
 
-## Combined Style Objects
+## How Tokens Flow Through Components
 
-For convenience, these tokens are combined into ready-to-use style objects:
+Understanding how tokens are combined and applied is critical:
 
-```typescript
-export const styles = {
-  messageContainer: `${ui.messageContainer} ${spacing.message.verticalGap} group/message`,
-  messageFlex: `flex ${spacing.message.internalGap} w-full`,
-  messageContent: {
-    user: `${ui.userMessage}`,  // User message has inline padding
-    assistant: `${ui.assistantMessage} ${spacing.message.padding}`  // Assistant uses token padding
-  },
-  messageActions: `flex flex-row ${spacing.message.internalGap} ${spacing.message.actionOffset}`,
-  virtualizedChat: `flex flex-col min-w-0 ${spacing.virtualized.itemGap} flex-1 h-full ${spacing.virtualized.containerPadding}`,
-  inputContainer: `sticky inset-x-0 bottom-0 z-10 w-full bg-gradient-to-t from-background via-background to-transparent ${spacing.chat.inputGap}`,
-  inputForm: `mx-auto flex max-w-3xl flex-col ${spacing.chat.formGap} bg-background`,
-  markdownMessage: `${markdown.container} ${markdown.lists} ${markdown.headings} ${markdown.code} ${typography.messageText}`
-};
+1. **Token Definition**: Raw spacing/styling values in `lib/tokens.ts`
+2. **Style Composition**: Tokens combined into style objects in `styles` export
+3. **Component Application**: Components import and apply these styles
+
+Example flow for a message container:
+```
+Token Definition:
+  ui.messageContainer = 'w-full mx-auto max-w-3xl px-4 md:px-6'
+  spacing.message.verticalGap = 'mb-3'
+
+Style Composition:
+  styles.messageContainer = `${ui.messageContainer} ${spacing.message.verticalGap} group/message`
+
+Component Application:
+  <div className={styles.messageContainer}>...</div>
 ```
 
-## Virtualization Configuration
+## Component Interactions
 
-Settings for virtualized list rendering are centralized in `lib/virtualization-config.ts`:
+The key components interact in the following ways:
 
-```typescript
-export const virtuosoConfig = {
-  style: {
-    height: '100%',
-    width: '100%',
-    flex: 1,
-    display: 'flex',
-    flexDirection: 'column'
-  },
-  className: 'flex flex-col min-w-0 gap-4 flex-1 h-full pt-10 pb-1',
-  defaultItemHeight: DEFAULT_ITEM_HEIGHT,  // 120px default height
-  atBottomThreshold: BOTTOM_THRESHOLD,     // 200px threshold for "at bottom" detection
-};
+1. **Chat.tsx**:
+   - Renders the overall chat layout
+   - Sets `pb-24` on the main content to create space above input
+   - Manages fixed header offset with `fixed-header-offset` class
+
+2. **VirtualizedChat.tsx**:
+   - Uses `CustomScrollArea` for scrolling
+   - Adds `paddingBottom: '0px'` to ensure last message visibility
+   - Uses `styles.virtualizedChat` for container styling
+
+3. **Message.tsx**:
+   - Uses `styles.messageContainer` for overall wrapper
+   - Uses `styles.messageFlex` for layout
+   - Uses conditional styling: `styles.messageContent.user` or `styles.messageContent.assistant`
+
+4. **MessageActions.tsx**:
+   - Adds `pb-2` for additional bottom spacing
+   - Uses `styles.messageActions` for base styling
+   - Uses `ui.actionButton` for individual buttons
+
+## Critical Spacing Measurement Reference
+
+For precise spacing matching, here are the key measurements:
+
+1. **Vertical spacing between messages**: 12px (Tailwind mb-3)
+2. **Padding inside message bubbles**: 24px horizontal, 12px vertical (px-6 py-3)
+3. **Gap between message and action buttons**: 4px (mt-1)
+4. **Space below action buttons**: 12px (mb-3)
+5. **Space between last message and input**: 96px (pb-24 on main container)
+6. **Message actions button size**: 12px (py-1.5) vertical, 20px (px-2.5) horizontal
+
+## Component Edit Guide
+
+When you need to adjust spacing, follow this guide to edit the correct component:
+
+### To Change Space Between Messages
+- Edit `spacing.message.verticalGap` in `lib/tokens.ts`
+- Current value: `mb-3`
+- Example:
+  ```typescript
+  // To increase space between messages
+  verticalGap: 'mb-4', // 16px instead of 12px
+  ```
+
+### To Adjust Message Content Padding
+- For user messages: Edit `ui.userMessage` in `lib/tokens.ts`
+- For assistant messages: Edit `ui.assistantMessage` and `spacing.message.padding`
+- Current values: `px-6 py-3 mr-2 mb-0.5` and `px-5 py-3`
+- Example:
+  ```typescript
+  // To increase horizontal padding in user messages
+  userMessage: 'bg-black text-white rounded-xl shadow-sm px-8 py-3 mr-2 mb-0.5',
+  ```
+
+### To Change Space Between Message and Action Buttons
+- Edit `spacing.message.actionOffset` first part in `lib/tokens.ts`
+- Current value: `mt-1 mb-3`
+- Example:
+  ```typescript
+  // To reduce space between message and buttons
+  actionOffset: 'mt-0.5 mb-3'
+  ```
+
+### To Adjust Space Below Action Buttons
+- Edit `spacing.message.actionOffset` second part in `lib/tokens.ts`
+- Current value: `mt-1 mb-3`
+- Example:
+  ```typescript
+  // To increase space below buttons
+  actionOffset: 'mt-1 mb-4'
+  ```
+
+### To Change Bottom Spacing Above Input
+1. The `pb-24` in `Chat.tsx` component (primary control)
+   ```tsx
+   // Increase bottom padding
+   <div className="flex-1 h-full pb-32">
+   ```
+
+2. If necessary, the input container padding in `Chat.tsx` (tertiary control)
+   ```tsx
+   // Adjust padding around input
+   <div className="... pb-1 pt-0.5 md:pb-2">
+   ```
+
+## Special Cases and Edge Considerations
+
+### 1. Message Actions for Different Roles
+
+- **Assistant Messages**: Have copy, upvote, and downvote buttons
+- **User Messages**: Only have copy button, with `isReadonly={true}` to hide voting
+- Controlled in `Message.tsx` with conditional rendering:
+  ```tsx
+  {!isReadonly && message.role === 'assistant' && (
+    <div className={spacing.message.actionOffset}>
+      <MessageActions ... isReadonly={isReadonly} />
+    </div>
+  )}
+  
+  {!isReadonly && message.role === 'user' && (
+    <div className={spacing.message.actionOffset}>
+      <MessageActions ... isReadonly={true} />
+    </div>
+  )}
+  ```
+
+### 2. Scroll Area and Virtualization
+
+The chat uses react-virtuoso for efficient rendering, which has its own spacing considerations:
+
+- **Custom Scroll Area**: Handles all scrolling in `VirtualizedChat.tsx`
+- **Virtuoso Settings**: Configured in `lib/virtualization-config.ts`
+- **Dynamic Loading**: Spacing adjusts when loading older messages
+
+### 3. CSS Variable Integration
+
+The layout uses CSS variables for some key dimensions:
+
+- **Header Height**: `--header-height: 3.5rem` defined in `app/globals.css`
+- **Header Offset**: Applied with `.fixed-header-offset { padding-top: var(--header-height); }`
+
+## Troubleshooting Spacing Issues
+
+If spacing doesn't match expectations:
+
+1. **Inspect visually with browser tools** to see which element is contributing the spacing
+2. **Check for stacking margins**: Remember that margins can collapse between elements
+3. **Confirm the correct component is being edited**: Use the component responsibility map
+4. **Look for inline styles**: Some spacing is set with inline styles rather than tokens
+5. **Check for overrides**: Some components add additional classes that can override token values
+
+## Template Matching Tips
+
+To match the template design closely:
+
+1. **Start from the top**: Adjust global container spacing first
+2. **Work inward**: Fix message spacing next, then action buttons
+3. **Visual verification**: Compare against design screenshots after each change
+4. **Browser tools**: Use the browser inspector to measure exact pixel values
+5. **Incremental changes**: Make small adjustments and check results
+
+## Common Patterns to Maintain
+
+### 1. Message Container Pattern
+```tsx
+<div className={styles.messageContainer}>
+  {/* Content */}
+</div>
 ```
 
-## Critical CSS Dependencies and Overrides
-
-Understanding these dependencies is critical for making changes:
-
-1. **Header Height and Main Content Padding**:
-   - The fixed header uses `--header-height: 3.5rem` CSS variable
-   - The main content uses the `fixed-header-offset` class which adds `padding-top: var(--header-height)`
-   - This creates proper spacing without hardcoding values
-
-2. **Message Content Padding**:
-   - User messages: `px-6 py-3 mr-2` is defined directly in the token
-   - Assistant messages: Uses the padding token `px-5 py-3`
-
-3. **Message Actions**:
-   - Only assistant messages have voting buttons (up/down)
-   - User messages only have copy button (readonly mode)
-   - Action buttons have significant bottom spacing: `mb-5` in tokens and additional `pb-4 mb-1` in component
-
-4. **Input Container and Bottom Message Visibility**:
-   - Input uses `sticky inset-x-0 bottom-0 z-10`
-   - Main content area has `pb-20` to prevent last message from being hidden under input
-   - Virtuoso container has `paddingBottom: '150px'` for additional bottom spacing
-   - Combined, these ensure messages and their action buttons are always visible above the input area
-
-## Component Responsibility Guidelines
-
-To maintain this system in the future, follow these guidelines:
-
-### 1. Component Boundary Rule
-
-Each component is responsible only for its internal spacing. For example:
-- Message component controls spacing within the message bubble
-- Parent components control spacing between messages
-
-### 2. Parent Container Rule
-
-Parent components control the gap between child elements:
-- The chat container controls the gap between messages
-- The message container controls the gap between message elements
-
-### 3. Token Usage Rule
-
-Always use design tokens instead of direct values:
-- Import spacing values from the token system
-- Use the combined style objects for common patterns
-
-### 4. Markdown Rule
-
-Message content should use the specialized `MessageMarkdown` component:
-- Customized for chat message formatting
-- Properly handles list spacing and typography
-- Maintains consistent paragraph spacing
-
-### 5. Scroll Container Rule
-
-Only designate one container to handle scrolling in a given area:
-- Use `CustomScrollArea` as the single scroll container for message lists
-- Parent containers should use `flex-1` and `h-full` without overflow properties
-- Child containers inside scroll areas should use appropriate height settings
-
-### 6. Fixed Elements Rule
-
-Fixed elements (like headers and input bars) require special attention:
-- Use CSS variables for dimensions that affect other elements
-- Add appropriate padding to the content area to prevent overlap
-- For fixed headers, use the `fixed-header-offset` class
-- For fixed input bars, add bottom padding to the content area
-
-## Troubleshooting Common Issues
-
-If layout issues occur, check for these common problems:
-
-1. **Message Spacing Issues**:
-   - Verify the correct `spacing.message.verticalGap` token is being used
-   - Check for overriding margin or padding on child elements
-
-2. **Content Hidden Under Fixed Elements**:
-   - For header issues: Make sure `fixed-header-offset` is applied to the main content
-   - For input issues: Verify the content container has sufficient bottom padding
-
-3. **Scrolling Problems**:
-   - Ensure only one container has scrolling properties
-   - Check that parent containers use `h-full` or `flex-1` to propagate height
-   - Verify the virtualized list has appropriate minimum height
-
-4. **Inconsistent Message Styling**:
-   - Confirm the styling token usage across different message components
-   - Check for hardcoded values that should be using tokens
-   - Verify that padding is applied at the correct level of the component tree
-
-5. **Font Size or Spacing Issues**:
-   - Ensure the `typography.messageText` is being applied consistently
-   - Check for conflicting typography settings from the markdown styling
-
-## Extending the System
-
-When adding new components:
-
-1. Add appropriate tokens to the token system
-2. Create combined style objects for the new component
-3. Document new style patterns in this document
-4. Follow the component responsibility guidelines
-5. Respect the scroll container hierarchy
-
-By maintaining this system, future development will be more consistent and avoid the styling conflicts that previously occurred. 
-
-Current issues:
-
-I'll analyze the spacing issues by examining all related files to better understand what controls the spacing between elements, especially at the bottom of the chat. 
-
-Let me study the code structure and identify potential points of confusion:
-
-Read file: components/chat.tsx
-
-Read file: app/globals.css
-
-Read file: components/multimodal-input.tsx
-
-Read file: lib/virtualization-config.ts
-After reviewing the code, I can now provide a comprehensive analysis of the spacing issues and a plan to address them.
-
-# Chat Spacing Analysis & Action Plan
-
-## What I've Discovered
-
-1. **Multiple Components Affecting Bottom Spacing:**
-   - **Chat Component (components/chat.tsx):** Has `pb-20` padding on the main content container that affects all bottom spacing
-   - **VirtualizedChat (components/virtualized-chat.tsx):** Adds `paddingBottom: '150px'` inline style to the Virtuoso component
-   - **MessageActions (components/message-actions.tsx):** Adds `pb-4 mb-1` to action buttons
-   - **Tokens (lib/tokens.ts):** Has `actionOffset: 'mt-2 mb-5'` which affects all message actions
-
-2. **Styling Confusion Points:**
-   - We're adding padding at multiple levels that are stacking on top of each other
-   - The input container has its own styling with `pb-2 pt-0.5 md:pb-3` which interacts with the content above
-   - User messages and assistant messages have different styling requirements but share some tokens
-
-3. **Key Issues with Current Implementation:**
-   - Too much spacing after the message actions (voting/copy buttons)
-   - Inconsistent spacing between elements
-   - Excessive bottom padding from multiple sources
-
-## Template Analysis (From Screenshots)
-
-Analyzing the template version shows:
-
-1. **Tighter Spacing Between Message Components:**
-   - Less vertical spacing between message content and action buttons
-   - Copy/vote buttons are closer to the message content
-
-2. **Better Bottom Margin Management:**
-   - Less excessive space between the last message and input
-   - More consistent spacing throughout the interface
-
-## Action Plan
-
-Based on my analysis, here's my plan to address these issues:
-
-### 1. Reduce Message Action Button Spacing (30% Reduction)
-
-```typescript
-// In lib/tokens.ts
-export const spacing = {
-    message: {
-        // Other properties...
-        actionOffset: 'mt-1 mb-3' // Reduce from mb-5 (40% reduction)
-    },
-};
+### 2. Message Flex Layout Pattern
+```tsx
+<div className={styles.messageFlex}>
+  {/* Avatar */}
+  <div className={cn("flex flex-col w-full", spacing.message.internalGap)}>
+    {/* Message content */}
+  </div>
+</div>
 ```
 
-### 2. Simplify and Optimize Bottom Spacing
+### 3. Message Content Pattern
+```tsx
+<div className={
+  cn(
+    'flex flex-col',
+    spacing.message.contentGap,
+    message.role === 'user'
+      ? styles.messageContent.user 
+      : styles.messageContent.assistant
+  )
+}>
+  <MessageMarkdown>{content}</MessageMarkdown>
+</div>
+```
 
-```typescript
-// In components/message-actions.tsx
-// Change this:
-<div className={cn(styles.messageActions, "pb-4 mb-1")}>
-// To this:
+### 4. Actions Container Pattern
+```tsx
 <div className={cn(styles.messageActions, "pb-2")}>
+  {/* Action buttons */}
+</div>
 ```
 
-### 3. Adjust Virtuoso Container Padding
-
-```typescript
-// In components/virtualized-chat.tsx
-// Change this:
-paddingBottom: '150px'
-// To this:
-paddingBottom: '100px'
-```
-
-### 4. Adjusting Main Content Padding
-
-```typescript
-// In components/chat.tsx
-// Change this:
-<div className="flex-1 h-full pb-20">
-// To this:
-<div className="flex-1 h-full pb-16">
-```
-
-### 5. Update Documentation for Better Clarity
-
-Update the styling-system.md to clarify:
-- Which components control which spacing
-- How padding values cascade through the component hierarchy
-- Clear documentation on how to make future spacing changes
-
-## Implementation Approach
-
-1. **Start from the Bottom Up:** Address the input container spacing first, then work upward
-2. **Make incremental changes:** Change one value at a time to observe the effects
-3. **Document all changes:** Keep track of what was changed and its effect
-4. **Visual verification:** Compare against template screenshots after each change
-
-This approach should help us match the template's spacing more closely while reducing confusion about what controls the spacing between elements.
-
-Would you like me to proceed with implementing these changes one at a time, or should I adjust the plan based on any additional insights?
+By following this guide, you can maintain a consistent spacing system that's easier to edit in the future. Always verify your changes visually and use browser developer tools to confirm the actual rendered dimensions match your expectations.

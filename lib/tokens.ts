@@ -9,15 +9,15 @@
 export const spacing = {
     message: {
         // Space between adjacent messages
-        verticalGap: 'mb-4',
+        verticalGap: 'mb-3',
         // Space between elements inside message
-        internalGap: 'gap-3',
+        internalGap: 'gap-2',
         // Content gap within message bubbles
-        contentGap: 'gap-1',
+        contentGap: 'gap-0.5',
         // Base padding for message bubbles
-        padding: 'px-5 py-3',
+        padding: 'px-5 py-2.5',
         // Offset for action buttons relative to message
-        actionOffset: 'mt-2 mb-5'
+        actionOffset: 'mt-0 mb-0'
     },
     chat: {
         // Padding for the entire chat container
@@ -31,7 +31,7 @@ export const spacing = {
         // Default gap between virtualized list items
         itemGap: 'gap-4',
         // Default padding for virtualized containers
-        containerPadding: 'pt-10 pb-2'
+        containerPadding: 'pt-10 pb-1'
     }
 };
 
@@ -62,9 +62,9 @@ export const ui = {
     // Message content container styling
     messageContainer: 'w-full mx-auto max-w-3xl px-4 md:px-6',
     // User message bubble styling
-    userMessage: 'bg-black text-white rounded-xl shadow-sm px-6 py-3 mr-2 mb-1',
+    userMessage: 'bg-black text-white rounded-xl shadow-sm px-6 py-3 mr-2',
     // Assistant message bubble styling
-    assistantMessage: 'rounded-xl px-6 py-3 mb-1',
+    assistantMessage: 'rounded-xl px-6 py-3',
     // Custom scrollbar styling
     scrollbar: 'scrollbar-thin custom-scrollbar'
 };

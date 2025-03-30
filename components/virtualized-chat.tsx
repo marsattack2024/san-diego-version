@@ -236,7 +236,7 @@ export function VirtualizedChat({
             flex: 1,
             height: '100%',
             minHeight: 'calc(100vh - 14rem)', // Add minimum height to ensure messages area is visible
-            paddingBottom: '150px' // Increased padding at the bottom to ensure last message is fully visible
+            paddingBottom: '0px' // No additional padding needed since parent has pb-24
           } as React.CSSProperties}
           data={allMessages}
           className={styles.virtualizedChat}

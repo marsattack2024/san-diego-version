@@ -256,7 +256,7 @@ export function Chat({
   return (
     <TooltipProvider delayDuration={0}>
       <div className="flex flex-col bg-white h-full relative fixed-header-offset">
-        <div className="flex-1 h-full pb-20">
+        <div className="flex-1 h-full pb-24">
           <VirtualizedChat
             chatId={id}
             isLoading={isLoading}
@@ -271,11 +271,11 @@ export function Chat({
         </div>
         <div
           ref={inputContainerRef}
-          className="sticky inset-x-0 bottom-0 z-10 w-full bg-gradient-to-t from-background via-background to-transparent pb-2 pt-0.5 md:pb-3"
+          className="sticky inset-x-0 bottom-0 z-10 w-full bg-gradient-to-t from-background via-background to-transparent pb-1 pt-0.5 md:pb-2"
         >
           <form
             onSubmit={handleSubmitWithSave}
-            className="mx-auto flex max-w-3xl flex-col gap-1 bg-background pt-0 pb-2 px-2 md:px-0"
+            className="mx-auto flex max-w-3xl flex-col gap-1 bg-background pt-0 pb-1 px-2 md:px-0"
           >
             {!isReadonly && (
               <MultimodalInput
