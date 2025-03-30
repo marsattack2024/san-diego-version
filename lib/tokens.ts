@@ -9,7 +9,7 @@
 export const spacing = {
     message: {
         // Space between adjacent messages
-        verticalGap: 'mb-2',
+        verticalGap: 'mb-1',
         // Space between elements inside message
         internalGap: 'gap-2',
         // Content gap within message bubbles
@@ -62,9 +62,9 @@ export const ui = {
     // Message content container styling
     messageContainer: 'w-full mx-auto max-w-3xl px-4 md:px-6',
     // User message bubble styling
-    userMessage: 'bg-black text-white rounded-xl shadow-sm px-6 py-2 mr-2',
+    userMessage: 'bg-black text-white rounded-xl shadow-sm px-6 py-3 mr-2',
     // Assistant message bubble styling
-    assistantMessage: 'rounded-xl px-6 py-2',
+    assistantMessage: 'rounded-xl px-6 py-3',
     // Custom scrollbar styling
     scrollbar: 'scrollbar-thin custom-scrollbar'
 };

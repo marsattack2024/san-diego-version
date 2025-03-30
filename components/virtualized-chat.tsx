@@ -201,7 +201,7 @@ export function VirtualizedChat({
   // Define the spacer Footer component
   const ListFooter = () => {
     // Add a spacer div to create proper space above the input bar
-    return <div className="h-32 w-full flex-shrink-0"></div>; // Increased height from h-24 to h-32 for more breathing room
+    return <div className="h-10 w-full flex-shrink-0"></div>; // Reduced height from h-32 to h-10 for less space
   };
 
   // Combine ThinkingItem and ListFooter for the Virtuoso Footer

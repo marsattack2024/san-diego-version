@@ -76,10 +76,10 @@ function PureMessageActions({
 
   if (isLoading) return null;
 
-  // Keep bottom spacing logic but remove any top margin that might be added
+  // Different spacing for assistant vs user messages
   const spacingClass = role === 'assistant'
-    ? 'mb-8 -mt-1' // Assistant: large bottom margin before next user message and negative top margin to get closer
-    : 'mb-2 -mt-1'; // User: small bottom margin before assistant response and negative top margin to get closer
+    ? 'mb-8' // Assistant: large bottom margin before next user message
+    : 'mb-3'; // User: moderate bottom margin before assistant response
 
   return (
     <div className={cn(styles.messageActions, spacingClass)}>

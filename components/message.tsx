@@ -211,7 +211,7 @@ const PurePreviewMessage = ({
             )}
 
             {!isReadonly && message.role === 'assistant' && (
-              <div className="mt-0">
+              <div className="-mt-7">
                 <MessageActions
                   key={`action-${message.id}`}
                   chatId={chatId}
@@ -226,7 +226,7 @@ const PurePreviewMessage = ({
             )}
 
             {!isReadonly && message.role === 'user' && (
-              <div className="flex justify-end mt-0">
+              <div className="flex justify-end mt-1">
                 <MessageActions
                   key={`action-${message.id}`}
                   chatId={chatId}

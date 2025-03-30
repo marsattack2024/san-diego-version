@@ -245,7 +245,7 @@ When you need to adjust spacing, follow this guide to edit the correct component
    ```tsx
    // Increase or decrease the height class
    const ListFooter = () => {
-     return <div className="h-32 w-full flex-shrink-0"></div>; // Using h-32 for more space
+     return <div className="h-12 w-full flex-shrink-0"></div>; // Using h-32 for more space
    };
    ```
 
