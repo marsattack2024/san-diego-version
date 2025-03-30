@@ -6,9 +6,11 @@ import { type Message } from 'ai';
 export interface ChatWidgetConfig {
   position?: 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left';
   title?: string;
+  subtitle?: string;
   primaryColor?: string;
   greeting?: string;
   placeholder?: string;
+  inputPlaceholder?: string;
   width?: number;
   height?: number;
   bubbleIcon?: string; // URL to icon or emoji string
@@ -83,13 +85,14 @@ export const POSITION_STYLES = {
 /**
  * Default widget configuration
  */
-export const DEFAULT_CONFIG: ChatWidgetConfig = {
+export const DEFAULT_CONFIG = {
   position: 'bottom-right',
   title: 'Ask Marlan',
+  subtitle: 'Mastermind AI Assistant',
   primaryColor: '#000000',
   greeting: "I'm your Mastermind AI companion! I can answer marketing and tech questions right now! What can I help with?",
   placeholder: 'Type your message...',
   width: 360,
   height: 500,
   maxMessages: 50,
-}; 
+} as ChatWidgetConfig; 

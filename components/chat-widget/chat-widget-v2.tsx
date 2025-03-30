@@ -14,6 +14,18 @@ import {
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardFooter,
+    CardHeader,
+    CardTitle,
+} from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+// No avatar component needed
+import { Message, useChat } from '@ai-sdk/react';
+// ChatWidgetProps is defined locally
 
 interface ChatWidgetProps {
     config?: Partial<ChatWidgetConfig>
@@ -22,6 +34,8 @@ interface ChatWidgetProps {
 export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
     // Merge default config with provided config
     const widgetConfig = { ...DEFAULT_CONFIG, ...config };
+    // Ensure subtitle is available even if TS doesn't recognize it
+    const subtitle = widgetConfig.subtitle || 'Mastermind AI Assistant';
 
     // Widget UI state
     const [isOpen, setIsOpen] = useState(false);
@@ -46,15 +60,15 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
 
     // Track when user sends a message (for scroll behavior)
     const [hasUserSentMessage, setHasUserSentMessage] = useState(false);
-    
+
     // References for UI interactions
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const virtuosoRef = useRef<VirtuosoHandle>(null);
-    
+
     // Get scroll state and actions from the store
-    const { 
-        shouldAutoScroll, 
-        isStreaming, 
+    const {
+        shouldAutoScroll,
+        isStreaming,
         handleScrollPositionChange,
         resetOnUserMessage,
         setIsStreaming
@@ -68,12 +82,12 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
             }, 100);
         }
     }, [isOpen]);
-    
+
     // Update streaming state based on chat status
     useEffect(() => {
         setIsStreaming(status === 'streaming');
     }, [status, setIsStreaming]);
-    
+
     // Reset scroll behavior when user sends a message
     useEffect(() => {
         if (hasUserSentMessage) {
@@ -86,7 +100,7 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
                     align: 'end'
                 });
             }
-            
+
             // Reset the flag after a short delay
             setTimeout(() => {
                 setHasUserSentMessage(false);
@@ -101,7 +115,7 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
             if (input.trim() && status === 'ready') {
                 // Mark that user is sending a message (for scroll behavior)
                 setHasUserSentMessage(true);
-                
+
                 const form = e.currentTarget.form;
                 if (form) handleSubmit(new SubmitEvent('submit', { bubbles: true }) as any);
             }
@@ -154,178 +168,134 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
         >
             {/* Chat bubble button */}
             {!isOpen && (
-                <button
+                <Button
                     onClick={() => setIsOpen(true)}
-                    className="rounded-full p-4 shadow-lg text-primary-foreground transition-all"
-                    style={{ backgroundColor: widgetConfig.primaryColor || '#0070f3' }}
-                    aria-label="Open chat"
+                    className="rounded-full w-14 h-14 shadow-lg"
+                    style={{
+                        backgroundColor: widgetConfig.primaryColor || '#0070f3',
+                    }}
                 >
-                    <MessageSquare className="h-6 w-6" />
-                </button>
+                    <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        width="24"
+                        height="24"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                    >
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                    </svg>
+                </Button>
             )}
 
             {/* Chat widget container */}
             {isOpen && (
-                <div
-                    className="bg-white rounded-lg shadow-xl flex flex-col overflow-hidden"
-                    style={{
-                        width: `${widgetConfig.width || 360}px`,
-                        height: `${widgetConfig.height || 500}px`,
-                        maxWidth: '90vw',
-                        maxHeight: '90vh'
-                    }}
-                >
-                    {/* Header */}
-                    <div
-                        className="flex items-center justify-between p-4 border-b"
+                <Card className="w-[350px] shadow-xl overflow-hidden flex flex-col">
+                    <CardHeader
+                        className="pb-0 pt-4"
                         style={{
                             backgroundColor: widgetConfig.primaryColor || '#0070f3',
-                            color: '#fff'
+                            color: 'white',
                         }}
                     >
-                        <h3 className="font-medium text-lg">{widgetConfig.title || 'Chat'}</h3>
-                        <div className="flex gap-2">
-                            <button
-                                onClick={resetChat}
-                                className="p-1 rounded-full hover:bg-white/20 transition-colors"
-                                title="Clear chat"
-                            >
-                                <RefreshCw className="h-5 w-5" />
-                            </button>
-                            <button
+                        <div className="flex justify-between items-center">
+                            <CardTitle className="text-lg">
+                                {widgetConfig.title || 'Chat with us'}
+                            </CardTitle>
+                            <Button
+                                variant="ghost"
                                 onClick={() => setIsOpen(false)}
-                                className="p-1 rounded-full hover:bg-white/20 transition-colors"
-                                title="Close chat"
+                                className="h-8 w-8 p-0 text-white hover:text-white/80 hover:bg-transparent"
                             >
-                                <X className="h-5 w-5" />
-                            </button>
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="18"
+                                    height="18"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                >
+                                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                                </svg>
+                            </Button>
                         </div>
-                    </div>
+                        <CardDescription className="text-white/85 pb-3">
+                            {subtitle}
+                        </CardDescription>
+                    </CardHeader>
 
-                    {/* Messages area */}
-                    <div className="flex-1 overflow-hidden p-0">
-                        {/* Welcome message */}
-                        {messages.length === 0 && (
-                            <div className="text-center my-8 p-4 text-gray-500">
-                                <p>{widgetConfig.greeting || "Hello! How can I help you today?"}</p>
-                            </div>
-                        )}
-
-                        {/* Message list using Virtuoso */}
-                        {messages.length > 0 && (
-                            <Virtuoso
-                                ref={virtuosoRef}
-                                style={{ height: '100%', width: '100%' }}
-                                data={messages}
-                                className="p-4"
-                                // Only follow output if shouldAutoScroll is true
-                                followOutput={shouldAutoScroll ? 'auto' : false}
-                                // Use smooth scrolling for better UX
-                                followOutputSmooth={true}
-                                // This is the key handler that updates our scroll state
-                                atBottomStateChange={(isAtBottom) => {
-                                    handleScrollPositionChange(isAtBottom);
-                                }}
-                                // Add custom threshold to consider "near bottom" 
-                                atBottomThreshold={150}
-                                // Make auto-scrolling smoother during streaming
-                                overscan={shouldAutoScroll && isStreaming ? 200 : 0}
-                                itemContent={(index, message) => {
-                                    // Check if the message actually has displayable content
-                                    const hasTextContent = !!message.content || (message.parts && message.parts.some(p => p.type === 'text' && p.text));
-
-                                    // Skip rendering empty assistant messages (prevent gray line)
-                                    if (message.role === 'assistant' && !hasTextContent) {
-                                        return null;
-                                    }
-
-                                    return (
-                                        <div
-                                            className={cn(
-                                                "flex flex-col max-w-[80%] rounded-lg p-3 overflow-hidden mb-3",
-                                                message.role === 'user'
-                                                    ? "ml-auto bg-primary/10 text-foreground"
-                                                    : "mr-auto bg-muted text-foreground"
-                                            )}
-                                        >
-                                            <div className="whitespace-pre-wrap break-words w-full">
-                                                {/* If using parts API */}
-                                                {message.parts?.map((part, i) => (
-                                                    part.type === 'text' ? <span key={i}>{part.text}</span> : null
-                                                )) || message.content}
-                                            </div>
-                                        </div>
-                                    );
-                                }}
-                                components={{
-                                    Footer: () => status === 'streaming' ? (
-                                        <div className="mt-4 flex items-center gap-2 mb-4" style={{ marginLeft: '8px' }}>
-                                            <Loader className="h-3 w-3 animate-spin text-muted-foreground" />
-                                            <span className="text-xs text-muted-foreground">Processing...</span>
-                                        </div>
-                                    ) : null
-                                }}
-                            />
-                        )}
-
-                        {/* Processing indicator now handled by Virtuoso Footer */}
-
-                        {/* Error message moved outside space-y-4 as well */}
-                        {error && (
-                            <div className="mt-4 flex items-center gap-2 p-3 text-sm text-red-500 bg-red-50 rounded-lg">
-                                <AlertCircle className="h-4 w-4" />
-                                <span>{getErrorMessage()}</span>
-                                {status !== 'streaming' && (
-                                    <Button
-                                        variant="ghost"
-                                        size="sm"
-                                        onClick={() => reload()}
-                                        className="ml-auto text-xs"
+                    <CardContent className="px-0 flex-grow h-[300px] overflow-hidden">
+                        <Virtuoso
+                            className="h-full"
+                            initialTopMostItemIndex={messages.length - 1}
+                            data={messages}
+                            followOutput={"smooth"}
+                            itemContent={(index, message) => (
+                                <div
+                                    key={message.id}
+                                    className={`flex items-start p-3 ${message.role === 'user' ? 'justify-end' : 'justify-start'
+                                        }`}
+                                >
+                                    <div
+                                        className={`rounded-lg px-3 py-2 max-w-[80%] ${message.role === 'user'
+                                            ? 'bg-blue-600 text-white'
+                                            : 'bg-gray-100 text-gray-800'
+                                            }`}
                                     >
-                                        Retry
-                                    </Button>
-                                )}
-                            </div>
-                        )}
-                    </ScrollArea>
+                                        {typeof message.content === 'string' ? message.content : JSON.stringify(message.content)}
+                                    </div>
+                                </div>
+                            )}
+                        />
+                    </CardContent>
 
-                    {/* Input area */}
-                    <div className="p-4 border-t">
-                        <form onSubmit={handleSubmit} className="flex gap-2">
+                    <CardFooter className="border-t px-3 py-3">
+                        <form
+                            onSubmit={handleSubmit}
+                            className="flex w-full items-center space-x-2"
+                        >
                             <Textarea
-                                ref={inputRef}
+                                ref={inputRef as React.RefObject<HTMLTextAreaElement>}
                                 placeholder={widgetConfig.placeholder || "Type your message..."}
                                 value={input}
                                 onChange={handleInputChange}
                                 onKeyDown={handleKeyDown}
                                 disabled={status === 'streaming' || rateLimitInfo.limited}
-                                className="flex-1 min-h-[60px] max-h-[120px] resize-none"
-                                rows={1}
+                                className="flex-1 min-h-[40px] resize-none"
                             />
                             <Button
                                 type="submit"
                                 size="icon"
                                 disabled={!input.trim() || status === 'streaming' || rateLimitInfo.limited}
-                                className="h-[60px] shrink-0 text-primary-foreground"
-                                style={{ backgroundColor: widgetConfig.primaryColor || '#0070f3' }}
-                                title="Send message"
+                                style={{
+                                    backgroundColor: widgetConfig.primaryColor || '#0070f3',
+                                }}
                             >
-                                {status === 'streaming' ? (
-                                    <Loader className="h-4 w-4 animate-spin" />
-                                ) : (
-                                    <Send className="h-4 w-4" />
-                                )}
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="18"
+                                    height="18"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                >
+                                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                </svg>
                             </Button>
                         </form>
-
-                        {/* Rate limit warning */}
-                        {rateLimitInfo.limited && (
-                            <div className="mt-2 text-xs text-amber-500">
-                                Rate limit reached. Please wait a moment before sending more messages.
-                            </div>
-                        )}
-                    </div>
-                </div>
+                    </CardFooter>
+                </Card>
             )}
         </div>
     );

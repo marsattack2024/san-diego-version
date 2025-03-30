@@ -75,6 +75,29 @@ const config: Config = {
       },
     },
   },
-  plugins: [require('tailwindcss-animate'), require('@tailwindcss/typography')],
+  plugins: [
+    require('tailwindcss-animate'), 
+    require('@tailwindcss/typography'),
+    // Add custom scrollbar styles
+    function({ addUtilities }) {
+      const newUtilities = {
+        '.scrollbar-thin': {
+          scrollbarWidth: 'thin',
+          '&::-webkit-scrollbar': {
+            width: '8px',
+            height: '8px',
+          },
+          '&::-webkit-scrollbar-track': {
+            backgroundColor: 'transparent',
+          },
+          '&::-webkit-scrollbar-thumb': {
+            backgroundColor: 'hsl(var(--muted))',
+            borderRadius: '9999px',
+          },
+        },
+      };
+      addUtilities(newUtilities);
+    },
+  ],
 };
 export default config;

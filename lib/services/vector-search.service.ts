@@ -9,8 +9,11 @@
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES, OPERATION_TYPES } from '@/lib/logger/constants';
 import { THRESHOLDS } from '@/lib/logger/edge-logger';
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from '@/utils/supabase/server';
+import { openai } from '@ai-sdk/openai';
+import { embed, embedMany } from 'ai';
 import { supabase } from '@/lib/db';
+import { cacheService } from '@/lib/cache/cache-service';
 
 // Types
 export interface EmbeddingDocument {
@@ -61,7 +64,7 @@ export interface VectorSearchOptions {
 const EMBEDDING_DIMENSION = 1536; // OpenAI embedding dimension
 const DEFAULT_SEARCH_LIMIT = 5;
 const DEFAULT_SIMILARITY_THRESHOLD = 0.7;
-const OPENAI_API_URL = 'https://api.openai.com/v1/embeddings';
+const EMBEDDING_MODEL = 'text-embedding-3-small';
 
 /**
  * Vector Search Service class
@@ -77,7 +80,7 @@ class VectorSearchService {
             edgeLogger.info('Vector Search service initialized', {
                 category: LOG_CATEGORIES.TOOLS,
                 operation: 'vector_search_init',
-                embeddingModel: 'text-embedding-3-small',
+                embeddingModel: EMBEDDING_MODEL,
                 dimensions: EMBEDDING_DIMENSION
             });
         } else {
@@ -119,66 +122,45 @@ class VectorSearchService {
                 totalCharacters: texts.reduce((acc, text) => acc + text.length, 0)
             });
 
-            // Generate embeddings for all texts using OpenAI API directly
-            const response = await fetch(OPENAI_API_URL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
-                },
-                body: JSON.stringify({
-                    input: texts,
-                    model: 'text-embedding-3-small',
-                    dimensions: EMBEDDING_DIMENSION
-                })
+            // Generate embeddings using AI SDK
+            const { embeddings, usage } = await embedMany({
+                model: openai.embedding(EMBEDDING_MODEL),
+                values: texts,
             });
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(`OpenAI API error: ${response.status} ${response.statusText} - ${errorText}`);
-            }
-
-            const result = await response.json();
-            const embeddings = result.data.map((item: any) => item.embedding);
 
             const duration = Date.now() - startTime;
 
-            // Estimate token usage from response
-            const promptTokens = result.usage?.prompt_tokens || Math.ceil(texts.join(' ').length / 4);
-            const totalTokens = result.usage?.total_tokens || promptTokens;
-
-            // Log successful embedding
+            // Log success
             edgeLogger.info('Embedding generation completed', {
                 category: LOG_CATEGORIES.TOOLS,
-                operation: 'embedding_success',
+                operation: 'embedding_completed',
                 operationId,
-                durationMs: duration,
                 textCount: texts.length,
-                embeddingCount: embeddings.length,
-                embeddingDimension: embeddings[0]?.length || 0,
-                promptTokens,
-                totalTokens
+                duration,
+                usage: {
+                    promptTokens: usage?.tokens || 0,
+                    totalTokens: usage?.tokens || 0
+                }
             });
 
             return {
                 embeddings,
                 usage: {
-                    promptTokens,
-                    totalTokens
+                    promptTokens: usage?.tokens || Math.ceil(texts.join(' ').length / 4),
+                    totalTokens: usage?.tokens || Math.ceil(texts.join(' ').length / 4)
                 }
             };
         } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
             const duration = Date.now() - startTime;
 
             // Log error
             edgeLogger.error('Embedding generation failed', {
                 category: LOG_CATEGORIES.TOOLS,
-                operation: 'embedding_error',
+                operation: 'embedding_failed',
                 operationId,
-                errorMessage,
-                durationMs: duration,
-                textCount: texts.length
+                error: error instanceof Error ? error.message : String(error),
+                textCount: texts.length,
+                duration
             });
 
             throw error;
@@ -502,6 +484,144 @@ class VectorSearchService {
                 errorMessage,
                 documentId,
                 collection
+            });
+
+            throw error;
+        }
+    }
+
+    /**
+     * Performs a vector similarity search on the kb_documents table
+     * @param embedding The embedding vector to search against
+     * @param limit Maximum number of results to return
+     * @param threshold Minimum similarity threshold
+     * @returns Array of matching documents with their similarity scores
+     */
+    public async similaritySearch(
+        embedding: number[],
+        limit: number = DEFAULT_SEARCH_LIMIT,
+        threshold: number = DEFAULT_SIMILARITY_THRESHOLD
+    ): Promise<Array<{ id: string; content: string; metadata: any; similarity: number }>> {
+        const operationId = `search-${Date.now().toString(36)}`;
+        const startTime = Date.now();
+
+        try {
+            if (!this.isInitialized) {
+                throw new Error('Vector search service not initialized');
+            }
+
+            const supabase = await createClient();
+
+            // Log search request
+            edgeLogger.info('Vector similarity search started', {
+                category: LOG_CATEGORIES.TOOLS,
+                operation: 'vector_search_started',
+                operationId,
+                embeddingLength: embedding.length,
+                limit,
+                threshold
+            });
+
+            // Generate embedding for the query
+            const embeddingResult = await this.generateEmbeddings([JSON.stringify(embedding)]);
+            const queryEmbedding = embeddingResult.embeddings[0];
+
+            // Calculate query embedding norm for metrics
+            const queryEmbeddingNorm = Math.sqrt(
+                queryEmbedding.reduce((sum, val) => sum + val * val, 0)
+            );
+
+            // Build Supabase query
+            const { data: documents, error } = await supabase
+                .rpc('match_documents', {
+                    query_embedding: queryEmbedding,
+                    match_threshold: threshold,
+                    match_count: limit,
+                    collection_name: 'documents'
+                });
+
+            if (error) {
+                throw new Error(`Supabase search error: ${error.message}`);
+            }
+
+            const duration = Date.now() - startTime;
+            const isSlow = duration > THRESHOLDS.SLOW_OPERATION;
+            const isImportant = duration > THRESHOLDS.IMPORTANT_THRESHOLD;
+
+            // Transform results to SearchResult format
+            const results: Array<{ id: string; content: string; metadata: any; similarity: number }> = documents.map((doc: any) => ({
+                id: doc.id,
+                content: doc.content,
+                metadata: doc.metadata,
+                similarity: doc.similarity
+            }));
+
+            // Calculate similarity distribution for enhanced logging
+            const similarityDistribution = results.length > 0
+                ? {
+                    max: results[0].similarity,
+                    min: results[results.length - 1].similarity,
+                    p75: results.length >= 4 ? results[Math.floor(results.length * 0.25)].similarity : null,
+                    p50: results.length >= 2 ? results[Math.floor(results.length * 0.5)].similarity : null,
+                    p25: results.length >= 4 ? results[Math.floor(results.length * 0.75)].similarity : null,
+                }
+                : {};
+
+            // Calculate average similarity
+            const avgSimilarity = results.length > 0
+                ? results.reduce((sum, doc) => sum + doc.similarity, 0) / results.length
+                : 0;
+
+            // Log successful search with enhanced metrics
+            if (isSlow) {
+                edgeLogger.warn('Vector similarity search completed', {
+                    category: LOG_CATEGORIES.TOOLS,
+                    operation: 'vector_search_completed',
+                    operationId,
+                    durationMs: duration,
+                    resultCount: results.length,
+                    vectorDimensions: queryEmbedding.length,
+                    queryEmbeddingNorm,
+                    similarityDistribution,
+                    avgSimilarity,
+                    slow: true,
+                    important: isImportant,
+                    status: 'completed'
+                });
+            } else {
+                edgeLogger.info('Vector similarity search completed', {
+                    category: LOG_CATEGORIES.TOOLS,
+                    operation: 'vector_search_completed',
+                    operationId,
+                    durationMs: duration,
+                    resultCount: results.length,
+                    vectorDimensions: queryEmbedding.length,
+                    queryEmbeddingNorm,
+                    similarityDistribution,
+                    avgSimilarity,
+                    slow: false,
+                    important: false,
+                    status: 'completed'
+                });
+            }
+
+            return results;
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const duration = Date.now() - startTime;
+
+            // Log error with enhanced context
+            edgeLogger.error('Vector similarity search failed', {
+                category: LOG_CATEGORIES.TOOLS,
+                operation: 'vector_search_error',
+                operationId,
+                errorMessage,
+                durationMs: duration,
+                vectorDimensions: embedding.length,
+                limit,
+                threshold,
+                important: true,
+                status: 'error'
             });
 
             throw error;

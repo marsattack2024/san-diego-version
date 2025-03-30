@@ -258,8 +258,8 @@ export function Chat({
   // Display the messages with the correct layout
   return (
     <TooltipProvider delayDuration={0}>
-      <div className="flex flex-col bg-primary-foreground h-full pt-14">
-        <div ref={chatContainerRef} className="flex-1 overflow-y-auto pb-8">
+      <div className="flex flex-col bg-primary-foreground h-full pt-14 relative">
+        <div ref={chatContainerRef} className="flex-1 overflow-y-auto pb-4 md:px-8 lg:px-16 xl:px-24 scrollbar-thin">
           <VirtualizedChat
             chatId={id}
             isLoading={isLoading}

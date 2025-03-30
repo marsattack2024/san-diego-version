@@ -1,5 +1,5 @@
 import { createClient } from '@/utils/supabase/server';
-import { CoreMessage, Message, StreamTextResult, Tool, ToolResult, ToolSet, streamText } from 'ai';
+import { CoreMessage, Message, StreamTextResult, Tool, ToolResult, ToolSet, streamText, ToolCall } from 'ai';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { NextRequest, NextResponse } from 'next/server';
@@ -8,7 +8,6 @@ import { createToolSet } from '@/lib/tools/registry.tool';
 import { extractUrls } from '@/lib/utils/url-utils';
 import { MessagePersistenceService } from './message-persistence';
 import { chatLogger } from '@/lib/logger/chat-logger';
-import type OpenAI from 'openai';
 import { openai } from '@ai-sdk/openai';
 import { RequestCookie } from 'next/dist/compiled/@edge-runtime/cookies';
 import { cookies } from 'next/headers';
@@ -610,34 +609,29 @@ export class ChatEngine {
                                 toolNames: allToolCalls.map(t => t.toolName).filter(Boolean),
                                 requestId
                             });
-                        } else {
-                            // Fallback to the original method
-                            // Cast response to access OpenAI-specific properties
-                            const openAIResponse = response as unknown as {
-                                choices?: Array<{
-                                    message?: OpenAI.ChatCompletionMessage
-                                }>
-                            };
+                        }
 
-                            // Safely check for tool calls with proper optional chaining
-                            const toolCalls = openAIResponse?.choices?.[0]?.message?.tool_calls;
+                        // Fallback to the original method
+                        // Use the toolCall information directly from the AI SDK response
+                        else if (response && (response as any)?.choices?.[0]?.message?.tool_calls) {
+                            const aiToolCalls = (response as any)?.choices?.[0]?.message?.tool_calls;
 
-                            if (toolCalls && toolCalls.length > 0) {
+                            if (aiToolCalls && aiToolCalls.length > 0) {
                                 // Add or merge with existing tools data
                                 toolsUsed = {
                                     ...toolsUsed,
-                                    api_tool_calls: toolCalls.map((tool: OpenAI.ChatCompletionMessageToolCall) => ({
+                                    api_tool_calls: aiToolCalls.map((tool: any) => ({
                                         name: tool.function?.name,
                                         id: tool.id,
                                         type: tool.type
                                     }))
                                 };
 
-                                edgeLogger.info('Captured tool calls from AI SDK', {
+                                edgeLogger.info('Captured tool calls from AI SDK response', {
                                     operation: operationName,
                                     sessionId: context.sessionId,
-                                    toolCount: toolCalls.length,
-                                    toolNames: toolCalls.map((t: OpenAI.ChatCompletionMessageToolCall) => t.function?.name).filter(Boolean),
+                                    toolCount: aiToolCalls.length,
+                                    toolNames: aiToolCalls.map((t: any) => t.function?.name).filter(Boolean),
                                     requestId
                                 });
                             }
@@ -1300,6 +1294,32 @@ export class ChatEngine {
         });
 
         try {
+            // Fallback to the original method
+            // Use the toolCall information directly from the AI SDK response
+            if (content && (content as any)?.choices?.[0]?.message?.tool_calls) {
+                const aiToolCalls = (content as any)?.choices?.[0]?.message?.tool_calls;
+
+                if (aiToolCalls && aiToolCalls.length > 0) {
+                    // Add or merge with existing tools data
+                    toolsUsed = {
+                        ...toolsUsed,
+                        api_tool_calls: aiToolCalls.map((tool: any) => ({
+                            name: tool.function?.name,
+                            id: tool.id,
+                            type: tool.type
+                        }))
+                    };
+
+                    edgeLogger.info('Captured tool calls from AI SDK response', {
+                        operation: this.config.operationName,
+                        sessionId: context.sessionId,
+                        toolCount: aiToolCalls.length,
+                        toolNames: aiToolCalls.map((t: any) => t.function?.name).filter(Boolean),
+                        requestId: crypto.randomUUID().substring(0, 8)
+                    });
+                }
+            }
+
             await this.persistenceService.saveMessage({
                 sessionId,
                 userId,
