@@ -31,13 +31,17 @@ const components: Partial<Components> = {
   },
   strong: ({ node, children, ...props }) => {
     return (
-      <span
-        className="font-extrabold text-primary"
-        style={{ fontWeight: 800 }}
+      <strong
+        className="font-black"
+        style={{
+          fontWeight: 900,
+          // Make text slightly larger for more impact
+          fontSize: '1.05em'
+        }}
         {...props}
       >
         {children}
-      </span>
+      </strong>
     );
   },
   a: ({ node, children, ...props }) => {
@@ -55,17 +59,35 @@ const components: Partial<Components> = {
   },
   // Add paragraph component to prevent wrapping code blocks in <p> tags
   p: ({ node, children, ...props }) => {
-    // Check if the paragraph contains a <pre> or code block component
-    const hasCodeBlock = React.Children.toArray(children).some(
-      child => typeof child === 'object' &&
-        React.isValidElement(child) &&
-        (child.type === CodeBlock ||
-          (child.props?.node?.tagName === 'pre' ||
-            child.props?.className?.includes('language-')))
-    );
+    // Helper function to recursively check for code blocks in children
+    const containsCodeBlock = (children: React.ReactNode): boolean => {
+      return React.Children.toArray(children).some(child => {
+        // Direct code block
+        if (typeof child === 'object' &&
+          React.isValidElement(child) &&
+          (child.type === CodeBlock ||
+            (child.props?.node?.tagName === 'pre' ||
+              child.props?.className?.includes('language-')))) {
+          return true;
+        }
+
+        // Check if it's an element with its own children that might contain code blocks
+        if (typeof child === 'object' &&
+          React.isValidElement(child)) {
+          // TypeScript doesn't know child.props might have children
+          // Use type assertion to safely access potential children
+          const childProps = child.props as { children?: React.ReactNode };
+          if (childProps.children) {
+            return containsCodeBlock(childProps.children);
+          }
+        }
+
+        return false;
+      });
+    };
 
     // If it contains a code block, render without wrapping in a paragraph
-    if (hasCodeBlock) {
+    if (containsCodeBlock(children)) {
       return <>{children}</>;
     }
 
@@ -77,42 +99,42 @@ const components: Partial<Components> = {
   },
   h1: ({ node, children, ...props }) => {
     return (
-      <h1 className="text-3xl font-semibold mt-6 mb-2" {...props}>
+      <h1 className="text-3xl font-black mt-8 mb-4 pb-1 border-b border-muted" {...props}>
         {children}
       </h1>
     );
   },
   h2: ({ node, children, ...props }) => {
     return (
-      <h2 className="text-2xl font-semibold mt-6 mb-2" {...props}>
+      <h2 className="text-2xl font-extrabold mt-6 mb-3" {...props}>
         {children}
       </h2>
     );
   },
   h3: ({ node, children, ...props }) => {
     return (
-      <h3 className="text-xl font-semibold mt-6 mb-2" {...props}>
+      <h3 className="text-xl font-bold mt-5 mb-2" {...props}>
         {children}
       </h3>
     );
   },
   h4: ({ node, children, ...props }) => {
     return (
-      <h4 className="text-lg font-semibold mt-6 mb-2" {...props}>
+      <h4 className="text-lg font-semibold mt-4 mb-2" {...props}>
         {children}
       </h4>
     );
   },
   h5: ({ node, children, ...props }) => {
     return (
-      <h5 className="text-base font-semibold mt-6 mb-2" {...props}>
+      <h5 className="text-base font-medium mt-3 mb-1" {...props}>
         {children}
       </h5>
     );
   },
   h6: ({ node, children, ...props }) => {
     return (
-      <h6 className="text-sm font-semibold mt-6 mb-2" {...props}>
+      <h6 className="text-sm font-medium italic mt-3 mb-1" {...props}>
         {children}
       </h6>
     );
