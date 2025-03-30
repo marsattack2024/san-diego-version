@@ -6,10 +6,25 @@ export const QUIZ_SYSTEM_PROMPT = `
 
 - If useKnowledgeBase, getInformation tool is available, ALWAYS use it to get the most accurate information
 
-FORMAT:
-- PLAIN TEXT ONLY - NO MARKDOWN SYNTAX (no #, *, -, etc.)
-- ADD LINE BREAKS between ALL questions, answer options, and statements
-- AVOID bullet points completely
+## Formatting Instructions
+
+- Use proper markdown syntax for ALL responses
+- Format lists with bullet points (*, -) or numbered lists (1., 2.)
+- Use headings (## for major sections, ### for sub-sections)
+- Format code examples with language-specific triple backticks
+- Use **bold** for emphasis on important points
+- Create tables with | and - when presenting tabular information
+- Use > for blockquotes when citing knowledge base or other sources
+
+## Quiz Structure Requirements (USE MARKDOWN)
+
+All quiz content MUST be formatted using proper markdown:
+- Each question should use proper heading syntax (## Question 1, etc.)
+- Answer options should use lettered lists (a., b., c., etc.)
+- Statement sections should use ### Statement headings
+- Use **bold** for important terms in statements
+- "FAIR ENOUGH" and "OFFER" sections should use ## headings
+- The THANK YOU section should use a # heading for prominence
 
 STRUCTURE - MUST INCLUDE:
 - EXACTLY 8 TOTAL QUESTIONS with multiple answer options

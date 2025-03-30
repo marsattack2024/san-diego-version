@@ -9,13 +9,13 @@
 export const spacing = {
     message: {
         // Space between adjacent messages
-        verticalGap: 'mb-3',
+        verticalGap: 'mb-2',
         // Space between elements inside message
         internalGap: 'gap-2',
         // Content gap within message bubbles
-        contentGap: 'gap-0.5',
+        contentGap: 'gap-1.5',
         // Base padding for message bubbles
-        padding: 'px-5 py-2.5',
+        padding: 'px-6 py-3.5',
         // Offset for action buttons relative to message
         actionOffset: 'mt-0 mb-0'
     },
@@ -42,15 +42,15 @@ export const typography = {
     // Line height for message content
     messageLineHeight: 'leading-relaxed',
     // Paragraph spacing in markdown content
-    paragraphSpacing: 'my-1',
+    paragraphSpacing: 'my-3',
     // List item spacing in markdown content
-    listItemSpacing: 'py-1',
+    listItemSpacing: 'py-1.5',
     // List container spacing in markdown content
-    listContainerSpacing: 'my-2',
-    // Strong text styling
-    strongText: 'font-bold',
+    listContainerSpacing: 'my-3',
+    // Strong text styling - enhanced for better visibility
+    strongText: 'font-extrabold text-primary',
     // Base message text size
-    messageText: 'text-lg'
+    messageText: 'text-md'
 };
 
 /**
@@ -62,9 +62,9 @@ export const ui = {
     // Message content container styling
     messageContainer: 'w-full mx-auto max-w-3xl px-4 md:px-6',
     // User message bubble styling
-    userMessage: 'bg-black text-white rounded-xl shadow-sm px-6 py-3 mr-2',
+    userMessage: 'bg-black text-white rounded-xl shadow-sm px-6 py-2 mr-2',
     // Assistant message bubble styling
-    assistantMessage: 'rounded-xl px-6 py-3',
+    assistantMessage: 'rounded-xl px-6 py-2',
     // Custom scrollbar styling
     scrollbar: 'scrollbar-thin custom-scrollbar'
 };
@@ -74,11 +74,11 @@ export const ui = {
  */
 export const markdown = {
     // Base markdown container styling
-    container: 'prose-base max-w-none prose-p:my-1 prose-p:leading-relaxed',
+    container: 'prose-base max-w-none prose-p:my-3 prose-p:leading-relaxed',
     // List styling overrides
-    lists: 'prose-li:my-1 prose-ol:my-2 prose-ul:my-2',
+    lists: 'prose-li:my-1.5 prose-ol:my-3 prose-ul:my-3',
     // Heading styling overrides
-    headings: 'prose-headings:my-2 prose-headings:font-bold',
+    headings: 'prose-headings:my-3 prose-headings:font-bold',
     // Code styling overrides
     code: 'prose-code:px-1.5 prose-code:py-0.5 prose-code:text-sm',
 };

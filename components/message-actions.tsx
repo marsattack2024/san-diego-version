@@ -20,6 +20,7 @@ export interface MessageActionsProps {
   isReadonly?: boolean;
   content?: string;
   vote?: Vote;
+  role?: 'user' | 'assistant';
 }
 
 function PureMessageActions({
@@ -29,6 +30,7 @@ function PureMessageActions({
   isReadonly,
   content,
   vote,
+  role
 }: MessageActionsProps) {
   const [copied, setCopied] = useState(false);
   const [pending, setPending] = useState(false);
@@ -74,8 +76,13 @@ function PureMessageActions({
 
   if (isLoading) return null;
 
+  // Keep bottom spacing logic but remove any top margin that might be added
+  const spacingClass = role === 'assistant'
+    ? 'mb-8 -mt-1' // Assistant: large bottom margin before next user message and negative top margin to get closer
+    : 'mb-2 -mt-1'; // User: small bottom margin before assistant response and negative top margin to get closer
+
   return (
-    <div className={styles.messageActions}>
+    <div className={cn(styles.messageActions, spacingClass)}>
       <TooltipProvider>
         <div className="flex items-center gap-1.5">
           <Tooltip>

@@ -32,7 +32,7 @@ const components: Partial<Components> = {
   },
   strong: ({ node, children, ...props }) => {
     return (
-      <span className="font-semibold" {...props}>
+      <span className="font-extrabold text-primary" {...props}>
         {children}
       </span>
     );
@@ -154,7 +154,7 @@ const NonMemoizedMarkdown = ({ children, className }: { children: string; classN
     <div className={cn(
       'prose dark:prose-invert max-w-none',
       'prose-headings:font-semibold prose-headings:text-foreground',
-      'prose-strong:font-semibold',
+      'prose-strong:font-extrabold prose-strong:text-primary',
       'prose-p:leading-normal prose-p:my-1.5',
       'prose-li:my-0.5',
       'prose-code:bg-muted prose-code:text-foreground prose-code:rounded prose-code:px-1 prose-code:py-0.5 prose-code:text-sm',

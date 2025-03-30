@@ -467,9 +467,9 @@ export class ChatEngine {
             // Add Deep Search information to user messages so it's accessible in the context
             const systemPrompt = this.config.systemPrompt || 'You are a helpful AI assistant.';
 
-            // Create system message with feature flags explicitly included
+            // Create system message with feature flags explicitly included but in a way that doesn't bury markdown formatting
             const dsEnabled = this.config.body?.deepSearchEnabled ? 'deepSearchEnabled' : 'deepSearchDisabled';
-            let systemContent = `${systemPrompt}\n\nFeature flags: ${dsEnabled}`;
+            let systemContent = `${systemPrompt}\n\n### FEATURE FLAGS:\n${dsEnabled}\n\n### REMINDER: USE MARKDOWN FORMATTING\nUse proper markdown syntax for all responses including lists, headings, code blocks, bold text, and tables as specified in the Formatting Instructions.`;
 
             const systemMessage: CoreMessage = {
                 role: 'system',
@@ -520,7 +520,7 @@ export class ChatEngine {
             const result = await streamText({
                 model: openai(this.config.model || 'gpt-4o'),
                 messages: [...context.previousMessages || [], ...context.messages],
-                system: `${this.config.systemPrompt}\n\nIMPORTANT INSTRUCTION: When a user message contains a URL (in any format including https://example.com or just example.com), you MUST use the scrapeWebContent tool to retrieve and analyze the content before responding. Never attempt to guess the content of a URL without scraping it first. For example, if asked to summarize a blog post at a URL, first use scrapeWebContent to get the full content, then provide your summary based on the actual content.`,
+                system: `${this.config.systemPrompt}\n\n### IMPORTANT INSTRUCTIONS:\n1. When a user message contains a URL (in any format including https://example.com or just example.com), use the scrapeWebContent tool to retrieve and analyze the content before responding.\n2. Never attempt to guess the content of a URL without scraping it first.\n3. ALWAYS use proper markdown formatting in your responses as specified in the Formatting Instructions section.\n\nExample: If asked to summarize a blog post at a URL, first use scrapeWebContent to get the full content, then provide your markdown-formatted summary based on the actual content.`,
                 tools: this.config.tools,
                 temperature: this.config.temperature,
                 maxTokens: this.config.maxTokens,
@@ -1179,14 +1179,15 @@ export class ChatEngine {
      */
     private extractToolsUsed(text: string): Record<string, any> | undefined {
         try {
-            // Look for the tools and resources section
-            const toolsSection = text.match(/--- Tools and Resources Used ---\s*([\s\S]*?)(?:\n\n|$)/);
+            // Look for the markdown-formatted resources section
+            // Match both plain text and markdown formatted resources sections
+            const toolsSection = text.match(/---\s*(?:\*\*Resources used:?\*\*|Resources used:?)\s*([\s\S]*?)(?:---|\n\n|$)/i);
 
             if (toolsSection && toolsSection[1]) {
                 return {
                     tools: toolsSection[1]
                         .split('\n')
-                        .filter(line => line.trim().startsWith('-'))
+                        .filter(line => line.trim().startsWith('-') || line.trim().startsWith('*'))
                         .map(line => line.trim())
                 };
             }

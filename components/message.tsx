@@ -211,7 +211,7 @@ const PurePreviewMessage = ({
             )}
 
             {!isReadonly && message.role === 'assistant' && (
-              <div className={spacing.message.actionOffset}>
+              <div className="mt-0">
                 <MessageActions
                   key={`action-${message.id}`}
                   chatId={chatId}
@@ -220,12 +220,13 @@ const PurePreviewMessage = ({
                   vote={vote}
                   isLoading={isLoading}
                   isReadonly={isReadonly}
+                  role="assistant"
                 />
               </div>
             )}
 
             {!isReadonly && message.role === 'user' && (
-              <div className={spacing.message.actionOffset}>
+              <div className="flex justify-end mt-0">
                 <MessageActions
                   key={`action-${message.id}`}
                   chatId={chatId}
@@ -233,6 +234,7 @@ const PurePreviewMessage = ({
                   content={message.content as string}
                   isLoading={isLoading}
                   isReadonly={true}  // Force readonly to hide voting buttons for user messages
+                  role="user"
                 />
               </div>
             )}

@@ -375,3 +375,13 @@ const ListFooter = () => {
 ```
 
 By following this guide, you can maintain a consistent spacing system that's easier to edit in the future. Always verify your changes visually and use browser developer tools to confirm the actual rendered dimensions match your expectations.
+
+## Formatting Instructions
+
+- Use proper markdown syntax for all responses
+- Format lists with bullet points (*, -) or numbered lists (1., 2.)
+- Use headings (## for major sections, ### for sub-sections)
+- Format code examples with ```language and ``` (triple backticks)
+- Use **bold** for emphasis on important points
+- Create tables with | and - when presenting tabular information
+- Use > for blockquotes when citing knowledge base or other sources

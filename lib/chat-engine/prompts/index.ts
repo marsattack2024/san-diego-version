@@ -66,13 +66,14 @@ export function buildSystemPromptWithDeepSearch(agentType: AgentType, deepSearch
 
   // Add attribution format section
   const attributionSection = `### ATTRIBUTION FORMAT:\n\n` +
-    `At the end of your response, you MUST include a section that ACCURATELY states which resources you used ` +
-    `(Knowledge Base, Web Scraper, or Deep Search). Format this section as:\n\n` +
+    `At the end of your response, include a section that ACCURATELY states which resources you used ` +
+    `(Knowledge Base, Web Scraper, or Deep Search). Format this section using markdown:\n\n` +
     `---\n` +
-    `Resources used: [list ONLY the resources you ACTUALLY used]\n` +
-    `[If Deep Search was used: Brief summary of key information retrieved with source attribution]\n` +
+    `**Resources used:** [list ONLY the resources you ACTUALLY used]\n` +
+    `${deepSearchEnabled ? '> *If Deep Search was used:* Brief summary of key information retrieved with source attribution*' : ''}\n` +
     `---\n\n` +
-    `IMPORTANT: If you did not use ANY tools, you MUST state "Resources used: None" - do NOT falsely claim to have used a resource.`;
+    `IMPORTANT: If you did not use ANY tools, state "**Resources used:** None" - do NOT falsely claim to have used a resource.\n\n` +
+    `Remember to use proper markdown formatting in ALL parts of your response as specified in the Formatting Instructions.`;
 
   // Combine all sections following AI SDK system prompt patterns
   return `${withToolDescription}\n\n${deepsearchInstructions}\n\n${attributionSection}`;
@@ -124,6 +125,9 @@ export function enhancePromptWithToolResults(
       enhancedPrompt += `\n\n### ${key.toUpperCase()}:\n${value}`;
     }
   }
+
+  // Add reminder about markdown formatting
+  enhancedPrompt += `\n\n### REMINDER:\nAlways use proper markdown formatting in your response as specified in the Formatting Instructions section.`;
 
   return enhancedPrompt;
 }
