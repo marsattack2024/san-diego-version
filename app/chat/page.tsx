@@ -1,11 +1,12 @@
 'use client';
 
-import { Chat } from '@/components/chat';
-import { useChatStore } from '@/stores/chat-store';
-import { useEffect, useState, useCallback } from 'react';
-import { clientLogger } from '@/lib/logger/client-logger';
 import { useRouter } from 'next/navigation';
+import { useEffect, useState, useCallback } from 'react';
+import { useChatStore } from '@/stores/chat-store';
 import { historyService } from '@/lib/api/history-service';
+import { Chat } from '@/components/chat';
+import { Chat as ChatType } from '@/lib/db/schema';
+import { clientLogger } from '@/lib/logger/client-logger';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,6 +31,7 @@ export default function ChatPage() {
     // If store is already known to be hydrated, we're ready
     if (storeHydrated) {
       setIsStoreReady(true);
+      console.debug('[ChatStore] Store already hydrated');
       return;
     }
 
@@ -38,8 +40,8 @@ export default function ChatPage() {
     const timer = setTimeout(() => {
       storeHydrated = true;
       setIsStoreReady(true);
-      log.debug('Chat store hydration check completed');
-    }, 100);
+      log.debug('[ChatStore] Hydration check completed');
+    }, 150); // Increased from 100ms to give more time for hydration
 
     return () => clearTimeout(timer);
   }, []);
@@ -48,8 +50,17 @@ export default function ChatPage() {
   const fetchHistory = useCallback(async () => {
     try {
       setHistoryLoading(true);
-      const data = await historyService.fetchHistory();
-      setHistory(data);
+      // Use data-only refresh to avoid navigation race conditions
+      await useChatStore.getState().refreshHistoryData();
+      // Get latest history from store for rendering
+      const historyData = Object.values(useChatStore.getState().conversations).map(conv => ({
+        id: conv.id,
+        title: conv.title || '',
+        createdAt: conv.createdAt,
+        updatedAt: conv.updatedAt,
+        userId: conv.userId || ''
+      } as ChatType));
+      setHistory(historyData);
     } catch (error) {
       log.error('Error fetching history:', error);
     } finally {
@@ -59,8 +70,14 @@ export default function ChatPage() {
 
   // Fetch history on component mount
   useEffect(() => {
+    // Only fetch if store is hydrated
+    if (!isStoreReady) {
+      log.debug('Waiting for store hydration before fetching history');
+      return;
+    }
+
     fetchHistory();
-  }, [fetchHistory]);
+  }, [fetchHistory, isStoreReady]);
 
   // Check for a newChat parameter which forces creation of a new chat
   useEffect(() => {

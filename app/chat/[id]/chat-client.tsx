@@ -36,7 +36,7 @@ export function ChatClient({ chatId }: ChatClientProps) {
       isStoreHydratedGlobal.value = true;
       setIsStoreHydrated(true);
       log.debug('Chat store hydration check completed');
-    }, 100);
+    }, 150); // Increased from 100ms to give more time for hydration
 
     return () => clearTimeout(timer);
   }, []);
@@ -44,7 +44,10 @@ export function ChatClient({ chatId }: ChatClientProps) {
   // Fetch the chat messages from the API
   useEffect(() => {
     // Wait for store hydration before fetching
-    if (!isStoreHydrated) return;
+    if (!isStoreHydrated) {
+      log.debug('Waiting for store hydration before fetching messages');
+      return;
+    }
 
     // Prevent infinite loop by only fetching once per chat ID
     if (hasFetchedMessages || !chatId) return;

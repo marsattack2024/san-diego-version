@@ -66,6 +66,9 @@ interface ChatState {
   syncConversationsFromHistory: (historyData: Chat[]) => void;
   updateConversationTitle: (id: string, title: string) => void;
   removeConversationOptimistic: (id: string) => void;
+
+  // Refresh history data without changing current conversation ID
+  refreshHistoryData: () => Promise<void>;
 }
 
 // Custom storage with debug logging
@@ -623,6 +626,44 @@ export const useChatStore = create<ChatState>()(
       isAnySearchInProgress: () => {
         // Now checks both history loading and deep search
         return get().isDeepSearchInProgress || get().isLoadingHistory;
+      },
+
+      // Refresh history data without changing current conversation ID
+      refreshHistoryData: async () => {
+        const currentId = get().currentConversationId;
+        const { isLoadingHistory } = get();
+
+        // Skip if already loading
+        if (isLoadingHistory) {
+          console.debug('[ChatStore] Skipping history refresh - already in progress');
+          return;
+        }
+
+        console.debug('[ChatStore] Refreshing history data without navigation');
+        set({ isLoadingHistory: true, historyError: null });
+
+        try {
+          // Fetch history data
+          const data = await historyService.fetchHistory(true);
+
+          // Sync conversations without changing current ID
+          get().syncConversationsFromHistory(data);
+
+          // Preserve current conversation ID if it still exists in history
+          if (currentId && get().conversations[currentId]) {
+            set({ currentConversationId: currentId });
+          }
+
+          set({
+            lastHistoryFetch: Date.now(),
+            isLoadingHistory: false
+          });
+        } catch (error) {
+          set({
+            historyError: error instanceof Error ? error.message : String(error),
+            isLoadingHistory: false
+          });
+        }
       }
     }),
     {

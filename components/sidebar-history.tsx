@@ -294,14 +294,15 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
         // Only refresh if it's been more than 2 minutes since last fetch
         if (timeSinceLastFetch > 2 * 60 * 1000) {
           console.debug(`[SidebarHistory] Tab visible after ${Math.round(timeSinceLastFetch / 1000)}s, refreshing history`);
-          fetchHistory(false);
+          // Use data-only fetch that doesn't trigger navigation
+          useChatStore.getState().refreshHistoryData();
         }
       }
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [fetchHistory, lastHistoryFetch, user?.id]);
+  }, [lastHistoryFetch, user?.id]);
 
   // Set error message when store has errors
   useEffect(() => {

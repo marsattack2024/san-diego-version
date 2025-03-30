@@ -44,7 +44,11 @@ const messageComponents: Partial<Components> = {
     // Text formatting with proper bold styling
     strong: ({ node, children, ...props }) => {
         return (
-            <span className={`${typography.strongText} [&]:text-primary font-extrabold`} {...props}>
+            <span 
+                className="font-extrabold text-primary" 
+                style={{ color: 'hsl(var(--primary))', fontWeight: 800 }}
+                {...props}
+            >
                 {children}
             </span>
         );

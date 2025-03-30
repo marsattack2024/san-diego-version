@@ -201,7 +201,99 @@ export const useChatStore = create<ChatStoreState & ChatStoreActions>()(
 );
 ```
 
-### 3.2 Client Disconnect Handling
+### 3.2 SSR-Safe Storage Implementation
+
+To prevent common server-side rendering (SSR) issues with localStorage, we implemented an SSR-safe storage adapter for Zustand:
+
+```typescript
+// Custom storage with SSR safety and debug logging
+const createDebugStorage = (options?: { enabled?: boolean }): StateStorage => {
+  const isDebugEnabled = options?.enabled ?? process.env.NODE_ENV !== 'production';
+  
+  // Check if we're in a browser environment
+  const isBrowser = typeof window !== 'undefined';
+
+  return {
+    getItem: (name: string): string | null => {
+      // Return null during SSR to prevent hydration errors
+      if (!isBrowser) {
+        return null;
+      }
+      
+      const value = localStorage.getItem(name);
+      if (isDebugEnabled) {
+        console.debug(`[ChatStore] Loading from storage: ${name.substring(0, 20)}...`);
+      }
+      return value;
+    },
+    setItem: (name: string, value: string): void => {
+      // Do nothing during SSR
+      if (!isBrowser) {
+        return;
+      }
+      
+      if (isDebugEnabled) {
+        console.debug(`[ChatStore] Saving to storage: ${name.substring(0, 20)}...`);
+      }
+      localStorage.setItem(name, value);
+    },
+    removeItem: (name: string): void => {
+      // Do nothing during SSR
+      if (!isBrowser) {
+        return;
+      }
+      
+      if (isDebugEnabled) {
+        console.debug(`[ChatStore] Removing from storage: ${name.substring(0, 20)}...`);
+      }
+      localStorage.removeItem(name);
+    },
+  };
+};
+```
+
+We also added a hydration event handler to manage the store's hydration state:
+
+```typescript
+{
+  // ... other configuration
+  onRehydrateStorage: (state) => {
+    // Return handler that will be called when hydration is complete or fails
+    return (rehydratedState, error) => {
+      if (error) {
+        console.error('Error rehydrating chat store:', error);
+      } else {
+        console.debug('[ChatStore] Hydration complete');
+      }
+    };
+  },
+}
+```
+
+This implementation prevents common race conditions during SSR by:
+
+1. Safely checking for browser environment before accessing localStorage
+2. Providing meaningful fallbacks for server-side execution
+3. Tracking hydration state completion via callbacks
+4. Logging hydration events for debugging
+
+In the client components, we track hydration state to prevent routing decisions before the store is ready:
+
+```typescript
+// Track whether the store is hydrated
+const [isStoreReady, setIsStoreReady] = useState(storeHydrated);
+
+// Wait for hydration before making routing decisions
+useEffect(() => {
+  if (historyLoading || !isStoreReady) return;
+  
+  // Routing logic here
+}, [historyLoading, isStoreReady]);
+```
+
+This approach ensures the chat functionality works reliably in both server-side rendered and client-side rendered contexts.
+
+### 3.3 Client Disconnect Handling
 
 Implemented in both the chat engine core and route handler with Zustand store integration:
 

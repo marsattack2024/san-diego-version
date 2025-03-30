@@ -200,6 +200,177 @@ This implementation provides several key benefits:
    - Clear error handling patterns
    - Comprehensive documentation
 
+## SSR and Hydration Safety
+
+To prevent common hydration issues when using localStorage during server-side rendering (SSR), we've implemented:
+
+### 1. SSR-Safe Storage Adapter
+
+```typescript
+// Custom storage adapter with SSR safety
+const createDebugStorage = (options?: { enabled?: boolean }): StateStorage => {
+  const isDebugEnabled = options?.enabled ?? process.env.NODE_ENV !== 'production';
+  
+  // Check for browser environment before accessing localStorage
+  const isBrowser = typeof window !== 'undefined';
+
+  return {
+    getItem: (name: string): string | null => {
+      // Return null during SSR
+      if (!isBrowser) {
+        return null;
+      }
+      
+      // Only access localStorage in browser context
+      const value = localStorage.getItem(name);
+      // Debug logging...
+      return value;
+    },
+    // Similar safety checks for setItem and removeItem...
+  };
+};
+```
+
+### 2. Hydration State Tracking
+
+```typescript
+// In the Zustand store configuration
+{
+  // Standard configuration...
+  onRehydrateStorage: (state) => {
+    return (rehydratedState, error) => {
+      if (error) {
+        console.error('Error rehydrating chat store:', error);
+      } else {
+        console.debug('[ChatStore] Hydration complete');
+      }
+    };
+  }
+}
+
+// In client components
+// Global hydration state tracking
+let storeHydrated = false;
+
+// Component implementation
+function ChatComponent() {
+  // Local state to track hydration
+  const [isStoreReady, setIsStoreReady] = useState(storeHydrated);
+  
+  // Wait for hydration
+  useEffect(() => {
+    if (storeHydrated) {
+      setIsStoreReady(true);
+      return;
+    }
+    
+    // Set timeout to allow hydration to complete
+    const timer = setTimeout(() => {
+      storeHydrated = true;
+      setIsStoreReady(true);
+    }, 100);
+    
+    return () => clearTimeout(timer);
+  }, []);
+  
+  // Hold rendering until hydration completes
+  if (!isStoreReady) {
+    return <LoadingState />;
+  }
+  
+  // Main component rendering...
+}
+```
+
+### 3. Race Condition Prevention
+
+- Components wait for both API data loading and store hydration before making routing decisions
+- Loading states shown while the store is hydrating
+- Global hydration state tracked to avoid repetitive checks
+- Timeouts implemented to ensure hydration completes even if callbacks fail
+
+These improvements prevent common SSR issues like:
+- "localStorage is not defined" errors
+- Hydration mismatches between server and client renders
+- Pages redirecting before state is fully available
+- UI flickering due to state changes during hydration
+
 ## Conclusion
 
 The chat state synchronization system successfully addresses synchronization issues between chat creation, title generation, and sidebar updates while establishing a robust and maintainable architecture. The centralized Zustand store with optimistic updates provides an excellent foundation for future features.
+
+## Navigation and Refresh Patterns
+
+To prevent race conditions between concurrent components that might trigger navigation:
+
+### 1. Separate Data Fetching from Navigation
+
+When refreshing data (especially on `visibilitychange` events), we use the `refreshHistoryData` method instead of `fetchHistory`. The key differences:
+
+```typescript
+// Regular fetchHistory - can change navigation state
+fetchHistory: async (forceRefresh = false) => {
+  // Fetch data and potentially update currentConversationId
+  // ...
+}
+
+// Data-only refresh - preserves navigation state
+refreshHistoryData: async () => {
+  // Save current conversation ID
+  const currentId = get().currentConversationId;
+  
+  // Fetch data
+  const data = await historyService.fetchHistory(true);
+  
+  // Sync data
+  get().syncConversationsFromHistory(data);
+  
+  // Preserve navigation state
+  if (currentId && get().conversations[currentId]) {
+    set({ currentConversationId: currentId });
+  }
+}
+```
+
+### 2. Hydration-Aware Components
+
+Components that make navigation decisions must wait for Zustand store hydration to complete:
+
+```typescript
+// Global hydration tracking
+const isStoreHydratedGlobal = { value: false };
+
+// In component
+const [isStoreHydrated, setIsStoreHydrated] = useState(false);
+
+// Wait for hydration
+useEffect(() => {
+  if (isStoreHydratedGlobal.value) {
+    setIsStoreHydrated(true);
+    return;
+  }
+  
+  const timer = setTimeout(() => {
+    isStoreHydratedGlobal.value = true;
+    setIsStoreHydrated(true);
+  }, 150); // Give time for hydration
+  
+  return () => clearTimeout(timer);
+}, []);
+
+// Only make navigation decisions after hydration
+useEffect(() => {
+  if (!isStoreHydrated) {
+    return; // Wait for hydration
+  }
+  
+  // Navigation logic...
+}, [isStoreHydrated, /* other dependencies */]);
+```
+
+### 3. Consistent Navigation Patterns
+
+- **Explicit Navigation**: Use the `setCurrentConversation` action to change the current chat
+- **Read-Only Refreshes**: Use `refreshHistoryData` for background data updates
+- **Hydration Checks**: Wait for store hydration before making routing decisions
+- **Preserving Context**: Always preserve user context during background updates

@@ -129,6 +129,12 @@ html, body {
   }
 }
 
+/* Fix for bold text in markdown - must be important to override message text colors */
+strong, b {
+  color: hsl(var(--primary)) !important;
+  font-weight: 800 !important;
+}
+
 @layer utilities {
   .text-balance {
     text-wrap: balance;
