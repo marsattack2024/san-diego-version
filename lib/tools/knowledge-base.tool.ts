@@ -10,7 +10,8 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { findSimilarDocumentsOptimized } from '@/lib/services/vector/document-retrieval';
-import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { LOG_CATEGORIES, OPERATION_TYPES } from '@/lib/logger/constants';
+import { THRESHOLDS } from '@/lib/logger/edge-logger';
 
 // Define tool parameters schema using Zod
 const knowledgeBaseSchema = z.object({
@@ -42,15 +43,18 @@ export function createKnowledgeBaseTool(options: KnowledgeBaseToolOptions = {}) 
         parameters: knowledgeBaseSchema,
         execute: async ({ query }, { toolCallId }) => {
             try {
+                const ragOperationId = `rag-${Date.now().toString(36)}`;
+                const startTime = Date.now();
+
                 // Log the start of the knowledge base search
                 edgeLogger.info('Knowledge base search started', {
                     category: LOG_CATEGORIES.TOOLS,
-                    operation: operationName,
+                    operation: OPERATION_TYPES.RAG_SEARCH,
+                    operationId: ragOperationId,
                     toolCallId,
-                    query
+                    queryLength: query.length,
+                    queryPreview: query.substring(0, 20) + (query.length > 20 ? '...' : '')
                 });
-
-                const startTime = Date.now();
 
                 // Use the existing vector search function
                 const result = await findSimilarDocumentsOptimized(query, {
@@ -61,15 +65,24 @@ export function createKnowledgeBaseTool(options: KnowledgeBaseToolOptions = {}) 
 
                 // Duration in milliseconds
                 const durationMs = Date.now() - startTime;
+                const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
+                const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
 
                 // Process and format results
                 if (!result || !result.documents || result.documents.length === 0) {
+                    // Log completion with no results
                     edgeLogger.info('Knowledge base search completed with no results', {
                         category: LOG_CATEGORIES.TOOLS,
-                        operation: operationName,
+                        operation: OPERATION_TYPES.RAG_SEARCH,
+                        operationId: ragOperationId,
                         toolCallId,
                         durationMs,
-                        query
+                        queryLength: query.length,
+                        resultsCount: 0,
+                        slow: isSlow,
+                        important: isImportant,
+                        status: 'no_matches',
+                        fromCache: result?.metrics?.fromCache || false
                     });
 
                     return {
@@ -92,18 +105,70 @@ export function createKnowledgeBaseTool(options: KnowledgeBaseToolOptions = {}) 
                     })
                     .join('\n---\n\n');
 
-                // Log completion details
-                edgeLogger.info('Knowledge base search completed', {
-                    category: LOG_CATEGORIES.TOOLS,
-                    operation: operationName,
-                    toolCallId,
-                    documentCount: documents.length,
-                    averageSimilarity: metrics.averageSimilarity,
-                    fromCache: metrics.fromCache,
-                    retrievalTimeMs: metrics.retrievalTimeMs,
-                    totalDurationMs: durationMs,
-                    query
-                });
+                // Calculate additional metrics for logging
+                const documentIds = documents.map(doc => doc.id || 'unknown').slice(0, 5); // First 5 document IDs
+                const topSimilarityScore = documents.length > 0 ? documents[0].similarity || 0 : 0;
+                const avgSimilarityScore = documents.length > 0
+                    ? documents.reduce((sum, doc) => sum + (doc.similarity || 0), 0) / documents.length
+                    : 0;
+                const similarityRange = documents.length > 0
+                    ? `${(documents[documents.length - 1].similarity || 0).toFixed(3)}-${(documents[0].similarity || 0).toFixed(3)}`
+                    : 'n/a';
+
+                // Calculate content length for all results
+                const contentLength = documents.reduce((sum, doc) => {
+                    const content = typeof doc.content === 'string' ? doc.content : String(doc.content);
+                    return sum + content.length;
+                }, 0);
+
+                // Extract metadata types
+                const metadataTypes = [...new Set(documents
+                    .map(doc => doc.metadata?.type || 'unknown'))];
+
+                // Log completion details with enhanced metrics
+                if (isSlow) {
+                    edgeLogger.warn('Knowledge base search completed', {
+                        category: LOG_CATEGORIES.TOOLS,
+                        operation: OPERATION_TYPES.RAG_SEARCH,
+                        operationId: ragOperationId,
+                        toolCallId,
+                        durationMs,
+                        resultsCount: documents.length,
+                        documentIds,
+                        topSimilarityScore,
+                        avgSimilarityScore,
+                        similarityRange,
+                        contentLength,
+                        metadataTypes,
+                        fromCache: metrics.fromCache,
+                        retrievalTimeMs: metrics.retrievalTimeMs,
+                        slow: isSlow,
+                        important: isImportant,
+                        status: "completed",
+                        queryLength: query.length
+                    });
+                } else {
+                    edgeLogger.info('Knowledge base search completed', {
+                        category: LOG_CATEGORIES.TOOLS,
+                        operation: OPERATION_TYPES.RAG_SEARCH,
+                        operationId: ragOperationId,
+                        toolCallId,
+                        durationMs,
+                        resultsCount: documents.length,
+                        documentIds,
+                        topSimilarityScore,
+                        avgSimilarityScore,
+                        similarityRange,
+                        contentLength,
+                        metadataTypes,
+                        fromCache: metrics.fromCache,
+                        retrievalTimeMs: metrics.retrievalTimeMs,
+                        slow: isSlow,
+                        important: isImportant,
+                        status: "completed",
+                        queryLength: query.length
+                    });
+                }
 
                 // Return formatted results
                 return {
@@ -115,7 +180,11 @@ export function createKnowledgeBaseTool(options: KnowledgeBaseToolOptions = {}) 
                     })),
                     meta: {
                         count: documents.length,
-                        fromCache: metrics.fromCache
+                        fromCache: metrics.fromCache,
+                        // Include enhanced metrics for potential UI usage
+                        topSimilarityScore,
+                        avgSimilarityScore,
+                        retrievalTimeMs: metrics.retrievalTimeMs
                     }
                 };
             } catch (error) {
@@ -124,10 +193,12 @@ export function createKnowledgeBaseTool(options: KnowledgeBaseToolOptions = {}) 
 
                 edgeLogger.error('Knowledge base search failed', {
                     category: LOG_CATEGORIES.TOOLS,
-                    operation: operationName,
+                    operation: OPERATION_TYPES.RAG_SEARCH,
                     toolCallId,
-                    query,
-                    error: errorMessage
+                    queryLength: query.length,
+                    queryPreview: query.substring(0, 50) + (query.length > 50 ? '...' : ''),
+                    error: errorMessage,
+                    important: true
                 });
 
                 // Return error information

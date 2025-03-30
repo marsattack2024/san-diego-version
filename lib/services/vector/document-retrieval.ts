@@ -105,13 +105,20 @@ export async function findSimilarDocumentsOptimized(
     const ragOperationId = `rag-${Date.now().toString(36)}`;
     const startTime = performance.now();
     const tenantId = options.tenantId || 'global';
+    const limit = options.limit || 5;
+    const similarityThreshold = options.similarityThreshold || 0.7;
 
     // Log the start of the RAG operation with cache check
     edgeLogger.info('Starting RAG operation with cache check', {
+        category: LOG_CATEGORIES.TOOLS,
         operation: OPERATION_TYPES.RAG_SEARCH,
         ragOperationId,
         queryLength: queryText.length,
-        queryPreview: queryText.substring(0, 20) + '...'
+        queryPreview: queryText.substring(0, 20) + '...',
+        limit,
+        similarityThreshold,
+        metadataFilterApplied: !!options.metadataFilter,
+        sessionId: options.sessionId
     });
 
     try {
@@ -119,26 +126,59 @@ export async function findSimilarDocumentsOptimized(
         const cachedResults = await cacheService.getRagResults<{
             documents: RetrievedDocument[],
             metrics: DocumentSearchMetrics
-        }>(queryText, { 
-            tenantId, 
+        }>(queryText, {
+            tenantId,
             metadataFilter: options.metadataFilter,
-            limit: options.limit 
+            limit: options.limit
         });
 
         // Log cache check attempt
         edgeLogger.debug('RAG cache check completed', {
+            category: LOG_CATEGORIES.TOOLS,
             operation: 'rag_cache_check',
             ragOperationId,
             cacheHit: !!cachedResults
         });
 
         if (cachedResults) {
-            edgeLogger.info('Using cached RAG results', {
-                operation: OPERATION_TYPES.RAG_SEARCH,
-                ragOperationId,
-                documentCount: cachedResults.documents.length,
-                source: 'cache'
-            });
+            const durationMs = Math.round(performance.now() - startTime);
+            const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
+            const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
+
+            // Add more metrics when using cached results
+            const documentIds = cachedResults.documents.map(doc => doc.id || 'unknown').slice(0, 5);
+            const topSimilarityScore = cachedResults.documents.length > 0 ?
+                cachedResults.documents[0].similarity || 0 : 0;
+
+            if (isSlow) {
+                edgeLogger.warn('Using cached RAG results', {
+                    category: LOG_CATEGORIES.TOOLS,
+                    operation: OPERATION_TYPES.RAG_SEARCH,
+                    ragOperationId,
+                    documentCount: cachedResults.documents.length,
+                    documentIds,
+                    topSimilarityScore,
+                    source: 'cache',
+                    durationMs,
+                    slow: true,
+                    important: isImportant,
+                    status: 'completed_from_cache'
+                });
+            } else {
+                edgeLogger.info('Using cached RAG results', {
+                    category: LOG_CATEGORIES.TOOLS,
+                    operation: OPERATION_TYPES.RAG_SEARCH,
+                    ragOperationId,
+                    documentCount: cachedResults.documents.length,
+                    documentIds,
+                    topSimilarityScore,
+                    source: 'cache',
+                    durationMs,
+                    slow: false,
+                    important: false,
+                    status: 'completed_from_cache'
+                });
+            }
 
             cacheStats.hits++;
             // Add fromCache flag for transparency
@@ -156,9 +196,18 @@ export async function findSimilarDocumentsOptimized(
         // No valid cache hit, perform the search
         const documents = await findSimilarDocuments(queryText, options);
         const retrievalTimeMs = Math.round(performance.now() - startTime);
+        const durationMs = retrievalTimeMs; // Total duration so far
 
         // Calculate metrics
         const metrics = calculateSearchMetrics(documents, retrievalTimeMs);
+
+        // Calculate additional metrics for logging
+        const documentIds = documents.map(doc => doc.id || 'unknown').slice(0, 5);
+        const topSimilarityScore = documents.length > 0 ? documents[0].similarity || 0 : 0;
+        const avgSimilarityScore = metrics.averageSimilarity;
+        const similarityRange = documents.length > 0
+            ? `${metrics.lowestSimilarity.toFixed(3)}-${metrics.highestSimilarity.toFixed(3)}`
+            : 'n/a';
 
         // Create result object
         const result = { documents, metrics };
@@ -170,24 +219,60 @@ export async function findSimilarDocumentsOptimized(
             limit: options.limit
         });
 
-        edgeLogger.info('RAG search completed', {
-            operation: OPERATION_TYPES.RAG_SEARCH,
-            ragOperationId,
-            documentCount: documents.length,
-            retrievalTimeMs,
-            source: 'search'
-        });
+        const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
+        const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
+
+        if (isSlow) {
+            edgeLogger.warn('RAG search completed', {
+                category: LOG_CATEGORIES.TOOLS,
+                operation: OPERATION_TYPES.RAG_SEARCH,
+                ragOperationId,
+                documentCount: documents.length,
+                documentIds,
+                topSimilarityScore,
+                avgSimilarityScore,
+                similarityRange,
+                retrievalTimeMs,
+                durationMs,
+                source: 'search',
+                slow: true,
+                important: isImportant,
+                status: 'completed'
+            });
+        } else {
+            edgeLogger.info('RAG search completed', {
+                category: LOG_CATEGORIES.TOOLS,
+                operation: OPERATION_TYPES.RAG_SEARCH,
+                ragOperationId,
+                documentCount: documents.length,
+                documentIds,
+                topSimilarityScore,
+                avgSimilarityScore,
+                similarityRange,
+                retrievalTimeMs,
+                durationMs,
+                source: 'search',
+                slow: false,
+                important: false,
+                status: 'completed'
+            });
+        }
 
         return result;
     } catch (error) {
         const retrievalTimeMs = Math.round(performance.now() - startTime);
+        const isTimeout = retrievalTimeMs > THRESHOLDS.RAG_TIMEOUT;
 
         edgeLogger.error('RAG search failed', {
+            category: LOG_CATEGORIES.TOOLS,
             operation: OPERATION_TYPES.RAG_SEARCH,
             ragOperationId,
             error: error instanceof Error ? error.message : String(error),
             queryLength: queryText.length,
-            retrievalTimeMs
+            queryPreview: queryText.substring(0, 50) + (queryText.length > 50 ? '...' : ''),
+            retrievalTimeMs,
+            important: true,
+            status: isTimeout ? 'timeout' : 'error'
         });
 
         // Return empty result on error
@@ -209,7 +294,7 @@ export async function findSimilarDocumentsOptimized(
 export async function cacheScrapedContent(tenantId: string, url: string, content: string): Promise<void> {
     try {
         await cacheService.setScrapedContent(url, content);
-        
+
         edgeLogger.debug('Cached scraped content', {
             category: LOG_CATEGORIES.TOOLS,
             tenantId,

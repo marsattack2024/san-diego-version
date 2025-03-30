@@ -7,7 +7,8 @@
  */
 
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { LOG_CATEGORIES, OPERATION_TYPES } from '@/lib/logger/constants';
+import { THRESHOLDS } from '@/lib/logger/edge-logger';
 import { createClient } from '@supabase/supabase-js';
 import { supabase } from '@/lib/db';
 
@@ -287,16 +288,25 @@ class VectorSearchService {
             // Log search request
             edgeLogger.info('Semantic search started', {
                 category: LOG_CATEGORIES.TOOLS,
-                operation: 'semantic_search_started',
+                operation: OPERATION_TYPES.VECTOR_SEARCH,
                 operationId,
                 queryLength: query.length,
+                queryPreview: query.length > 20 ? query.substring(0, 20) + '...' : query,
                 collection,
-                limit
+                limit,
+                minSimilarity: minScore,
+                filterApplied: !!options.filters,
+                metadataFilters: options.filters ? Object.keys(options.filters) : []
             });
 
             // Generate embedding for the query
             const embeddingResult = await this.generateEmbeddings([query]);
             const queryEmbedding = embeddingResult.embeddings[0];
+
+            // Calculate query embedding norm for metrics
+            const queryEmbeddingNorm = Math.sqrt(
+                queryEmbedding.reduce((sum, val) => sum + val * val, 0)
+            );
 
             // Build Supabase query
             const { data: documents, error } = await supabase
@@ -312,6 +322,8 @@ class VectorSearchService {
             }
 
             const duration = Date.now() - startTime;
+            const isSlow = duration > THRESHOLDS.SLOW_OPERATION;
+            const isImportant = duration > THRESHOLDS.IMPORTANT_THRESHOLD;
 
             // Transform results to SearchResult format
             const results: SearchResult[] = documents.map((doc: any) => ({
@@ -321,30 +333,74 @@ class VectorSearchService {
                 similarity: doc.similarity
             }));
 
-            // Log successful search
-            edgeLogger.info('Semantic search completed', {
-                category: LOG_CATEGORIES.TOOLS,
-                operation: 'semantic_search_success',
-                operationId,
-                durationMs: duration,
-                resultCount: results.length,
-                collection
-            });
+            // Calculate similarity distribution for enhanced logging
+            const similarityDistribution = results.length > 0
+                ? {
+                    max: results[0].similarity,
+                    min: results[results.length - 1].similarity,
+                    p75: results.length >= 4 ? results[Math.floor(results.length * 0.25)].similarity : null,
+                    p50: results.length >= 2 ? results[Math.floor(results.length * 0.5)].similarity : null,
+                    p25: results.length >= 4 ? results[Math.floor(results.length * 0.75)].similarity : null,
+                }
+                : {};
+
+            // Calculate average similarity
+            const avgSimilarity = results.length > 0
+                ? results.reduce((sum, doc) => sum + doc.similarity, 0) / results.length
+                : 0;
+
+            // Log successful search with enhanced metrics
+            if (isSlow) {
+                edgeLogger.warn('Semantic search completed', {
+                    category: LOG_CATEGORIES.TOOLS,
+                    operation: OPERATION_TYPES.VECTOR_SEARCH,
+                    operationId,
+                    durationMs: duration,
+                    resultCount: results.length,
+                    collection,
+                    vectorDimensions: queryEmbedding.length,
+                    queryEmbeddingNorm,
+                    similarityDistribution,
+                    avgSimilarity,
+                    slow: true,
+                    important: isImportant,
+                    status: 'completed'
+                });
+            } else {
+                edgeLogger.info('Semantic search completed', {
+                    category: LOG_CATEGORIES.TOOLS,
+                    operation: OPERATION_TYPES.VECTOR_SEARCH,
+                    operationId,
+                    durationMs: duration,
+                    resultCount: results.length,
+                    collection,
+                    vectorDimensions: queryEmbedding.length,
+                    queryEmbeddingNorm,
+                    similarityDistribution,
+                    avgSimilarity,
+                    slow: false,
+                    important: false,
+                    status: 'completed'
+                });
+            }
 
             return results;
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             const duration = Date.now() - startTime;
 
-            // Log error
+            // Log error with enhanced context
             edgeLogger.error('Semantic search failed', {
                 category: LOG_CATEGORIES.TOOLS,
-                operation: 'semantic_search_error',
+                operation: OPERATION_TYPES.VECTOR_SEARCH,
                 operationId,
                 errorMessage,
                 durationMs: duration,
                 collection,
-                query
+                queryLength: query.length,
+                queryPreview: query.length > 50 ? query.substring(0, 50) + '...' : query,
+                important: true,
+                status: 'error'
             });
 
             throw error;
