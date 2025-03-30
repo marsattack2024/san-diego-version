@@ -1,16 +1,17 @@
 'use client';
 
+import React, { useEffect, useRef, useState } from 'react';
+import type { ChatRequestOptions, Message } from 'ai';
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
-import { Message } from 'ai';
-import { Vote } from '@/lib/db/schema';
-import { useScrollStore } from '@/stores/scroll-store';
 import { PreviewMessage, ThinkingMessage } from './message';
-import { useRef, useEffect, useState } from 'react';
+import type { Vote } from '@/lib/db/schema';
 import { useChatStore } from '@/stores/chat-store';
-import { ChatRequestOptions } from 'ai';
 import { Overview } from './overview';
+import { virtuosoConfig, BOTTOM_THRESHOLD } from '@/lib/virtualization-config'; // Import the virtuoso config
+import { styles } from '@/lib/tokens'; // Import styles from token system
+import { CustomScrollArea } from './ui/custom-scroll-area'; // Import custom scroll area
 
-interface VirtualizedChatProps {
+export interface VirtualizedChatProps {
   chatId: string;
   messages: Array<Message>;
   isLoading: boolean;
@@ -38,66 +39,61 @@ export function VirtualizedChat({
   isArtifactVisible
 }: VirtualizedChatProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
-  const {
-    shouldAutoScroll,
-    isStreaming,
-    handleScrollPositionChange,
-    resetOnUserMessage,
-    setIsStreaming
-  } = useScrollStore();
 
+  // Deep search state
   const deepSearchEnabled = useChatStore(state => state.getDeepSearchEnabled());
   const isDeepSearchInProgress = useChatStore(state => state.isDeepSearchInProgress);
 
-  // State to show thinking indicator immediately, even before server responds
+  // Thinking state - local implementation
   const [localThinking, setLocalThinking] = useState(false);
 
-  // Update streaming state based on isLoading prop
-  useEffect(() => {
-    setIsStreaming(isLoading);
+  // Auto-scroll state
+  const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
+  const [isStreaming, setIsStreaming] = useState(false);
 
+  // Monitor streaming state based on isLoading
+  useEffect(() => {
     if (isLoading) {
+      setIsStreaming(true);
       setLocalThinking(true);
     } else {
-      // Add a slight delay before hiding the indicator to prevent flickering
-      const timer = setTimeout(() => setLocalThinking(false), 300);
-      return () => clearTimeout(timer);
+      // Add a small delay to ensure smooth auto-scrolling completes
+      const timeout = setTimeout(() => {
+        setIsStreaming(false);
+        setLocalThinking(false);
+      }, 1000);
+      return () => clearTimeout(timeout);
     }
-  }, [isLoading, setIsStreaming]);
+  }, [isLoading]);
 
-  // Reset scroll behavior when user sends a message
+  // Handle scroll position changes
+  const handleScrollPositionChange = (isAtBottom: boolean) => {
+    setShouldAutoScroll(isAtBottom);
+  };
+
+  // Reset thinking state when user sends message
+  const resetOnUserMessage = () => {
+    setLocalThinking(false);
+  };
+
+  // Handle user message effects
   useEffect(() => {
     if (hasUserSentMessage) {
       resetOnUserMessage();
       // Programmatically scroll to bottom when user sends a message
       if (virtuosoRef.current && messages.length > 0) {
-        // Force an immediate scroll to bottom first
         virtuosoRef.current.scrollToIndex({
           index: messages.length - 1,
-          behavior: 'auto',
-          align: 'end'
+          behavior: 'smooth',
+          align: 'end',
         });
-        
-        // Then do a smooth scroll for better visual effect
-        setTimeout(() => {
-          if (virtuosoRef.current) {
-            virtuosoRef.current.scrollToIndex({
-              index: messages.length - 1,
-              behavior: 'smooth',
-              align: 'end'
-            });
-          }
-        }, 50);
       }
     }
-  }, [hasUserSentMessage, messages.length, resetOnUserMessage]);
+  }, [hasUserSentMessage, messages.length]);
 
   // Show thinking indicator for user messages or when explicitly loading
   const shouldShowThinking = (localThinking || isLoading || isDeepSearchInProgress) &&
     (messages.length === 0 || messages[messages.length - 1]?.role === 'user');
-
-  // Lower threshold to make bottom detection more precise
-  const BOTTOM_THRESHOLD = 20; // pixels
 
   // Create empty state if no messages
   const EmptyPlaceholder = () => {
@@ -109,9 +105,9 @@ export function VirtualizedChat({
     if (!shouldShowThinking) return null;
 
     return (
-      <div className="flex flex-col gap-3 px-4 md:px-6 w-full max-w-2xl mx-auto mb-0">
+      <div className="flex flex-col gap-3 px-4 md:px-6 w-full max-w-3xl mx-auto mb-3">
         <div className="flex justify-end">
-          <div className="flex items-center gap-3 bg-background rounded-xl p-3 shadow-sm">
+          <div className="flex items-center gap-3 bg-card rounded-xl p-3 shadow-sm border border-border/30 animate-pulse-subtle">
             <ThinkingMessage
               message={deepSearchEnabled ? "Thinking & searching" : "Thinking"}
               className="animate-pulse"
@@ -123,29 +119,23 @@ export function VirtualizedChat({
   };
 
   return (
-    <>
+    <CustomScrollArea className="h-full w-full flex-1 flex flex-col" hideScrollbar>
       <EmptyPlaceholder />
 
       {messages.length > 0 && (
         <Virtuoso
           ref={virtuosoRef}
-          style={{ height: '100%', width: '100%' }}
+          style={{ ...virtuosoConfig.style, flex: 1 }}
           data={messages}
-          className="flex flex-col min-w-0 gap-6 flex-1 overflow-y-auto h-full pt-4 pb-0"
-          // Ensure complete scroll to bottom on initial load
+          className={styles.virtualizedChat}
           initialTopMostItemIndex={messages.length - 1}
           alignToBottom={true}
-          defaultItemHeight={100}
-          // Use smooth follow output for better scrolling experience
-          followOutput="smooth"
-          followOutputSmooth={true}
-          // This is the key handler that updates our scroll state
+          defaultItemHeight={virtuosoConfig.defaultItemHeight}
+          followOutput={shouldAutoScroll ? 'auto' : false}
           atBottomStateChange={(isAtBottom) => {
             handleScrollPositionChange(isAtBottom);
           }}
-          // Add custom threshold to consider "near bottom" 
           atBottomThreshold={BOTTOM_THRESHOLD}
-          // Make auto-scrolling smoother during streaming
           overscan={shouldAutoScroll && isStreaming ? 200 : 0}
           itemContent={(index, message) => (
             <PreviewMessage
@@ -165,6 +155,6 @@ export function VirtualizedChat({
           }}
         />
       )}
-    </>
+    </CustomScrollArea>
   );
 }

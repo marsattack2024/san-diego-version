@@ -3,7 +3,7 @@
 import type { ChatRequestOptions, Message } from 'ai';
 import cx from 'classnames';
 import { AnimatePresence, motion } from 'framer-motion';
-import { memo, useState } from 'react';
+import { memo, useState, useMemo } from 'react';
 import type { Vote } from '@/lib/db/schema';
 import { PencilEditIcon, SparklesIcon, MagnifyingGlassIcon } from './icons';
 import { Markdown } from './markdown';
@@ -16,6 +16,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { MessageEditor } from './message-editor';
 import { MessageReasoning } from './message-reasoning';
 import { RagResultCount } from './rag-result-count';
+import { MessageMarkdown } from './message-markdown';
+import { styles, spacing } from '@/lib/tokens';
 
 const PurePreviewMessage = ({
   chatId,
@@ -42,21 +44,27 @@ const PurePreviewMessage = ({
 }) => {
   const [mode, setMode] = useState<'view' | 'edit'>('view');
 
+  // Transform any JSON RAG results from message into more readable format
+  const formattedContent = useMemo(() => {
+    if (!message.content) return '';
+    return message.content;
+  }, [message.content]);
+
   return (
     <AnimatePresence>
       <motion.div
         data-testid={`message-${message.role}-${index}`}
-        className="w-full mx-auto max-w-3xl px-4 group/message mb-4"
+        className={styles.messageContainer}
         initial={{ y: 5, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         data-role={message.role}
       >
         <div
           className={cn(
-            'flex gap-4 w-full group-data-[role=user]/message:ml-auto group-data-[role=user]/message:max-w-xl',
+            styles.messageFlex,
             {
               'w-full': mode === 'edit',
-              'group-data-[role=user]/message:w-fit': mode !== 'edit',
+              'group-data-[role=user]/message:w-fit group-data-[role=user]/message:ml-auto': mode !== 'edit',
             },
           )}
         >
@@ -68,7 +76,7 @@ const PurePreviewMessage = ({
             </div>
           )}
 
-          <div className="flex flex-col gap-3 w-full">
+          <div className={cn("flex flex-col w-full", spacing.message.internalGap)}>
             {message.experimental_attachments && (
               <div
                 data-testid={`message-attachments-${index}`}
@@ -91,7 +99,7 @@ const PurePreviewMessage = ({
             )}
 
             {(message.content || message.reasoning) && mode === 'view' && (
-              <div className="flex flex-row gap-2 items-start">
+              <div className="flex flex-row gap-1 items-start">
                 {message.role === 'user' && !isReadonly && (
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -111,28 +119,32 @@ const PurePreviewMessage = ({
                 )}
 
                 <div
-                  className={cn('flex flex-col gap-3', {
-                    'bg-primary text-primary-foreground px-3 py-2 rounded-xl':
-                      message.role === 'user',
-                  })}
+                  className={cn(
+                    'flex flex-col',
+                    spacing.message.contentGap,
+                    message.role === 'user'
+                      ? styles.messageContent.user
+                      : styles.messageContent.assistant
+                  )}
                 >
-                  {/* Remove the marker from the content before rendering */}
-                  <Markdown>
-                    {typeof message.content === 'string'
-                      ? message.content.replace(/<DeepSearchMarker count="[^"]+" \/>/, '')
-                      : message.content as string}
-                  </Markdown>
+                  <MessageMarkdown
+                    className={cn({
+                      'text-foreground': message.role === 'assistant',
+                      'text-white': message.role === 'user',
+                      'opacity-90': isLoading && message.role === 'assistant',
+                    })}
+                  >
+                    {formattedContent}
+                  </MessageMarkdown>
 
-                  {/* Show thinking indicator for streaming assistant messages */}
                   {message.role === 'assistant' && isLoading && (
                     <ThinkingMessage
                       className="ml-1 inline-flex animate-pulse"
                     />
                   )}
 
-                  {/* Display RAG results only */}
                   {message.role === 'assistant' && (
-                    <div className="flex items-center flex-wrap gap-2 mt-2">
+                    <div className="flex items-center flex-wrap gap-2">
                       {/* DeepSearch badge removed */}
                     </div>
                   )}
@@ -155,7 +167,7 @@ const PurePreviewMessage = ({
             )}
 
             {message.toolInvocations && message.toolInvocations.length > 0 && (
-              <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-2">
                 {message.toolInvocations.map((toolInvocation) => {
                   const { toolName, toolCallId, state, args } = toolInvocation;
 
@@ -169,7 +181,7 @@ const PurePreviewMessage = ({
                         ) : toolName === 'deepSearch' || toolName === 'webScraper' || toolName === 'detectAndScrapeUrls' ||
                           toolName === 'comprehensiveScraper' ||
                           toolName.includes('Scraper') || toolName.includes('Search') ? (
-                          null // Don't show any UI for these tools
+                          null
                         ) : (
                           <div className="text-xs text-muted-foreground">
                             Tool used: {toolName}
@@ -199,13 +211,17 @@ const PurePreviewMessage = ({
             )}
 
             {!isReadonly && (
-              <MessageActions
-                key={`action-${message.id}`}
-                chatId={chatId}
-                message={message}
-                vote={vote}
-                isLoading={isLoading}
-              />
+              <div className={spacing.message.actionOffset}>
+                <MessageActions
+                  key={`action-${message.id}`}
+                  chatId={chatId}
+                  messageId={message.id}
+                  content={message.content as string}
+                  vote={vote}
+                  isLoading={isLoading}
+                  isReadonly={isReadonly}
+                />
+              </div>
             )}
           </div>
         </div>
@@ -243,13 +259,37 @@ export function ThinkingMessage({
 }) {
   return (
     <div className={cn('flex items-center gap-2 text-xs text-muted-foreground', className)}>
-      <SparklesIcon size={14} />
-      {message && <span className="mr-1">{message}</span>}
+      <div className="text-primary/80">
+        <SparklesIcon size={14} />
+      </div>
+      {message && <span className="font-medium">{message}</span>}
       <span className="flex items-center gap-0.5">
-        <span className="thinking-dot thinking-dot-1">.</span>
-        <span className="thinking-dot thinking-dot-2">.</span>
-        <span className="thinking-dot thinking-dot-3">.</span>
+        <span className="thinking-dot thinking-dot-1 size-1.5 rounded-full bg-current"></span>
+        <span className="thinking-dot thinking-dot-2 size-1.5 rounded-full bg-current"></span>
+        <span className="thinking-dot thinking-dot-3 size-1.5 rounded-full bg-current"></span>
       </span>
+    </div>
+  );
+}
+
+// User message
+export function UserMessage({ message }: { message: string }) {
+  return (
+    <div className={styles.messageContent.user}>
+      <MessageMarkdown className="text-white">
+        {message}
+      </MessageMarkdown>
+    </div>
+  );
+}
+
+// Assistant message
+export function AssistantMessage({ message }: { message: string }) {
+  return (
+    <div className={styles.messageContent.assistant}>
+      <MessageMarkdown className="text-foreground">
+        {message}
+      </MessageMarkdown>
     </div>
   );
 }

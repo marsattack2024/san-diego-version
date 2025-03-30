@@ -5,6 +5,12 @@
 
 /* purgecss end ignore */
 
+/* Ensure full document height */
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
 @font-face {
   font-family: 'geist';
   src: local('Inter'), local('Segoe UI'), local('Helvetica Neue'), local('Arial'), sans-serif;
@@ -322,5 +328,39 @@
   .streaming-message {
     opacity: 0.8;
     font-style: italic;
+  }
+
+  /* Subtle pulse animation for loading states */
+  .animate-pulse-subtle {
+    animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  
+  @keyframes pulse-subtle {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.8; }
+  }
+
+  /* Custom scrollbar styles */
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.2);
+    border-radius: 9999px;
+  }
+
+  .dark .custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.2);
   }
 }

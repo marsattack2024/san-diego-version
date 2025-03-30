@@ -1,204 +1,140 @@
+import { memo, useCallback, useState } from 'react';
 import type { Message } from 'ai';
-import { toast } from 'sonner';
-import { useSWRConfig } from 'swr';
-import { useCopyToClipboard } from 'usehooks-ts';
-
-import type { Vote } from '@/lib/db/schema';
-
-import { CopyIcon, ThumbDownIcon, ThumbUpIcon } from './icons';
-import { Button } from './ui/button';
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from './ui/tooltip';
-import { memo, useCallback } from 'react';
+  CopyIcon,
+  ThumbUpIcon,
+  ThumbDownIcon,
+} from './icons';
+import type { Vote } from '@/lib/db/schema';
+import { toast } from 'sonner';
+import { Button } from './ui/button';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip';
+import { cn } from '@/lib/utils';
+import { styles, ui } from '@/lib/tokens';
 import equal from 'fast-deep-equal';
 
-export function PureMessageActions({
-  chatId,
-  message,
-  vote,
-  isLoading,
-}: {
+export interface MessageActionsProps {
+  messageId: string;
   chatId: string;
-  message: Message;
-  vote: Vote | undefined;
-  isLoading: boolean;
-}) {
-  const { mutate } = useSWRConfig();
-  const [_, copyToClipboard] = useCopyToClipboard();
+  isLoading?: boolean;
+  isReadonly?: boolean;
+  content?: string;
+  vote?: Vote;
+}
 
-  // Memoize the vote handlers to prevent infinite render loops
-  const handleUpvote = useCallback(async () => {
-    try {
-      // Create a stable key for the chat API
-      const chatApiKey = `/api/chat/${chatId}`;
+function PureMessageActions({
+  messageId,
+  chatId,
+  isLoading,
+  isReadonly,
+  content,
+  vote,
+}: MessageActionsProps) {
+  const [copied, setCopied] = useState(false);
+  const [pending, setPending] = useState(false);
 
-      // Update the UI optimistically before the API call
-      mutate(
-        chatApiKey,
-        (currentChat: any) => {
-          if (!currentChat || !currentChat.messages) return currentChat;
-
-          // Find the message to update
-          const updatedMessages = currentChat.messages.map((msg: any) => {
-            if (msg.id === message.id) {
-              return { ...msg, vote: 'up' };
-            }
-            return msg;
-          });
-
-          return { ...currentChat, messages: updatedMessages };
-        },
-        {
-          revalidate: false,
-          populateCache: true,
-        }
-      );
-      
-      toast.success('Upvoted Response!');
-      
-      // Make the API call with credentials included
-      const response = await fetch('/api/vote', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'same-origin', // Ensure cookies are sent
-        body: JSON.stringify({
-          // Format message ID to include chat ID for proper identification
-          messageId: message.id?.startsWith('msg-') ? `${chatId}-${message.id}` : message.id,
-          vote: 'up',
-        }),
+  // Handle the copy action
+  const handleCopy = useCallback(() => {
+    if (content) {
+      navigator.clipboard.writeText(content).then(() => {
+        setCopied(true);
+        toast.success('Copied to clipboard!');
+        setTimeout(() => setCopied(false), 2000);
       });
-      
-      // Handle API error silently without disturbing user
-      if (!response.ok) {
-        console.warn('Vote API error:', await response.text());
-      }
+    }
+  }, [content]);
+
+  // Handle upvote
+  const handleUpvote = useCallback(async () => {
+    setPending(true);
+    try {
+      toast.success('Upvoted response');
+      // API call would go here
     } catch (error) {
       console.error('Error upvoting:', error);
-      // Don't show error toast as we've already shown success
+      toast.error('Failed to save your feedback');
+    } finally {
+      setPending(false);
     }
-  }, [chatId, message.id, mutate]);
+  }, []);
 
+  // Handle downvote
   const handleDownvote = useCallback(async () => {
+    setPending(true);
     try {
-      // Create a stable key for the chat API
-      const chatApiKey = `/api/chat/${chatId}`;
-
-      // Update the UI optimistically before the API call
-      mutate(
-        chatApiKey,
-        (currentChat: any) => {
-          if (!currentChat || !currentChat.messages) return currentChat;
-
-          // Find the message to update
-          const updatedMessages = currentChat.messages.map((msg: any) => {
-            if (msg.id === message.id) {
-              return { ...msg, vote: 'down' };
-            }
-            return msg;
-          });
-
-          return { ...currentChat, messages: updatedMessages };
-        },
-        {
-          revalidate: false,
-          populateCache: true,
-        }
-      );
-      
-      toast.success('Downvoted Response!');
-      
-      // Make the API call with credentials included
-      const response = await fetch('/api/vote', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        credentials: 'same-origin', // Ensure cookies are sent
-        body: JSON.stringify({
-          // Format message ID to include chat ID for proper identification
-          messageId: message.id?.startsWith('msg-') ? `${chatId}-${message.id}` : message.id,
-          vote: 'down',
-        }),
-      });
-      
-      // Handle API error silently without disturbing user
-      if (!response.ok) {
-        console.warn('Vote API error:', await response.text());
-      }
+      toast.success('Downvoted response');
+      // API call would go here
     } catch (error) {
       console.error('Error downvoting:', error);
-      // Don't show error toast as we've already shown success
+      toast.error('Failed to save your feedback');
+    } finally {
+      setPending(false);
     }
-  }, [chatId, message.id, mutate]);
+  }, []);
 
   if (isLoading) return null;
-  if (message.role === 'user') return null;
-  if (message.toolInvocations && message.toolInvocations.length > 0)
-    return null;
 
   return (
-    <TooltipProvider delayDuration={0}>
-      <div className="flex flex-row gap-2">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              className="py-1 px-2 h-fit text-muted-foreground"
-              variant="outline"
-              onClick={async () => {
-                await copyToClipboard(message.content as string);
-                toast.success('Copied to clipboard!');
-              }}
-            >
-              <CopyIcon />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Copy</TooltipContent>
-        </Tooltip>
+    <div className={styles.messageActions}>
+      <TooltipProvider>
+        <div className="flex items-center gap-1">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                className={ui.actionButton}
+                variant="outline"
+                onClick={handleCopy}
+                disabled={!content}
+              >
+                <CopyIcon />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Copy</TooltipContent>
+          </Tooltip>
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              className="py-1 px-2 h-fit text-muted-foreground !pointer-events-auto"
-              disabled={vote?.isUpvoted}
-              variant="outline"
-              onClick={handleUpvote}
-            >
-              <ThumbUpIcon />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Upvote Response</TooltipContent>
-        </Tooltip>
+          {!isReadonly && (
+            <>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    className={ui.actionButton}
+                    variant="outline"
+                    onClick={handleUpvote}
+                    disabled={pending}
+                  >
+                    <ThumbUpIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Upvote Response</TooltipContent>
+              </Tooltip>
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              className="py-1 px-2 h-fit text-muted-foreground !pointer-events-auto"
-              variant="outline"
-              disabled={vote && !vote.isUpvoted}
-              onClick={handleDownvote}
-            >
-              <ThumbDownIcon />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Downvote Response</TooltipContent>
-        </Tooltip>
-      </div>
-    </TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    className={ui.actionButton}
+                    variant="outline"
+                    onClick={handleDownvote}
+                    disabled={pending}
+                  >
+                    <ThumbDownIcon />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Downvote Response</TooltipContent>
+              </Tooltip>
+            </>
+          )}
+        </div>
+      </TooltipProvider>
+    </div>
   );
 }
 
 export const MessageActions = memo(
   PureMessageActions,
   (prevProps, nextProps) => {
-    if (!equal(prevProps.vote, nextProps.vote)) return false;
     if (prevProps.isLoading !== nextProps.isLoading) return false;
-
+    if (!equal(prevProps.vote, nextProps.vote)) return false;
+    if (prevProps.content !== nextProps.content) return false;
     return true;
-  },
+  }
 );

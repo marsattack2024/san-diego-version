@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import { useChatStore } from '@/stores/chat-store';
 import { TooltipProvider } from './ui/tooltip';
 import { historyService } from '@/lib/api/history-service';
+import { ScrollArea } from './ui/scroll-area';
 
 export function Chat({
   id,
@@ -30,12 +31,8 @@ export function Chat({
   // Track when user sends a message to control scrolling behavior
   const [hasUserSentMessage, setHasUserSentMessage] = useState(false);
 
-  // Add ref for scroll container
-  const chatContainerRef = useRef<HTMLDivElement>(null);
+  // Add ref for form input container
   const inputContainerRef = useRef<HTMLDivElement>(null);
-
-  // Removed redundant scroll handling
-  // The VirtualizedChat component now handles all scrolling
 
   // Update conversation metadata when agent changes
   useEffect(() => {
@@ -167,7 +164,7 @@ export function Chat({
 
       // Signal that user has sent a message - will trigger scroll to bottom
       setHasUserSentMessage(true);
-      
+
       // Submit directly to AI with the current input
       // The server will handle saving both the user message and assistant response
       await handleSubmit(event, chatRequestOptions);
@@ -183,7 +180,7 @@ export function Chat({
             [userMessage.id]: messageId
           }));
         }
-        
+
         // Reset the user message flag after a delay
         setTimeout(() => {
           setHasUserSentMessage(false);
@@ -258,8 +255,8 @@ export function Chat({
   // Display the messages with the correct layout
   return (
     <TooltipProvider delayDuration={0}>
-      <div className="flex flex-col bg-primary-foreground h-full pt-14 relative">
-        <div ref={chatContainerRef} className="flex-1 overflow-y-auto pb-4 md:px-8 lg:px-16 xl:px-24 scrollbar-thin">
+      <div className="flex flex-col bg-white h-full pt-14 relative">
+        <div className="flex-1 h-full">
           <VirtualizedChat
             chatId={id}
             isLoading={isLoading}
@@ -274,11 +271,11 @@ export function Chat({
         </div>
         <div
           ref={inputContainerRef}
-          className="sticky inset-x-0 bottom-0 z-10 w-full bg-gradient-to-t from-background via-background to-transparent pb-3 pt-1 md:pb-4"
+          className="sticky inset-x-0 bottom-0 z-10 w-full bg-gradient-to-t from-background via-background to-transparent pb-2 pt-0.5 md:pb-3"
         >
           <form
             onSubmit={handleSubmitWithSave}
-            className="mx-auto flex max-w-3xl flex-col gap-2 bg-background pt-0 pb-4 px-2 md:px-0"
+            className="mx-auto flex max-w-3xl flex-col gap-1 bg-background pt-0 pb-2 px-2 md:px-0"
           >
             {!isReadonly && (
               <MultimodalInput
