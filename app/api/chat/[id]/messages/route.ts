@@ -6,10 +6,10 @@ import type { Message } from 'ai';
 
 export async function GET(
     request: NextRequest,
-    { params }: { params: { chatId: string } }
+    { params }: { params: { id: string } }
 ): Promise<NextResponse> {
     try {
-        const chatId = params.chatId;
+        const chatId = params.id;
         const { searchParams } = new URL(request.url);
         const page = parseInt(searchParams.get('page') || '1');
         const pageSize = parseInt(searchParams.get('pageSize') || '20');

@@ -12,9 +12,10 @@ import { styles, typography, markdown } from '@/lib/tokens';
  */
 
 const messageComponents: Partial<Components> = {
-    // Code block component
+    // Code block component - handled separately to avoid paragraph nesting issues
     // @ts-expect-error
     code: CodeBlock,
+    // Remove pre tag rendering to avoid nesting issues
     pre: ({ children }) => <>{children}</>,
 
     // List components with tighter spacing
@@ -64,8 +65,20 @@ const messageComponents: Partial<Components> = {
         );
     },
 
-    // Paragraph with minimal spacing
+    // Paragraph with minimal spacing - make sure children don't contain block elements
     p: ({ node, children, ...props }) => {
+        // Check if this paragraph contains a <pre> or code block
+        const containsCodeBlock = React.Children.toArray(children).some(
+            child => typeof child === 'object' && React.isValidElement(child) &&
+                (child.type === CodeBlock || (child.props && child.props.node &&
+                    child.props.node.tagName === 'pre'))
+        );
+
+        // If it contains a code block, render without wrapping in a paragraph
+        if (containsCodeBlock) {
+            return <>{children}</>;
+        }
+
         return (
             <p className={`${typography.paragraphSpacing} ${typography.messageLineHeight}`} {...props}>
                 {children}
