@@ -75,9 +75,9 @@ function PureMessageActions({
   if (isLoading) return null;
 
   return (
-    <div className={styles.messageActions}>
+    <div className={cn(styles.messageActions, "pb-4 mb-1")}>
       <TooltipProvider>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1.5">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

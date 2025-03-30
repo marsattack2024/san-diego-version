@@ -17,7 +17,7 @@ export const spacing = {
         // Base padding for message bubbles
         padding: 'px-5 py-3',
         // Offset for action buttons relative to message
-        actionOffset: 'mt-1'
+        actionOffset: 'mt-2 mb-5'
     },
     chat: {
         // Padding for the entire chat container
@@ -58,13 +58,13 @@ export const typography = {
  */
 export const ui = {
     // Message action button styling
-    actionButton: 'py-1 px-2 h-fit',
+    actionButton: 'py-1.5 px-2.5 h-fit',
     // Message content container styling
     messageContainer: 'w-full mx-auto max-w-3xl px-4 md:px-6',
     // User message bubble styling
-    userMessage: 'bg-black text-white rounded-xl shadow-sm px-6 py-3 mr-2',
+    userMessage: 'bg-black text-white rounded-xl shadow-sm px-6 py-3 mr-2 mb-1',
     // Assistant message bubble styling
-    assistantMessage: 'rounded-xl px-6 py-3',
+    assistantMessage: 'rounded-xl px-6 py-3 mb-1',
     // Custom scrollbar styling
     scrollbar: 'scrollbar-thin custom-scrollbar'
 };

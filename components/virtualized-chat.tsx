@@ -185,7 +185,7 @@ export function VirtualizedChat({
     if (!shouldShowThinking) return null;
 
     return (
-      <div className="flex flex-col gap-3 px-4 md:px-6 w-full max-w-3xl mx-auto mb-3">
+      <div className="flex flex-col gap-3 px-4 md:px-6 w-full max-w-3xl mx-auto mb-6">
         <div className="flex justify-end">
           <div className="flex items-center gap-3 bg-card rounded-xl p-3 shadow-sm border border-border/30 animate-pulse-subtle">
             <ThinkingMessage
@@ -236,7 +236,7 @@ export function VirtualizedChat({
             flex: 1,
             height: '100%',
             minHeight: 'calc(100vh - 14rem)', // Add minimum height to ensure messages area is visible
-            paddingBottom: '120px' // Add padding at the bottom to ensure last message is fully visible
+            paddingBottom: '150px' // Increased padding at the bottom to ensure last message is fully visible
           } as React.CSSProperties}
           data={allMessages}
           className={styles.virtualizedChat}
