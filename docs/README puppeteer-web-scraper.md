@@ -1,377 +1,504 @@
-# Puppeteer Web Scraper & Redis Caching Implementation
+# Web Scraper Implementation
+
+This document outlines the web scraper functionality implemented in our application, which provides automated extraction of content from URLs shared by users or detected in conversations.
 
 ## Overview
 
-Our web scraper system extracts content from web pages using Puppeteer in a cloud-based function, with Redis caching to optimize performance. The system automatically detects URLs in user messages and enhances AI responses with relevant web content.
+The web scraper enhances our AI assistant by enabling it to dynamically extract and analyze content from websites that users reference. This capability allows the assistant to provide informed responses based on the specific content of websites rather than relying solely on its training data or knowledge base.
 
-## Components
+## Architecture
 
-### 1. Web Scraper Tool
+The web scraper follows a robust, layered architecture:
 
-The web scraper is implemented as a Vercel AI SDK tool:
+1. **Tool Interface Layer**: Implements the Vercel AI SDK Tool interface
+2. **Service Layer**: Abstracts Puppeteer-based web scraping functionality
+3. **Caching Layer**: Optimizes performance through Redis caching
+4. **URL Processing Layer**: Provides URL validation, normalization and extraction
+5. **Content Formatting Layer**: Formats extracted content for AI consumption
 
-- **Location**: `/lib/chat-engine/tools/web-scraper.ts`
-- **Features**:
-  - URL extraction from messages
-  - Configured as an AI SDK tool with compelling, precise description
-  - Works with the Puppeteer Service for actual scraping
-  - Handles multiple URLs (limited to 3 by default)
-  - Formats and sanitizes output for AI consumption
-  - Uses Redis caching for performance
-  
-### 2. URL Detection System
+### Component Diagram
 
-The URL detection system has been enhanced to handle a wide variety of URL formats:
+```
+┌───────────────────┐     ┌─────────────────────┐     ┌───────────────────┐
+│                   │     │                     │     │                   │
+│  Web Scraper      │────▶│  Puppeteer          │────▶│  External         │
+│     Tool          │     │   Service           │     │  Scraper API      │
+│                   │     │                     │     │                   │
+└───────────────────┘     └─────────────────────┘     └───────────────────┘
+         │                          │                         │
+         │                          │                         │
+         ▼                          ▼                         ▼
+┌───────────────────┐     ┌─────────────────────┐     ┌───────────────────┐
+│                   │     │                     │     │                   │
+│  URL Processing   │     │   Cache Service     │     │  Content Formatter│
+│                   │     │                     │     │                   │
+│                   │     │                     │     │                   │
+└───────────────────┘     └─────────────────────┘     └───────────────────┘
+```
 
-- **Location**: `/lib/utils/url-utils.ts`
-- **Features**:
-  - Comprehensive regex pattern for URL detection
-  - **NEW**: Enhanced naked domain detection (domains without http/https)
-  - **IMPROVED**: Support for common TLDs and international domains
-  - Filters out false positives (common abbreviations)
-  - Automatic protocol addition (adds https:// to naked domains)
-  - URL validation and sanitization for security
-
-### 3. Puppeteer Service
-
-The Puppeteer service handles the actual web scraping:
-
-- **Location**: `/lib/services/puppeteer.service.ts`
-- **Features**:
-  - Abstracts cloud function communication
-  - Formats and processes scraped content
-  - Integrates with caching layer
-  - Handles errors and timeouts
-  - **NEW**: Handles HTML content with intelligent parsing
-  - **NEW**: Automatically extracts key content from HTML pages
-
-## Architecture Components
+## Core Implementation
 
 ### 1. Web Scraper Tool
 
-The web scraper is implemented as a Vercel AI SDK tool:
+The Web Scraper Tool is defined in `lib/tools/web-scraper.tool.ts` using the Vercel AI SDK's tool pattern:
 
 ```typescript
-export const webScraperTool = tool({
-  description: 'CRITICAL: Use this tool IMMEDIATELY for ANY URL in the user message (including http://, https://, or just domain.com formats). This tool extracts text content from web pages, allowing you to summarize, analyze, or quote from the web page. This tool MUST be preferred over general search when the user provides a specific URL or asks to summarize a webpage.',
-  parameters: z.object({
-    url: z.string().describe('The URL to scrape content from')
-  }),
-  execute: async ({ url }) => {
-    // Sanitize and validate URL
-    const validUrl = validateAndSanitizeUrl(url);
-    
-    // Check cache first
-    const cachedContent = await getScrapedContentFromCache(validUrl);
-    if (cachedContent) {
-      return cachedContent;
-    }
-    
-    // Call the scraper service if no cache hit
-    const result = await puppeteerService.scrapeUrl(validUrl);
-    
-    // Cache the result for future use
-    await cacheScrapedContent(validUrl, result);
-    
-    return formatScrapedContent(result);
-  }
-});
+export const webScraperTool = createWebScraperTool();
+
+export function createWebScraperTool(options: WebScraperToolOptions = {}) {
+    const {
+        timeout = 10000, // Default timeout of 10 seconds
+        maxUrlsToProcess = 3, // Default max URLs to process
+        operationName = 'web_scraper'
+    } = options;
+
+    return tool({
+        description: 'CRITICAL: Use this tool IMMEDIATELY for ANY URL in the user message (including http://, https://, or just domain.com formats). This tool extracts text content from web pages, allowing you to summarize, analyze, or quote from the web page. This tool MUST be preferred over general search when the user provides a specific URL or asks to summarize a webpage. Example triggers: "summarize this website", "tell me about example.com", "extract info from https://site.com". The tool can process up to 3 URLs at once and will automatically cache results for faster future access.',
+        parameters: webScraperSchema,
+        execute: async ({ query, urls: specificUrls }, { toolCallId }) => {
+            try {
+                // Extract URLs from the query or use specified URLs
+                const urls = specificUrls || extractUrls(query);
+
+                if (!urls || urls.length === 0) {
+                    return {
+                        content: "No URLs were found to scrape in the provided message.",
+                        urls: []
+                    };
+                }
+
+                // Limit the number of URLs to process
+                const urlsToProcess = urls.slice(0, maxUrlsToProcess);
+
+                // Process each URL using the puppeteerService
+                const scrapedResults = await Promise.all(
+                    urlsToProcess.map(async (url) => {
+                        try {
+                            // Use the puppeteerService to scrape the URL
+                            const result = await puppeteerService.scrapeUrl(url);
+                            return {
+                                url,
+                                title: result.title || `Content from ${url}`,
+                                content: result.content,
+                                success: true
+                            };
+                        } catch (error) {
+                            // Handle errors for individual URLs
+                            return {
+                                url,
+                                title: `Failed to scrape ${url}`,
+                                content: `Could not retrieve content: ${error instanceof Error ? error.message : String(error)}`,
+                                success: false
+                            };
+                        }
+                    })
+                );
+
+                // Format the content for the AI
+                const formattedContent = scrapedResults
+                    .map(item => {
+                        const statusIndicator = item.success ? '✓' : '✗';
+                        return `## ${item.title} ${statusIndicator}\nURL: ${item.url}\n\n${item.content}`;
+                    })
+                    .join('\n\n---\n\n');
+
+                // Return formatted results
+                return {
+                    content: formattedContent,
+                    urlsProcessed: urlsToProcess,
+                    meta: {
+                        count: urlsToProcess.length,
+                        durationMs: Date.now() - startTime
+                    }
+                };
+            } catch (error) {
+                // Error handling with detailed logging
+                // ...
+            }
+        }
+    });
+}
 ```
 
 ### 2. Puppeteer Service
 
+The Puppeteer Service (`lib/services/puppeteer.service.ts`) handles web scraping operations:
+
 ```typescript
 class PuppeteerService {
-  async scrapeUrl(url: string): Promise<ScrapedContent> {
-    // Determine API endpoint based on environment
-    const endpoint = process.env.SCRAPER_ENDPOINT || 
-      'https://cloud-function-scraper.googleapis.com/scrape';
-    
-    // Call the Puppeteer scraper with timeout protection
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        url,
-        format: 'json' // Explicitly request JSON format
-      }),
-      signal: AbortSignal.timeout(15000) // 15-second timeout
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Scraping failed: ${response.status}`);
+    /**
+     * Scrape content from a URL using Puppeteer
+     * @param url URL to scrape
+     * @returns Scraped content
+     */
+    public async scrapeUrl(url: string): Promise<ScrapedContent> {
+        try {
+            // Validate URL
+            const sanitizedUrl = this.validateAndSanitizeUrl(url);
+            if (!sanitizedUrl) {
+                throw new Error('Invalid URL: ' + url);
+            }
+
+            // Check cache first
+            const cachedContent = await cacheService.getScrapedContent(sanitizedUrl);
+            if (cachedContent) {
+                // Handle both string and object responses from cache
+                let cachedResult: PuppeteerResponseData;
+                try {
+                    // If it's a string, parse it; if it's already an object, use it directly
+                    cachedResult = typeof cachedContent === 'string' 
+                        ? JSON.parse(cachedContent) as PuppeteerResponseData 
+                        : cachedContent as PuppeteerResponseData;
+                    
+                    return {
+                        content: this.formatContent(cachedResult),
+                        title: cachedResult.title || 'Untitled Page',
+                        url: sanitizedUrl,
+                        timestamp: Date.now()
+                    };
+                } catch (error) {
+                    // If parsing fails, log it but continue to fetch fresh content
+                }
+            }
+
+            // Call scraper
+            const result = await this.callPuppeteerScraper(sanitizedUrl);
+
+            // Cache result
+            await cacheService.setScrapedContent(sanitizedUrl, JSON.stringify(result));
+
+            // Format and return content
+            return {
+                content: this.formatContent(result),
+                title: result.title || 'Untitled Page',
+                url: sanitizedUrl,
+                timestamp: Date.now()
+            };
+        } catch (error) {
+            throw error;
+        }
     }
-    
-    const result = await response.json();
-    return this.processScrapedContent(result);
+
+    /**
+     * Call the Puppeteer scraper to extract content from a URL
+     */
+    private async callPuppeteerScraper(url: string): Promise<PuppeteerResponseData> {
+        // Make request to external Puppeteer service
+        const response = await fetch(SCRAPER_ENDPOINT, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': 'Mozilla/5.0 SanDiego/1.0',
+                'Accept': 'application/json, text/html'
+            },
+            body: JSON.stringify({ 
+                url,
+                format: 'json'
+            })
+        });
+
+        // Process response
+        // ...
+    }
+
+    /**
+     * Format scraped content for AI consumption
+     */
+    private formatContent(data: PuppeteerResponseData): string {
+        // Format text data into readable sections
+        let formattedContent = '';
+        
+        // Use content or text field depending on what's available
+        const textContent = data.content || data.text || '';
+        
+        if (!textContent) {
+            return 'No content was found on this page.';
+        }
+        
+        // Process content to enhance readability
+        // Extract and format headings, paragraphs, etc.
+        // ...
+        
+        // Add metadata if available
+        if (data.metadata && Object.keys(data.metadata).length > 0) {
+            formattedContent += '\n\n### Metadata\n';
+            for (const [key, value] of Object.entries(data.metadata)) {
+                if (value) {
+                    formattedContent += `**${key}**: ${value}\n`;
+                }
+            }
+        }
+        
+        return formattedContent;
+    }
+}
+
+// Export singleton instance
+export const puppeteerService = new PuppeteerService();
+```
+
+### 3. URL Processing
+
+The URL processing utilities (`lib/utils/url-utils.ts`) handle URL validation and extraction:
+
+```typescript
+/**
+ * Extracts URLs from text with improved detection
+ * @param text Text to extract URLs from
+ * @returns Array of extracted URLs
+ */
+export function extractUrls(
+    text: string,
+    options: {
+        shouldEnsureProtocol?: boolean,
+        shouldValidate?: boolean,
+        shouldLog?: boolean
+    } = {}
+): string[] {
+    const {
+        shouldEnsureProtocol = true,
+        shouldValidate = false,
+        shouldLog = true
+    } = options;
+
+    // First try the regex pattern
+    const matches = text.match(URL_REGEX) || [];
+    const result: string[] = [...matches];
+
+    // Then check for potential domain-like words that might have been missed
+    if (matches.length === 0) {
+        const words = text.split(/\s+/);
+        for (const word of words) {
+            // Advanced domain detection
+            // ...
+        }
+    }
+
+    // Process the extracted URLs
+    const processedUrls = result
+        .map(url => shouldEnsureProtocol ? ensureProtocol(url) : url)
+        .filter((url, index, self) => self.indexOf(url) === index) // Remove duplicates
+        .filter(url => !shouldValidate || validateAndSanitizeUrl(url, { logErrors: false }) !== null);
+
+    return processedUrls;
+}
+
+/**
+ * Validates and sanitizes a URL to ensure it's safe and well-formed
+ */
+export function validateAndSanitizeUrl(
+    url: string,
+    options: {
+        logErrors?: boolean,
+        additionalBannedDomains?: string[]
+    } = {}
+): string | null {
+    // Validation and sanitization logic
+    // ...
+}
+```
+
+### 4. Cache Integration
+
+The web scraper uses the Cache Service for performance optimization:
+
+```typescript
+// In lib/cache/cache-service.ts
+async getScrapedContent(url: string): Promise<string | null> {
+  // Normalize URL
+  const normalizedUrl = url.toLowerCase().trim();
+  const hashedUrl = await this.hashKey(normalizedUrl);
+  
+  return this.get<string>(this.generateKey(hashedUrl, CACHE_NAMESPACES.SCRAPER));
+}
+
+async setScrapedContent(url: string, content: string): Promise<void> {
+  // Normalize URL
+  const normalizedUrl = url.toLowerCase().trim();
+  const hashedUrl = await this.hashKey(normalizedUrl);
+  
+  return this.set<string>(
+    this.generateKey(hashedUrl, CACHE_NAMESPACES.SCRAPER),
+    content,
+    { ttl: CACHE_TTL.SCRAPER }
+  );
+}
+```
+
+The TTL for scraped content is defined in `lib/cache/constants.ts`:
+
+```typescript
+export const CACHE_TTL = {
+  // ...
+  SCRAPER: 12 * 60 * 60,  // 12 hours for web scraper content
+  // ...
+};
+```
+
+## Tool Registration
+
+The web scraper tool is registered in the tool registry:
+
+```typescript
+// In lib/tools/registry.tool.ts
+export function createToolSet(options: {
+  useKnowledgeBase?: boolean;
+  useWebScraper?: boolean;
+  useDeepSearch?: boolean;
+}): Record<string, Tool<any, any>> {
+  const {
+    useKnowledgeBase = true,
+    useWebScraper = true,
+    useDeepSearch = false
+  } = options;
+  
+  const toolSet: Record<string, Tool<any, any>> = {};
+  
+  // Add Web Scraper tool if enabled
+  if (useWebScraper) {
+    toolSet.webScraper = webScraperTool;
   }
   
-  private processScrapedContent(data: any): ScrapedContent {
-    // Extract and format the relevant content
-    return {
-      title: data.title || 'Untitled Page',
-      description: data.description || '',
-      content: data.content || '',
-      url: data.url
-    };
-  }
+  // Other tools...
+  
+  return toolSet;
 }
 ```
 
-### 3. Redis Caching Layer
+## Content Formatting
 
-The Redis caching implementation follows these best practices:
+The web scraper formats content for optimal AI consumption:
+
+1. **Content Cleaning**: Removes excess whitespace, script tags, and irrelevant content
+2. **Section Organization**: Preserves document structure with headings and paragraphs
+3. **Metadata Extraction**: Extracts and formats metadata like authors, dates, etc.
+4. **Length Management**: Truncates content to prevent token limits while preserving key information
+5. **Status Indication**: Clearly marks successful vs. failed scraping attempts
+
+Example formatted content:
+
+```
+## Example Website Title ✓
+URL: https://example.com
+
+### Main Content
+This is the main content from the website, formatted to preserve structure and readability. The content is organized into sections based on the original document structure.
+
+#### Section 1
+Content from section 1...
+
+#### Section 2
+Content from section 2...
+
+### Metadata
+**Author**: John Doe
+**Published**: 2023-03-15
+**Category**: Technology
+```
+
+## Error Handling
+
+The web scraper includes comprehensive error handling:
+
+1. **URL Validation**: Rejects invalid or prohibited URLs
+2. **Timeout Handling**: Manages timeouts for unresponsive websites
+3. **Content Processing Errors**: Handles issues with content extraction or formatting
+4. **Per-URL Error Isolation**: Processes multiple URLs independently so errors don't affect other URLs
+5. **Cache Fallbacks**: Uses cached content when available, preventing repeated errors
+6. **Graceful Degradation**: Returns useful partial results even when some URLs fail
+
+## Configuration Options
+
+The web scraper supports several configuration options:
 
 ```typescript
-// Cache key format
-const cacheKey = `scrape:${normalizedUrl}`;
-
-// Store content with TTL (6 hours)
-async function cacheScrapedContent(url: string, content: ScrapedContent): Promise<void> {
-  try {
-    const redis = Redis.fromEnv();
-    
-    // Ensure we're storing a serializable object
-    const cacheableContent = {
-      url: content.url,
-      title: content.title,
-      description: content.description || '',
-      content: content.content,
-      timestamp: Date.now()
-    };
-    
-    // Proper serialization
-    const jsonString = JSON.stringify(cacheableContent);
-    
-    // Store with 6-hour TTL
-    await redis.set(cacheKey, jsonString, { ex: 60 * 60 * 6 });
-    
-    edgeLogger.info('Stored scraped content in Redis cache', {
-      url,
-      contentLength: content.content.length,
-      jsonStringLength: jsonString.length,
-      ttl: 60 * 60 * 6
-    });
-  } catch (error) {
-    // Log error but continue execution
-    edgeLogger.error('Failed to cache scraped content', {
-      url,
-      error: error instanceof Error ? error.message : String(error)
-    });
-  }
+export interface WebScraperToolOptions {
+    timeout?: number;          // Maximum time to wait for scraping (ms)
+    maxUrlsToProcess?: number; // Maximum number of URLs to process
+    operationName?: string;    // Operation name for logging
 }
 ```
 
-## Recent Improvements
+## Security Features
 
-### 1. Enhanced HTML Content Processing
+The web scraper implements several security measures:
 
-We've added smart HTML content handling to improve readability:
+1. **URL Validation**: Verifies and sanitizes URLs before processing
+2. **Banned Domain List**: Maintains a list of prohibited domains:
+   ```typescript
+   export const BANNED_DOMAINS = ['localhost', '127.0.0.1', 'internal', '.local'];
+   ```
+3. **Content Sanitization**: Removes potentially harmful elements from scraped content
+4. **External Process Isolation**: Uses a separate service for actual scraping to isolate browser operations
+5. **Response Validation**: Validates and sanitizes responses before processing
 
-```typescript
-// Detect if content is HTML and process accordingly
-if (data.content.includes('<!DOCTYPE html>') || data.content.includes('<html')) {
-  // Extract title
-  const titleMatch = data.content.match(/<title[^>]*>([^<]+)<\/title>/i);
-  const title = titleMatch ? titleMatch[1].trim() : 'Untitled Page';
-  
-  // Extract meta description
-  const descriptionMatch = data.content.match(/<meta\s+name="description"\s+content="([^"]+)"/i);
-  const description = descriptionMatch ? descriptionMatch[1].trim() : '';
-  
-  // Extract main content using common content containers
-  // Look for article, main, or content divs
-  const contentElements = [
-    /<article[^>]*>([\s\S]*?)<\/article>/gi,
-    /<main[^>]*>([\s\S]*?)<\/main>/gi,
-    /<div[^>]*(?:class|id)="(?:content|main|post)[^"]*"[^>]*>([\s\S]*?)<\/div>/gi
-  ];
-  
-  // Clean and format the extracted content
-  const cleanedContent = extractedContent
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '');
-    
-  // Convert HTML to readable text
-  const plainText = convertHtmlToText(cleanedContent);
-  
-  return formatAsMarkdown(title, description, plainText, url);
-}
-```
+## Logging and Monitoring
 
-### 2. Content Type Handling
-
-Improved handling of different content types:
+The implementation includes detailed logging for monitoring and analytics:
 
 ```typescript
-// Check if response is JSON or HTML
-const contentType = response.headers.get('content-type') || '';
+// Log scraping start
+edgeLogger.info('Web scraping started', {
+    category: LOG_CATEGORIES.TOOLS,
+    operation: operationName,
+    toolCallId,
+    url: sanitizedUrl
+});
 
-// Handle different content types
-if (contentType.includes('application/json')) {
-  jsonData = JSON.parse(responseText);
-} else {
-  // Create a JSON structure from HTML content
-  jsonData = {
-    content: responseText,
-    title: extractTitle(responseText),
-    url: url
-  };
-}
-```
+// Log cache hits
+edgeLogger.info('Web scraping cache hit', {
+    category: LOG_CATEGORIES.TOOLS,
+    operation: 'web_scraping_cache_hit',
+    operationId,
+    url: sanitizedUrl
+});
 
-### 3. Response Format Standardization
-
-We now explicitly request JSON format from the Puppeteer service and handle any format it returns:
-
-```typescript
-// Request JSON format explicitly
-body: JSON.stringify({ 
-  url,
-  format: 'json' // Explicitly request JSON format
-})
-```
-
-### 4. Improved Tool Description
-
-The web scraper tool now has a more compelling and explicit description to ensure proper selection:
-
-```typescript
-description: 'CRITICAL: Use this tool IMMEDIATELY for ANY URL in the user message (including http://, https://, or just domain.com formats). This tool extracts text content from web pages, allowing you to summarize, analyze, or quote from the web page. This tool MUST be preferred over general search when the user provides a specific URL or asks to summarize a webpage.'
-```
-
-### 5. Enhanced System Prompt
-
-Added explicit directives to the system prompt to prioritize using the web scraper for URLs:
-
-```typescript
-system: `${systemPrompt}\n\nIMPORTANT INSTRUCTION: When a user message contains a URL (in any format including https://example.com or just example.com), you MUST use the scrapeWebContent tool to retrieve and analyze the content before responding. Never attempt to guess the content of a URL without scraping it first.`
-```
-
-### 6. Comprehensive Test Suite
-
-We've created a thorough test suite for the web scraper functionality:
-
-- **Location**: `/tests/unit/chat-engine/web-scraper.test.ts`
-- **Coverage**:
-  - URL extraction and detection
-  - Multiple URL handling
-  - Error handling and resilience
-  - Response formatting and processing
-  - Proper logging
-  - Edge cases and failure modes
-
-Example test for URL extraction:
-
-```typescript
-it('should extract URLs from the query', async () => {
-  // Execute the tool
-  await webScraperTool.execute({ query: sampleQuery }, { 
-    toolCallId: sampleToolCallId,
-    messages: [{ role: 'user', content: sampleQuery }]
-  });
-  
-  // Verify URL extraction was called
-  expect(extractUrls).toHaveBeenCalledWith(sampleQuery);
+// Log completion
+edgeLogger.info('Web scraping completed', {
+    category: LOG_CATEGORIES.TOOLS,
+    operation: operationName,
+    toolCallId,
+    urlCount: urlsToProcess.length,
+    successCount: scrapedResults.filter(r => r.success).length,
+    failureCount: scrapedResults.filter(r => !r.success).length,
+    durationMs,
+    query
 });
 ```
 
-## Error Resilience
+## Usage Patterns
 
-We've implemented multi-layered error handling for maximum resilience:
+### When to Use the Web Scraper
 
-### 1. Content Format Error Handling
+The AI is instructed to use the web scraper in these scenarios:
 
-The service now gracefully handles both JSON and non-JSON responses:
+1. **Explicit URL Mention**: When the user includes URLs in their message
+2. **Website Analysis Requests**: When asked to analyze or summarize a website
+3. **Information Extraction**: When asked to extract specific information from a website
+4. **Content Comparison**: When asked to compare information across multiple websites
+5. **Domain References**: When the user mentions a domain name (e.g., "example.com")
 
-```typescript
-try {
-  // Check if response is already JSON
-  if (contentType.includes('application/json')) {
-    jsonData = JSON.parse(responseText);
-  } else {
-    // Create structured data from non-JSON content
-    jsonData = createStructuredData(responseText, url);
-  }
-} catch (error) {
-  edgeLogger.error('Failed to parse response', {
-    category: LOG_CATEGORIES.TOOLS,
-    operation: 'parse_error',
-    contentType,
-    errorMessage: error.message
-  });
-  
-  // Fallback to simple structure with error message
-  jsonData = {
-    content: `Failed to parse content from ${url}: ${error.message}`,
-    title: `Error scraping ${url}`,
-    url: url
-  };
-}
-```
+### How the Web Scraper Is Used in Conversations
 
-### 2. HTTP Error Handling
+1. The user sends a message containing URLs or asks about a website
+2. The AI detects URLs either explicitly provided or from domain references in the text
+3. The web scraper tool processes the URLs (up to the configured limit)
+4. The tool returns formatted content from each URL
+5. The AI incorporates this information into its response
+6. The AI references the specific sources when using information from scraped content
 
-Improved handling of HTTP errors from the Puppeteer service:
+## Benefits
 
-```typescript
-if (!response.ok) {
-  const statusText = response.statusText || 'Unknown error';
-  throw new Error(`Scraping failed with status ${response.status}: ${statusText}`);
-}
-```
+1. **Current Information**: Provides access to the latest content from websites
+2. **Specific Content Analysis**: Allows the AI to analyze specific pages the user is interested in
+3. **Enhanced Context**: Gives the AI better context for responding to user queries
+4. **Performance Optimization**: Caching reduces repeated scraping of the same URLs
+5. **Multi-URL Processing**: Can handle multiple URLs in a single request
+6. **Intelligent URL Detection**: Can identify domains even without http/https prefixes
 
-### 3. Individual URL Failure Handling
+## References
 
-The system continues processing other URLs even if one fails:
-
-```typescript
-// Process each URL with individual error handling
-const scrapedResults = await Promise.all(
-  urlsToProcess.map(async (url) => {
-    try {
-      return await puppeteerService.scrapeUrl(url);
-    } catch (error) {
-      // Log error but continue with other URLs
-      edgeLogger.warn(`Failed to scrape URL: ${url}`, {
-        category: LOG_CATEGORIES.TOOLS,
-        operation: 'url_scrape_error',
-        url,
-        error: error.message
-      });
-      
-      // Return error information
-      return {
-        url,
-        title: `Failed to scrape ${url}`,
-        content: `Could not retrieve content: ${error.message}`,
-        success: false
-      };
-    }
-  })
-);
-```
-
-## Best Practices
-
-1. **URL Validation**: Always sanitize and validate URLs before processing
-2. **Cache First**: Check cache before making external requests
-3. **Proper Serialization**: Ensure clean JSON serialization/deserialization
-4. **Type Safety**: Implement strict type checking for cached content
-5. **Error Handling**: Implement comprehensive error handling at all levels
-6. **Timeouts**: Set appropriate timeouts for external services
-7. **Fallbacks**: Gracefully handle failures in the scraping process
-8. **Logging**: Implement detailed logging for debugging and monitoring
-9. **Content Formatting**: Format content for readability and usefulness to the AI
-10. **AI Guidance**: Provide clear instructions in the tool description and system prompt
-
-## Future Enhancements
-
-1. **Multi-URL Support**: Process multiple URLs in parallel
-2. **Selective Content Extraction**: Extract only the most relevant sections
-3. **Summarization**: Add automatic summarization for long pages
-4. **Structured Data Extraction**: Add support for extracting structured data
-5. **Image Processing**: Add support for describing images in scraped content
-6. **Domain-Specific Extractors**: Create specialized extractors for common sites
-7. **Cache Prefetching**: Implement proactive cache warming for common URLs
-8. **Content Updates**: Add mechanism to detect and refresh stale cached content
+- [Puppeteer Documentation](https://pptr.dev/)
+- [Vercel AI SDK Tool Documentation](https://sdk.vercel.ai/docs/getting-started/tools)
+- [Redis Caching Best Practices](https://redis.io/docs/manual/patterns/)
+- [Web Scraping Best Practices](https://www.scrapingbee.com/blog/web-scraping-best-practices/) 

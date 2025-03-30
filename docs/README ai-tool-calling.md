@@ -1,8 +1,8 @@
-## Tool Calling Implementation Guide
+# Tool Calling Implementation Guide
 
 This document outlines how we implement tool calling functionality in our application using Vercel AI SDK. Tool calling enables AI models to invoke specific functions to perform tasks like vector search, web scraping, and web research.
 
-### Core Concepts
+## Core Concepts
 
 Tools in the Vercel AI SDK contain three key elements:
 
@@ -10,7 +10,7 @@ Tools in the Vercel AI SDK contain three key elements:
 2. **parameters**: A Zod schema that defines the required parameters with proper validation
 3. **execute**: An async function that runs when the tool is called and returns results
 
-### Basic Implementation Pattern
+## Basic Implementation Pattern
 
 Here's how we implement tools using Vercel AI SDK:
 
@@ -29,123 +29,173 @@ const result = await streamText({
       parameters: z.object({
         query: z.string().describe('The topic to search for')
       }),
-      execute: async ({ query }, runOptions) => {
+      execute: async ({ query }, { toolCallId }) => {
         // Implementation of knowledge base search
         const results = await performVectorSearch(query);
         return formatResults(results);
       }),
     }),
   },
-  maxSteps: 5, // Allow multiple steps for complex reasoning
   toolChoice: 'auto', // Enable automatic tool selection
 });
 ```
 
-### Our Tools Implementation
+## Our Tools Implementation
 
 Our application uses the following tools:
 
-1. **Knowledge Base Tool**: Searches our vectorized content
-   ```typescript
-   export const knowledgeBaseTool = tool({
-     description: 'Search the knowledge base for relevant information',
-     parameters: z.object({
-       query: z.string().describe('The search query')
-     }),
-     execute: async ({ query }, runOptions) => {
-       // Vector search implementation with proper logging
-       const operationId = `kb-search-${Date.now().toString(36)}`;
-       edgeLogger.info("Knowledge base search started", {
-         category: LOG_CATEGORIES.TOOLS,
-         operation: "kb_search_started",
-         operationId,
-         toolCallId: runOptions.toolCallId,
-       });
-       
-       return searchResults;
-     }
-   });
-   ```
-
-2. **Web Scraper Tool**: Extracts content from web pages
-   ```typescript
-   export const webScraperTool = tool({
-     description: 'Scrape content from web pages',
-     parameters: z.object({
-       url: z.string().describe('The URL to scrape')
-     }),
-     execute: async ({ url }, runOptions) => {
-       // Web scraping implementation with safety checks
-       const operationId = `web-scrape-${Date.now().toString(36)}`;
-       
-       // Validate URL for safety
-       if (!isValidUrl(url)) {
-         return "Please provide a valid URL";
-       }
-       
-       return scrapedContent;
-     }
-   });
-   ```
-
-3. **Deep Search Tool**: Performs web research via Perplexity API
-   ```typescript
-   export const deepSearchTool = tool({
-     description: 'Search the web for up-to-date information about any topic',
-     parameters: z.object({
-       search_term: z.string().describe('The specific search term to look up on the web')
-     }),
-     execute: async ({ search_term }, runOptions) => {
-       // Deep search implementation with safety checks
-       const operationId = `deep-search-${Date.now().toString(36)}`;
-       
-       // Runtime verification that deep search is enabled
-       const deepSearchEnabled = runOptions.body?.deepSearchEnabled === true;
-       
-       if (!deepSearchEnabled) {
-         return "Deep Search is not enabled for this conversation";
-       }
-       
-       return await performDeepSearch(search_term);
-     }
-   });
-   ```
-
-### Tool Parameters and Safety
-
-We use Zod for parameter validation and additional safety checks:
+### 1. Knowledge Base Tool (`lib/tools/knowledge-base.tool.ts`)
 
 ```typescript
-// Parameter schema with detailed validation
-const knowledgeBaseSchema = z.object({
-  query: z.string()
-    .min(2, "Query must be at least 2 characters")
-    .max(1000, "Query must not exceed 1000 characters")
-    .describe("The search query to find information in the knowledge base")
-});
+export const knowledgeBaseTool = tool({
+  description: 'Search the knowledge base for information relevant to the query. Use this when you need specific information about photography services, marketing, or business practices.',
+  parameters: z.object({
+    query: z.string().describe('The search query to find relevant information from the knowledge base')
+  }),
+  execute: async ({ query }, { toolCallId }) => {
+    try {
+      // Log the start of the knowledge base search
+      edgeLogger.info('Knowledge base search started', {
+        category: LOG_CATEGORIES.TOOLS,
+        operation: 'knowledge_base_search',
+        toolCallId,
+        query
+      });
 
-// Multiple safety checks in execute function
-if (!query || query.trim().length < 2) {
-  return "Please provide a valid search query with at least 2 characters";
-}
+      const startTime = Date.now();
 
-// Time executions for performance monitoring
-const startTime = Date.now();
-const result = await performSearch(query);
-const duration = Date.now() - startTime;
+      // Use the existing vector search function
+      const result = await findSimilarDocumentsOptimized(query, {
+        limit: 5,
+        sessionId: toolCallId
+      });
 
-// Log performance metrics
-edgeLogger.info("Search completed", {
-  durationMs: duration,
-  resultSize: result?.length || 0
+      // Format and return results
+      return {
+        content: formattedContent,
+        documents: documents.map(doc => ({
+          id: doc.id,
+          content: typeof doc.content === 'string' ? doc.content : String(doc.content),
+          similarity: doc.similarity || 0
+        })),
+        meta: {
+          count: documents.length,
+          fromCache: metrics.fromCache
+        }
+      };
+    } catch (error) {
+      // Handle and log errors
+      return {
+        content: `Error searching the knowledge base: ${errorMessage}`,
+        error: errorMessage,
+        documents: []
+      };
+    }
+  }
 });
 ```
 
-### Tool Registration and Configuration
-
-We use a registry system for conditional tool inclusion:
+### 2. Web Scraper Tool (`lib/tools/web-scraper.tool.ts`)
 
 ```typescript
+export const webScraperTool = tool({
+  description: 'Scrapes content from web pages. Use this to extract information from a specific URL shared by the user.',
+  parameters: z.object({
+    urls: z.array(z.string()).describe('The URLs to scrape, provided by the user')
+  }),
+  execute: async ({ urls }, { toolCallId }) => {
+    try {
+      // Log the start of web scraping
+      edgeLogger.info('Web scraping started', {
+        category: LOG_CATEGORIES.TOOLS,
+        operation: 'web_scraping_started',
+        toolCallId,
+        urlCount: urls.length
+      });
+
+      // Create puppeteer service
+      const puppeteerService = new PuppeteerService();
+      
+      // Process each URL
+      const results = await Promise.all(
+        urls.map(async (url) => {
+          // Validate and sanitize URL
+          const sanitizedUrl = puppeteerService.validateAndSanitizeUrl(url);
+          if (!sanitizedUrl) {
+            return { url, content: `Invalid URL: ${url}`, error: true };
+          }
+          
+          // Scrape content
+          const scraped = await puppeteerService.scrapeUrl(sanitizedUrl);
+          return { url: sanitizedUrl, content: scraped.content, title: scraped.title };
+        })
+      );
+      
+      // Format results
+      return formatScrapedResults(results);
+    } catch (error) {
+      // Handle and log errors
+      return `Error scraping web content: ${errorMessage}. Please make sure the URLs are valid and accessible.`;
+    }
+  }
+});
+```
+
+### 3. Deep Search Tool (`lib/tools/deep-search.tool.ts`)
+
+```typescript
+export const deepSearchTool = tool({
+  description: "Search the web for up-to-date information about any topic. Use this when you need information that might not be in your training data or when you need to verify current facts.",
+  parameters: z.object({
+    search_term: z.string().describe("The specific search term to look up on the web. Be as specific as possible.")
+  }),
+  execute: async ({ search_term }, { toolCallId, body }) => {
+    const operationId = `deep-search-${Date.now().toString(36)}`;
+    const startTime = Date.now();
+
+    try {
+      // Extract deepSearchEnabled from the options payload
+      const deepSearchEnabled = body?.deepSearchEnabled === true;
+
+      // Security check: Verify deep search is explicitly enabled
+      if (!deepSearchEnabled) {
+        edgeLogger.warn("Deep Search tool was invoked without being enabled", {
+          category: LOG_CATEGORIES.TOOLS,
+          operation: 'deep_search_security',
+          toolCallId,
+          searchTerm: search_term
+        });
+        
+        return "I'm sorry, but web search capabilities are not enabled for this conversation.";
+      }
+      
+      // Initialize Perplexity client and verify it's ready
+      const clientStatus = perplexityService.initialize();
+      if (!clientStatus.isReady) {
+        throw new Error("Perplexity API client is not ready");
+      }
+
+      // Format the search query for better results
+      const query = formatSearchQuery(search_term);
+      
+      // Call the Perplexity API via our service
+      const result = await perplexityService.search(query);
+      
+      return result.content;
+    } catch (error) {
+      // Enhanced error logging and user-friendly response
+      return `I encountered an error while searching for information: ${errorMessage}. Please try again with a more specific search term.`;
+    }
+  }
+});
+```
+
+## Tool Registry Implementation
+
+We use a centralized registry for conditional tool inclusion:
+
+```typescript
+// In lib/tools/registry.tool.ts
 export function createToolSet(options: {
   useKnowledgeBase?: boolean;
   useWebScraper?: boolean;
@@ -162,19 +212,23 @@ export function createToolSet(options: {
   // Log tool set creation
   edgeLogger.info('Creating custom tool set', {
     category: LOG_CATEGORIES.TOOLS,
+    operation: 'create_tool_set',
     useKnowledgeBase,
     useWebScraper,
     useDeepSearch
   });
 
+  // Add knowledge base tool if enabled
   if (useKnowledgeBase) {
     toolSet.getInformation = knowledgeBaseTool;
   }
 
+  // Add web scraper tool if enabled
   if (useWebScraper) {
     toolSet.scrapeWebContent = webScraperTool;
   }
 
+  // Add Deep Search tool ONLY if explicitly enabled
   if (useDeepSearch) {
     toolSet.deepSearch = deepSearchTool;
   }
@@ -183,188 +237,187 @@ export function createToolSet(options: {
 }
 ```
 
-### Multi-Step Tool Calling
+## Integration with Chat Engine
 
-We support multi-step tool calling with the `maxSteps` parameter:
+The tools are integrated into the Chat Engine using Vercel AI SDK's `streamText` function:
 
 ```typescript
+// In lib/chat-engine/core.ts
 const result = await streamText({
-  model: openai(model || 'gpt-4o'),
-  messages,
-  system: systemPrompt,
-  tools,
-  maxSteps: 5, // Allow up to 5 steps
-  toolChoice: useDeepSearch ? 'auto' : 'none', // Conditionally enable tools
+  model: openai(this.config.model || 'gpt-4o'),
+  messages: formattedMessages,
+  system: this.config.systemPrompt,
+  tools: this.config.tools,
+  temperature: this.config.temperature,
+  maxTokens: this.config.maxTokens,
+  body: this.config.body, // Pass custom configuration to tool execution
   onStepFinish({ text, toolCalls, toolResults, finishReason, usage }) {
-    // Log step completion
-    edgeLogger.info('Step completed in multi-step execution', {
+    // Process step completion
+    toolCallsProcessed += toolCalls?.length || 0;
+    
+    // Log completion of each step
+    edgeLogger.info('Step completed in tool execution', {
       operation: operationName,
       hasText: !!text && text.length > 0,
       textLength: text?.length || 0,
       toolCallCount: toolCalls?.length || 0,
-      toolResultCount: toolResults?.length || 0,
-      finishReason,
-      usage: usage ? {
-        completionTokens: usage.completionTokens,
-        promptTokens: usage.promptTokens,
-        totalTokens: usage.totalTokens
-      } : undefined
+      toolCallsProcessed,
+      finishReason
     });
   },
-});
-```
-
-Steps during the tool calling flow:
-
-1. **Step 1**: AI receives user prompt and calls a knowledge base tool
-2. **Step 2**: AI receives knowledge base results and calls web scraper tool
-3. **Step 3**: AI receives web scraper results and generates final text
-
-### Tool Execution Options
-
-Tool functions receive an options parameter with additional context:
-
-```typescript
-execute: async (params, runOptions) => {
-  // Access tool call ID for tracking
-  const { toolCallId } = runOptions;
-  
-  // Access message history if needed
-  const { messages } = runOptions;
-  
-  // Access abort signal for cancellation support
-  const { abortSignal } = runOptions;
-  
-  // Additional custom data passed from the route handler
-  const deepSearchEnabled = runOptions.body?.deepSearchEnabled === true;
-  const sessionId = runOptions.body?.sessionId;
-  
-  // Implementation with tracking
-  const operationId = `${toolName}-${Date.now().toString(36)}`;
-  
-  // Log operation
-  edgeLogger.info(`Tool execution started`, {
-    toolName,
-    toolCallId,
-    operationId,
-    sessionId
-  });
-  
-  // Implementation here
-}
-```
-
-### Client Disconnect Handling
-
-To ensure message persistence even when clients disconnect, we use Vercel AI SDK's `consumeStream()` method:
-
-```typescript
-const result = await streamText({
-  model: openai(model || 'gpt-4o'),
-  messages,
-  system: systemPrompt,
-  tools,
-  maxSteps: 5,
-  toolChoice: useDeepSearch ? 'auto' : 'none',
+  onFinish({ text, response, usage }) {
+    // Process completion of the entire sequence
+    edgeLogger.info('Stream text completed', {
+      operation: operationName,
+      textLength: text?.length || 0,
+      toolCallsProcessed,
+      completionTokens: usage?.completionTokens,
+      promptTokens: usage?.promptTokens,
+      totalTokens: usage?.totalTokens
+    });
+  }
 });
 
-// Consume the stream to ensure it runs to completion even when the client disconnects
-result.consumeStream(); // no await
+// Consume the stream in the background to ensure callbacks run
+// even if the client disconnects from the HTTP response
+result.consumeStream();
 
 edgeLogger.info('Stream consumption enabled to ensure processing completes', {
-  operation: operationName,
-  sessionId
+  operation: this.config.operationName,
+  sessionId: context.sessionId
 });
 
 return result.toDataStreamResponse();
 ```
 
-### Error Handling
+## Safety and Error Handling
 
-We implement robust error handling for tool calls:
+### Parameter Validation with Zod
+
+```typescript
+// Parameter schema with detailed validation
+const knowledgeBaseSchema = z.object({
+  query: z.string()
+    .min(2, "Query must be at least 2 characters")
+    .max(1000, "Query must not exceed 1000 characters")
+    .describe("The search query to find information in the knowledge base")
+});
+```
+
+### Runtime Security Checks
+
+```typescript
+// Inside Deep Search tool execution
+const deepSearchEnabled = body?.deepSearchEnabled === true;
+
+// CRITICAL SAFETY CHECK: Verify deep search is explicitly enabled
+if (!deepSearchEnabled) {
+  edgeLogger.warn("Deep Search tool was invoked without being enabled", {
+    category: LOG_CATEGORIES.TOOLS,
+    operation: 'deep_search_security',
+    toolCallId,
+    searchTerm: search_term
+  });
+  
+  return "I'm sorry, but web search capabilities are not enabled for this conversation.";
+}
+```
+
+### Comprehensive Error Handling
 
 ```typescript
 try {
   // Tool implementation
-  const clientStatus = perplexityService.initialize();
-  if (!clientStatus.isReady) {
-    throw new Error("Perplexity API client is not ready");
-  }
-  
   const result = await perplexityService.search(query);
   return result.content;
 } catch (error) {
   const errorMessage = error instanceof Error ? error.message : String(error);
   
   // Enhanced error logging
-  edgeLogger.error("Tool error", {
+  edgeLogger.error("Deep Search error", {
     category: LOG_CATEGORIES.TOOLS,
-    operation: "tool_error",
+    operation: "deep_search_error",
     operationId,
-    toolCallId: runOptions.toolCallId,
+    toolCallId,
     errorMessage,
     errorType: error instanceof Error ? error.name : typeof error,
     errorStack: error instanceof Error ? error.stack : 'No stack available',
+    durationMs: duration,
+    searchTerm: search_term,
     important: true
   });
   
   // Return user-friendly error message
-  return `I encountered an error: ${errorMessage}. Please try again or contact support.`;
+  return `I encountered an error while searching for information: ${errorMessage}. Please try again with a more specific search term.`;
 }
 ```
 
-### Prompting for Tool Use
+## Client Disconnect Handling
 
-We enhance our system prompts with specific instructions for tool usage:
+We ensure message persistence even when clients disconnect by using `consumeStream()`:
 
 ```typescript
-export function buildSystemPromptWithDeepSearch(agentType: AgentType, deepSearchEnabled = false): string {
-  // Get the base system prompt
-  const basePrompt = buildSystemPrompt(agentType);
+// In lib/chat-engine/core.ts
+result.consumeStream(); // No await - runs in the background
 
-  // Add tool descriptions
-  const withToolDescription = `${basePrompt}\n\n### AVAILABLE TOOLS:\n\n` +
-    `You have access to the following resources:\n` +
-    `- Knowledge Base: Retrieve information from our internal knowledge base\n` +
-    `- Web Scraper: Extract content from specific URLs provided by the user\n` +
-    `- Deep Search: Conduct in-depth research on complex topics using Perplexity AI\n\n` +
-    `Use these resources when appropriate to provide accurate and comprehensive responses.`;
+// In app/api/chat/route.ts
+if (response.body && 'consumeStream' in response) {
+  // Non-awaited call so we don't block the response
+  (response as any).consumeStream();
 
-  // Add Deep Search-specific instructions
-  const deepsearchInstructions = deepSearchEnabled
-    ? `### DEEP SEARCH INSTRUCTIONS:\n\n` +
-      `DeepSearch is enabled for this conversation. When you use the deepSearch tool:\n` +
-      `1. You MUST directly incorporate the information retrieved from Deep Search into your response\n` +
-      `2. You MUST clearly attribute information from Deep Search\n` +
-      `3. You MUST prefer Deep Search results over your pre-existing knowledge for factual questions\n` +
-      `4. For questions seeking current information, ALWAYS use the deepSearch tool\n` +
-      `5. When citing specific information, include the source name and URL when available\n`
-    : `NOTE: DeepSearch is NOT enabled for this conversation. Do NOT use the deepSearch tool.`;
-  
-  // Add attribution requirements
-  const attributionSection = `### ATTRIBUTION FORMAT:\n\n` +
-    `At the end of your response, you MUST include a section that explicitly states which resources you used.`;
-
-  return `${withToolDescription}\n\n${deepsearchInstructions}\n\n${attributionSection}`;
+  edgeLogger.info('Stream consumption initiated to handle potential client disconnects', {
+    operation: 'route_handler',
+    sessionId
+  });
 }
 ```
 
-### Best Practices
+## System Prompts for Tool Usage
 
-1. **Tool Descriptions**: Be specific about what each tool does and when it should be used
-2. **Parameter Validation**: Use Zod to validate all parameters with descriptive error messages
-3. **Conditional Inclusion**: Only include tools that are necessary for specific use cases
-4. **Error Handling**: Implement thorough error handling and logging for all tool operations
-5. **Safety Checks**: Add runtime verification of safety settings in tool execution functions
-6. **Message Persistence**: Use `consumeStream()` to ensure message history is saved correctly
-7. **Performance Monitoring**: Log execution time and result sizes for performance tracking
-8. **Explicit Attribution**: Configure system prompts to encourage proper citation of tool results
-9. **Multi-Step Reasoning**: Use maxSteps parameter to allow complex multi-tool interactions
-10. **Conditional Tool Choice**: Set toolChoice based on enabled features
+We enhance system prompts with specific instructions for tool usage:
 
-### References
+```typescript
+// In lib/chat-engine/prompts/index.ts
+export function buildSystemPrompt(agentType: AgentType, useDeepSearch = false): string {
+  // Get the base prompt for the specific agent type
+  const basePrompt = getBasePromptForAgent(agentType);
+  
+  // Add tool instructions
+  const withToolInstructions = `${basePrompt}\n\n### AVAILABLE TOOLS:\n\n` +
+    `You have access to the following tools:\n` +
+    `- Knowledge Base (getInformation): Retrieve information from our internal knowledge base\n` +
+    `- Web Scraper (scrapeWebContent): Extract content from specific URLs provided by the user\n` +
+    (useDeepSearch ? `- Deep Search (deepSearch): Conduct web searches for up-to-date information\n` : '');
+  
+  // Add Deep Search-specific instructions if enabled
+  const deepSearchInstructions = useDeepSearch
+    ? `\n### DEEP SEARCH USAGE:\n\n` +
+      `When using the Deep Search tool:\n` +
+      `1. Use it for questions about current events or information that may not be in your training data\n` +
+      `2. Be specific with your search terms for better results\n` +
+      `3. Clearly cite information obtained through Deep Search in your responses\n`
+    : `\nNOTE: Web searching is not available for this conversation. Do not use the deepSearch tool.`;
+  
+  return `${withToolInstructions}${deepSearchInstructions}`;
+}
+```
 
-- [Vercel AI SDK Tools Documentation](https://sdk.vercel.ai/docs/getting-started/tools)
-- [AI SDK on GitHub](https://github.com/vercel/ai)
+## Best Practices
+
+1. **Tool Descriptions**: Create specific descriptions that help the model decide when to use a tool
+2. **Parameter Validation**: Use Zod for parameter validation with descriptive error messages
+3. **Conditional Inclusion**: Use the tool registry to selectively include tools based on configuration
+4. **Comprehensive Logging**: Implement detailed logging for tool execution and results
+5. **Error Handling**: Handle errors gracefully with user-friendly messages
+6. **Security Verification**: Add runtime security checks for sensitive operations
+7. **Client Disconnect Handling**: Use `consumeStream()` to ensure tool processing completes
+8. **Performance Monitoring**: Track execution time and result sizes
+9. **Tool-Specific Prompts**: Enhance system prompts with tool usage instructions
+10. **Selective Tool Choice**: Use toolChoice based on configuration (auto vs. none)
+
+## References
+
+- [Vercel AI SDK Documentation](https://sdk.vercel.ai/docs)
+- [Vercel AI SDK Tools Guide](https://sdk.vercel.ai/docs/getting-started/tools)
 - [Handling Client Disconnects](https://sdk.vercel.ai/docs/concepts/message-persistence#handling-client-disconnects)
 - [Zod Schema Validation](https://zod.dev/)

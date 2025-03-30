@@ -1,11 +1,12 @@
 # Message Persistence System Upgrade
 
-This document outlines the changes made to the message persistence system in the San Diego chat application.
+This document outlines the changes made to the message persistence system in the San Diego chat application, which now works in conjunction with the Zustand store for state management.
 
 ## Background
 
 Previously, the chat system used this approach for message handling:
 
+1. **In-Memory State**: Maintained messages in React state
 2. **RPC Function Calls**: Saved messages to the database in a separate process
 
 This dual approach caused several issues:
@@ -22,6 +23,7 @@ We consolidated message handling by creating a unified `MessagePersistenceServic
 2. Eliminates the need for Redis caching of conversation history
 3. Provides consistent conversation context directly from the source of truth
 4. Captures and stores tool usage data for analytics and debugging
+5. Integrates with Zustand store for state management
 
 ## Recent Improvements
 
@@ -214,11 +216,13 @@ This feature:
 3. **Improved Reliability**: Eliminated potential sync issues between cache and database
 4. **Better Performance**: Reduced overhead by removing unnecessary Redis operations
 5. **Enhanced Developer Experience**: Clear, consistent pattern for message handling
-6. **Temporary Chat Mode**: Added ability to disable persistence for testing/temporary chats
-7. **Disconnect Resilience**: Messages are saved correctly even when clients disconnect
-8. **Network Efficiency**: Reduced bandwidth usage with single message optimization
-9. **Improved Maintainability**: Standardized error handling and logging patterns
-10. **Tool Usage Analytics**: Captured tool usage data for insights and debugging
+6. **State Management Integration**: Seamless integration with the Zustand store
+7. **Temporary Chat Mode**: Added ability to disable persistence for testing/temporary chats
+8. **Disconnect Resilience**: Messages are saved correctly even when clients disconnect
+9. **Network Efficiency**: Reduced bandwidth usage with single message optimization
+10. **Improved Maintainability**: Standardized error handling and logging patterns
+11. **Tool Usage Analytics**: Captured tool usage data for insights and debugging
+12. **Optimistic Updates**: Immediate UI feedback with optimistic updates
 
 ## Implementation Details
 
@@ -256,13 +260,21 @@ class MessagePersistenceService {
 }
 ```
 
-### Integration with ChatEngine
+### Integration with ChatEngine and Zustand Store
 
 ```typescript
 // In the ChatEngine's handleRequest method
 if (!this.config.messagePersistenceDisabled) {
   // Save user message
   this.saveUserMessage(sessionId, userId, lastUserMessage);
+  
+  // Update Zustand store with the new message
+  const { addMessage } = useChatStore.getState();
+  addMessage(sessionId, {
+    id: messageId,
+    role: 'user',
+    content: lastUserMessage.content
+  });
 }
 
 // In the AI completion's onFinish callback
@@ -299,6 +311,20 @@ if (!this.config.messagePersistenceDisabled) {
 
   // Save the assistant message with tool usage data
   this.saveAssistantMessage(context, text, toolsUsed);
+  
+  // Update Zustand store with the assistant message
+  const { addMessage, updateConversationTitle } = useChatStore.getState();
+  addMessage(sessionId, {
+    id: assistantMessageId,
+    role: 'assistant',
+    content: text,
+    toolsUsed
+  });
+  
+  // If this is a new conversation, also update the title
+  if (firstMessageInConversation) {
+    updateConversationTitle(sessionId, generatedTitle);
+  }
 }
 
 // Ensure streaming completes even if client disconnects

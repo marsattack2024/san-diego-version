@@ -350,6 +350,29 @@ Based on our examination of the codebase, we have tests for:
 6. ✅ **Perplexity Service Tests**: Tests for the Perplexity API integration
 7. ✅ **Deep Search Tool Tests**: Tests for the deep search tool
 8. ✅ **Supabase RPC Tests**: Tests for Supabase RPC function calls
+9. ✅ **Title Generation Tests**: Tests for chat title generation and persistence
+10. ✅ **Tool Usage Persistence Tests**: Tests for saving tool usage data with messages
+
+### Test Coverage Gaps
+
+The following areas currently lack comprehensive test coverage:
+
+1. ❌ **Zustand Store Tests**: The centralized state management store (`stores/chat-store.ts`) needs tests for:
+   - Store actions (createConversation, addMessage, etc.)
+   - Optimistic update patterns
+   - Error recovery mechanisms
+   - Synchronization with backend APIs
+
+2. ❌ **UI Component Tests**: Key UI components like the sidebar-history component require testing:
+   - Rendering of conversation history
+   - Handling of optimistic updates
+   - Interaction with the Zustand store
+   - Visibility-based refresh logic
+
+3. ❌ **Chat-History Synchronization Tests**: The synchronization between UI state and database needs tests:
+   - History polling mechanism
+   - Cache invalidation
+   - Error handling in synchronization
 
 ## Best Practices
 
@@ -372,11 +395,81 @@ Based on our examination of the codebase, we have tests for:
 - **ESM Compatibility**: Some older libraries might have CommonJS compatibility issues. Use dynamic imports or ESM-compatible alternatives when possible.
 - **Edge Runtime Testing**: For Edge API routes, ensure mocks are compatible with the Edge runtime restrictions (no Node.js specific APIs).
 
+## Testing Guidelines for Key Features
+
+### 1. Zustand Store Testing Guide (TODO)
+
+This section outlines the recommended approach for implementing tests for the chat store that is currently missing from our test coverage.
+
+#### Test File Structure
+
+Recommended test file: `tests/unit/stores/chat-store.test.ts`
+
+```
+tests/
+├── unit/
+│   ├── stores/
+│   │   └── chat-store.test.ts  # Unit tests for the Zustand store
+```
+
+#### Mock Requirements
+
+For comprehensive testing of the Zustand store, we need to mock:
+
+1. **History Service**: Mock the fetchHistory API calls
+2. **Supabase Client**: Mock database operations for creating/updating conversations
+3. **Logger**: Intercept logs to verify correct logging patterns
+4. **Local Storage**: Mock for testing persistence functionality
+
+#### Key Test Cases
+
+1. **Core State Management**
+   - Test initial state setup
+   - Test state updates through actions
+   - Verify persistence configuration
+
+2. **Conversation Management**
+   - Test creating conversations (optimistic updates)
+   - Test deleting conversations
+   - Test updating conversation titles
+   - Test error recovery mechanisms
+
+3. **History Synchronization**
+   - Test fetching history and updating store
+   - Test error handling during synchronization
+   - Test throttling and caching behavior
+
+4. **Visibility-Based Updates**
+   - Test visibility change detection
+   - Test polling behavior with different intervals
+
+### 2. UI Component Testing Guide (TODO)
+
+For testing React components that interact with the Zustand store, such as the sidebar-history component:
+
+#### Test File Structure
+
+Recommended test file: `tests/unit/components/sidebar-history.test.tsx`
+
+```
+tests/
+├── unit/
+│   ├── components/
+│   │   └── sidebar-history.test.tsx  # Unit tests for the sidebar component
+```
+
+#### Test Approach
+
+1. Mock the Zustand store using vi.mock
+2. Test rendering with different store states
+3. Test interaction handlers
+4. Verify proper shallow comparison usage
+
 ## Title Generation Service Testing Guide
 
 ### Overview
 
-This guide outlines the testing approach for the title generation service, which uses OpenAI to generate contextual titles for chat conversations after the first message exchange.
+This guide outlines the testing approach for the title generation service, which uses OpenAI to generate contextual titles for chat conversations after the first message exchange. This is an example of well-implemented tests that serve as a model for future test implementations.
 
 ### Test File Structure
 

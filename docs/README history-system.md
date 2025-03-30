@@ -2,7 +2,7 @@
 
 ## Overview
 
-The chat history system provides users with access to their past conversations and is a critical component of the San Diego application. It's built with a focus on performance, reliability, and security through multiple layers of caching, authentication validation, request deduplication, rate limiting, and adaptive polling.
+The chat history system provides users with access to their past conversations and is a critical component of the San Diego application. It's built with a focus on performance, reliability, and security through multiple layers of caching, authentication validation, request deduplication, rate limiting, and adaptive polling, integrated with the Zustand store for state management.
 
 ## System Architecture
 
@@ -28,6 +28,8 @@ The chat history system provides users with access to their past conversations a
 │   └── db                          # Database schemas and utilities
 │       └── schema.ts               # Types for database entities
 ├── middleware.ts                   # Root middleware (handles auth & logging)
+├── stores                          # Global state management
+│   └── chat-store.ts               # Zustand store for chat state & history
 └── utils
     └── supabase
         └── middleware.ts           # Supabase authentication middleware
@@ -64,10 +66,11 @@ The client-side history service manages:
 
 The sidebar history component:
 - Renders the list of chat sessions grouped by date
-- Manages polling with adaptive intervals
-- Handles loading and error states
-- Implements visibility-based refreshing
+- Derives data directly from the Zustand store
+- Uses shallow equality checks for optimal rendering
+- Implements visibility-based refreshing when tab becomes active
 - Provides chat management actions (delete, rename)
+- Works with optimistic updates for immediate user feedback
 
 #### 4. Middleware
 
@@ -81,12 +84,13 @@ Multiple middleware layers work together:
 
 ### Auth Flow for History API
 
-1. **Client Makes Request**: `historyService.fetchHistory()` is called
+1. **Store Method Call**: `useChatStore.getState().fetchHistory()` is called
 2. **Auth Readiness Check**: Client checks if auth is ready before proceeding
 3. **Request Headers**: Request includes credentials and auth cookies
 4. **Middleware Processing**: Root middleware adds authentication headers
 5. **API Route Validation**: History API validates auth via middleware headers and Supabase
 6. **Response**: Returns data with appropriate status code and headers
+7. **Store Update**: Data is stored in the Zustand store via `syncConversationsFromHistory`
 
 ### Authentication Fixes
 

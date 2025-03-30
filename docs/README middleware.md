@@ -67,9 +67,9 @@ Root Middleware (middleware.ts)
       │                     ▼                        ▼                        ▼
       │            Set Auth Headers   ───────▶   Verify Headers       Use Auth Context
       │                                                                       │
-      │                                                                       │
-      │                                                                       ▼
-      └──────────────────────────────────────────────────────────────────Response
+      │                     ┌─────────────────────────────────────────────────┘
+      │                     ▼
+      └──────────────────Response
 ```
 
 ## Authentication Status Flows
@@ -77,26 +77,29 @@ Root Middleware (middleware.ts)
 ### Successful Authentication Flow with Auth Readiness
 
 1. Page loads, middleware processes auth and sets `x-auth-ready: true`
-2. Component checks auth readiness via `/api/chat/test-permissions`
-3. Auth readiness confirmed, component makes history API request
-4. Request includes headers and `auth_ready=true` parameter
+2. Component checks auth readiness via `/api/auth/status` or test endpoint
+3. Auth readiness confirmed, component makes API requests (history, chat, etc.)
+4. Request includes auth headers and `auth_ready=true` parameter
 5. API returns 200 OK with data
+6. Zustand store updates with the received data
 
 ### Auth Not Ready Flow
 
 1. Page loads, component checks auth readiness
 2. Probe request shows auth is not yet ready
-3. Component displays "Preparing your history..." message
+3. Component displays appropriate loading state
 4. Component schedules retry with exponential backoff
-5. On retry, auth is ready and history fetch succeeds
+5. On retry, auth is ready and data fetch succeeds
+6. Zustand store updates with the received data
 
 ### Auth-In-Progress Flow (409 Conflict)
 
 1. Client requests with auth cookies and timestamp
 2. Middleware has not completed auth validation yet
-3. API route detects auth cookies but auth validation incomplete
+3. API route detects auth cookies but validation incomplete
 4. Returns 409 Conflict with `Retry-After: 1` header
-5. Client retries after delay, using cached data temporarily
+5. Client retries after delay, using cached data temporarily 
+6. Zustand store provides consistent UI during retry process
 
 ### Unauthorized Flow with Circuit Breaker
 
@@ -105,7 +108,9 @@ Root Middleware (middleware.ts)
 3. API route returns 401 Unauthorized
 4. Client tracks consecutive 401s
 5. After threshold (3 failures in 5 seconds), client activates circuit breaker
-6. During circuit breaker period, client uses cached data and reduces requests
+6. During circuit breaker period, client uses cached data from Zustand store
+7. Circuit breaker uses exponential backoff with randomized jitter
+8. When circuit breaker resets, client attempts auth check again
 
 ## Core Middleware Files
 

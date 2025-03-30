@@ -22,7 +22,6 @@ Marlan is built as a modern Next.js 15 application with a focus on serverless ar
 │   │   ├── perplexity/     # DeepSearch API endpoint
 │   │   ├── profile/        # User profile endpoints
 │   │   ├── events/         # Server-sent events endpoint
-│   │   ├── widget-chat/    # Widget-specific chat endpoint
 │   ├── chat/               # Chat interface pages
 │   ├── admin/              # Admin dashboard pages
 │   └── widget.js/          # Widget JavaScript loader
@@ -34,12 +33,14 @@ Marlan is built as a modern Next.js 15 application with a focus on serverless ar
 │   │   ├── core.ts         # Chat engine core implementation
 │   │   ├── message-persistence.ts # Message storage and retrieval
 │   │   ├── agent-router.ts # Agent routing logic
-│   │   ├── cache-service.ts # Chat engine caching service
-│   │   ├── tools/          # Tool implementations
-│   │   └── prompts/        # System prompts for agents
+│   │   ├── prompts/        # System prompts for agents
+│   ├── tools/              # AI SDK tool implementations
+│   │   ├── knowledge-base.tool.ts # Knowledge base tool
+│   │   ├── web-scraper.tool.ts    # Web scraper tool
+│   │   ├── deep-search.tool.ts    # Deep search tool
+│   │   └── registry.tool.ts       # Tool registry
 │   ├── cache/              # Redis caching implementation
 │   ├── services/           # Service layer (Puppeteer, Perplexity)
-│   ├── agents/             # Agent implementations
 │   ├── logger/             # Structured logging system
 │   └── utils/              # Shared utilities
 ├── public/                 # Static assets
@@ -48,7 +49,7 @@ Marlan is built as a modern Next.js 15 application with a focus on serverless ar
 
 ## Chat Engine Architecture
 
-The recent refactoring implemented a unified Chat Engine that powers all chat interactions across the application. This engine is designed to be modular, extensible, and consistent across different interfaces.
+The Chat Engine is the unified system that powers all chat interactions across the application. It provides a consistent interface for processing chat requests, executing tools, and generating responses while integrating with the Zustand store for state management.
 
 ### Chat Engine Core
 
@@ -68,6 +69,26 @@ export class ChatEngine {
   // Core processing logic
   private async processRequest(context: ChatEngineContext): Promise<Response> {
     // Message processing, tool execution, and streaming
+    
+    // Title generation and store updates
+    const result = await streamText({
+      // Configuration options
+      messages: allMessages,
+      model: openai(this.config.model || 'gpt-4o'),
+      temperature: this.config.temperature || 0.7,
+      maxTokens: this.config.maxTokens,
+      // Callbacks that update the Zustand store
+      onFinish: (completion, response) => {
+        // Update title in Zustand store for real-time UI updates
+        if (!this.config.messagePersistenceDisabled && firstMessageInConversation) {
+          const { updateConversationTitle } = useChatStore.getState();
+          updateConversationTitle(sessionId, generatedTitle);
+        }
+      }
+    });
+    
+    // Ensure stream processing completes even if client disconnects
+    result.consumeStream();
   }
 }
 ```
@@ -76,9 +97,12 @@ Key features of the Chat Engine:
 - Unified authentication and authorization
 - Standardized request/response handling
 - Integrated message persistence
-- Consistent tool execution
+- Zustand store integration for state synchronization
+- Consistent tool execution via Vercel AI SDK
 - Centralized prompt management
 - Comprehensive error handling and logging
+- Support for all chat interfaces (main app, widget)
+- Client disconnect resilience with consumeStream()
 
 ### Message Persistence
 
@@ -90,8 +114,21 @@ export class MessagePersistenceService {
     // Initialize with configuration
   }
 
-  // Store a message
-  async saveMessage(message: Message, context: MessageContext): Promise<void>
+  // Store a message and update Zustand store
+  async saveMessage(message: Message, context: MessageContext): Promise<MessageSaveResult> {
+    // Save to database
+    const result = await this.saveToDatabase(message, context);
+    
+    // Update Zustand store for real-time UI updates
+    const { addMessage } = useChatStore.getState();
+    addMessage(context.sessionId, {
+      id: message.id,
+      role: message.role,
+      content: message.content
+    });
+    
+    return result;
+  }
 
   // Retrieve message history
   async getRecentHistory(
@@ -105,73 +142,28 @@ export class MessagePersistenceService {
 
 ### Agent Router
 
-The Agent Router (`lib/chat-engine/agent-router.ts`) analyzes user messages and routes them to the appropriate specialized agent:
+The Agent Router (`lib/chat-engine/agent-router.ts`) uses AI to route messages to the appropriate specialized agent:
 
 ```typescript
 export async function detectAgentType(
   message: string,
-  requestedAgentId: string
+  currentAgentType: AgentType = 'default'
 ): Promise<{
-  agentType: string;
+  agentType: AgentType;
   config: AgentConfig;
+  reasoning?: string;
 }> {
-  // Agent detection logic
+  // AI-based agent detection logic using generateObject
 }
 ```
 
-## Feature Implementation Details
+## Tool System
 
-### 1. Agent System
+The application uses a modernized tool system based on the Vercel AI SDK's tool calling interface. Tools are defined as standalone modules and registered through a central registry.
 
-The agent system uses a sophisticated routing mechanism that analyzes user queries and directs them to specialized agents based on keyword matching and context analysis.
+### Tool Registry
 
-#### Agent Types
-
-1. **Default Agent**: General marketing assistant
-2. **Copywriting Agent**: Specialized for website copy, landing pages, email copy
-3. **Google Ads Agent**: Optimized for search campaign creation and optimization
-4. **Facebook Ads Agent**: Focused on social media advertising strategies
-5. **Quiz Agent**: Designed for interactive content creation
-
-#### Agent Configuration
-
-Agents are configured with specialized tools and prompts:
-
-```typescript
-export const AGENT_CONFIG = {
-  default: {
-    agentType: 'default',
-    systemPrompt: defaultPrompt,
-    temperature: 0.7,
-    toolOptions: {
-      useKnowledgeBase: true,
-      useWebScraper: true,
-      useDeepSearch: true
-    }
-  },
-  
-  copywriting: {
-    agentType: 'copywriting',
-    systemPrompt: copywritingPrompt,
-    temperature: 0.8,
-    toolOptions: {
-      useKnowledgeBase: true,
-      useWebScraper: true,
-      useDeepSearch: false
-    }
-  },
-  
-  // Additional agent configurations...
-};
-```
-
-### 2. Tool System
-
-Tools are implemented using the Vercel AI SDK's tool calling interface and registered through the tool registry.
-
-#### Tool Registry
-
-The Tool Registry (`lib/chat-engine/tools/registry.ts`) provides a centralized registration and configuration system for tools:
+The Tool Registry (`lib/tools/registry.tool.ts`) provides a centralized registration and configuration system:
 
 ```typescript
 export function createToolSet(options: {
@@ -179,155 +171,154 @@ export function createToolSet(options: {
   useWebScraper?: boolean;
   useDeepSearch?: boolean;
 }): Record<string, Tool<any, any>> {
-  // Tool selection based on options
+  // Select and configure tools based on options
 }
 ```
 
-#### Knowledge Base Tool
+### Knowledge Base Tool
 
-The Knowledge Base Tool (`lib/chat-engine/tools/knowledge-base.ts`) provides access to the RAG system:
+The Knowledge Base Tool (`lib/tools/knowledge-base.tool.ts`) provides access to the RAG system:
 
 ```typescript
 export const knowledgeBaseTool = tool({
-  description: "Retrieves information from the knowledge base...",
+  description: "Search the knowledge base for information...",
   parameters: knowledgeBaseSchema,
   execute: async ({ query }, { toolCallId }) => {
-    // Implementation
+    // Implementation using vector search
   }
 });
 ```
 
-#### Web Scraper Tool
+### Web Scraper Tool
 
-The Web Scraper Tool (`lib/chat-engine/tools/web-scraper.ts`) extracts content from URLs in user messages:
+The Web Scraper Tool (`lib/tools/web-scraper.tool.ts`) extracts content from URLs in user messages:
 
 ```typescript
 export const webScraperTool = tool({
   description: "Scrapes content from web pages...",
   parameters: webScraperSchema,
-  execute: async ({ query, urls }, { toolCallId }) => {
-    // Implementation
+  execute: async ({ urls }, { toolCallId }) => {
+    // Implementation using puppeteer service
   }
 });
 ```
 
-#### DeepSearch Tool
+### DeepSearch Tool
 
-The DeepSearch Tool (`lib/chat-engine/tools/deep-search.ts`) provides real-time web search capabilities:
+The DeepSearch Tool (`lib/tools/deep-search.tool.ts`) provides real-time web search capabilities:
 
 ```typescript
 export const deepSearchTool = tool({
   description: "Search the web for up-to-date information...",
   parameters: deepSearchSchema,
-  execute: async ({ search_term }, runOptions) => {
-    // Implementation
+  execute: async ({ search_term }, { toolCallId }) => {
+    // Implementation using perplexity service
   }
 });
 ```
 
-### 3. Caching System
+## Agent System
 
-The caching system is implemented as a layered architecture with domain-specific methods for different types of content.
+The agent system routes user messages to specialized agents optimized for different tasks using AI-based classification.
 
-#### Redis Client
+### Agent Types
 
-The Redis client (`lib/cache/redis-client.ts`) provides the low-level caching interface with fallback to an in-memory cache:
+1. **Default Agent**: General marketing assistant
+2. **Copywriting Agent**: Specialized for website copy, landing pages, email copy
+3. **Google Ads Agent**: Optimized for search campaign creation and optimization
+4. **Facebook Ads Agent**: Focused on social media advertising strategies
+5. **Quiz Agent**: Designed for interactive content creation
 
-```typescript
-export const redisCache = {
-  async set(key: string, value: any, ttl?: number): Promise<void> {
-    // Implementation
-  },
-  
-  async get(key: string): Promise<any> {
-    // Implementation
-  },
-  
-  // Domain-specific methods
-  async getRAG(tenantId: string, query: string): Promise<any> {
-    // Implementation
-  },
-  
-  async setRAG(tenantId: string, query: string, result: any): Promise<void> {
-    // Implementation
-  },
-  
-  // Additional methods...
-};
-```
+### Agent Configuration
 
-#### Chat Engine Cache Service
-
-The Chat Engine Cache Service (`lib/chat-engine/cache-service.ts`) provides a higher-level interface with proper namespacing and TTL management:
+Each agent is configured with specialized tools and settings:
 
 ```typescript
-export class ChatEngineCache {
-  constructor(namespace: string = 'chat-engine') {
-    // Initialization
-  }
-  
-  async setEmbedding(query: string, embedding: number[]): Promise<void> {
-    // Implementation
-  }
-  
-  async getEmbedding(query: string): Promise<number[] | null> {
-    // Implementation
-  }
-  
-  async setScrapedContent(url: string, content: string): Promise<void> {
-    // Implementation
-  }
-  
-  async getScrapedContent(url: string): Promise<string | null> {
-    // Implementation
-  }
-  
-  // Additional methods...
+function getAgentConfig(agentType: AgentType): AgentConfig {
+  // Get system prompt using the prompts module
+  const systemPrompt = buildSystemPrompt(agentType);
+
+  // Agent-specific configurations
+  const configurations: Record<AgentType, Omit<AgentConfig, 'systemPrompt'>> = {
+    'copywriting': {
+      temperature: 0.7, // More creative for copywriting
+      model: 'gpt-4o',
+      toolOptions: {
+        useKnowledgeBase: true,
+        useWebScraper: true,
+        useDeepSearch: true,
+        useRagTool: true
+      }
+    },
+    // Other agent configurations...
+  };
+
+  return {
+    systemPrompt,
+    ...configurations[agentType]
+  };
 }
 ```
 
-### 4. Authentication System
+## Caching System
 
-Authentication is integrated directly into the Chat Engine:
+The caching system uses Redis (via Upstash) for caching various types of data with proper TTL management and fallbacks.
+
+### Cache Service
+
+The Cache Service (`lib/cache/cache-service.ts`) provides a unified interface for all caching operations:
 
 ```typescript
-// In lib/chat-engine/core.ts
-private async handleAuth(req: Request): Promise<{ userId: string | undefined, error?: Response }> {
-  // Implementation
+export class CacheService {
+  // Basic operations
+  async get<T>(key: string): Promise<T | null>
+  async set<T>(key: string, value: T, options?: { ttl?: number }): Promise<void>
+  async delete(key: string): Promise<void>
+  async exists(key: string): Promise<boolean>
+  
+  // Domain-specific operations
+  async getRagResults<T>(query: string, options?: any): Promise<T | null>
+  async setRagResults<T>(query: string, results: T, options?: any): Promise<void>
+  async getScrapedContent(url: string): Promise<string | null>
+  async setScrapedContent(url: string, content: string): Promise<void>
+  async getDeepSearchResults<T>(query: string): Promise<T | null>
+  async setDeepSearchResults<T>(query: string, results: T): Promise<void>
 }
 ```
 
-This supports both token-based and cookie-based authentication, with fallback mechanisms for guest access when appropriate.
+## Logging System
 
-### 5. Logging System
+A comprehensive logging system is implemented with structured logging for both server and edge environments:
 
-A comprehensive logging system is implemented for both server and edge environments:
-
-#### Edge Logger
+### Edge Logger
 
 The Edge Logger (`lib/logger/edge-logger.ts`) is optimized for edge runtime environments:
 
 ```typescript
 export const edgeLogger = {
-  debug(message: string, context?: Record<string, any>): void {
-    // Implementation
-  },
-  
-  info(message: string, context?: Record<string, any>): void {
-    // Implementation
-  },
-  
-  warn(message: string, context?: Record<string, any>): void {
-    // Implementation
-  },
-  
-  error(message: string, context?: Record<string, any>): void {
-    // Implementation
-  }
-};
+  debug(message: string, metadata?: Record<string, any>): void
+  info(message: string, metadata?: Record<string, any>): void
+  warn(message: string, metadata?: Record<string, any>): void
+  error(message: string, metadata?: Record<string, any>): void
+}
 ```
 
-### 6. Chat API Route
+### Chat Logger
+
+The Chat Logger (`lib/logger/chat-logger.ts`) provides specialized logging for chat operations:
+
+```typescript
+export const chatLogger = {
+  startRequest(operationId: string, context: Record<string, any>): void
+  endRequest(operationId: string, context: Record<string, any>): void
+  toolCall(operationId: string, toolName: string, context: Record<string, any>): void
+  // Additional methods...
+}
+```
+
+## API Routes
+
+### Chat API Route
 
 The Chat API Route (`app/api/chat/route.ts`) provides the HTTP interface for the Chat Engine:
 
@@ -336,14 +327,14 @@ export async function POST(req: Request) {
   // Extract request body, validate, and process
   const { agentType, config: agentConfig } = await detectAgentType(
     lastUserMessage.content as string,
-    requestedAgentId as any
+    requestedAgentId
   );
   
   // Create tools based on agent configuration
   const tools = createToolSet({
     useKnowledgeBase: agentConfig.toolOptions.useKnowledgeBase,
     useWebScraper: agentConfig.toolOptions.useWebScraper,
-    useDeepSearch: shouldUseDeepSearch
+    useDeepSearch: agentConfig.toolOptions.useDeepSearch
   });
   
   // Create chat engine with appropriate configuration
@@ -368,7 +359,7 @@ export async function POST(req: Request) {
 
 1. User submits a message via the chat interface
 2. Message is sent to the Chat API with the conversation ID and agent preference
-3. Chat API routes the request to the appropriate agent based on content analysis
+3. The Agent Router classifies the message and selects the appropriate specialized agent
 4. Agent selects appropriate tools based on configuration
 5. Tools are executed as needed to retrieve relevant information
 6. AI generates a streaming response with reference to tools used
@@ -377,11 +368,11 @@ export async function POST(req: Request) {
 ### Tool Execution Flow
 
 1. The Chat Engine receives a user query
-2. The AI model determines which tools to use
+2. The AI model determines which tools to use based on the query
 3. Tools are executed with appropriate parameters
 4. Tool results are collected and added to the prompt context
 5. The AI model generates a response incorporating tool results
-6. The response is streamed back to the user
+6. The response is streamed back to the user with tool usage indicators
 
 ## Performance Optimization Techniques
 
@@ -391,6 +382,7 @@ export async function POST(req: Request) {
 4. **In-Memory Fallbacks**: Graceful degradation when external services are unavailable
 5. **Optimized Message Loading**: Only loading necessary message history from the database
 6. **Client Disconnect Handling**: Processing continues even when clients disconnect
+7. **Edge-compatible Implementations**: Key services optimized for Edge runtime
 
 ## Environment Variables
 
@@ -407,6 +399,7 @@ UPSTASH_REDIS_REST_TOKEN=your_upstash_token
 
 # Optional
 PERPLEXITY_API_KEY=your_perplexity_api_key
+SCRAPER_ENDPOINT=your_puppeteer_endpoint
 LOG_LEVEL=info
 WIDGET_ALLOWED_ORIGINS=https://example.com,*
 NEXT_PUBLIC_MAX_TOKENS=600

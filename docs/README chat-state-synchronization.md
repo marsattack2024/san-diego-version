@@ -1,8 +1,8 @@
-# Chat State Synchronization Refactoring
+# Chat State Synchronization
 
 ## Overview
 
-This document details the implementation of a robust chat state synchronization system using Zustand for centralized state management. The refactoring addresses critical issues with chat creation and title updates not appearing in the sidebar without manual refreshing, while also optimizing API calls and reducing redundant code.
+This document details the implementation of a robust chat state synchronization system using Zustand for centralized state management. The system addresses critical issues with chat creation and title updates not appearing in the sidebar without manual refreshing, while also optimizing API calls and reducing redundant code.
 
 ## Problem Statement
 
@@ -79,11 +79,18 @@ Key features:
 The sidebar now derives its data directly from the Zustand store:
 
 ```typescript
-// Select only what's needed from the store
-const conversations = useChatStore(state => state.conversations);
-const fetchHistory = useChatStore(state => state.fetchHistory);
-const isLoadingHistory = useChatStore(state => state.isLoadingHistory);
-const historyError = useChatStore(state => state.historyError);
+// Select only what's needed from the store with shallow comparison
+const { 
+  conversations, 
+  fetchHistory, 
+  isLoadingHistory,
+  historyError
+} = useChatStore(state => ({
+  conversations: state.conversations,
+  fetchHistory: state.fetchHistory,
+  isLoadingHistory: state.isLoadingHistory,
+  historyError: state.historyError
+}), shallow);
 
 // Convert conversations map to array for display
 const historyArray = useMemo(() => {
@@ -101,38 +108,65 @@ The chat engine now calls the title API and updates the store:
 
 ```typescript
 // Title generation in the streamText onFinish callback
-      // Get base URL for Edge Runtime compatibility
-      const baseUrl = process.env.VERCEL_URL 
-          ? `https://${process.env.VERCEL_URL}`
-          : process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
-          
-      fetch(`${baseUrl}/api/chat/update-title`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sessionId,
-          content: firstUserMessage.content
-        })
-      })
-      .then(async response => {
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success && data.title) {
-            // Update Zustand store
-            const { updateConversationTitle } = useChatStore.getState();
-            updateConversationTitle(sessionId, data.title);
-          }
-        }
-      });
+// Get base URL for Edge Runtime compatibility
+const baseUrl = process.env.VERCEL_URL 
+    ? `https://${process.env.VERCEL_URL}`
+    : process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
+    
+fetch(`${baseUrl}/api/chat/update-title`, {
+  method: 'POST',
+  headers: authHeaders,
+  credentials: 'include',
+  body: JSON.stringify({
+    sessionId,
+    content: firstUserMessage.content,
+    userId: context.userId
+  })
+})
+.then(async response => {
+  if (response.ok) {
+    const data = await response.json();
+    if (data.success && data.title) {
+      // Update Zustand store directly
+      const { updateConversationTitle } = useChatStore.getState();
+      updateConversationTitle(sessionId, data.title);
+    }
+  }
+});
 ```
+
+## Authentication for Title Generation
+
+Our multi-layered title generation authentication approach includes:
+
+1. **Primary Method: Direct Database Update**
+   - Creates simple titles directly from user messages without API calls
+   - Updates database directly using Supabase client
+   - Updates Zustand store immediately after database update
+   - Avoids authentication complexities of API calls entirely
+
+2. **Secondary Method: Service-to-Service Authentication**
+   - Uses custom headers to authenticate internal service calls:
+     ```typescript
+     'x-user-id': context.userId || '',
+     'x-session-context': 'chat-engine-title-generation',
+     'x-auth-state': 'authenticated'
+     ```
+
+3. **Fallback Methods**
+   - Standard cookie-based authentication via Supabase
+   - User ID from request body
+   - Database session lookup as last resort
 
 ## Edge Runtime Compatibility
 
-Working with Next.js Edge Runtime required several compatibility adjustments:
+To ensure compatibility with Edge Runtime environments, we implemented:
 
-1. **Web Crypto API**: We replaced Node.js crypto with Web Crypto API for UUID generation
-2. **Absolute URLs**: Edge Runtime requires absolute URLs for fetch operations
-3. **Type-Safe Logging**: We addressed conflicts between different logging systems
+1. **Web Crypto API**: Replaced Node.js crypto with Web Crypto API for UUID generation
+2. **Absolute URLs**: Used environment-aware absolute URLs for API calls
+3. **Type-Safe Logging**: Fixed TypeScript logger category typing issues
+4. **CORS Handling**: Added proper CORS headers for Edge Runtime
+5. **Authentication Headers**: Created multi-layer authentication with fallbacks
 
 ## Testing
 
@@ -144,7 +178,7 @@ Comprehensive testing ensures the reliability of the new system:
 
 ## Benefits
 
-This refactoring provides several key benefits:
+This implementation provides several key benefits:
 
 1. **Improved User Experience**:
    - New chats appear immediately in the sidebar
@@ -161,6 +195,11 @@ This refactoring provides several key benefits:
    - Less redundant data processing
    - Better caching strategies
 
+4. **Maintainability**:
+   - Single source of truth for chat state
+   - Clear error handling patterns
+   - Comprehensive documentation
+
 ## Conclusion
 
-This refactoring successfully addresses the synchronization issues between chat creation, title generation, and sidebar updates while establishing a more robust and maintainable architecture. The centralized Zustand store with optimistic updates provides an excellent foundation for future features. 
+The chat state synchronization system successfully addresses synchronization issues between chat creation, title generation, and sidebar updates while establishing a robust and maintainable architecture. The centralized Zustand store with optimistic updates provides an excellent foundation for future features.

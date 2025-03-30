@@ -16,6 +16,12 @@ TOOLS: RAG, Deep Search, Web Scraping, other function calls
 LLM: Large Language Model operations
 SYSTEM: Application infrastructure, startup, core services
 CACHE: Cache operations (Redis, in-memory)
+API: API route operations and request handling
+DB: Database operations and queries
+SEARCH: Search operations (non-vector)
+VECTOR: Vector database operations
+TITLE: Chat title generation operations
+EVENTS: Event handling and propagation
 Each log uses a standard level, often indicated visually:
 
 debug (no emoji): Detailed information for development only (filtered out in production).
@@ -25,12 +31,25 @@ error (🔴): Actual errors that impact functionality.
 Production Sampling Strategy
 In production, to manage volume while maintaining visibility:
 
-ERROR level logs and logs explicitly marked important: true are always retained.
-Other logs (info, warn without important: true) are sampled based on their category:
-AUTH: 20%
-CHAT, TOOLS, LLM: 10%
-CACHE (Hits): 10%
-CACHE (Misses/Errors), SYSTEM: 100%
+#### Server-Side Sampling
+- ERROR level logs and logs explicitly marked important: true are always retained (100%)
+- Other logs (info, warn without important: true) are sampled based on their category:
+  - AUTH: 20%
+  - CHAT, TOOLS, LLM: 10% 
+  - CACHE (Hits): 10%
+  - CACHE (Misses/Errors), SYSTEM: 100%
+  - API: 20%
+  - DB, VECTOR: 50%
+  - TITLE: 10%
+
+#### Client-Side Sampling
+Client logs are sampled at different rates to reduce network traffic:
+- trace: 1%
+- debug: 5%
+- info: 20%
+- warn: 100%
+- error: 100%
+
 The important: true flag should only be used for critical errors, timeouts, or operations exceeding the IMPORTANT_THRESHOLD.
 Structured Log Format
 All logs follow a consistent JSON-like structure (represented here in key-value format for readability):
@@ -145,16 +164,30 @@ Plaintext
 🔵 {Timestamp} Deep Search completed (tools)
   level=info category=tools operationId=deepsearch-abc durationMs=11346 resultsCount=5 slow=true important=true status=completed fromCache=false // Example: slow & important
 Recent Improvements Summary
-Verbosity: Middleware, session updates, user object retrieval, memory checkpoints moved to debug.
-RAG Logging: Consolidated to a single, accurate completion log per operation (including cache hits with status=completed_from_cache), fixed duration/count issues, corrected important flag usage.
-Perplexity/DeepSearch: Internal logs moved to debug, incorrect important=true flags removed, fromCache flag logic fixed.
-Structure: Consistent level field added, important=true usage corrected across all logs.
-Startup: Duplicate startup logs eliminated via singleton pattern.
-Security: Full query and cookie logging eliminated. User ID masking implemented.
-Request Tracing: Added unique requestId to track complete request lifecycles across all log entries.
-Error Handling: Implemented retry logic with exponential backoff for database operations to improve resilience.
-Privacy: Enhanced user ID masking in logs to show only first/last 3 characters.
-Correlation: Ensured all related log entries within a request share the same requestId for easier debugging.
+
+✅ **Verbosity Reduction**: Middleware, session updates, user object retrieval, memory checkpoints moved to debug level.
+
+✅ **RAG Logging**: Consolidated to a single, accurate completion log per operation (including cache hits with status=completed_from_cache), fixed duration/count issues, corrected important flag usage.
+
+✅ **Perplexity/DeepSearch**: Internal logs moved to debug, incorrect important=true flags removed, fromCache flag logic fixed.
+
+✅ **Structure**: Consistent level field added, important=true usage corrected across all logs.
+
+✅ **Startup**: Duplicate startup logs eliminated via singleton pattern in edge-logger.ts, ensuring each application instance logs startup only once.
+
+✅ **Security**: Full query and cookie logging eliminated. User ID masking implemented with maskSensitiveData function.
+
+✅ **Request Tracing**: Added unique requestId to track complete request lifecycles across all log entries, supporting correlation with the context propagation system.
+
+✅ **Error Handling**: Implemented retry logic with exponential backoff for database operations to improve resilience.
+
+✅ **Privacy**: Enhanced user ID masking in logs to show only first/last characters with `${userId.substring(0, 4)}...${userId.slice(-4)}` pattern.
+
+✅ **Correlation**: Ensured all related log entries within a request share the same requestId for easier debugging through the context tracking system.
+
+✅ **Specialized Loggers**: Added dedicated loggers for chat operations, title generation, and client-side logging.
+
+✅ **Context Propagation**: Implemented a context tracking system in context.ts for maintaining context across asynchronous operations.
 Best Practices
 (Copied and verified from final Logging Rules document)
 
@@ -198,9 +231,43 @@ Logging Long-Lived Connections (SSE):
 Avoid Misleading Durations: Standard framework request logs for SSE show total connection time. Document this in the route handler code.
 Recommended Logging: Use custom logs (level=info) to mark SSE connection established (with connectionId) and SSE connection closed (with connectionId and connectionDurationMs). Log SSE-specific errors at level=error.
 Implementation Details
-lib/logger/edge-logger.ts: Core logging utilities
-lib/logger/constants.ts: Log categories and configuration (if separated)
-middleware.ts: May contain request context logging (now likely at debug)
+
+### Logger Components
+- `lib/logger/edge-logger.ts`: Core logging engine for Edge-compatible environments
+- `lib/logger/constants.ts`: Log categories, levels, and operation types
+- `lib/logger/context.ts`: Request context management and propagation
+- `lib/logger/index.ts`: Exports unified logger interface
+- `lib/logger/client-logger.ts`: Client-side logging implementation
+- `lib/logger/chat-logger.ts`: Specialized logger for chat operations
+- `lib/logger/title-logger.ts`: Specialized logger for title generation
+
+### Specialized Loggers
+The system includes specialized loggers for specific operations:
+
+1. **Chat Logger (`chat-logger.ts`)**
+   - Tracks chat request lifecycles
+   - Monitors tool usage
+   - Calculates complete request durations
+   - Provides chat-specific metadata
+
+2. **Title Logger (`title-logger.ts`)**
+   - Tracks title generation operations
+   - Monitors AI model performance for titles
+   - Logs title caching and reuse
+
+3. **Client Logger (`client-logger.ts`)**
+   - Handles browser-side logging
+   - Batches client logs for efficient transmission
+   - Implements client-side sampling
+
+### Context Propagation
+The `context.ts` module provides a powerful mechanism for:
+- Tracking request context across asynchronous operations
+- Propagating requestId, userId, sessionId, and other metadata
+- Timing operations automatically
+- Supporting nested operations with proper parent-child relationships
+
+This allows for correlated logging across complex operations with minimal boilerplate code.
 Migration Notes
 Replace all console.log calls with appropriate logger methods (edgeLogger.debug, .info, .warn, .error).
 Ensure correct level and category are provided.

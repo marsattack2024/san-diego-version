@@ -1,504 +1,430 @@
 Goal: Implement backend AI title generation using Vercel AI SDK with OpenAI, triggered asynchronously via the Vercel AI SDK's onFinish callback after the first user message. Update the title directly in Supabase.
 
-# Chat Title Generation Implementation Plan
+# Chat Title Generation Implementation
 
-## Current System Analysis
+## Overview
 
-Current title generation is client-side implemented in the `stores/chat-store.ts` file:
-- Simple substring of the first user message 
-- Applies only when title is "New Chat" or "Untitled Conversation"
-- Uses a setTimeout to update the title in the database
-- Lacks consistency when users refresh or access from different devices
-- Doesn't leverage AI to create more meaningful titles
+Chat title generation is handled server-side through the Vercel AI SDK, automatically generating contextually relevant titles when a user sends their first message in a conversation. The system uses Redis for locking and coordination, OpenAI for title generation, and comprehensive logging for monitoring performance and errors.
 
-## Implementation Strategy
+## System Architecture
 
-### Phase 1: Create Title Service Infrastructure
+### Core Components
 
-#### 1. Create Title Logger (lib/logger/title-logger.ts)
+1. **Title Service** (`lib/chat/title-service.ts`)
+   - Main implementation of title generation logic
+   - Uses the Vercel AI SDK with OpenAI for title generation
+   - Handles database interactions, caching, and error handling
 
-```typescript
-import { edgeLogger } from '@/lib/logger/edge-logger';
-import { LOG_CATEGORIES } from '@/lib/logger/constants';
+2. **Title Logger** (`lib/logger/title-logger.ts`)
+   - Specialized logger for title generation operations
+   - Tracks performance metrics and error states
+   - Provides consistent logging patterns
 
-// Performance thresholds for title generation
-const TITLE_THRESHOLDS = {
-    SLOW_OPERATION: 2000,    // 2 seconds (triggers level=warn, slow=true)
-    IMPORTANT_THRESHOLD: 5000 // Mark important=true if durationMs > 5000
-};
+3. **Chat Engine Integration** (`lib/chat-engine/core.ts`)
+   - Hooks into the `onFinish` callback to trigger title generation
+   - Verifies if this is the first user message before generating title
+   - Uses API approach for title updates rather than direct DB access
 
-// Mask user ID for logging
-const maskUserId = (userId: string): string => {
-    if (!userId) return 'unknown';
-    return userId.substring(0, 4) + '...' + userId.substring(userId.length - 4);
-};
+4. **API Endpoint** (`app/api/chat/update-title/route.ts`)
+   - Handles title generation requests from the chat engine
+   - Provides authentication and validation
+   - Returns generated titles to the client
 
-/**
- * Specialized logger for title generation operations
- * Provides consistent logging patterns for all title-related operations
- */
-export const titleLogger = {
-    attemptGeneration: ({ chatId, userId }: { chatId: string; userId?: string }) => {
-        edgeLogger.info('Attempting title generation', {
-            category: LOG_CATEGORIES.CHAT,
-            operation: 'title_generation_attempt',
-            chatId,
-            userId: userId ? maskUserId(userId) : undefined
-        });
-    },
+### File Structure
 
-    titleGenerated: ({ chatId, generatedTitle, durationMs, userId }: {
-        chatId: string,
-        generatedTitle: string,
-        durationMs: number,
-        userId?: string
-    }) => {
-        const isSlow = durationMs > TITLE_THRESHOLDS.SLOW_OPERATION;
-        const isImportant = durationMs > TITLE_THRESHOLDS.IMPORTANT_THRESHOLD;
+```
+lib/
+├── chat/
+│   └── title-service.ts        # Title generation service
+├── logger/
+│   └── title-logger.ts         # Specialized logging for title generation
+├── cache/
+│   └── cache-service.ts        # Redis caching used for locks
+└── chat-engine/
+    └── core.ts                 # Chat engine with onFinish integration
 
-        if (isSlow) {
-            edgeLogger.warn('Title generated successfully', {
-                category: LOG_CATEGORIES.CHAT,
-                operation: 'title_generation_success',
-                chatId,
-                userId: userId ? maskUserId(userId) : undefined,
-                titlePreview: generatedTitle.substring(0, 30) + (generatedTitle.length > 30 ? '...' : ''),
-                durationMs,
-                slow: isSlow,
-                important: isImportant
-            });
-        } else {
-            edgeLogger.info('Title generated successfully', {
-                category: LOG_CATEGORIES.CHAT,
-                operation: 'title_generation_success',
-                chatId,
-                userId: userId ? maskUserId(userId) : undefined,
-                titlePreview: generatedTitle.substring(0, 30) + (generatedTitle.length > 30 ? '...' : ''),
-                durationMs,
-                slow: isSlow,
-                important: isImportant
-            });
-        }
-    },
-
-    // Additional logging methods for various title service operations
-    titleGenerationFailed: ({ chatId, error, durationMs, userId }: {
-        chatId: string,
-        error: string,
-        durationMs: number,
-        userId?: string
-    }) => {
-        edgeLogger.error('Title generation failed', {
-            category: LOG_CATEGORIES.CHAT,
-            operation: 'title_generation_error',
-            chatId,
-            userId: userId ? maskUserId(userId) : undefined,
-            error,
-            durationMs,
-            important: true
-        });
-    },
-
-    // ...and other logging methods for various operations
-};
+app/
+└── api/
+    └── chat/
+        └── update-title/
+            └── route.ts        # Title generation API endpoint
 ```
 
-#### 2. Create Title Generation Service (lib/chat/title-service.ts)
+## Implementation Details
+
+### Title Generation Process
+
+1. **Trigger Point**:
+   - Executed in the `onFinish` callback of the chat engine
+   - Only runs after the first user message in a conversation
+
+2. **Verification Steps**:
+   - Checks if this is a first/second message in conversation
+   - Verifies current title is a default one ("New Chat", "Untitled Conversation", etc.)
+   - Uses database queries to confirm message count
+
+3. **Generation Process**:
+   - Extracts first user message content
+   - Truncates content if too long (1000 char limit)
+   - Uses Vercel AI SDK with OpenAI gpt-3.5-turbo model
+   - Prompt engineers for concise 2-6 word titles
+
+4. **Title Processing**:
+   - Cleans generated title (removes quotes, trims, handles empty responses)
+   - Truncates titles longer than 50 characters
+   - Provides fallback title if generation fails
+
+5. **Database Update**:
+   - Updates the title in Supabase's sd_chat_sessions table
+   - Updates the updated_at timestamp
+   - Invalidates history cache to ensure UI reflects new title
+
+### Rate Limiting and Locking
+
+The title generation system includes protections against excessive API usage and race conditions:
+
+1. **Rate Limiting**:
+   - Tracks global title generation attempts in Redis cache
+   - Limits to 10 generation attempts per minute globally
+   - Prevents excessive OpenAI API usage during high traffic
+   - Logs rate limit exceedances for monitoring
+
+2. **Redis Locking**:
+   - Uses Redis for distributed locking to prevent race conditions
+   - Each generation attempt acquires a chat-specific lock
+   - 30-second TTL on locks prevents indefinite blocking
+   - Gracefully handles lock acquisition failures
+   - Ensures only one title generation process runs for a given chat
+
+3. **Defensive Coding**:
+   - Checks for existing non-default titles before generating
+   - Properly releases locks in both success and error paths
+   - Includes logging for lock acquisition failures
+   - Provides fallback titles when generation fails
+
+These mechanisms ensure the system remains stable and cost-effective even under high load, while preventing duplicate work and race conditions.
+
+### Code Implementation (Title Service)
+
+Here's an example of the core title generation function:
 
 ```typescript
-import { titleLogger } from '@/lib/logger/title-logger';
+// Example implementation of title generation service function
+import { OpenAIStream } from 'ai';
+import { openai } from '@/lib/openai';
 import { createClient } from '@/utils/supabase/server';
-import { cacheService } from '@/lib/cache/cache-service';
-import { openai } from '@ai-sdk/openai';
-import { generateText } from 'ai';
+import { getCacheLock, releaseLock } from '@/services/cache/cache-service';
+import { logTitleGeneration, logTitleSuccess } from '@/services/logging/title-logger';
 
-// Cache keys
-const TITLE_GENERATION_ATTEMPTS_KEY = 'title_generation:attempts';
-const TITLE_GENERATION_LOCK_KEY = 'title_generation:lock';
+const TITLE_LOCK_KEY = 'title_generation_lock';
+const TITLE_RATE_LIMIT = 'title_generation_rate_limit';
 
-/**
- * Clean and validate a title from the AI response
- */
-function cleanTitle(rawTitle: string): string {
-  // Remove quotes that GPT often adds
-  let cleanedTitle = rawTitle.trim().replace(/^["']|["']$/g, '');
+export async function generateTitle(
+  chatId: string, 
+  userMessage: string,
+  userId: string
+): Promise<string | null> {
+  // Truncate long messages for prompt
+  const truncatedMessage = userMessage.slice(0, 1000);
   
-  // Truncate if too long (50 chars max)
-  if (cleanedTitle.length > 50) {
-    cleanedTitle = cleanedTitle.substring(0, 47) + '...';
-  }
+  // Try to acquire lock to prevent race conditions
+  const lockKey = `${TITLE_LOCK_KEY}:${chatId}`;
+  const lockAcquired = await getCacheLock(lockKey, 30); // 30 second TTL
   
-  // Make sure it's not empty
-  if (!cleanedTitle) {
-    return 'Chat Summary';
-  }
-  
-  return cleanedTitle;
-}
-
-/**
- * Fetch the current title from the database
- */
-async function getCurrentTitle(chatId: string, userId?: string): Promise<string | null> {
-  const startTime = performance.now();
-  try {
-    const supabase = await createClient();
-    
-    const { data, error } = await supabase
-      .from('sd_chat_sessions')
-      .select('title')
-      .eq('id', chatId)
-      .single();
-      
-    if (error) {
-      throw new Error(`Failed to fetch current title: ${error.message}`);
-    }
-    
-    const durationMs = Math.round(performance.now() - startTime);
-
-    if (data?.title && data.title !== 'New Chat' && data.title !== 'Untitled Conversation') {
-      titleLogger.titleExists({
-        chatId,
-        currentTitle: data.title,
-        userId
-      });
-    }
-    
-    return data?.title || null;
-  } catch (error) {
-    const durationMs = Math.round(performance.now() - startTime);
-    titleLogger.titleUpdateResult({
-      chatId,
-      newTitle: 'Error fetching current title',
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      durationMs,
-      userId
-    });
+  if (!lockAcquired) {
+    logTitleGeneration('lock_failed', { userId, chatId });
     return null;
   }
-}
-
-/**
- * Update the title in the database
- */
-async function updateTitleInDatabase(chatId: string, newTitle: string, userId?: string): Promise<boolean> {
-  const startTime = performance.now();
+  
   try {
-    const supabase = await createClient();
+    // Check rate limiting
+    const rateCount = await incrementRateLimit();
+    if (rateCount > 10) { // Allow 10 generations per minute
+      logTitleGeneration('rate_limited', { userId, chatId });
+      return null;
+    }
     
-    const { error } = await supabase
+    // Start timing for performance monitoring
+    const startTime = performance.now();
+    
+    // Generate title using OpenAI
+    const response = await openai.completions.create({
+      model: 'gpt-3.5-turbo-instruct',
+      temperature: 0.7,
+      max_tokens: 20,
+      prompt: `Generate a concise, meaningful 2-6 word title for a chat that starts with this message:
+        "${truncatedMessage}"
+        
+        Rules:
+        - DO NOT use quotation marks
+        - Be specific and descriptive
+        - Be brief (2-6 words)
+        - Capture key topic
+        - DON'T use generic titles like "Chat about X" or "Question about X"
+        - DON'T repeat obvious patterns
+        
+        Title:`,
+    });
+    
+    // Clean the generated title
+    let title = response.choices[0]?.text?.trim() || '';
+    title = title.replace(/^["']|["']$/g, ''); // Remove surrounding quotes
+    
+    // Fallback if no good title generated
+    if (!title || title.length < 2) {
+      title = generateFallbackTitle(truncatedMessage);
+    }
+    
+    // Truncate if too long
+    if (title.length > 50) {
+      title = title.slice(0, 47) + '...';
+    }
+    
+    // Update in database
+    const supabase = createClient();
+    await supabase
       .from('sd_chat_sessions')
-      .update({
-        title: newTitle,
-        updated_at: new Date().toISOString()
-      })
+      .update({ title, updated_at: new Date().toISOString() })
       .eq('id', chatId);
-      
-    if (error) {
-      throw new Error(`Database update failed: ${error.message}`);
-    }
     
-    // Invalidate history cache to ensure the sidebar shows the new title
-    try {
-      await fetch('/api/history/invalidate', { method: 'POST' });
-    } catch (cacheError) {
-      // Ignore cache invalidation errors, non-critical
-    }
-    
-    const durationMs = Math.round(performance.now() - startTime);
-    titleLogger.titleUpdateResult({
+    // Log success with timing
+    const endTime = performance.now();
+    logTitleSuccess({
+      userId,
       chatId,
-      newTitle,
-      success: true,
-      durationMs,
-      userId
+      titleLength: title.length,
+      duration: Math.round(endTime - startTime),
+      slow: (endTime - startTime) > 2000, // Log if over 2 seconds
     });
     
-    return true;
+    return title;
   } catch (error) {
-    const durationMs = Math.round(performance.now() - startTime);
-    titleLogger.titleUpdateResult({
-      chatId,
-      newTitle,
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-      durationMs,
-      userId
+    logTitleGeneration('error', { 
+      userId, 
+      chatId, 
+      error: error.message || 'Unknown error'
     });
-    return false;
+    return null;
+  } finally {
+    // Always release the lock
+    await releaseLock(lockKey);
   }
 }
 
-/**
- * Generate and save a title for a chat session based on first user message
- * Uses Redis for rate limiting and locking to prevent duplicate work
- */
-export async function generateAndSaveChatTitle(
-  chatId: string,
-  firstUserMessageContent: string,
-  userId?: string
-): Promise<void> {
-  // Skip if no message content
-  if (!firstUserMessageContent || firstUserMessageContent.trim().length === 0) {
-    return;
-  }
-  
-  const startTime = performance.now();
-  let lockAcquired = false;
-  
-  try {
-    titleLogger.attemptGeneration({ chatId, userId });
+// Generate a simple fallback title from the message
+function generateFallbackTitle(message: string): string {
+  // Extract first 5 meaningful words
+  const words = message
+    .split(/\s+/)
+    .filter(word => word.length > 3)
+    .slice(0, 5)
+    .join(' ');
     
-    // Try to acquire lock to prevent multiple parallel generation attempts
-    const lockStartTime = performance.now();
-    const lockExists = await cacheService.exists(`${TITLE_GENERATION_LOCK_KEY}:${chatId}`);
-    lockAcquired = !lockExists;
-    if (lockAcquired) {
-      await cacheService.set(`${TITLE_GENERATION_LOCK_KEY}:${chatId}`, 'locked', { ttl: 30 });
-    } else {
-      titleLogger.lockAcquisitionFailed({ chatId, userId });
-      return;
-    }
-    const lockDurationMs = Math.round(performance.now() - lockStartTime);
-    
-    // Check rate limiting - maximum 10 generation attempts per minute
-    let currentAttempts = 0;
-    const counterKey = `${TITLE_GENERATION_ATTEMPTS_KEY}:global`;
-    const existingCounter = await cacheService.get<number>(counterKey);
-    if (existingCounter) {
-      currentAttempts = existingCounter + 1;
-    } else {
-      currentAttempts = 1;
-    }
-    await cacheService.set(counterKey, currentAttempts, { ttl: 60 });
-    
-    if (currentAttempts && currentAttempts > 10) {
-      titleLogger.rateLimitExceeded({ chatId, userId });
-      return;
-    }
-    
-    try {
-      // Check if title is still default
-      const currentTitle = await getCurrentTitle(chatId, userId);
-      if (currentTitle !== 'New Chat' && currentTitle !== 'Untitled Conversation' && currentTitle !== null) {
-        return;
-      }
-      
-      // Truncate message for API call if needed
-      const truncatedMessage = firstUserMessageContent.length > 1000 
-        ? firstUserMessageContent.substring(0, 1000) + '...'
-        : firstUserMessageContent;
-      
-      // Generate title using Vercel AI SDK with OpenAI
-      const result = await generateText({
-        model: openai('gpt-3.5-turbo'),
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a helpful assistant that generates concise, descriptive titles for chat conversations. Create a title that summarizes the main topic or intent of the user message in 5-7 words. Do not use quotes in your response.'
-          },
-          {
-            role: 'user',
-            content: truncatedMessage
-          }
-        ],
-        maxTokens: 30,
-        temperature: 0.7
-      });
-      
-      // Extract and clean the title
-      const cleanedTitle = cleanTitle(result.text || 'Chat Conversation');
-      
-      const titleGenerationDurationMs = Math.round(performance.now() - startTime);
-      titleLogger.titleGenerated({
-        chatId,
-        generatedTitle: cleanedTitle,
-        durationMs: titleGenerationDurationMs,
-        userId
-      });
-      
-      // Update the title in the database
-      await updateTitleInDatabase(chatId, cleanedTitle, userId);
-    } finally {
-      // Release the lock when done
-      if (lockAcquired) {
-        await cacheService.delete(`${TITLE_GENERATION_LOCK_KEY}:${chatId}`);
-      }
-    }
-  } catch (error) {
-    const errorDurationMs = Math.round(performance.now() - startTime);
-    titleLogger.titleGenerationFailed({
-      chatId,
-      error: error instanceof Error ? error.message : String(error),
-      durationMs: errorDurationMs,
-      userId
-    });
-    
-    // Attempt to set a default title if we failed to generate one
-    try {
-      const defaultTitle = 'Chat ' + new Date().toLocaleDateString();
-      await updateTitleInDatabase(chatId, defaultTitle, userId);
-    } catch (fallbackError) {
-      // Fallback error can be safely ignored
-    } finally {
-      // Make sure lock is released even if fallback fails
-      if (lockAcquired) {
-        await cacheService.delete(`${TITLE_GENERATION_LOCK_KEY}:${chatId}`);
-      }
-    }
-  }
+  return words || 'New Conversation';
+}
+
+// Rate limiting helper
+async function incrementRateLimit(): Promise<number> {
+  // Implementation using Redis to track and limit global title generation
+  // Returns current count of generations in the current minute window
 }
 ```
 
-### Phase 2: Integration with Chat Engine
+This implementation showcases:
+- OpenAI integration with appropriate prompt engineering
+- Redis-based locking to prevent race conditions
+- Rate limiting to control API usage
+- Error handling and fallback mechanism
+- Performance monitoring
+- Comprehensive logging
 
-#### Modify Chat Engine Core (lib/chat-engine/core.ts)
+## Chat Engine Integration
 
-Find the `onFinish` callback in the `processRequest` method of the ChatEngine class and modify it:
+The chat engine integrates with the title generation service through the `onFinish` callback:
 
 ```typescript
-// Add onFinish callback to save the assistant message
-async onFinish({ text, response }) {
-  // Existing code to save assistant message...
-  
-  try {
-    // Extract any tool usage information from the response
-    const toolsUsed = text.includes('Tools and Resources Used')
-      ? self.extractToolsUsed(text)
-      : undefined;
-    
-    // Save the assistant message to the database
-    await self.saveAssistantMessage(context, text, toolsUsed);
-    
-    edgeLogger.info('Successfully saved assistant message in onFinish', {
-      operation: operationName,
-      sessionId,
-      contentLength: text.length,
-      hasToolsUsed: !!toolsUsed,
-      requestId
-    });
-    
-    // NEW TITLE GENERATION CODE
-    // Check if this is the first message in the conversation
-    // We can do this by checking the message history length
-    const { data: messageCount, error: countError } = await supabase
-      .from('sd_chat_histories')
-      .select('id', { count: 'exact', head: true })
-      .eq('session_id', sessionId);
+async onFinish({ text, response, usage }) {
+  // [existing assistant message saving code]
+
+  // Check if this is the first message
+  const isFirstMessage = async () => {
+    try {
+      const supabase = await createClient();
       
-    if (!countError && messageCount && messageCount.count <= 2) { // 2 because we just saved the assistant message
-      // Find the first user message in the context
-      const firstUserMessage = context.messages.find(m => m.role === 'user');
-      if (firstUserMessage && firstUserMessage.content) {
-        // Import title service and generate title asynchronously (fire and forget)
-        try {
-          const { generateAndSaveChatTitle } = await import('@/lib/chat/title-service');
+      // First get history from sd_messages table
+      const { count, error } = await supabase
+        .from('sd_messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('session_id', sessionId);
+        
+      // If this is the first or second message in this conversation
+      // The first is typically system, second is user's first message
+      const messageCount = count === null ? 0 : count;
+      const shouldGenerateTitle = !error && messageCount <= 2;
+      
+      // For new conversations with no messages, check the session table
+      if (error || count === null) {
+        const { data: sessionData, error: sessionError } = await supabase
+          .from('sd_chat_sessions')
+          .select('title')
+          .eq('id', sessionId)
+          .single();
           
-          // Don't await this to avoid blocking the response
-          generateAndSaveChatTitle(sessionId, firstUserMessage.content as string, context.userId)
-            .catch(titleError => {
-              edgeLogger.error('Unhandled exception in title generation', {
-                category: LOG_CATEGORIES.CHAT,
-                operation: 'title_generation_error',
-                chatId: sessionId,
-                error: titleError instanceof Error ? titleError.message : String(titleError),
-                userId: context.userId
-              });
-            });
-        } catch (importError) {
-          edgeLogger.error('Failed to import title service', {
-            category: LOG_CATEGORIES.CHAT,
-            operation: 'title_import_error',
-            error: importError instanceof Error ? importError.message : String(importError)
-          });
+        // If session exists and has default title, we should generate a new one
+        if (!sessionError && sessionData &&
+            (sessionData.title === 'New Conversation' || !sessionData.title)) {
+          return true;
         }
       }
+      
+      return shouldGenerateTitle;
+    } catch (countError) {
+      // Default to true for new conversations
+      return true;
     }
-  } catch (error) {
-    edgeLogger.error('Failed to save assistant message in onFinish callback', {
-      operation: operationName,
-      error: error instanceof Error ? error.message : String(error),
+  };
+  
+  // Only generate title for the first user message
+  const shouldGenerateTitle = await isFirstMessage();
+  if (!shouldGenerateTitle) return;
+  
+  // Find the user message to base the title on
+  const userMessage = context.messages.find(m => m.role === 'user');
+  if (!userMessage || !userMessage.content) return;
+  
+  // Extract user message content
+  const messageContent = typeof userMessage.content === 'string'
+    ? userMessage.content
+    : 'New Conversation';
+    
+  // Call the title generation API
+  fetch(`${baseUrl}/api/chat/update-title`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders,
+      ...(cookieHeader ? { 'Cookie': cookieHeader } : {})
+    },
+    credentials: 'include',
+    cache: 'no-store',
+    body: JSON.stringify({
       sessionId,
-      userId: logUserId,
-      requestId
-    });
+      content: messageContent,
+      userId: context.userId
+    })
+  }).then(/* handle response */);
+}
+```
+
+## API Endpoint
+
+The `/api/chat/update-title` endpoint:
+
+```typescript
+export async function POST(request: NextRequest) {
+  const operationId = generateShortId();
+  
+  try {
+    // Parse request body
+    const body = await request.json();
+    const { sessionId, content, userId: requestUserId } = body;
+    
+    // Validate and authenticate
+    if (!sessionId) return errorResponse(400, 'Session ID is required');
+    
+    // Authenticate the user (via headers, cookies, or session lookup)
+    const authenticatedUserId = await getAuthenticatedUserId();
+    
+    // Generate title
+    const title = await generateTitle(sessionId, content, authenticatedUserId);
+    
+    if (!title) {
+      return addCorsHeaders(
+        NextResponse.json({
+          success: false,
+          error: 'Failed to generate title'
+        }, { status: 500 })
+      );
+    }
+    
+    return addCorsHeaders(
+      NextResponse.json({
+        success: true,
+        chatId: sessionId,
+        title
+      })
+    );
+  } catch (error) {
+    // Handle errors
   }
 }
 ```
 
-### Phase 3: Remove Old Client-Side Title Generation
+## Logging Implementation
 
-#### Modify Chat Store (stores/chat-store.ts)
-
-Remove the title generation logic from the `addMessage` method:
+The specialized title logger tracks various aspects of the title generation process:
 
 ```typescript
-addMessage: (message) => {
-  const { currentConversationId, conversations } = get();
-  if (!currentConversationId) return;
-
-  const messageWithId = message.id ? message : { ...message, id: uuidv4() };
-  const timestamp = new Date().toISOString();
-
-  // Just update conversation with new message, no title changes
-  set({
-    conversations: {
-      ...conversations,
-      [currentConversationId]: {
-        ...conversations[currentConversationId],
-        messages: [...conversations[currentConversationId].messages, messageWithId],
-        updatedAt: timestamp
-      }
-    }
-  });
-},
+export const titleLogger = {
+  attemptGeneration: ({ chatId, userId }) => {
+    edgeLogger.info('Attempting title generation', {
+      category: LOG_CATEGORIES.CHAT,
+      operation: 'title_generation_attempt',
+      chatId,
+      userId: userId ? maskUserId(userId) : undefined
+    });
+  },
+  
+  titleGenerated: ({ chatId, generatedTitle, durationMs, userId }) => {
+    const isSlow = durationMs > TITLE_THRESHOLDS.SLOW_OPERATION;
+    const isImportant = durationMs > TITLE_THRESHOLDS.IMPORTANT_THRESHOLD;
+    
+    edgeLogger.info('Title generated successfully', {
+      category: LOG_CATEGORIES.CHAT,
+      operation: 'title_generation_success',
+      chatId,
+      userId: userId ? maskUserId(userId) : undefined,
+      titlePreview: generatedTitle.substring(0, 30) + (generatedTitle.length > 30 ? '...' : ''),
+      durationMs,
+      slow: isSlow,
+      important: isImportant
+    });
+  },
+  
+  // Additional logging methods...
+}
 ```
 
-## Implementation Benefits
+## Testing Approach
 
-1. **Reliable Backend Processing**
-   - Title generation happens on the server, ensuring consistency
-   - Uses Vercel AI SDK for proper AI integration
-   - Only triggers on conversations with 2 or fewer messages
+### Unit Tests
 
-2. **Advanced Features**
-   - Performance tracking with thresholds for slow operations
-   - User ID tracking for better analytics and debugging
-   - Rate limiting using Redis cache (10 requests per minute)
-   - Locking mechanism to prevent duplicate work
-   - Proper error handling with fallback titles
-   - Cache invalidation for UI updates
+1. **Title Service** (`tests/unit/services/title-service.test.ts`)
+   - Tests title generation with various inputs
+   - Verifies title cleaning works properly
+   - Tests database interactions are handled correctly
+   - Verifies error handling and fallbacks
+   - Tests proper OpenAI integration via Vercel AI SDK
+   - Validates existing title checks to prevent redundant generation
 
-3. **Simplified Client**
-   - Removes client-side title generation logic
-   - Single source of truth in the database
-   - No need for manual setTimeout handling
+2. **API Endpoint** (`tests/unit/api/title-update.test.ts`)
+   - Tests authentication validation 
+   - Verifies proper error handling
+   - Tests successful title generation flow
+   - Validates proper logging of operations
+   - Validates API response formats for various scenarios
 
-4. **AI-Powered Titles**
-   - Better contextual understanding of conversation
-   - More descriptive and professional titles
-   - Configurable prompt for different title styles
+3. **Authentication** (`tests/unit/api/title-generation-auth.test.ts`)
+   - Tests authentication fallback mechanisms
+   - Verifies session-based authentication when headers are missing
+   - Tests handling of unauthenticated users
+   - Validates proper error responses for auth failures
 
-## Testing Plan
+4. **Integration Tests** (`tests/integration/auth/title-generation-flow.test.ts`)
+   - Tests the end-to-end flow from chat engine to API to database
+   - Verifies proper authentication across the entire flow
+   - Tests that UI components receive updated titles
 
-1. **Basic Functionality Test**
-   - Create a new chat and send a message
-   - Check logs for title generation attempts
-   - Verify title is updated in Supabase
-   - Confirm sidebar updates with new title
-
-2. **Content Tests**
-   - Test with different message types (questions, statements, etc.)
-   - Test with very short and very long messages
-
-3. **Error Handling Test**
-   - Test with API unavailable (mock)
-   - Test with database errors (mock)
-   - Test with Redis unavailable
-   - Verify fallback title generation works
-
-4. **Performance Tests**
+5. **Performance Tests**
    - Monitor duration of title generation operations
    - Verify logging of slow operations
    - Test concurrency with multiple requests
@@ -506,117 +432,211 @@ addMessage: (message) => {
 ## Implementation Notes
 
 - Uses Vercel AI SDK's `generateText` with OpenAI model for title generation
-- Leverages existing Redis cache for rate limiting and locking
-- Uses dynamic import for the title service to avoid circular dependencies
-- Integrates with existing logging patterns and error handling
-- Fire-and-forget pattern prevents blocking the main chat response
-- Compatible with existing manual title editing functionality
-- Includes performance monitoring for all operations
+- Implements optimized prompt engineering for short, descriptive titles
+- Uses database as source of truth for titles
+- Provides thorough logging with performance tracking
+- Employs defensive programming techniques for handling errors
+- Updates client state where needed through API response
 
-## Implementation Plan
+## Common Issues & Troubleshooting
 
-### Step 1: Create Title Logger (lib/logger/title-logger.ts)
-Create this file with the logger implementation as described above.
+### 1. Titles Not Generating
 
-### Step 2: Create Title Generation Service (lib/chat/title-service.ts)
-Create this file with the title generation service implementation as described above.
+**Symptoms**:
+- Chat remains with default "New Conversation" title
+- No title updates visible in the sidebar
 
-### Step 3: Modify Chat Engine (lib/chat-engine/core.ts)
-Find the `onFinish` callback in the `processRequest` method of the ChatEngine class and add the title generation code as described above.
+**Possible Causes**:
+- User message not properly extracted
+- OpenAI API call failing
+- Database permissions issues
+- Rate limiting triggered
+- Lock acquisition failures
 
-### Step 4: Remove Client-Side Title Generation (stores/chat-store.ts)
-Remove the title generation logic from the `addMessage` method as described above.
+**Diagnosis Steps**:
+1. Check logs for errors in title generation API calls:
+   ```bash
+   grep -i "title_generation" /path/to/logs | grep -i "error\|fail"
+   ```
+2. Verify the user message is properly extracted in chat engine logs
+3. Check for Redis locking errors:
+   ```bash
+   grep -i "title_lock_failed" /path/to/logs
+   ```
+4. Check database permissions for the service account
 
-### Step 5: Testing
-1. Create a new test chat
-2. Send a first message
-3. Verify in logs that title generation was triggered
-4. Check the database to confirm the title was updated
-5. Verify the sidebar updates to show the new AI-generated title
+**Solutions**:
+- If OpenAI API failures: Check API key and quota
+- If lock failures: Ensure Redis is functioning, check for stuck locks
+- If database issues: Verify Supabase permissions and connection
+- For message extraction issues: Debug the message context in chat engine
 
-### Step 6: Documentation & Monitoring
-1. Update project documentation to indicate the new feature
-2. Monitor logs for any issues with title generation
-3. Track API usage to ensure we're not exceeding rate limits
+### 2. Slow Title Generation
 
-This implementation prioritizes:
-- Server-side consistency
-- Minimal client changes
-- Leveraging existing Redis infrastructure
-- Non-blocking operation
-- Proper error handling with fallbacks
-- Performance tracking and monitoring
+**Symptoms**:
+- Titles appear after significant delay
+- Slow response time for first message
+- Logs show `slow: true` flag
 
-The integration with the onFinish callback ensures that we're following the Vercel AI SDK patterns properly while maintaining compatibility with the rest of the system.
+**Possible Causes**:
+- OpenAI API latency
+- Redis connection issues
+- Database performance problems
+- Excessive network requests
 
-## Files to Remove
+**Diagnosis Steps**:
+1. Look for logs with `slow: true` to identify performance issues:
+   ```bash
+   grep -i "title_generation_success" /path/to/logs | grep -i "slow"
+   ```
+2. Check average timing for OpenAI responses vs. database operations
+3. Monitor Redis performance metrics
+4. Check for network latency between services
 
-The following files should be removed as they are outdated and have been replaced with the new implementation:
+**Solutions**:
+- Consider increasing timeouts for OpenAI calls
+- Optimize database queries if those are causing delays
+- Implement client-side temporary titles while waiting for AI generation
+- Configure more aggressive caching for Redis calls
 
-1. ~~Previous client-side title generation code in stores/chat-store.ts (the logic has been removed, no need to delete file)~~
-2. ~~Any outdated tests that verify client-side title generation~~
+### 3. Rate Limiting Issues
 
-## Completed Implementation
+**Symptoms**:
+- Multiple chats not getting titles
+- Logs show `title_rate_limit` operations
+- Issue occurs during high traffic periods
 
-As of the last update, we have successfully implemented the server-side AI-powered title generation feature with the following components:
+**Diagnosis Steps**:
+1. Check for rate limit logs:
+   ```bash
+   grep -i "title_rate_limit" /path/to/logs
+   ```
+2. Monitor Redis counter values for title generation attempts
+3. Analyze patterns in rate limit hits (time of day, specific events)
 
-### Completed Components
+**Solutions**:
+- Increase the rate limit if API quota allows
+- Implement more sophisticated rate limiting based on user priority
+- Add queuing system for title generation during high traffic
+- Provide better feedback when rate limited
 
-✅ **Title Logger (lib/logger/title-logger.ts)**
-- Created specialized logger for title generation operations
-- Implemented methods for tracking generation attempts, successes, and failures
-- Added performance tracking with thresholds for slow operations
-- Integrated with existing edge logger for consistent logging patterns
+### 4. Authentication Failures
 
-✅ **Title Service (lib/chat/title-service.ts)**
-- Implemented core title generation functionality using Vercel AI SDK with OpenAI
-- Added title cleaning and validation
-- Created database interaction methods for fetching and updating titles
-- Implemented rate limiting and locking mechanisms to prevent duplicate processing
-- Added fallback title generation for graceful degradation
-- Added performance tracking for all operations
+**Symptoms**:
+- Titles only generate for some users
+- Authentication errors in logs
+- Session-specific issues
 
-✅ **Chat Engine Integration (lib/chat-engine/core.ts)**
-- Modified the onFinish callback to detect the first user message
-- Added message count check to trigger title generation only on new conversations
-- Implemented dynamic import of title service to avoid circular dependencies
-- Added comprehensive error handling and logging
-- Preserved user context for better debugging and analytics
+**Diagnosis Steps**:
+1. Check for authentication errors:
+   ```bash
+   grep -i "auth_error\|unauthorized" /path/to/logs | grep -i "title"
+   ```
+2. Verify session data in database for affected chats
+3. Test authentication flow manually with API requests
 
-✅ **Client-Side Cleanup (stores/chat-store.ts)**
-- Removed client-side title generation from the addMessage method
-- Eliminated client-side database updates for titles
-- Maintained backward compatibility with existing code
+**Solutions**:
+- Ensure cookie forwarding is working properly in API calls
+- Verify authentication headers are properly propagated
+- Check Supabase session handling and token refresh
+- Add fallback mechanisms for authentication errors
 
-### Key Features Implemented
+## Monitoring Tips
 
-1. **Server-side Processing** - Titles are now generated and stored on the server
-2. **AI-Powered Titles** - Using Vercel AI SDK with OpenAI for contextually relevant titles
-3. **Rate Limiting** - Maximum 10 generation attempts per minute
-4. **Locking Mechanism** - Prevents duplicate work with Redis locks
-5. **Asynchronous Processing** - Non-blocking implementation with fire-and-forget pattern
-6. **Fallback Generation** - Graceful degradation when AI generation fails
-7. **Performance Tracking** - Monitoring and logging of operation durations
-8. **User Context Preservation** - Tracking user IDs for better debugging and analytics
-9. **Comprehensive Logging** - Detailed logs for monitoring and debugging
+1. **Key Metrics to Watch**:
+   - Title generation success rate
+   - Average generation time
+   - Rate limit hits
+   - Lock acquisition failures
+   - Authentication success rate
 
-The implementation follows the server-side architecture outlined in the plan and leverages the Vercel AI SDK for seamless integration into the chat lifecycle.
+2. **Log Queries for Quick Diagnosis**:
+   ```bash
+   # Check for general title generation issues
+   grep -i "title_generation" /path/to/logs | grep -i "error\|fail"
+   
+   # Check for performance issues
+   grep -i "title_generation_success" /path/to/logs | grep -i "slow"
+   
+   # Check for rate limiting issues
+   grep -i "title_rate_limit" /path/to/logs
+   
+   # Check for lock issues
+   grep -i "title_lock_failed" /path/to/logs
+   ```
 
-## Next Steps
+3. **Health Check Endpoint**:
+   Test the title generation system's health with a dedicated endpoint:
+   ```
+   curl -X POST https://your-domain.com/api/health/title-generation
+   ```
 
-### Testing and Validation
-1. Create a new test chat and verify title generation works end-to-end
-2. Test with different message types to ensure quality of generated titles
-3. Monitor logs for any errors or unexpected behavior
-4. Verify that the title appears correctly in the sidebar
+## Future Enhancements
 
-### Optimizations
-1. Consider caching generated titles for faster retrieval
-2. Implement batch processing for high-volume scenarios
-3. Explore using different models for different quality/cost tradeoffs
-4. Add more advanced analytics for title generation operations
+### Performance Optimizations
 
-### Monitoring
-1. Set up alerts for title generation failures
-2. Monitor API usage to ensure we stay within rate limits
-3. Track user satisfaction with generated titles (potential future feature)
+1. **Client-Side Temporary Titles**
+   - Implement optimistic UI updates with temporary titles while waiting for AI generation
+   - Reduce perceived latency for users
+
+2. **Smarter Caching**
+   - Cache title generation results for similar conversations
+   - Use token-based hashing of first message to identify similar conversations
+   - Potentially reduce OpenAI API usage by 30-40%
+
+3. **Batched Processing**
+   - Queue title generation requests and process in batches
+   - Reduce Redis lock contention during high-traffic periods
+   - Implement priority-based processing for premium users
+
+### Quality Improvements
+
+1. **Model Upgrades**
+   - Benchmark title quality between different models (gpt-3.5-turbo vs gpt-4)
+   - Consider selective use of gpt-4 for specific use cases where title quality is critical
+   - Evaluate fine-tuning opportunities for faster, higher-quality results
+
+2. **Multi-Message Context**
+   - Utilize 2-3 messages of context instead of just the first message
+   - Better title generation for conversations that evolve quickly
+   - Implement title updates after significant topic shifts
+
+3. **User Customization**
+   - Allow users to specify title generation preferences
+   - Support multilingual title generation based on user locale
+   - Provide title style options (descriptive, question-based, etc.)
+
+### Architectural Improvements
+
+1. **Serverless Function Separation**
+   - Move title generation to dedicated serverless functions
+   - Reduce main API endpoint load
+   - Enable better scaling and isolation of title generation concerns
+
+2. **Streaming Title Updates**
+   - Implement WebSockets for instant title updates on the client
+   - Reduce polling and improve UI responsiveness
+   - Enable animated title transitions for better UX
+
+3. **Analytics Integration**
+   - Track title effectiveness metrics (do users change AI-generated titles?)
+   - A/B test different title generation strategies
+   - Use analytics data to improve prompt engineering
+
+These enhancements would further improve the title generation system's performance, quality, and scalability while maintaining its core architectural principles.
+
+## Conclusion
+
+The Chat Title Generation system is a robust server-side implementation that provides automatically generated, contextually relevant titles for chat conversations. By leveraging the Vercel AI SDK with OpenAI, the system delivers high-quality titles that accurately reflect the conversation content.
+
+Key architectural strengths of the implementation include:
+
+1. **Asynchronous Processing**: Title generation occurs in the callback phase without blocking the main chat response
+2. **Distributed Coordination**: Redis-based locking and rate limiting prevent race conditions and excessive API usage
+3. **Defensive Programming**: Comprehensive error handling, fallbacks, and validation ensure robust operation
+4. **Observability**: Detailed logging of operations, errors, and performance metrics facilitate monitoring
+5. **Scalability**: API-based approach with proper authentication enables future enhancements and scaling
+
+The transition from client-side to server-side title generation has resolved previous inconsistencies and improved the user experience by providing more meaningful, AI-generated titles while ensuring better performance and reliability.
+
+This documentation serves as a comprehensive guide for understanding, maintaining, and troubleshooting the title generation system, with detailed explanations of the implementation, testing approach, and common issues.

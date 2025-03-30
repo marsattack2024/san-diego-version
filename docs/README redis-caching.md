@@ -21,6 +21,8 @@ The application uses a standardized caching approach through a central `CacheSer
 - **Edge-compatible Key Generation** - Using Web Crypto API for consistent hashing
 - **In-memory Fallback** - Automatic fallback when Redis is unavailable
 - **Comprehensive Logging** - Structured logging for all cache operations
+- **Performance Monitoring** - Hit/miss stats tracking and periodic logging
+- **Environment Detection** - Runtime detection for Edge vs Node.js environments
 
 ### Integration Points
 
@@ -88,6 +90,55 @@ private async hashKey(input: string): Promise<string> {
 
 The service provides automatic fallback to in-memory caching when Redis is unavailable:
 
+```typescript
+function createInMemoryFallback() {
+  const store = new Map<string, { value: any, expiry: number | null }>();
+  
+  edgeLogger.info('Creating in-memory cache fallback', {
+    category: LOG_CATEGORIES.SYSTEM
+  });
+  
+  return {
+    async set(key: string, value: any, options?: { ex?: number }): Promise<string> {
+      const expiry = options?.ex ? Date.now() + (options.ex * 1000) : null;
+      store.set(key, { value, expiry });
+      return 'OK';
+    },
+    
+    async get(key: string): Promise<any> {
+      const item = store.get(key);
+      if (!item) return null;
+      
+      if (item.expiry && item.expiry < Date.now()) {
+        store.delete(key);
+        return null;
+      }
+      
+      return item.value;
+    },
+    
+    async del(key: string): Promise<number> {
+      const deleted = store.delete(key);
+      return deleted ? 1 : 0;
+    },
+    
+    async exists(key: string): Promise<number> {
+      const item = store.get(key);
+      if (!item) return 0;
+      
+      if (item.expiry && item.expiry < Date.now()) {
+        store.delete(key);
+        return 0;
+      }
+      
+      return 1;
+    }
+  };
+}
+```
+
+This implementation ensures:
+
 1. **Automatic Detection** - Detects missing environment variables or connection failures
 2. **Transparent Switch** - Applications using the cache service don't need to handle the fallback
 3. **TTL Support** - In-memory implementation supports expiration just like Redis
@@ -102,6 +153,53 @@ Comprehensive error handling ensures the application remains functional even whe
 3. **Serialization Issues** - Handles parsing errors with appropriate logging
 4. **Cache Repair Tools** - Debug endpoints to fix serialization issues
 
+### Performance Monitoring
+
+The cache service includes built-in performance monitoring:
+
+```typescript
+// In the CacheService class
+private stats = { hits: 0, misses: 0, lastLoggedAt: Date.now() };
+
+// In the get() method
+async get<T>(key: string): Promise<T | null> {
+  const fullKey = this.generateKey(key);
+  try {
+    const redis = await this.redisPromise;
+    const value = await redis.get(fullKey);
+    
+    // Update stats
+    if (value !== null) {
+      this.stats.hits++;
+    } else {
+      this.stats.misses++;
+    }
+    
+    // Log stats periodically
+    const totalOps = this.stats.hits + this.stats.misses;
+    if (totalOps % 20 === 0 || Date.now() - this.stats.lastLoggedAt > 60000) {
+      edgeLogger.info('Cache stats', {
+        category: LOG_CATEGORIES.SYSTEM,
+        hits: this.stats.hits,
+        misses: this.stats.misses,
+        hitRate: totalOps > 0 ? this.stats.hits / totalOps : 0
+      });
+      this.stats.lastLoggedAt = Date.now();
+    }
+    
+    return value as T;
+  } catch (error) {
+    // Error handling
+  }
+}
+```
+
+This provides:
+- Automatic tracking of cache hits and misses
+- Periodic logging of cache performance metrics
+- Hit rate calculation for monitoring efficiency
+- Detailed logging for troubleshooting
+
 ## Domain-specific Methods
 
 ### RAG-specific Caching
@@ -109,15 +207,86 @@ Comprehensive error handling ensures the application remains functional even whe
 The `findSimilarDocumentsOptimized` function in `document-retrieval.ts` uses cache for RAG results:
 
 ```typescript
-// Use the cacheService for RAG results, passing options with tenantId
-const cachedResults = await cacheService.getRagResults<{
-    documents: RetrievedDocument[],
-    metrics: DocumentSearchMetrics
-}>(queryText, { 
-    tenantId, 
-    metadataFilter: options.metadataFilter,
-    limit: options.limit 
-});
+export async function findSimilarDocumentsOptimized(
+    queryText: string,
+    options: DocumentSearchOptions = {}
+): Promise<{ documents: RetrievedDocument[], metrics: DocumentSearchMetrics }> {
+    const ragOperationId = `rag-${Date.now().toString(36)}`;
+    const startTime = performance.now();
+    const tenantId = options.tenantId || 'global';
+
+    try {
+        // Use the cacheService for RAG results, passing options with tenantId
+        const cachedResults = await cacheService.getRagResults<{
+            documents: RetrievedDocument[],
+            metrics: DocumentSearchMetrics
+        }>(queryText, { 
+            tenantId, 
+            metadataFilter: options.metadataFilter,
+            limit: options.limit 
+        });
+
+        if (cachedResults) {
+            edgeLogger.info('Using cached RAG results', {
+                operation: OPERATION_TYPES.RAG_SEARCH,
+                ragOperationId,
+                documentCount: cachedResults.documents.length,
+                source: 'cache'
+            });
+
+            // Add fromCache flag for transparency
+            return {
+                ...cachedResults,
+                metrics: {
+                    ...cachedResults.metrics,
+                    fromCache: true
+                }
+            };
+        }
+
+        // No valid cache hit, perform the search
+        const documents = await findSimilarDocuments(queryText, options);
+        const retrievalTimeMs = Math.round(performance.now() - startTime);
+
+        // Calculate metrics
+        const metrics = calculateSearchMetrics(documents, retrievalTimeMs);
+
+        // Create result object
+        const result = { documents, metrics };
+
+        // Cache the results using the standardized approach
+        await cacheService.setRagResults(queryText, result, {
+            tenantId,
+            metadataFilter: options.metadataFilter,
+            limit: options.limit
+        });
+
+        return result;
+    } catch (error) {
+        // Error handling
+    }
+}
+```
+
+The implementation in `CacheService` handles complex query parameters:
+
+```typescript
+async getRagResults<T>(query: string, options?: any): Promise<T | null> {
+  // Normalize inputs
+  const normalizedQuery = query.toLowerCase().trim();
+  
+  // Create a stable representation of the query and options
+  const keyContent = {
+    q: normalizedQuery,
+    opts: options || {}
+  };
+  
+  // Generate a hash for the cache key
+  const hashInput = this.stableStringify(keyContent);
+  const hashedKey = await this.hashKey(hashInput);
+  
+  return this.get<T>(this.generateKey(hashedKey, CACHE_NAMESPACES.RAG));
+}
 ```
 
 ### Web Scraper Caching
@@ -137,25 +306,121 @@ const result = await this.callPuppeteerScraper(sanitizedUrl);
 await cacheService.setScrapedContent(sanitizedUrl, JSON.stringify(result));
 ```
 
+The implementation in `CacheService`:
+
+```typescript
+async getScrapedContent(url: string): Promise<string | null> {
+  // Normalize URL
+  const normalizedUrl = url.toLowerCase().trim();
+  const hashedUrl = await this.hashKey(normalizedUrl);
+  
+  return this.get<string>(this.generateKey(hashedUrl, CACHE_NAMESPACES.SCRAPER));
+}
+
+async setScrapedContent(url: string, content: string): Promise<void> {
+  // Normalize URL
+  const normalizedUrl = url.toLowerCase().trim();
+  const hashedUrl = await this.hashKey(normalizedUrl);
+  
+  return this.set<string>(
+    this.generateKey(hashedUrl, CACHE_NAMESPACES.SCRAPER),
+    content,
+    { ttl: CACHE_TTL.SCRAPER }
+  );
+}
+```
+
 ### Deep Search Caching
 
 The `PerplexityService` implements caching for deep search results:
 
 ```typescript
-// Check cache first to avoid unnecessary API calls
-const cachedResults = await cacheService.getDeepSearchResults<PerplexitySearchResult>(query);
-if (cachedResults) {
-    edgeLogger.info("Using cached deep search results", {
-        category: LOG_CATEGORIES.TOOLS,
-        operation: "perplexity_cache_hit"
-    });
-    
-    return cachedResults;
-}
+public async search(query: string): Promise<PerplexitySearchResult> {
+    const startTime = Date.now();
+    const operationId = `perplexity-${Date.now().toString(36)}`;
 
-// If no cache hit, perform the search and cache the result
-const searchResult = await performDeepSearch(query);
-await cacheService.setDeepSearchResults(query, searchResult);
+    try {
+        // Ensure the client is initialized before proceeding
+        this.initialize();
+
+        // Check cache first to avoid unnecessary API calls
+        const cachedResults = await cacheService.getDeepSearchResults<PerplexitySearchResult>(query);
+        if (cachedResults) {
+            edgeLogger.info("Using cached deep search results", {
+                category: LOG_CATEGORIES.TOOLS,
+                operation: "perplexity_cache_hit",
+                operationId,
+                queryLength: query.length,
+                responseLength: cachedResults.content.length
+            });
+            
+            return cachedResults;
+        }
+
+        // API call implementation...
+
+        // Create formatted result
+        const searchResult: PerplexitySearchResult = {
+            content,
+            model: data.model,
+            timing: { total: duration }
+        };
+
+        // Cache the search result
+        await cacheService.setDeepSearchResults(query, searchResult);
+        
+        edgeLogger.debug("Perplexity result cached", {
+            category: LOG_CATEGORIES.TOOLS,
+            operation: "perplexity_result_cached",
+            operationId,
+            queryLength: query.length,
+            responseLength: content.length
+        });
+
+        return searchResult;
+    } catch (error) {
+        // Error handling
+    }
+}
+```
+
+The implementation in `CacheService`:
+
+```typescript
+async getDeepSearchResults<T>(query: string): Promise<T | null> {
+  try {
+    // Normalize query
+    const normalizedQuery = query.toLowerCase().trim();
+    const hashedQuery = await this.hashKey(normalizedQuery);
+    const key = this.generateKey(hashedQuery, CACHE_NAMESPACES.DEEP_SEARCH);
+    const cachedData = await this.get<T>(key);
+    
+    if (cachedData) {
+      edgeLogger.info('Cache hit for deep search query', { 
+        category: LOG_CATEGORIES.SYSTEM, 
+        service: 'cache-service', 
+        query,
+        key
+      });
+      return cachedData;
+    }
+    
+    edgeLogger.info('Cache miss for deep search query', { 
+      category: LOG_CATEGORIES.SYSTEM, 
+      service: 'cache-service',
+      query,
+      key
+    });
+    return null;
+  } catch (error) {
+    edgeLogger.error('Error retrieving deep search results from cache', {
+      category: LOG_CATEGORIES.SYSTEM,
+      service: 'cache-service',
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
+}
 ```
 
 ## Diagnostic Tools
@@ -171,24 +436,107 @@ The application includes several debugging endpoints for cache management:
 
 The caching system is thoroughly tested through:
 
-1. **Unit Tests** - Comprehensive tests for the `CacheService` class
-2. **Integration Tests** - Testing integration with RAG, web scraper, etc.
-3. **Mock Implementation** - In-memory mock for isolated testing
+1. **Unit Tests** - Comprehensive tests for the `CacheService` class:
+   ```typescript
+   it('should set and get RAG results', async () => {
+     const query = 'example RAG query';
+     const results = { documents: [{ id: '1', content: 'test content' }] };
+     const options = { tenantId: 'test' };
+     
+     await cacheService.setRagResults(query, results, options);
+     const retrieved = await cacheService.getRagResults<typeof results>(query, options);
+     
+     expect(retrieved).toEqual(results);
+   });
+   ```
+
+2. **Mock Implementation** - Dedicated mock implementation for testing:
+   ```typescript
+   export class MockRedisClient {
+     private store = new Map<string, any>();
+     private expirations = new Map<string, number>();
+   
+     async set(key: string, value: any, options?: { ex?: number }): Promise<string> {
+       this.store.set(key, value);
+       
+       // Set expiration if provided
+       if (options?.ex) {
+         const expiry = Date.now() + (options.ex * 1000);
+         this.expirations.set(key, expiry);
+       } else {
+         this.expirations.delete(key);
+       }
+       
+       return 'OK';
+     }
+   
+     // Other methods...
+   }
+   ```
+
+3. **Integration Tests** - Testing integration with RAG, web scraper, etc.
 4. **Error Cases** - Testing behavior under error conditions
 
-Example test from `cache-service.test.ts`:
+## Client-side Caching
+
+The application also implements a client-side caching layer for browser environments:
+
 ```typescript
-it('should set and get RAG results', async () => {
-  const query = 'example RAG query';
-  const results = { documents: [{ id: '1', content: 'test content' }] };
-  const options = { tenantId: 'test' };
+export const clientCache = {
+  sessionStorage: typeof window !== 'undefined' ? window.sessionStorage : null,
+  localStorage: typeof window !== 'undefined' ? window.localStorage : null,
   
-  await cacheService.setRagResults(query, results, options);
-  const retrieved = await cacheService.getRagResults<typeof results>(query, options);
+  // Check if cache is available
+  isAvailable(): boolean {
+    return !!(this.sessionStorage || this.localStorage);
+  },
   
-  expect(retrieved).toEqual(results);
-});
+  // Get storage for a specific key
+  getStorageForKey(key: string): Storage | null {
+    // Use sessionStorage for transient data, localStorage for persistent
+    return key.startsWith('persist:') ? this.localStorage : this.sessionStorage;
+  },
+  
+  // Get item from cache
+  get(key: string): any {
+    const storage = this.getStorageForKey(key);
+    if (!storage) return null;
+    
+    try {
+      // Get the stored item
+      const item = storage.getItem(key);
+      if (!item) return null;
+      
+      // Check if there's a custom TTL
+      const ttlStr = storage.getItem(`${key}_ttl`);
+      if (ttlStr) {
+        const ttl = parseInt(ttlStr, 10);
+        const timestamp = parseInt(storage.getItem(`${key}_timestamp`) || '0', 10);
+        
+        // Check if expired
+        if (Date.now() > timestamp + ttl) {
+          this.remove(key);
+          return null;
+        }
+      }
+      
+      // Parse and return the item
+      return JSON.parse(item);
+    } catch (error) {
+      console.error('Cache get error:', error);
+      return null;
+    }
+  },
+  
+  // Additional methods for set, remove, clear, etc.
+}
 ```
+
+This client-side implementation:
+- Provides TTL support similar to the server implementation
+- Handles storage quotas by clearing old items when needed
+- Differentiates between session and persistent storage
+- Includes proper error handling
 
 ## Future Enhancements
 
@@ -199,6 +547,9 @@ Potential areas for future improvement:
 3. **Distributed Cache Invalidation** - Selective invalidation of related cache entries
 4. **Compression** - Compression for large cached values to save space
 5. **Tiered Caching** - Multiple cache levels with different TTLs
+6. **Advanced Client-side Integration** - Tighter integration between server and client caches
+7. **Circuit Breaker Pattern** - Smart degradation for Redis errors
+8. **Key Eviction Policies** - Custom eviction strategies beyond TTL
 
 ## Migration Status
 
@@ -210,7 +561,14 @@ The standardization effort has been completed:
 ✅ Error handling with fallbacks is in place  
 ✅ Edge compatibility is ensured  
 ✅ The legacy `chatEngineCache` service has been removed  
+✅ Performance monitoring and logging implemented
 
 ## Summary
 
-The Redis caching system provides a robust, efficient, and serverless-friendly solution for various caching needs in the application. It follows best practices for key generation, error handling, and TTL management while providing specialized methods for different use cases.
+The Redis caching system provides a robust, efficient, and serverless-friendly solution for various caching needs in the application. It follows best practices for key generation, error handling, and TTL management while providing specialized methods for different use cases. The implementation ensures:
+
+1. **Reliability** - With in-memory fallbacks when Redis is unavailable
+2. **Performance** - Through optimized key generation and consistent serialization
+3. **Maintainability** - Via centralized configuration and specialized methods
+4. **Observability** - With comprehensive logging and diagnostic endpoints
+5. **Compatibility** - Working in both Edge and Node.js environments
