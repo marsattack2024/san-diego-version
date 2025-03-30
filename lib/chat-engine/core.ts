@@ -125,7 +125,7 @@ export class ChatEngine {
             corsEnabled: false,
             model: 'gpt-4o',
             maxTokens: 4096,
-            temperature: 0.7,
+            temperature: 0.5,
             useDeepSearch: false,
             useWebScraper: true,
             rateLimitRequests: 50,

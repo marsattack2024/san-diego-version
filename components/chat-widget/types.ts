@@ -86,7 +86,7 @@ export const POSITION_STYLES = {
 export const DEFAULT_CONFIG: ChatWidgetConfig = {
   position: 'bottom-right',
   title: 'Ask Marlan',
-  primaryColor: '#0070f3',
+  primaryColor: '#000000',
   greeting: "I'm your Mastermind AI companion! I can answer marketing and tech questions right now! What can I help with?",
   placeholder: 'Type your message...',
   width: 360,

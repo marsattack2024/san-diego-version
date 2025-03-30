@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
       corsEnabled: true,
       systemPrompt: prompts.widget,
       maxTokens: 800,
-      temperature: 0.5,
+      temperature: 0.4,
       useWebScraper: false,
       useDeepSearch: false,
       operationName: 'widget_chat',

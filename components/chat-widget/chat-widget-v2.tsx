@@ -146,7 +146,8 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
             {!isOpen && (
                 <button
                     onClick={() => setIsOpen(true)}
-                    className="rounded-full p-4 shadow-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-all"
+                    className="rounded-full p-4 shadow-lg text-primary-foreground transition-all"
+                    style={{ backgroundColor: widgetConfig.primaryColor || '#0070f3' }}
                     aria-label="Open chat"
                 >
                     <MessageSquare className="h-6 w-6" />
@@ -218,7 +219,7 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
                                             "flex flex-col max-w-[80%] rounded-lg p-3 overflow-hidden",
                                             message.role === 'user'
                                                 ? "ml-auto bg-primary/10 text-foreground"
-                                                : "mr-auto bg-muted text-muted-foreground"
+                                                : "mr-auto bg-muted text-foreground"
                                         )}
                                     >
                                         <div className="whitespace-pre-wrap break-words w-full">
@@ -278,7 +279,8 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
                                 type="submit"
                                 size="icon"
                                 disabled={!input.trim() || status === 'streaming' || rateLimitInfo.limited}
-                                className="h-[60px] shrink-0"
+                                className="h-[60px] shrink-0 text-primary-foreground"
+                                style={{ backgroundColor: widgetConfig.primaryColor || '#0070f3' }}
                                 title="Send message"
                             >
                                 {status === 'streaming' ? (
