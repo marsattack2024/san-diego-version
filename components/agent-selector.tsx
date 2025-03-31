@@ -24,7 +24,7 @@ interface Agent {
 const agents: Agent[] = [
   {
     id: 'default',
-    name: 'General Assistant',
+    name: 'Default (Auto)',
     description: 'General photography marketing assistant'
   },
   {

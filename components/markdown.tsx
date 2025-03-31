@@ -32,11 +32,11 @@ const components: Partial<Components> = {
   strong: ({ node, children, ...props }) => {
     return (
       <strong
-        className="font-black"
+        className="font-black text-primary"
         style={{
-          fontWeight: 900,
-          // Make text slightly larger for more impact
-          fontSize: '1.05em'
+          fontWeight: 900, /* Maximum valid font weight */
+          color: 'inherit',
+          textShadow: '0 0 0.5px currentColor' /* Subtle text shadow for emphasis without fuzziness */
         }}
         {...props}
       >
