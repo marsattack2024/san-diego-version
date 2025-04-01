@@ -10,6 +10,26 @@ type DeepSearchEvent = {
 };
 
 /**
+ * Helper function to extract the Supabase auth token from cookies
+ */
+function getSupabaseToken(): string | null {
+  if (typeof document === 'undefined') return null;
+
+  const cookies = document.cookie.split(';');
+  const authCookie = cookies.find(cookie =>
+    cookie.trim().startsWith('sb-') &&
+    cookie.includes('-auth-token='));
+
+  if (!authCookie) return null;
+
+  // Extract just the token value
+  const tokenParts = authCookie.split('=');
+  if (tokenParts.length !== 2) return null;
+
+  return tokenParts[1].trim();
+}
+
+/**
  * This component listens for deep search events from the server
  * and updates the chat store accordingly.
  */
@@ -17,9 +37,16 @@ export function DeepSearchTracker() {
   const setDeepSearchInProgress = useChatStore(state => state.setDeepSearchInProgress);
 
   useEffect(() => {
-    // Create an event source for server-sent events
-    // The URL will be intercepted by the middleware to add credentials
-    const eventSource = new EventSource('/api/events');
+    // Get the auth token to include in the request
+    const authToken = getSupabaseToken();
+
+    // Create URL with auth token as query parameter
+    const eventSourceUrl = authToken
+      ? `/api/events?token=${encodeURIComponent(authToken)}`
+      : '/api/events';
+
+    // Create an event source for server-sent events with auth token
+    const eventSource = new EventSource(eventSourceUrl);
 
     // Listen for deep search status events
     eventSource.addEventListener('message', (event) => {

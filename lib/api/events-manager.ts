@@ -4,30 +4,45 @@ import { LOG_CATEGORIES } from '@/lib/logger/constants';
 // Define the ReadableStreamController type for server-side event streaming
 type ReadableStreamController<T> = ReadableStreamDefaultController<T>;
 
-// Track active connections on the server side
-const serverClients = new Set<ReadableStreamController<Uint8Array>>();
+// Track active connections on the server side with user context
+type ClientInfo = {
+  controller: ReadableStreamController<Uint8Array>;
+  userId?: string;
+};
+
+// Update from Set to Map to associate user IDs with controllers
+const serverClients = new Map<ReadableStreamController<Uint8Array>, ClientInfo>();
 
 /**
  * Send an event to all connected event stream clients
- * Server-side function to broadcast events to all connected clients
+ * Optionally filter by user ID for targeted notifications
  */
-export function sendEventToClients(event: { type: string; status: string; details?: string }) {
+export function sendEventToClients(
+  event: { type: string; status: string; details?: string },
+  targetUserId?: string
+) {
   const eventData = `data: ${JSON.stringify(event)}\n\n`;
 
   // Convert string to Uint8Array
   const encoder = new TextEncoder();
   const data = encoder.encode(eventData);
 
-  // Send to all connected clients
-  serverClients.forEach((client) => {
+  // Send to all connected clients, optionally filtering by userId
+  serverClients.forEach((clientInfo, controller) => {
+    // Skip if target user specified and this isn't them
+    if (targetUserId && clientInfo.userId !== targetUserId) {
+      return;
+    }
+
     try {
-      client.enqueue(data);
+      controller.enqueue(data);
     } catch (err: unknown) {
       edgeLogger.error('Error sending event to client', {
-        error: err instanceof Error ? err.message : String(err)
+        error: err instanceof Error ? err.message : String(err),
+        userId: clientInfo.userId?.substring(0, 8) + '...' || 'unknown'
       });
-      // Remove failed clients from the set
-      serverClients.delete(client);
+      // Remove failed clients from the map
+      serverClients.delete(controller);
     }
   });
 }
@@ -45,16 +60,36 @@ export function triggerDeepSearchEvent(status: 'started' | 'completed' | 'failed
 
 /**
  * Add a client controller to the connected clients list
+ * @param controller The ReadableStreamController to add
+ * @param userId Optional user ID for targeted notifications
  */
-export function addEventClient(controller: ReadableStreamController<Uint8Array>) {
-  serverClients.add(controller);
+export function addEventClient(
+  controller: ReadableStreamController<Uint8Array>,
+  userId?: string
+) {
+  serverClients.set(controller, { controller, userId });
+
+  if (userId) {
+    edgeLogger.debug('Added event client with user context', {
+      userId: userId.substring(0, 8) + '...',
+      totalClients: serverClients.size
+    });
+  }
 }
 
 /**
  * Remove a client controller from the connected clients list
  */
 export function removeEventClient(controller: ReadableStreamController<Uint8Array>) {
+  const clientInfo = serverClients.get(controller);
   serverClients.delete(controller);
+
+  if (clientInfo?.userId) {
+    edgeLogger.debug('Removed event client with user context', {
+      userId: clientInfo.userId.substring(0, 8) + '...',
+      totalClients: serverClients.size
+    });
+  }
 }
 
 /**
