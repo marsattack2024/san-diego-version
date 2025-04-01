@@ -9,6 +9,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/utils/supabase/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { successResponse, errorResponse, unauthorizedError, notFoundError } from '@/lib/utils/route-handler';
+import type { IdParam } from '@/lib/types/route-handlers';
 
 export const runtime = 'edge';
 export const maxDuration = 15;
@@ -17,8 +19,8 @@ export const dynamic = 'force-dynamic';
 // GET handler to retrieve a specific chat and its messages
 export async function GET(
     req: Request,
-    { params }: { params: Promise<{ id: string }> }
-) {
+    { params }: IdParam
+): Promise<Response> {
     const operationId = `get_chat_${Math.random().toString(36).substring(2, 10)}`;
     const { id: chatId } = await params;
 
@@ -40,10 +42,7 @@ export async function GET(
                 error: authError?.message || 'No user found'
             });
 
-            return NextResponse.json(
-                { error: 'Unauthorized' },
-                { status: 401 }
-            );
+            return unauthorizedError();
         }
 
         // Get chat session data
@@ -62,10 +61,7 @@ export async function GET(
                 important: true
             });
 
-            return NextResponse.json(
-                { error: 'Chat not found' },
-                { status: 404 }
-            );
+            return notFoundError('Chat not found');
         }
 
         // Verify that the authenticated user owns this chat
@@ -77,10 +73,7 @@ export async function GET(
                 chatUserId: sessionData.user_id
             });
 
-            return NextResponse.json(
-                { error: 'Unauthorized - you do not have access to this chat' },
-                { status: 403 }
-            );
+            return errorResponse('Unauthorized - you do not have access to this chat', null, 403);
         }
 
         // Get chat messages
@@ -99,10 +92,7 @@ export async function GET(
                 important: true
             });
 
-            return NextResponse.json(
-                { error: 'Error fetching chat messages' },
-                { status: 500 }
-            );
+            return errorResponse('Error fetching chat messages', messagesError);
         }
 
         // Format messages for client
@@ -131,7 +121,7 @@ export async function GET(
             messageCount: messages.length
         });
 
-        return NextResponse.json(response);
+        return successResponse(response);
 
     } catch (error) {
         edgeLogger.error('Unexpected error getting chat', {
@@ -142,18 +132,15 @@ export async function GET(
             important: true
         });
 
-        return NextResponse.json(
-            { error: 'Server error' },
-            { status: 500 }
-        );
+        return errorResponse('Server error', error);
     }
 }
 
 // PATCH handler to update chat metadata
 export async function PATCH(
-    request: NextRequest,
-    { params }: { params: Promise<{ id: string }> }
-) {
+    request: Request,
+    { params }: IdParam
+): Promise<Response> {
     const operationId = `patch_chat_${Math.random().toString(36).substring(2, 10)}`;
     const { id: chatId } = await params;
 
@@ -176,10 +163,7 @@ export async function PATCH(
                 important: true
             });
 
-            return NextResponse.json(
-                { error: 'Invalid JSON: Failed to parse request body' },
-                { status: 400 }
-            );
+            return errorResponse('Invalid JSON: Failed to parse request body', error, 400);
         }
 
         // Authenticate user
@@ -193,10 +177,7 @@ export async function PATCH(
                 error: authError?.message || 'No user found'
             });
 
-            return NextResponse.json(
-                { error: 'Unauthorized' },
-                { status: 401 }
-            );
+            return unauthorizedError();
         }
 
         // Verify the chat exists and belongs to this user
@@ -207,7 +188,7 @@ export async function PATCH(
             .single();
 
         if (sessionError || !sessionData) {
-            edgeLogger.error('Chat not found for update', {
+            edgeLogger.error('Error fetching chat session for update', {
                 category: 'chat',
                 operationId,
                 chatId,
@@ -215,10 +196,7 @@ export async function PATCH(
                 important: true
             });
 
-            return NextResponse.json(
-                { error: 'Chat not found' },
-                { status: 404 }
-            );
+            return notFoundError('Chat not found');
         }
 
         // Verify ownership
@@ -230,38 +208,40 @@ export async function PATCH(
                 chatUserId: sessionData.user_id
             });
 
-            return NextResponse.json(
-                { error: 'Unauthorized - you do not have access to this chat' },
-                { status: 403 }
-            );
+            return errorResponse('Unauthorized - you do not have access to this chat', null, 403);
         }
 
-        // Update the relevant fields
-        const updateData: { title?: string } = {};
+        // Extract properties to update
+        const updateData: Record<string, any> = {};
 
-        // Title update
+        // Check for valid title update
         if (body.title !== undefined) {
-            updateData.title = body.title;
+            if (typeof body.title !== 'string') {
+                return errorResponse('Invalid title format', null, 400);
+            }
+            updateData.title = body.title.trim();
         }
 
-        // If nothing to update, return success
+        // Check for agent_id update
+        if (body.agentId !== undefined) {
+            if (typeof body.agentId !== 'string') {
+                return errorResponse('Invalid agent ID format', null, 400);
+            }
+            updateData.agent_id = body.agentId;
+        }
+
+        // Check if there's anything to update
         if (Object.keys(updateData).length === 0) {
-            edgeLogger.info('No fields to update', {
-                category: 'chat',
-                operationId,
-                chatId
-            });
-
-            return NextResponse.json({ success: true });
+            return errorResponse('No valid fields to update', null, 400);
         }
 
-        // Perform the update
+        // Set updated_at timestamp
+        updateData.updated_at = new Date().toISOString();
+
+        // Update the chat session
         const { error: updateError } = await supabase
             .from('sd_chat_sessions')
-            .update({
-                ...updateData,
-                updated_at: new Date().toISOString()
-            })
+            .update(updateData)
             .eq('id', chatId);
 
         if (updateError) {
@@ -273,10 +253,7 @@ export async function PATCH(
                 important: true
             });
 
-            return NextResponse.json(
-                { error: 'Error updating chat' },
-                { status: 500 }
-            );
+            return errorResponse('Error updating chat', updateError);
         }
 
         edgeLogger.info('Successfully updated chat', {
@@ -286,7 +263,7 @@ export async function PATCH(
             fields: Object.keys(updateData).join(', ')
         });
 
-        return NextResponse.json({ success: true });
+        return successResponse({ success: true });
 
     } catch (error) {
         edgeLogger.error('Unexpected error updating chat', {
@@ -297,9 +274,6 @@ export async function PATCH(
             important: true
         });
 
-        return NextResponse.json(
-            { error: 'Server error' },
-            { status: 500 }
-        );
+        return errorResponse('Server error', error);
     }
 }

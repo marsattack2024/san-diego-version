@@ -6,7 +6,6 @@
  * to the chat engine components.
  */
 
-import { NextRequest } from 'next/server';
 import { createChatEngine, ChatEngineConfig } from '@/lib/chat-engine/core';
 import { detectAgentType } from '@/lib/chat-engine/agent-router';
 import { createToolSet } from '@/lib/tools/registry.tool';
@@ -14,8 +13,7 @@ import { prompts } from '@/lib/chat-engine/prompts';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createClient } from '@/utils/supabase/server';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-// Remove validator import
-// import { validateChatRequest } from '@/lib/chat/validator';
+import { errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
 
 // Maintain existing runtime directives
 export const runtime = 'edge';
@@ -47,7 +45,7 @@ function parseBooleanValue(value: any): boolean {
   return false;
 }
 
-export async function POST(req: Request) {
+export async function POST(req: Request): Promise<Response> {
   const startTime = Date.now();
 
   try {
@@ -65,10 +63,7 @@ export async function POST(req: Request) {
         error: error instanceof Error ? error.message : String(error)
       });
 
-      return new Response(
-        JSON.stringify({ error: 'Invalid JSON: Failed to parse request body' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return errorResponse('Invalid JSON: Failed to parse request body', error, 400);
     }
 
     // Handle validation directly instead of using the validator
@@ -93,9 +88,10 @@ export async function POST(req: Request) {
         body: JSON.stringify(body).substring(0, 200) // Log first 200 chars
       });
 
-      return new Response(
-        JSON.stringify({ error: 'Invalid request: messages required', bodyProvided: Object.keys(body) }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
+      return errorResponse(
+        'Invalid request: messages required',
+        { bodyProvided: Object.keys(body) },
+        400
       );
     }
 
@@ -124,10 +120,7 @@ export async function POST(req: Request) {
         length: clientMessages?.length
       });
 
-      return new Response(
-        JSON.stringify({ error: 'Invalid request: messages required' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return errorResponse('Invalid request: messages required', null, 400);
     }
 
     if (!sessionId) {
@@ -135,10 +128,7 @@ export async function POST(req: Request) {
         operation: 'request_validation'
       });
 
-      return new Response(
-        JSON.stringify({ error: 'Invalid request: session ID required' }),
-        { status: 400, headers: { 'Content-Type': 'application/json' } }
-      );
+      return errorResponse('Invalid request: session ID required', null, 400);
     }
 
     // Get the latest user message for agent detection
@@ -192,12 +182,10 @@ export async function POST(req: Request) {
         important: true
       });
 
-      return new Response(
-        JSON.stringify({
-          error: 'Agent detection failed',
-          message: agentError instanceof Error ? agentError.message : 'Unknown error'
-        }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      return errorResponse(
+        'Agent detection failed',
+        agentError instanceof Error ? agentError.message : 'Unknown error',
+        500
       );
     }
 
@@ -228,12 +216,10 @@ export async function POST(req: Request) {
         error: toolError instanceof Error ? toolError.message : String(toolError)
       });
 
-      return new Response(
-        JSON.stringify({
-          error: 'Tool creation failed',
-          message: toolError instanceof Error ? toolError.message : 'Unknown error'
-        }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      return errorResponse(
+        'Tool creation failed',
+        toolError instanceof Error ? toolError.message : 'Unknown error',
+        500
       );
     }
 
@@ -261,10 +247,7 @@ export async function POST(req: Request) {
         authError: authError?.message
       });
 
-      return new Response(
-        JSON.stringify({ error: 'Authentication required' }),
-        { status: 401, headers: { 'Content-Type': 'application/json' } }
-      );
+      return unauthorizedError();
     }
 
     // For testing: when auth is bypassed, use a default user ID for persistence
@@ -356,12 +339,10 @@ export async function POST(req: Request) {
         error: engineError instanceof Error ? engineError.message : String(engineError)
       });
 
-      return new Response(
-        JSON.stringify({
-          error: 'Chat engine creation failed',
-          message: engineError instanceof Error ? engineError.message : 'Unknown error'
-        }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      return errorResponse(
+        'Chat engine creation failed',
+        engineError instanceof Error ? engineError.message : 'Unknown error',
+        500
       );
     }
 
@@ -410,13 +391,10 @@ export async function POST(req: Request) {
         stack: handleRequestError instanceof Error ? handleRequestError.stack : undefined
       });
 
-      return new Response(
-        JSON.stringify({
-          error: 'Request handling failed',
-          message: handleRequestError instanceof Error ? handleRequestError.message : 'Unknown error',
-          location: 'handle_request'
-        }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      return errorResponse(
+        'Request handling failed',
+        handleRequestError instanceof Error ? handleRequestError.message : 'Unknown error',
+        500
       );
     }
 
@@ -428,13 +406,10 @@ export async function POST(req: Request) {
     });
 
     // Return a user-friendly error response
-    return new Response(
-      JSON.stringify({
-        error: 'An error occurred processing your request',
-        message: error instanceof Error ? error.message : 'Unknown error',
-        location: 'outer_try_catch'
-      }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
+    return errorResponse(
+      'An error occurred processing your request',
+      error instanceof Error ? error.message : 'Unknown error',
+      500
     );
   }
 } 

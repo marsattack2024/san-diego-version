@@ -1,4 +1,3 @@
-import { NextRequest } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import {
   sendEventToClients,
@@ -7,11 +6,12 @@ import {
   getClientCount
 } from '@/lib/api/events-manager';
 import { createServerClient } from '@supabase/ssr';
+import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
 
-// Remove edge runtime - endpoint will use serverless runtime by default
+// Using serverless runtime by default with no runtime declaration
 
 // Connect to the event stream
-export async function GET(req: NextRequest) {
+export async function GET(req: Request): Promise<Response> {
   // 1. Extract auth token from query parameters
   const url = new URL(req.url);
   const authToken = url.searchParams.get('auth');
@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
   // 2. Authentication check
   if (!authToken) {
     edgeLogger.warn('Unauthorized events connection attempt', { noToken: true });
-    return new Response('Unauthorized - No authentication token provided', { status: 401 });
+    return unauthorizedError('No authentication token provided');
   }
 
   // 3. Validate token with Supabase
@@ -52,7 +52,7 @@ export async function GET(req: NextRequest) {
       edgeLogger.warn('Invalid token for events connection', {
         error: error?.message || 'No user found',
       });
-      return new Response('Unauthorized - Invalid authentication token', { status: 401 });
+      return unauthorizedError('Invalid authentication token');
     }
 
     // Valid user, proceed with connection
@@ -61,7 +61,7 @@ export async function GET(req: NextRequest) {
     // Performance optimization: Set a maximum client limit to prevent memory issues
     if (getClientCount() >= 100) {
       edgeLogger.warn('Too many event stream connections', { connectionCount: getClientCount() });
-      return new Response('Too many connections', { status: 503 });
+      return errorResponse('Too many connections', { connectionCount: getClientCount() }, 503);
     }
 
     // Log connection for debugging
@@ -123,37 +123,28 @@ export async function GET(req: NextRequest) {
     edgeLogger.error('Error in events endpoint', {
       error: err instanceof Error ? err.message : String(err)
     });
-    return new Response('Internal Server Error', { status: 500 });
+    return errorResponse('Internal Server Error', err, 500);
   }
 }
 
 // POST handler to trigger events from other parts of the application
-export async function POST(req: NextRequest) {
+export async function POST(req: Request): Promise<Response> {
   try {
     const { type, status, details } = await req.json();
 
     if (!type || !status) {
-      return new Response(JSON.stringify({ error: 'Type and status are required' }), {
-        status: 400,
-        headers: { 'Content-Type': 'application/json' }
-      });
+      return errorResponse('Type and status are required', null, 400);
     }
 
     // Send the event to all connected clients
     sendEventToClients({ type, status, details });
 
-    return new Response(JSON.stringify({ success: true }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' }
-    });
+    return successResponse({ success: true });
   } catch (err) {
     edgeLogger.error('Error processing event POST', {
       error: err instanceof Error ? err.message : String(err)
     });
 
-    return new Response(JSON.stringify({ error: 'Error processing request' }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
+    return errorResponse('Error processing request', err, 500);
   }
 }

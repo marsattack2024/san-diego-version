@@ -38,7 +38,7 @@ describe('Environment Loader', () => {
     
     it('should provide default values for optional variables', async () => {
       // Set NODE_ENV to undefined using vi.stubEnv instead of delete
-      vi.stubEnv('NODE_ENV', undefined);
+      vi.stubEnv('NODE_ENV', '');
       
       // Import the env loader
       const { env } = await import('@/scripts/lib/env-loader');
@@ -51,7 +51,7 @@ describe('Environment Loader', () => {
     it('should handle validation failure when critical variables are missing', async () => {
       // Explicitly unset critical API key and capture original
       const originalKey = process.env.OPENAI_API_KEY;
-      vi.stubEnv('OPENAI_API_KEY', undefined);
+      vi.stubEnv('OPENAI_API_KEY', '');
       
       // Remove it from process.env as well to ensure it's truly missing
       delete process.env.OPENAI_API_KEY;
@@ -118,7 +118,7 @@ describe('Environment Loader', () => {
     
     it('should identify non-Vercel environment', async () => {
       // Clear Vercel environment using vi.stubEnv instead of delete
-      vi.stubEnv('VERCEL_ENV', undefined);
+      vi.stubEnv('VERCEL_ENV', '');
       
       // Import the env loader
       const { env } = await import('@/scripts/lib/env-loader');

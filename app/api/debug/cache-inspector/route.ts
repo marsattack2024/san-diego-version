@@ -1,7 +1,9 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { edgeLogger } from '../../../../lib/logger/edge-logger';
-import { LOG_CATEGORIES } from '../../../../lib/logger/constants';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { Redis } from '@upstash/redis';
+import { successResponse, errorResponse, notFoundError } from '@/lib/utils/route-handler';
+
+export const runtime = 'edge';
 
 /**
  * A comprehensive cache debugging endpoint that shows the raw cached value,
@@ -12,16 +14,17 @@ import { Redis } from '@upstash/redis';
  * 
  * Example: /api/debug/cache-inspector?key=vector:query:12345
  */
-export async function GET(request: NextRequest) {
+export async function GET(request: Request): Promise<Response> {
   try {
     const { searchParams } = new URL(request.url);
     const key = searchParams.get('key');
 
     if (!key) {
-      return NextResponse.json({
-        error: 'Missing required parameter: key',
-        usage: '/api/debug/cache-inspector?key=your-cache-key'
-      }, { status: 400 });
+      return errorResponse(
+        'Missing required parameter: key',
+        { usage: '/api/debug/cache-inspector?key=your-cache-key' },
+        400
+      );
     }
 
     // Use Redis.fromEnv() for consistent initialization
@@ -51,10 +54,7 @@ export async function GET(request: NextRequest) {
     const rawValue = await redis.get<string>(key);
 
     if (!rawValue) {
-      return NextResponse.json({
-        error: 'Cache key not found',
-        key
-      }, { status: 404 });
+      return notFoundError(`Cache key not found: ${key}`);
     }
 
     // Prepare diagnostic information
@@ -138,20 +138,20 @@ export async function GET(request: NextRequest) {
       innerParseSuccess: diagnostics.parsedValue.innerStringParse !== null
     });
 
-    return NextResponse.json({
+    return successResponse({
       success: true,
       diagnostics
     });
   } catch (error) {
-    console.error('Cache inspector error:', error);
     edgeLogger.error('Cache inspector error', {
       category: LOG_CATEGORIES.SYSTEM,
       error: error instanceof Error ? error.message : String(error)
     });
 
-    return NextResponse.json({
-      error: 'Error inspecting cache',
-      message: error instanceof Error ? error.message : String(error)
-    }, { status: 500 });
+    return errorResponse(
+      'Error inspecting cache',
+      error instanceof Error ? error.message : String(error),
+      500
+    );
   }
 } 

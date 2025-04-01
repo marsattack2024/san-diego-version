@@ -3,28 +3,32 @@ import { createClient } from '@/utils/supabase/server';
 import { cookies } from 'next/headers';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import type { Message } from 'ai';
+import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import type { IdParam } from '@/lib/types/route-handlers';
+
+export const runtime = 'edge';
 
 export async function GET(
-    request: NextRequest,
-    { params }: { params: { id: string } }
-): Promise<NextResponse> {
+    request: Request,
+    { params }: IdParam
+): Promise<Response> {
     try {
-        const chatId = params.id;
+        const { id: chatId } = await params;
         const { searchParams } = new URL(request.url);
         const page = parseInt(searchParams.get('page') || '1');
         const pageSize = parseInt(searchParams.get('pageSize') || '20');
 
         // Basic validation
         if (!chatId) {
-            return NextResponse.json({ error: 'Chat ID is required' }, { status: 400 });
+            return errorResponse('Chat ID is required', null, 400);
         }
 
         if (isNaN(page) || page < 1) {
-            return NextResponse.json({ error: 'Invalid page number' }, { status: 400 });
+            return errorResponse('Invalid page number', null, 400);
         }
 
         if (isNaN(pageSize) || pageSize < 1 || pageSize > 100) {
-            return NextResponse.json({ error: 'Invalid page size' }, { status: 400 });
+            return errorResponse('Invalid page size', null, 400);
         }
 
         // Create Supabase client
@@ -39,7 +43,7 @@ export async function GET(
                 error: authError?.message || 'No user found'
             });
 
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+            return unauthorizedError();
         }
 
         // Calculate offset for pagination
@@ -72,7 +76,7 @@ export async function GET(
                 pageSize
             });
 
-            return NextResponse.json({ error: 'Failed to fetch messages' }, { status: 500 });
+            return errorResponse('Failed to fetch messages', error);
         }
 
         // Transform database records to Message format
@@ -92,16 +96,9 @@ export async function GET(
             count: messages.length
         });
 
-        return NextResponse.json(messages);
+        return successResponse(messages);
     } catch (error) {
         // Handle unexpected errors
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-
-        edgeLogger.error('Unexpected error fetching paginated messages', {
-            operation: 'fetch_paginated_messages',
-            error: errorMessage
-        });
-
-        return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+        return errorResponse('Unexpected error fetching paginated messages', error);
     }
 } 

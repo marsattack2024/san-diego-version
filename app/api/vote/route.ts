@@ -1,9 +1,11 @@
-import { NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createClient as createServerClient } from '@/utils/supabase/server';
 import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import type { PostgrestError } from '@supabase/supabase-js';
+import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+
+export const runtime = 'edge';
 
 // Votes are now stored directly in the sd_chat_histories table as a column,
 // so this endpoint now handles voting on messages
@@ -57,15 +59,12 @@ export async function POST(req: Request): Promise<Response> {
       const userId = user?.id;
 
       if (!userId) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        return unauthorizedError('Authentication required for voting');
       }
 
       // Validate vote value
       if (vote !== 'up' && vote !== 'down' && vote !== null) {
-        return NextResponse.json(
-          { error: 'Vote must be "up", "down", or null' },
-          { status: 400 }
-        );
+        return errorResponse('Vote must be "up", "down", or null', null, 400);
       }
 
       // Check for development mode fast path
@@ -75,7 +74,7 @@ export async function POST(req: Request): Promise<Response> {
       // In development mode, just return success without doing DB operations
       if (DEV_MODE_ENABLED) {
         edgeLogger.info('Development mode - skipping vote operation', { messageId, vote });
-        return NextResponse.json({ success: true });
+        return successResponse({ success: true });
       }
 
       // Create Supabase client for database operations
@@ -146,7 +145,7 @@ export async function POST(req: Request): Promise<Response> {
       } else {
         // If we can't identify the message format
         edgeLogger.warn('Unrecognized message ID format', { messageId });
-        return NextResponse.json({ success: true });
+        return successResponse({ success: true });
       }
 
       if (messageError || !message) {
@@ -155,7 +154,7 @@ export async function POST(req: Request): Promise<Response> {
           messageId
         });
         // Return success instead of error to avoid client-side errors
-        return NextResponse.json({ success: true });
+        return successResponse({ success: true });
       }
 
       // Verify user has access to this chat session
@@ -173,7 +172,7 @@ export async function POST(req: Request): Promise<Response> {
         });
 
         // Return success without creating a new chat
-        return NextResponse.json({ success: true });
+        return successResponse({ success: true });
       }
 
       // Update the vote using the actual database message ID we found
@@ -189,16 +188,16 @@ export async function POST(req: Request): Promise<Response> {
           databaseId: message.id
         });
         // Return success instead of error
-        return NextResponse.json({ success: true });
+        return successResponse({ success: true });
       }
 
-      return NextResponse.json({ success: true });
+      return successResponse({ success: true });
     } catch (error) {
       edgeLogger.error('Error processing vote', {
         error: formatError(error),
         requestId
       });
-      return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+      return errorResponse('Internal server error', error, 500);
     }
   }, { requestId, messageId: messageId!, voteType: vote! });
 }

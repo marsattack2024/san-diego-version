@@ -1,36 +1,55 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { SupabaseClient } from '@supabase/supabase-js';
+import type { RouteParams, IdParam } from '@/lib/types/route-handlers';
+
+export const runtime = 'edge';
 
 // Helper to check if a user is an admin with comprehensive checks
-async function isAdmin(supabase: any, userId: string) {
-  console.log("[Delete User API] Checking admin status for user:", userId);
-  
+async function isAdmin(supabase: SupabaseClient, userId: string): Promise<boolean> {
+  edgeLogger.debug('Checking admin status for user', {
+    category: LOG_CATEGORIES.AUTH,
+    userId
+  });
+
   try {
     // Method 1: Use the RPC function that checks sd_user_roles
     const { data: rpcData, error: rpcError } = await supabase.rpc('is_admin', { uid: userId });
-    
+
     if (rpcError) {
-      console.error("[Delete User API] Error checking admin via RPC:", rpcError);
+      edgeLogger.error('Error checking admin via RPC', {
+        category: LOG_CATEGORIES.AUTH,
+        error: rpcError
+      });
     } else if (rpcData) {
-      console.log("[Delete User API] User is admin via RPC check");
+      edgeLogger.debug('User is admin via RPC check', {
+        category: LOG_CATEGORIES.AUTH
+      });
       return true;
     }
-    
+
     // Method 2: Check directly in the profiles table
     const { data: profileData, error: profileError } = await supabase
       .from('sd_user_profiles')
       .select('is_admin')
       .eq('user_id', userId)
       .single();
-      
+
     if (profileError) {
-      console.error("[Delete User API] Error checking admin via profile:", profileError);
+      edgeLogger.error('Error checking admin via profile', {
+        category: LOG_CATEGORIES.AUTH,
+        error: profileError
+      });
     } else if (profileData?.is_admin === true) {
-      console.log("[Delete User API] User is admin via profile flag");
+      edgeLogger.debug('User is admin via profile flag', {
+        category: LOG_CATEGORIES.AUTH
+      });
       return true;
     }
-    
+
     // Method 3: Check directly in the roles table
     const { data: roleData, error: roleError } = await supabase
       .from('sd_user_roles')
@@ -38,18 +57,28 @@ async function isAdmin(supabase: any, userId: string) {
       .eq('user_id', userId)
       .eq('role', 'admin')
       .maybeSingle();
-      
+
     if (roleError) {
-      console.error("[Delete User API] Error checking admin via roles:", roleError);
+      edgeLogger.error('Error checking admin via roles', {
+        category: LOG_CATEGORIES.AUTH,
+        error: roleError
+      });
     } else if (roleData) {
-      console.log("[Delete User API] User is admin via roles table");
+      edgeLogger.debug('User is admin via roles table', {
+        category: LOG_CATEGORIES.AUTH
+      });
       return true;
     }
-    
-    console.log("[Delete User API] User is not admin by any verification method");
+
+    edgeLogger.debug('User is not admin by any verification method', {
+      category: LOG_CATEGORIES.AUTH
+    });
     return false;
   } catch (err) {
-    console.error("[Delete User API] Exception checking admin status:", err);
+    edgeLogger.error('Exception checking admin status', {
+      category: LOG_CATEGORIES.AUTH,
+      error: err instanceof Error ? err.message : String(err)
+    });
     return false;
   }
 }
@@ -61,20 +90,26 @@ export async function DELETE(
 ): Promise<Response> {
   // Access userId from params with await
   const { userId } = await params;
-  
+
   if (!userId) {
-    return NextResponse.json({ error: 'User ID is required' }, { status: 400 });
+    return errorResponse('User ID is required', null, 400);
   }
 
-  console.log("[Delete User API] Deleting user:", userId);
-  
+  edgeLogger.info('Deleting user', {
+    category: LOG_CATEGORIES.AUTH,
+    targetUserId: userId
+  });
+
   // Use await with cookies to satisfy Next.js warning
   const cookieStore = await cookies();
-  
+
   // Try to use service role key if available
   const apiKey = process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-  console.log("[Delete User API] Using service key:", !!process.env.SUPABASE_KEY);
-  
+  edgeLogger.debug('Using service key for user deletion', {
+    category: LOG_CATEGORIES.AUTH,
+    hasServiceKey: !!process.env.SUPABASE_KEY
+  });
+
   const supabase = createSupabaseServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     apiKey,
@@ -97,252 +132,422 @@ export async function DELETE(
       },
     }
   );
-  
+
   // Verify the user is authenticated and an admin
   const { data: userData, error: userError } = await supabase.auth.getUser();
-  
+
   if (userError) {
-    console.error("[Delete User API] Error getting user:", userError);
-    return NextResponse.json({ error: 'Authentication error' }, { status: 401 });
+    edgeLogger.error('Authentication error during user deletion', {
+      category: LOG_CATEGORIES.AUTH,
+      error: userError.message
+    });
+    return unauthorizedError('Authentication error');
   }
-  
+
   const user = userData.user;
   if (!user) {
-    console.log("[Delete User API] No authenticated user found");
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    edgeLogger.warn('No authenticated user found during deletion attempt', {
+      category: LOG_CATEGORIES.AUTH
+    });
+    return unauthorizedError('Not authenticated');
   }
-  
-  console.log("[Delete User API] Authenticated as user:", user.id);
-  
+
+  edgeLogger.debug('Authenticated as user for deletion operation', {
+    category: LOG_CATEGORIES.AUTH,
+    userId: user.id
+  });
+
   // Check if user is an admin
   const admin = await isAdmin(supabase, user.id);
   if (!admin) {
-    console.log("[Delete User API] User is not an admin:", user.id);
-    return NextResponse.json({ error: 'Forbidden - You do not have admin privileges' }, { status: 403 });
+    edgeLogger.warn('Non-admin user attempted to delete a user', {
+      category: LOG_CATEGORIES.AUTH,
+      userId: user.id
+    });
+    return errorResponse('Forbidden - You do not have admin privileges', null, 403);
   }
-  
-  console.log("[Delete User API] User is confirmed admin:", user.id);
-  
+
+  edgeLogger.info('Admin user confirmed for deletion operation', {
+    category: LOG_CATEGORIES.AUTH,
+    adminId: user.id
+  });
+
   try {
     // Don't allow deleting your own account
     if (userId === user.id) {
-      console.log("[Delete User API] Attempted to delete own account");
-      return NextResponse.json({ error: 'You cannot delete your own account' }, { status: 400 });
+      edgeLogger.warn('Admin attempted to delete own account', {
+        category: LOG_CATEGORIES.AUTH,
+        userId: user.id
+      });
+      return errorResponse('You cannot delete your own account', null, 400);
     }
-    
-    console.log("[Delete User API] Checking if target user exists:", userId);
-    
+
+    edgeLogger.debug('Checking if target user exists', {
+      category: LOG_CATEGORIES.AUTH,
+      targetUserId: userId
+    });
+
     // First check the existence through the profiles table (doesn't require admin privileges)
     const { data: profileExists, error: profileError } = await supabase
       .from('sd_user_profiles')
       .select('user_id')
       .eq('user_id', userId)
       .maybeSingle();
-    
+
     if (profileError) {
-      console.error("[Delete User API] Error checking profile:", profileError);
+      edgeLogger.error('Error checking profile existence', {
+        category: LOG_CATEGORIES.AUTH,
+        error: profileError,
+        targetUserId: userId
+      });
     } else if (profileExists) {
-      console.log("[Delete User API] Found existing profile for user");
+      edgeLogger.debug('Found existing profile for user', {
+        category: LOG_CATEGORIES.AUTH,
+        targetUserId: userId
+      });
     } else {
-      console.log("[Delete User API] No profile found for user, may not exist");
+      edgeLogger.warn('No profile found for user, may not exist', {
+        category: LOG_CATEGORIES.AUTH,
+        targetUserId: userId
+      });
     }
-    
+
     // Try checking user existence through admin API as a fallback
     try {
-      console.log("[Delete User API] Checking user existence via admin API");
+      edgeLogger.debug('Checking user existence via admin API', {
+        category: LOG_CATEGORIES.AUTH,
+        targetUserId: userId
+      });
+
       const { data: userExists, error: userExistsError } = await supabase.auth.admin.getUserById(userId);
-      
+
       if (userExistsError) {
-        console.error("[Delete User API] Error checking user via admin API:", userExistsError);
-        
+        edgeLogger.error('Error checking user via admin API', {
+          category: LOG_CATEGORIES.AUTH,
+          error: userExistsError,
+          targetUserId: userId
+        });
+
         // If both profile check and admin API failed, but we know the user should exist,
         // let's proceed anyway since deleteUser will fail for non-existent users
         if (!profileExists) {
-          console.log("[Delete User API] Both profile check and admin API failed");
-          return NextResponse.json({ error: 'Failed to verify user exists' }, { status: 500 });
+          edgeLogger.error('Both profile check and admin API failed', {
+            category: LOG_CATEGORIES.AUTH,
+            targetUserId: userId
+          });
+          return errorResponse('Failed to verify user exists', null, 500);
         }
       } else if (!userExists?.user) {
-        console.log("[Delete User API] User not found in auth.users table");
-        return NextResponse.json({ error: 'User not found' }, { status: 404 });
+        edgeLogger.warn('User not found in auth.users table', {
+          category: LOG_CATEGORIES.AUTH,
+          targetUserId: userId
+        });
+        return errorResponse('User not found', null, 404);
       } else {
-        console.log("[Delete User API] Found user in auth.users:", userExists.user.email);
+        edgeLogger.debug('Found user in auth.users', {
+          category: LOG_CATEGORIES.AUTH,
+          targetUserId: userId,
+          email: userExists.user.email
+        });
       }
     } catch (adminError) {
-      console.error("[Delete User API] Exception checking user existence:", adminError);
-      
+      edgeLogger.error('Exception checking user existence', {
+        category: LOG_CATEGORIES.AUTH,
+        error: adminError instanceof Error ? adminError.message : String(adminError),
+        targetUserId: userId
+      });
+
       // If admin API throws but profile exists, we'll proceed with deletion
       if (!profileExists) {
-        return NextResponse.json({ error: 'Failed to verify user exists' }, { status: 500 });
+        return errorResponse('Failed to verify user exists', null, 500);
       }
     }
-    
+
     // First, verify if ON DELETE CASCADE is working properly by checking if any tables 
     // don't have the proper constraints
-    
+
     // Check sd_user_roles (should cascade from auth.users)
     const { data: userRoles } = await supabase
       .from('sd_user_roles')
       .select('id')
       .eq('user_id', userId)
       .limit(1);
-      
+
     if (userRoles && userRoles.length > 0) {
-      console.log(`User ${userId} has role assignments that will be deleted`);
+      edgeLogger.debug('User has role assignments that will be deleted', {
+        category: LOG_CATEGORIES.AUTH,
+        targetUserId: userId
+      });
     }
-    
+
     // Check if user has chat sessions
     const { data: chatSessions } = await supabase
       .from('sd_chat_sessions')
       .select('id')
       .eq('user_id', userId)
       .limit(5);
-      
+
     if (chatSessions && chatSessions.length > 0) {
-      console.log(`User ${userId} has ${chatSessions.length} chat sessions that will be deleted`);
+      edgeLogger.debug('User has chat sessions that will be deleted', {
+        category: LOG_CATEGORIES.AUTH,
+        targetUserId: userId,
+        sessionCount: chatSessions.length
+      });
     }
-    
-    console.log("[Delete User API] Beginning deletion process for user:", userId);
-    
+
+    edgeLogger.info('Beginning deletion process for user', {
+      category: LOG_CATEGORIES.AUTH,
+      targetUserId: userId
+    });
+
     // Try to use the safe_delete_user function first
     try {
-      console.log("[Delete User API] Using safe_delete_user function");
-      
+      edgeLogger.debug('Using safe_delete_user function', {
+        category: LOG_CATEGORIES.AUTH,
+        targetUserId: userId
+      });
+
       // Call the safe_delete_user function that handles all deletions in one transaction
       const { data: safeDeleteResult, error: safeDeleteError } = await supabase
         .rpc('safe_delete_user', { user_id_param: userId });
-        
+
       if (safeDeleteError) {
-        console.error("[Delete User API] Error using safe_delete_user:", safeDeleteError);
-        
+        edgeLogger.error('Error using safe_delete_user', {
+          category: LOG_CATEGORIES.AUTH,
+          error: safeDeleteError,
+          targetUserId: userId
+        });
+
         // Fall back to deleting the data manually
-        console.log("[Delete User API] Falling back to manual deletion");
-        
+        edgeLogger.debug('Falling back to manual deletion', {
+          category: LOG_CATEGORIES.AUTH,
+          targetUserId: userId
+        });
+
         // Delete from sd_user_roles
         const { error: rolesError } = await supabase
           .from('sd_user_roles')
           .delete()
           .eq('user_id', userId);
-          
+
         if (rolesError) {
-          console.error("[Delete User API] Error deleting roles:", rolesError);
+          edgeLogger.error('Error deleting roles', {
+            category: LOG_CATEGORIES.AUTH,
+            error: rolesError,
+            targetUserId: userId
+          });
         }
-        
+
         // Delete from sd_user_profiles
         const { error: profilesError } = await supabase
           .from('sd_user_profiles')
           .delete()
           .eq('user_id', userId);
-          
+
         if (profilesError) {
-          console.error("[Delete User API] Error deleting profile:", profilesError);
+          edgeLogger.error('Error deleting profile', {
+            category: LOG_CATEGORIES.AUTH,
+            error: profilesError,
+            targetUserId: userId
+          });
         }
-        
+
         // Delete from sd_chat_sessions (should cascade to histories)
         const { error: sessionsError } = await supabase
           .from('sd_chat_sessions')
           .delete()
           .eq('user_id', userId);
-          
+
         if (sessionsError) {
-          console.error("[Delete User API] Error deleting chat sessions:", sessionsError);
+          edgeLogger.error('Error deleting chat sessions', {
+            category: LOG_CATEGORIES.AUTH,
+            error: sessionsError,
+            targetUserId: userId
+          });
         }
       } else {
-        console.log("[Delete User API] safe_delete_user succeeded:", safeDeleteResult);
+        edgeLogger.debug('safe_delete_user succeeded', {
+          category: LOG_CATEGORIES.AUTH,
+          targetUserId: userId,
+          result: safeDeleteResult
+        });
       }
-      
-      console.log("[Delete User API] Profile data deletion completed");
+
+      edgeLogger.info('Profile data deletion completed', {
+        category: LOG_CATEGORIES.AUTH,
+        targetUserId: userId
+      });
     } catch (profileDeleteError) {
-      console.error("[Delete User API] Error in profile deletion:", profileDeleteError);
+      edgeLogger.error('Error in profile deletion', {
+        category: LOG_CATEGORIES.AUTH,
+        error: profileDeleteError instanceof Error ? profileDeleteError.message : String(profileDeleteError),
+        targetUserId: userId
+      });
     }
-    
+
     // Use the complete_user_deletion function for reliable deletion
     try {
-      console.log("[Delete User API] Using complete_user_deletion function for proper cleanup");
-      
+      edgeLogger.debug('Using complete_user_deletion function for proper cleanup', {
+        category: LOG_CATEGORIES.AUTH,
+        targetUserId: userId
+      });
+
       // Call the existing comprehensive user deletion function
       const { data: deleteResult, error: deleteError } = await supabase
         .rpc('complete_user_deletion', { user_id_param: userId });
-        
+
       if (deleteError) {
-        console.error("[Delete User API] Error using complete_user_deletion function:", deleteError);
-        
+        edgeLogger.error('Error using complete_user_deletion function', {
+          category: LOG_CATEGORIES.AUTH,
+          error: deleteError,
+          targetUserId: userId
+        });
+
         // Try the fallback safe_delete_user_data function that only deletes application data
-        console.log("[Delete User API] Falling back to safe_delete_user_data");
+        edgeLogger.debug('Falling back to safe_delete_user_data', {
+          category: LOG_CATEGORIES.AUTH,
+          targetUserId: userId
+        });
+
         const { data: safeDeleteResult, error: safeDeleteError } = await supabase
           .rpc('safe_delete_user_data', { user_id_param: userId });
-          
+
         if (safeDeleteError) {
-          console.error("[Delete User API] Error using safe_delete_user_data:", safeDeleteError);
+          edgeLogger.error('Error using safe_delete_user_data', {
+            category: LOG_CATEGORIES.AUTH,
+            error: safeDeleteError,
+            targetUserId: userId
+          });
         } else {
-          console.log("[Delete User API] User data deletion successful:", safeDeleteResult);
+          edgeLogger.debug('User data deletion successful', {
+            category: LOG_CATEGORIES.AUTH,
+            targetUserId: userId,
+            result: safeDeleteResult
+          });
         }
-          
+
         // Try the Supabase Auth API as a final step
-        console.log("[Delete User API] Trying Supabase Auth API");
+        edgeLogger.debug('Trying Supabase Auth API', {
+          category: LOG_CATEGORIES.AUTH,
+          targetUserId: userId
+        });
+
         const { error: authError } = await supabase.auth.admin.deleteUser(userId);
-        
+
         if (authError) {
-          console.error("[Delete User API] Error deleting auth user:", authError);
-          
+          edgeLogger.error('Error deleting auth user', {
+            category: LOG_CATEGORIES.AUTH,
+            error: authError,
+            targetUserId: userId
+          });
+
           // Check error message to determine if this is a permissions issue
           const errorMessage = authError.message || '';
           if (errorMessage.includes('not allowed') || errorMessage.includes('permission') ||
-              errorMessage.includes('not admin')) {
-            return NextResponse.json({ 
-              error: 'Admin operation not permitted - check SUPABASE_KEY in environment variables',
-              details: errorMessage
-            }, { status: 403 });
+            errorMessage.includes('not admin')) {
+            return errorResponse(
+              'Admin operation not permitted - check SUPABASE_KEY in environment variables',
+              errorMessage,
+              403
+            );
           }
-          
+
           // For other errors, we've already deleted profile data so return partial success
-          return NextResponse.json({ 
-            message: 'User profile data deleted but auth record could not be removed',
-            details: errorMessage
-          }, { status: 207 }); // 207 Multi-Status
+          return successResponse(
+            {
+              message: 'User profile data deleted but auth record could not be removed',
+              details: errorMessage
+            },
+            207 // 207 Multi-Status
+          );
         }
-        
-        console.log("[Delete User API] Auth user deletion successful via Auth API");
+
+        edgeLogger.debug('Auth user deletion successful via Auth API', {
+          category: LOG_CATEGORIES.AUTH,
+          targetUserId: userId
+        });
       } else {
-        console.log("[Delete User API] User deleted successfully via complete_user_deletion:", deleteResult);
+        edgeLogger.debug('User deleted successfully via complete_user_deletion', {
+          category: LOG_CATEGORIES.AUTH,
+          targetUserId: userId,
+          result: deleteResult
+        });
       }
     } catch (deleteError) {
-      console.error("[Delete User API] Exception during user deletion:", deleteError);
-      
+      edgeLogger.error('Exception during user deletion', {
+        category: LOG_CATEGORIES.AUTH,
+        error: deleteError instanceof Error ? deleteError.message : String(deleteError),
+        targetUserId: userId
+      });
+
       // Return partial success since we've already deleted profile data
-      return NextResponse.json({ 
-        message: 'User profile data deleted but auth record could not be removed',
-        error: String(deleteError)
-      }, { status: 207 }); // 207 Multi-Status
+      return successResponse(
+        {
+          message: 'User profile data deleted but auth record could not be removed',
+          error: deleteError instanceof Error ? deleteError.message : String(deleteError)
+        },
+        207 // 207 Multi-Status
+      );
     }
-    
+
     // Verify that the profile was deleted
     try {
-      console.log("[Delete User API] Verifying deletion was successful");
-      
+      edgeLogger.debug('Verifying deletion was successful', {
+        category: LOG_CATEGORIES.AUTH,
+        targetUserId: userId
+      });
+
       const { data: profileCheck, error: profileCheckError } = await supabase
         .from('sd_user_profiles')
         .select('user_id')
         .eq('user_id', userId)
         .maybeSingle();
-        
+
       if (profileCheckError) {
-        console.error("[Delete User API] Error verifying profile deletion:", profileCheckError);
+        edgeLogger.error('Error verifying profile deletion', {
+          category: LOG_CATEGORIES.AUTH,
+          error: profileCheckError,
+          targetUserId: userId
+        });
       } else if (profileCheck) {
-        console.warn("[Delete User API] Profile still exists after deletion attempt:", profileCheck);
-        
+        edgeLogger.warn('Profile still exists after deletion attempt', {
+          category: LOG_CATEGORIES.AUTH,
+          targetUserId: userId,
+          profile: profileCheck
+        });
+
         // One more attempt to remove profile
         await supabase.from('sd_user_profiles').delete().eq('user_id', userId);
       } else {
-        console.log("[Delete User API] Confirmed profile no longer exists");
+        edgeLogger.debug('Confirmed profile no longer exists', {
+          category: LOG_CATEGORIES.AUTH,
+          targetUserId: userId
+        });
       }
     } catch (verifyError) {
-      console.error("[Delete User API] Error verifying deletion:", verifyError);
+      edgeLogger.error('Error verifying deletion', {
+        category: LOG_CATEGORIES.AUTH,
+        error: verifyError instanceof Error ? verifyError.message : String(verifyError),
+        targetUserId: userId
+      });
     }
-    
-    console.log("[Delete User API] User deletion process completed for:", userId);
-    return NextResponse.json({ message: 'User deleted successfully' });
+
+    edgeLogger.info('User deletion process completed', {
+      category: LOG_CATEGORIES.AUTH,
+      targetUserId: userId
+    });
+
+    return successResponse({ message: 'User deleted successfully' });
   } catch (error) {
-    console.error("[Delete User API] Error in delete user API:", error);
-    return NextResponse.json({ error: 'Internal Server Error', details: String(error) }, { status: 500 });
+    edgeLogger.error('Error in delete user API', {
+      category: LOG_CATEGORIES.AUTH,
+      error: error instanceof Error ? error.message : String(error)
+    });
+
+    return errorResponse(
+      'Internal Server Error',
+      error instanceof Error ? error.message : String(error),
+      500
+    );
   }
 }

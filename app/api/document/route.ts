@@ -1,5 +1,7 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { generateUUID } from '@/lib/utils';
+import { successResponse, errorResponse } from '@/lib/utils/route-handler';
+
+export const runtime = 'edge';
 
 // Mock document data for testing
 const mockDocuments = {
@@ -46,15 +48,10 @@ const mockDocuments = {
   }
 };
 
-export async function GET() {
-  return NextResponse.json({
-    message: 'Document API endpoint',
-    status: 'Not implemented'
-  }, { status: 501 });
+export async function GET(request: Request): Promise<Response> {
+  return errorResponse('Document API endpoint not implemented', null, 501);
 }
 
-export async function POST() {
-  return NextResponse.json({
-    error: 'Method not implemented'
-  }, { status: 501 });
+export async function POST(request: Request): Promise<Response> {
+  return errorResponse('Method not implemented', null, 501);
 } 

@@ -1,11 +1,13 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
+import { createServerClient } from '@supabase/ssr';
 import { createClient } from '@/utils/supabase/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { z } from 'zod';
-import { headers } from 'next/headers';
+import { successResponse, errorResponse, unauthorizedError, validationError } from '@/lib/utils/route-handler';
 
-// const logger = getLogger('api:chat:session');
+// Declare edge runtime
+export const runtime = 'edge';
 
 const sessionSchema = z.object({
     id: z.string().uuid(),
@@ -17,7 +19,7 @@ const sessionSchema = z.object({
 /**
  * POST handler to create a new chat session
  */
-export async function POST(req: NextRequest) {
+export async function POST(request: Request): Promise<Response> {
     const operationId = `create_session_${Math.random().toString(36).substring(2, 10)}`;
 
     edgeLogger.debug('Creating new chat session', {
@@ -27,7 +29,7 @@ export async function POST(req: NextRequest) {
     });
 
     try {
-        const body = await req.json();
+        const body = await request.json();
         edgeLogger.debug('Request body', {
             category: LOG_CATEGORIES.CHAT,
             operation: 'session_create',
@@ -43,10 +45,7 @@ export async function POST(req: NextRequest) {
                 operationId,
                 errors: result.error.format()
             });
-            return NextResponse.json(
-                { error: 'Invalid request body', details: result.error.format() },
-                { status: 400 }
-            );
+            return validationError('Invalid request body', result.error.format());
         }
 
         const { id, title, agentId, deepSearchEnabled } = result.data;
@@ -57,7 +56,7 @@ export async function POST(req: NextRequest) {
                 operation: 'session_create_error',
                 operationId
             });
-            return NextResponse.json({ error: 'Missing session ID' }, { status: 400 });
+            return validationError('Missing session ID');
         }
 
         // Authenticate user
@@ -72,10 +71,7 @@ export async function POST(req: NextRequest) {
                 error: authError?.message || 'No user found'
             });
 
-            return NextResponse.json(
-                { error: 'Unauthorized' },
-                { status: 401 }
-            );
+            return unauthorizedError('Authentication required');
         }
 
         // Create the session
@@ -103,10 +99,7 @@ export async function POST(req: NextRequest) {
                 important: true
             });
 
-            return NextResponse.json(
-                { error: 'Error creating chat session', details: sessionError.message },
-                { status: 500 }
-            );
+            return errorResponse('Error creating chat session', sessionError.message, 500);
         }
 
         edgeLogger.info('Chat session created successfully', {
@@ -116,7 +109,7 @@ export async function POST(req: NextRequest) {
             sessionId: id
         });
 
-        return NextResponse.json(sessionData);
+        return successResponse(sessionData);
     } catch (error) {
         edgeLogger.error('Unexpected error creating chat session', {
             category: LOG_CATEGORIES.CHAT,
@@ -126,9 +119,10 @@ export async function POST(req: NextRequest) {
             important: true
         });
 
-        return NextResponse.json(
-            { error: 'Unexpected error', details: error instanceof Error ? error.message : String(error) },
-            { status: 500 }
+        return errorResponse(
+            'Unexpected error creating chat session',
+            error instanceof Error ? error.message : String(error),
+            500
         );
     }
 }
@@ -136,7 +130,7 @@ export async function POST(req: NextRequest) {
 /**
  * GET handler to retrieve all sessions for the authenticated user
  */
-export async function GET(req: NextRequest) {
+export async function GET(request: Request): Promise<Response> {
     const operationId = `get_sessions_${Math.random().toString(36).substring(2, 10)}`;
 
     edgeLogger.debug('Retrieving chat sessions', {
@@ -146,66 +140,72 @@ export async function GET(req: NextRequest) {
     });
 
     try {
-        // Authenticate user
-        const supabase = await createClient();
-        const { data: { user }, error: authError } = await supabase.auth.getUser();
+        // Get cookies - make sure to await this
+        const cookieStore = await cookies();
 
-        if (authError || !user) {
-            edgeLogger.warn('Authentication failed getting sessions', {
-                category: LOG_CATEGORIES.AUTH,
-                operation: 'sessions_get_error',
-                operationId,
-                error: authError?.message || 'No user found'
-            });
+        const supabase = createServerClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+            {
+                cookies: {
+                    getAll() {
+                        return cookieStore.getAll();
+                    },
+                    setAll(cookiesToSet) {
+                        try {
+                            cookiesToSet.forEach(({ name, value, options }) =>
+                                cookieStore.set(name, value, options)
+                            );
+                        } catch {
+                            // The `setAll` method was called from a Server Component.
+                            // This can be ignored if you have middleware refreshing
+                            // user sessions.
+                        }
+                    },
+                },
+            }
+        );
 
-            return NextResponse.json(
-                { error: 'Unauthorized' },
-                { status: 401 }
-            );
+        // Verify the user is authenticated
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+            return unauthorizedError('Authentication required');
         }
 
-        // Get sessions
-        const { data: sessions, error: sessionsError } = await supabase
-            .from('sd_chat_sessions')
-            .select('id, title, created_at, updated_at, agent_id, deep_search_enabled')
+        // Get the user's chat sessions
+        const { data: sessions, error } = await supabase
+            .from('sd_chats')
+            .select('id, title, created_at, updated_at')
             .eq('user_id', user.id)
             .order('updated_at', { ascending: false });
 
-        if (sessionsError) {
+        if (error) {
             edgeLogger.error('Error fetching chat sessions', {
                 category: LOG_CATEGORIES.CHAT,
-                operation: 'sessions_get_error',
-                operationId,
-                error: sessionsError.message,
-                important: true
+                userId: user.id,
+                error: error.message
             });
 
-            return NextResponse.json(
-                { error: 'Error fetching chat sessions', details: sessionsError.message },
-                { status: 500 }
-            );
+            return errorResponse('Failed to fetch chat sessions', error.message, 500);
         }
 
-        edgeLogger.info('Chat sessions fetched successfully', {
+        edgeLogger.info('Chat sessions retrieved successfully', {
             category: LOG_CATEGORIES.CHAT,
-            operation: 'sessions_get_success',
-            operationId,
-            sessionCount: sessions.length
+            userId: user.id,
+            count: sessions?.length || 0
         });
 
-        return NextResponse.json(sessions);
+        return successResponse({ sessions: sessions || [] });
     } catch (error) {
-        edgeLogger.error('Unexpected error fetching chat sessions', {
+        edgeLogger.error('Exception in chat sessions API', {
             category: LOG_CATEGORIES.CHAT,
-            operation: 'sessions_get_error',
-            operationId,
-            error: error instanceof Error ? error.message : String(error),
-            important: true
+            error: error instanceof Error ? error.message : String(error)
         });
 
-        return NextResponse.json(
-            { error: 'Unexpected error', details: error instanceof Error ? error.message : String(error) },
-            { status: 500 }
+        return errorResponse(
+            'Failed to fetch chat sessions',
+            error instanceof Error ? error.message : String(error),
+            500
         );
     }
 } 

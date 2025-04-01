@@ -1,10 +1,19 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { createClient as createServerClient } from '@/utils/supabase/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-// Removing the unused cookies import
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { User } from '@supabase/supabase-js';
+import { SupabaseClient } from '@supabase/supabase-js';
 
-// Implementing getAuthenticatedUser inline since we don't have the auth-utils file
-async function getAuthenticatedUser(request?: NextRequest) {
+export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
+
+// Helper function to get authenticated user
+async function getAuthenticatedUser(request: Request): Promise<{
+  user: User | null;
+  serverClient: SupabaseClient | null;
+  errorResponse: Response | null;
+}> {
   try {
     const supabase = await createServerClient();
     const { data: { user } } = await supabase.auth.getUser();
@@ -16,21 +25,21 @@ async function getAuthenticatedUser(request?: NextRequest) {
     return {
       user: null,
       serverClient: null,
-      errorResponse: NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      errorResponse: unauthorizedError('Authentication required to access debug histories')
     };
   } catch (error) {
     edgeLogger.error('Authentication error', {
+      category: LOG_CATEGORIES.AUTH,
       error: error instanceof Error ? error.message : String(error)
     });
+
     return {
       user: null,
       serverClient: null,
-      errorResponse: NextResponse.json({ error: 'Authentication error' }, { status: 500 })
+      errorResponse: errorResponse('Authentication error', error instanceof Error ? error.message : String(error), 500)
     };
   }
 }
-
-export const dynamic = 'force-dynamic';
 
 // Define types for our data structures
 interface ChatMessage {
@@ -55,29 +64,39 @@ interface SessionMap {
 }
 
 // Debug endpoint to check chat histories
-export async function GET(_request: NextRequest) {
+export async function GET(request: Request): Promise<Response> {
   try {
     // Get authenticated user
-    const { user, serverClient, errorResponse } = await getAuthenticatedUser(_request);
+    const { user, serverClient, errorResponse: authError } = await getAuthenticatedUser(request);
 
     // Return error response if authentication failed
-    if (errorResponse) {
-      return errorResponse;
+    if (authError) {
+      return authError;
     }
 
+    // Type guard to ensure serverClient and user are defined
+    if (!user || !serverClient) {
+      return unauthorizedError('User authentication failed');
+    }
+
+    // Now TypeScript knows serverClient and user are defined in this scope
     // Get the session ID from query params if provided
-    const url = new URL(_request.url);
+    const url = new URL(request.url);
     const sessionId = url.searchParams.get('sessionId');
     const limit = parseInt(url.searchParams.get('limit') || '50');
 
     edgeLogger.info('Debug checking chat histories', {
+      category: LOG_CATEGORIES.SYSTEM,
       userId: user.id,
       sessionId: sessionId || 'all',
       limit
     });
 
-    // Query to get recent histories
-    let query = serverClient
+    // Query to get recent histories - we've confirmed serverClient is not null
+    const supabase = serverClient;
+
+    // Query to get recent histories - serverClient is guaranteed to be non-null here
+    let query = supabase
       .from('sd_chat_histories')
       .select('id, session_id, role, content, created_at, user_id, tools_used')
       .eq('user_id', user.id)
@@ -93,17 +112,19 @@ export async function GET(_request: NextRequest) {
 
     if (messagesError) {
       edgeLogger.error('Error fetching chat histories for debug', {
+        category: LOG_CATEGORIES.SYSTEM,
         error: messagesError,
         userId: user.id
       });
-      return NextResponse.json({ error: 'Failed to fetch chat histories' }, { status: 500 });
+
+      return errorResponse('Failed to fetch chat histories', messagesError, 500);
     }
 
     // Get distinct sessions involved
     const sessionIds = [...new Set((messages as ChatMessage[])?.map(m => m.session_id) || [])];
 
     // Get session info for these sessions
-    const { data: sessions } = await serverClient
+    const { data: sessions } = await supabase
       .from('sd_chat_sessions')
       .select('id, title, created_at, updated_at')
       .in('id', sessionIds);
@@ -115,7 +136,7 @@ export async function GET(_request: NextRequest) {
     });
 
     // Build response data
-    return NextResponse.json({
+    return successResponse({
       messageCount: messages?.length || 0,
       sessionCount: sessionIds.length,
       messages: (messages as ChatMessage[])?.map(m => ({
@@ -135,14 +156,18 @@ export async function GET(_request: NextRequest) {
     });
   } catch (error) {
     edgeLogger.error('Error in debug/histories endpoint', {
+      category: LOG_CATEGORIES.SYSTEM,
       error: error instanceof Error ? error.message : String(error)
     });
-    return NextResponse.json({ error: 'Debug check failed', details: String(error) }, { status: 500 });
+
+    return errorResponse(
+      'Debug check failed',
+      error instanceof Error ? error.message : String(error),
+      500
+    );
   }
 }
 
-export async function POST() {
-  return NextResponse.json({
-    error: 'Method not implemented'
-  }, { status: 501 });
+export async function POST(): Promise<Response> {
+  return errorResponse('Method not implemented', null, 501);
 } 

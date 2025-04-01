@@ -1,11 +1,11 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createClient } from '@/utils/supabase/server';
 import { validateEnvironment } from '@/lib/env-validator';
+import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
 
-// Important: No runtime declaration means this runs as a serverless function
+// Important: No runtime declaration for serverless function
 
-export async function POST(req: NextRequest) {
+export async function POST(req: Request): Promise<Response> {
   const startTime = performance.now();
   const operationId = `perplexity-serverless-${Date.now().toString(36)}`;
 
@@ -106,10 +106,7 @@ export async function POST(req: NextRequest) {
           operationId
         });
 
-        return NextResponse.json({
-          success: false,
-          error: 'Unauthorized'
-        }, { status: 401 });
+        return unauthorizedError('Authentication required for Perplexity API access');
       }
 
       edgeLogger.info('User authenticated for Perplexity API', {
@@ -124,10 +121,7 @@ export async function POST(req: NextRequest) {
         error: authError instanceof Error ? authError.message : String(authError)
       });
 
-      return NextResponse.json({
-        success: false,
-        error: 'Authentication error'
-      }, { status: 500 });
+      return errorResponse('Authentication error', authError, 500);
     }
   } else {
     edgeLogger.info('Internal API-to-API request detected, skipping authentication', {
@@ -141,19 +135,13 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json();
   } catch (error) {
-    return NextResponse.json({
-      success: false,
-      error: 'Invalid request body'
-    }, { status: 400 });
+    return errorResponse('Invalid request body', error, 400);
   }
 
   // Get the query from the request body
   const { query } = body;
   if (!query || typeof query !== 'string') {
-    return NextResponse.json({
-      success: false,
-      error: 'Query parameter is required'
-    }, { status: 400 });
+    return errorResponse('Query parameter is required', null, 400);
   }
 
   // Check for API key with enhanced logging
@@ -167,10 +155,7 @@ export async function POST(req: NextRequest) {
       important: true
     });
 
-    return NextResponse.json({
-      success: false,
-      error: 'PERPLEXITY_API_KEY not configured'
-    }, { status: 500 });
+    return errorResponse('PERPLEXITY_API_KEY not configured', null, 500);
   }
 
   // Log key format check (NOT the key itself)
@@ -323,14 +308,11 @@ export async function POST(req: NextRequest) {
     });
 
     if (!response.ok) {
-      return NextResponse.json({
-        success: false,
-        error: responseBody
-      }, { status: statusCode });
+      return errorResponse('Perplexity API error', responseBody, statusCode);
     }
 
     // Return the Perplexity API response
-    return NextResponse.json({
+    return successResponse({
       success: true,
       data: responseBody,
       model,
@@ -359,9 +341,6 @@ export async function POST(req: NextRequest) {
       important: true
     });
 
-    return NextResponse.json({
-      success: false,
-      error: errorMessage
-    }, { status: 500 });
+    return errorResponse('Error calling Perplexity API', error, 500);
   }
 } 

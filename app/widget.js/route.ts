@@ -1,4 +1,7 @@
-import { NextRequest } from 'next/server'
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+
+export const runtime = 'edge';
 
 // Get allowed origins from environment or use default with more permissive fallback
 const getAllowedOrigins = () => {
@@ -9,7 +12,7 @@ const getAllowedOrigins = () => {
 };
 
 // Function to add CORS headers to a response with improved origin handling
-function addCorsHeaders(response: Response, req: NextRequest): Response {
+function addCorsHeaders(response: Response, req: Request): Response {
   const origin = req.headers.get('origin') || '';
   const allowedOrigins = getAllowedOrigins();
 
@@ -38,7 +41,8 @@ function addCorsHeaders(response: Response, req: NextRequest): Response {
 
   // Enhanced logging for CORS issues in development
   if (process.env.NODE_ENV === 'development') {
-    console.log('CORS Headers set:', {
+    edgeLogger.debug('Widget CORS Headers set', {
+      category: LOG_CATEGORIES.SYSTEM,
       origin,
       isWildcardAllowed,
       isSpecificOriginAllowed,
@@ -54,7 +58,7 @@ function addCorsHeaders(response: Response, req: NextRequest): Response {
 }
 
 // Get CORS headers as an object for use in error responses
-function getCorsHeaders(req: NextRequest): Record<string, string> {
+function getCorsHeaders(req: Request): Record<string, string> {
   const origin = req.headers.get('origin') || '';
   const allowedOrigins = getAllowedOrigins();
 
@@ -84,9 +88,11 @@ function getCorsHeaders(req: NextRequest): Record<string, string> {
 }
 
 // Handle OPTIONS requests for CORS preflight
-export async function OPTIONS(req: NextRequest) {
+export async function OPTIONS(req: Request): Promise<Response> {
   // Log for debugging
-  console.log('Widget.js route handler: Handling OPTIONS request');
+  edgeLogger.debug('Widget.js: Handling OPTIONS request', {
+    category: LOG_CATEGORIES.SYSTEM
+  });
 
   const response = new Response(null, {
     status: 204,
@@ -95,13 +101,13 @@ export async function OPTIONS(req: NextRequest) {
   return response;
 }
 
-export const runtime = 'edge';
-
 // Serve the widget script file
-export async function GET(req: NextRequest) {
+export async function GET(req: Request): Promise<Response> {
   try {
     // Log for debugging purposes
-    console.log('Widget.js route handler: Redirecting to static widget script');
+    edgeLogger.info('Widget.js: Redirecting to static widget script', {
+      category: LOG_CATEGORIES.SYSTEM
+    });
 
     // Redirect to the new v2 widget implementation
     // We use a symbolic link in the public folder to maintain backward compatibility
@@ -115,7 +121,12 @@ export async function GET(req: NextRequest) {
     return addCorsHeaders(response, req);
   } catch (error) {
     // Enhanced error handling with detailed logging
-    console.error('Widget.js route: Error serving widget script:', error);
+    edgeLogger.error('Widget.js: Error serving widget script', {
+      category: LOG_CATEGORIES.SYSTEM,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : 'No stack trace'
+    });
+
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
     // Return fallback script that logs the error but still with proper headers

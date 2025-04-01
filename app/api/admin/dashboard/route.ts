@@ -1,7 +1,9 @@
-import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+
+export const runtime = 'edge';
 
 // Performance thresholds for admin dashboard operations
 const THRESHOLDS = {
@@ -142,7 +144,7 @@ export async function GET(_request: Request): Promise<Response> {
         important: true,
         status: 401
       });
-      return NextResponse.json({ error: 'Authentication error' }, { status: 401 });
+      return errorResponse('Authentication error', userError, 401);
     }
 
     const user = userData.user;
@@ -154,7 +156,7 @@ export async function GET(_request: Request): Promise<Response> {
         durationMs,
         status: 401
       });
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return unauthorizedError();
     }
 
     const maskedUserId = user.id.substring(0, 8) + '...';
@@ -175,7 +177,7 @@ export async function GET(_request: Request): Promise<Response> {
         durationMs,
         status: 403
       });
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      return errorResponse('Forbidden - Admin access required', null, 403);
     }
 
     edgeLogger.info('Admin access confirmed for dashboard', {
@@ -308,7 +310,7 @@ export async function GET(_request: Request): Promise<Response> {
     }
 
     // Return dashboard stats directly
-    return NextResponse.json({
+    return successResponse({
       userCount: userCount || 0,
       chatCount: chatCount || 0,
       adminCount: adminProfilesCount || 0,
@@ -324,6 +326,6 @@ export async function GET(_request: Request): Promise<Response> {
       status: 500,
       important: true
     });
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    return errorResponse('Internal Server Error', error, 500);
   }
 }

@@ -3,17 +3,21 @@ import { createClient } from '@/utils/supabase/server';
 import { cookies } from 'next/headers';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import type { Message } from 'ai';
+import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import type { IdParam } from '@/lib/types/route-handlers';
+
+export const runtime = 'edge';
 
 export async function GET(
-    request: NextRequest,
-    { params }: { params: { id: string } }
-): Promise<NextResponse> {
+    request: Request,
+    { params }: IdParam
+): Promise<Response> {
     try {
-        const chatId = params.id;
+        const { id: chatId } = await params;
 
         // Basic validation
         if (!chatId) {
-            return NextResponse.json({ error: 'Chat ID is required' }, { status: 400 });
+            return errorResponse('Chat ID is required', null, 400);
         }
 
         // Create Supabase client
@@ -28,7 +32,7 @@ export async function GET(
                 error: authError?.message || 'No user found'
             });
 
-            return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+            return unauthorizedError();
         }
 
         // Log the request
@@ -51,7 +55,7 @@ export async function GET(
                 chatId: chatId.slice(0, 8)
             });
 
-            return NextResponse.json({ error: 'Failed to count messages' }, { status: 500 });
+            return errorResponse('Failed to count messages', error);
         }
 
         // Log the result
@@ -61,16 +65,8 @@ export async function GET(
             count: count || 0
         });
 
-        return NextResponse.json({ count: count || 0 });
+        return successResponse({ count: count || 0 });
     } catch (error) {
-        // Handle unexpected errors
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-
-        edgeLogger.error('Unexpected error counting chat messages', {
-            operation: 'count_chat_messages',
-            error: errorMessage
-        });
-
-        return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+        return errorResponse('Unexpected error counting chat messages', error);
     }
 } 

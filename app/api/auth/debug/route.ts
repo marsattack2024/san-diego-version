@@ -1,16 +1,21 @@
-import { NextResponse } from 'next/server';
 import { createClient } from '@/utils/supabase/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { successResponse, errorResponse } from '@/lib/utils/route-handler';
+
+export const runtime = 'edge';
 
 /**
  * Debug endpoint for troubleshooting authentication issues
  * Only use this in development and testing
  */
-export async function GET(request: Request) {
+export async function GET(request: Request): Promise<Response> {
     if (process.env.NODE_ENV === 'production') {
-        return NextResponse.json({
-            error: 'Debug endpoint disabled in production'
-        }, { status: 403 });
+        return errorResponse(
+            'Debug endpoint disabled in production',
+            null,
+            403
+        );
     }
 
     try {
@@ -47,7 +52,7 @@ export async function GET(request: Request) {
         }
 
         // Return debugging information without exposing cookie details
-        return NextResponse.json({
+        return successResponse({
             auth: {
                 isAuthenticated: !!user,
                 userId: user?.id,
@@ -68,15 +73,16 @@ export async function GET(request: Request) {
         });
     } catch (error) {
         edgeLogger.error('Error in auth debug endpoint', {
+            category: LOG_CATEGORIES.AUTH,
             error: error instanceof Error ? error.message : String(error),
             stack: error instanceof Error ? error.stack : undefined,
-            category: 'auth',
             important: true
         });
 
-        return NextResponse.json({
-            error: 'Internal server error',
-            message: error instanceof Error ? error.message : String(error)
-        }, { status: 500 });
+        return errorResponse(
+            'Internal server error',
+            error instanceof Error ? error.message : String(error),
+            500
+        );
     }
 } 

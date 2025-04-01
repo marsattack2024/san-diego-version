@@ -1,7 +1,8 @@
 import { logger } from '@/lib/logger';
-import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
+import { successResponse, errorResponse } from '@/lib/utils/route-handler';
 
+export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
 // Sampling rates for different log levels
@@ -20,7 +21,7 @@ function shouldProcessLog(level: string): boolean {
   if (process.env.NODE_ENV !== 'production') {
     return true; // Always process in non-production
   }
-  
+
   const rate = samplingRates[level as keyof typeof samplingRates] || 1.0;
   return Math.random() < rate;
 }
@@ -41,13 +42,13 @@ function mapLogLevel(clientLevel: string): string {
     WARN: 'warn',
     ERROR: 'error'
   };
-  
+
   return levelMap[clientLevel] || 'info';
 }
 
-export async function POST(req: NextRequest) {
+export async function POST(req: Request): Promise<Response> {
   const requestId = req.headers.get('x-request-id') || uuidv4();
-  
+
   try {
     logger.debug('Received client logs', {
       requestId,
@@ -55,33 +56,33 @@ export async function POST(req: NextRequest) {
       url: req.url,
       timestamp: new Date().toISOString()
     });
-    
+
     // Handle both single log and batch logs
     const body = await req.json();
     const logs = Array.isArray(body) ? body : [body];
-    
-    logger.debug('Processing client logs', { 
+
+    logger.debug('Processing client logs', {
       requestId,
       count: logs.length,
       timestamp: new Date().toISOString()
     });
-    
+
     // Process each log based on sampling
     let processedCount = 0;
-    
+
     for (const clientLog of logs) {
       const level = mapLogLevel(clientLog.level);
-      
+
       // Apply sampling
       if (!shouldProcessLog(level)) {
         continue;
       }
-      
+
       processedCount++;
-      
+
       // Extract standard fields
       const { message, namespace, sessionId, timestamp, ...data } = clientLog;
-      
+
       // Create context with client metadata
       const context = {
         requestId,
@@ -90,7 +91,7 @@ export async function POST(req: NextRequest) {
         clientTimestamp: timestamp,
         ...data
       };
-      
+
       // Use the appropriate log level method
       switch (level) {
         case 'debug':
@@ -109,33 +110,34 @@ export async function POST(req: NextRequest) {
           logger.info(message || 'Client log', context);
       }
     }
-    
-    logger.debug('Processed client logs', { 
+
+    logger.debug('Processed client logs', {
       requestId,
       totalReceived: logs.length,
       processedCount,
       samplingApplied: process.env.NODE_ENV === 'production',
       timestamp: new Date().toISOString()
     });
-    
-    return NextResponse.json({ 
-      success: true, 
-      message: `Processed ${processedCount} of ${logs.length} logs` 
+
+    return successResponse({
+      success: true,
+      message: `Processed ${processedCount} of ${logs.length} logs`
     });
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     const errorStack = error instanceof Error ? error.stack : undefined;
-    
+
     logger.error('Error processing client logs', {
       requestId,
       error: errorMessage,
       stack: errorStack,
       timestamp: new Date().toISOString()
     });
-    
-    return NextResponse.json(
-      { success: false, error: 'Failed to process client logs' },
-      { status: 500 }
+
+    return errorResponse(
+      'Failed to process client logs',
+      error,
+      500
     );
   }
 } 

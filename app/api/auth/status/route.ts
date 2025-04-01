@@ -1,7 +1,8 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { createClient as createServerClient } from '@/utils/supabase/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
 
+export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
 /**
@@ -9,60 +10,55 @@ export const dynamic = 'force-dynamic';
  * Returns 200 if authenticated, 401 if not
  * Also sets x-auth-state header for debugging
  */
-export async function GET(_request: NextRequest) {
+export async function GET(_request: Request): Promise<Response> {
   try {
     // Create Supabase server client
     const supabase = await createServerClient();
-    
+
     // Get user session
     const { data: { user } } = await supabase.auth.getUser();
-    
+
     // Get time for tracking response times
     const startTime = Date.now();
-    
-    // Set headers for all response types
-    const headers = new Headers();
-    headers.set('x-response-time', `${Date.now() - startTime}ms`);
-    
+
     // If authenticated
     if (user) {
-      headers.set('x-auth-state', 'authenticated');
-      
       // Return success response with appropriate headers
-      return new NextResponse(JSON.stringify({ 
+      const response = successResponse({
         status: 'authenticated',
         userId: user.id
-      }), {
-        status: 200,
-        headers
       });
+
+      // Add custom headers
+      response.headers.set('x-auth-state', 'authenticated');
+      response.headers.set('x-response-time', `${Date.now() - startTime}ms`);
+
+      return response;
     }
-    
-    // Not authenticated
-    headers.set('x-auth-state', 'unauthenticated');
-    
-    // Return 401 Unauthorized
-    return new NextResponse(JSON.stringify({ 
-      status: 'unauthenticated' 
-    }), {
-      status: 401,
-      headers
-    });
+
+    // Not authenticated - use standard unauthorized response
+    const response = unauthorizedError('Unauthorized: Authentication required');
+
+    // Add response data through headers 
+    response.headers.set('x-auth-state', 'unauthenticated');
+    response.headers.set('x-response-time', `${Date.now() - startTime}ms`);
+
+    return response;
   } catch (error: unknown) {
     // Log the error
-    edgeLogger.error('Error in auth status endpoint', { 
-      error: error instanceof Error ? error.message : String(error) 
+    edgeLogger.error('Error in auth status endpoint', {
+      error: error instanceof Error ? error.message : String(error)
     });
-    
-    // Return 500 Internal Server Error
-    return new NextResponse(JSON.stringify({ 
-      status: 'error',
-      message: 'Failed to check authentication status'
-    }), {
-      status: 500,
-      headers: {
-        'x-auth-state': 'error'
-      }
-    });
+
+    // Return 500 Internal Server Error with custom header
+    const response = errorResponse(
+      'Failed to check authentication status',
+      error,
+      500
+    );
+
+    response.headers.set('x-auth-state', 'error');
+
+    return response;
   }
 } 

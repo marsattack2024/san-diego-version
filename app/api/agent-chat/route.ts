@@ -10,10 +10,11 @@ import { createChatEngine } from '@/lib/chat-engine/core';
 import { detectAgentType, createAgentToolSet } from '@/lib/chat-engine/agent-router';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { errorResponse } from '@/lib/utils/route-handler';
 
 export const runtime = 'edge';
 
-export async function POST(req: Request) {
+export async function POST(req: Request): Promise<Response> {
     try {
         // Parse request body
         const body = await req.json();
@@ -24,10 +25,7 @@ export async function POST(req: Request) {
 
         // Validate required parameters
         if ((!message && !messages) || !id) {
-            return new Response(
-                JSON.stringify({ error: 'Missing required parameters' }),
-                { status: 400, headers: { 'Content-Type': 'application/json' } }
-            );
+            return errorResponse('Missing required parameters', null, 400);
         }
 
         // Get the user message for agent detection
@@ -76,15 +74,10 @@ export async function POST(req: Request) {
         });
 
         // Return error response
-        return new Response(
-            JSON.stringify({
-                error: 'Failed to process request',
-                message: error instanceof Error ? error.message : 'Unknown error'
-            }),
-            {
-                status: 500,
-                headers: { 'Content-Type': 'application/json' }
-            }
+        return errorResponse(
+            'Failed to process request',
+            error instanceof Error ? error.message : 'Unknown error',
+            500
         );
     }
 } 

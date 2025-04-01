@@ -1,19 +1,32 @@
 import { cookies } from 'next/headers';
-import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { SupabaseClient } from '@supabase/supabase-js';
+
+export const runtime = 'edge';
 
 // Helper to check if a user is an admin
-async function isAdmin(supabase: any, userId: string) {
-    console.log("[DEBUG API] Checking admin status for user:", userId);
+async function isAdmin(supabase: SupabaseClient, userId: string): Promise<boolean> {
+    edgeLogger.debug('Checking admin status for user', {
+        category: LOG_CATEGORIES.AUTH,
+        userId
+    });
 
     try {
         // Method 1: RPC function
         const { data: rpcData, error: rpcError } = await supabase.rpc('is_admin', { uid: userId });
 
         if (rpcError) {
-            console.error("[DEBUG API] Error checking admin via RPC:", rpcError);
+            edgeLogger.error('Error checking admin via RPC', {
+                category: LOG_CATEGORIES.AUTH,
+                error: rpcError
+            });
         } else if (rpcData) {
-            console.log("[DEBUG API] User is admin via RPC check");
+            edgeLogger.debug('User is admin via RPC check', {
+                category: LOG_CATEGORIES.AUTH
+            });
             return true;
         }
 
@@ -25,9 +38,14 @@ async function isAdmin(supabase: any, userId: string) {
             .single();
 
         if (profileError) {
-            console.error("[DEBUG API] Error checking admin via profile:", profileError);
+            edgeLogger.error('Error checking admin via profile', {
+                category: LOG_CATEGORIES.AUTH,
+                error: profileError
+            });
         } else if (profileData?.is_admin === true) {
-            console.log("[DEBUG API] User is admin via profile flag");
+            edgeLogger.debug('User is admin via profile flag', {
+                category: LOG_CATEGORIES.AUTH
+            });
             return true;
         }
 
@@ -40,23 +58,35 @@ async function isAdmin(supabase: any, userId: string) {
             .maybeSingle();
 
         if (roleError) {
-            console.error("[DEBUG API] Error checking admin via roles:", roleError);
+            edgeLogger.error('Error checking admin via roles', {
+                category: LOG_CATEGORIES.AUTH,
+                error: roleError
+            });
         } else if (roleData) {
-            console.log("[DEBUG API] User is admin via roles table");
+            edgeLogger.debug('User is admin via roles table', {
+                category: LOG_CATEGORIES.AUTH
+            });
             return true;
         }
 
-        console.log("[DEBUG API] User is not admin by any verification method");
+        edgeLogger.debug('User is not admin by any verification method', {
+            category: LOG_CATEGORIES.AUTH
+        });
         return false;
     } catch (err) {
-        console.error("[DEBUG API] Exception checking admin status:", err);
+        edgeLogger.error('Exception checking admin status', {
+            category: LOG_CATEGORIES.AUTH,
+            error: err instanceof Error ? err.message : String(err)
+        });
         return false;
     }
 }
 
 // Diagnostic endpoint to check widget access permissions
-export async function GET(request: NextRequest): Promise<Response> {
-    console.log("[WIDGET-DEBUG] Diagnostic endpoint called");
+export async function GET(request: Request): Promise<Response> {
+    edgeLogger.info('Admin diagnostic endpoint called', {
+        category: LOG_CATEGORIES.SYSTEM
+    });
 
     try {
         // Create supabase client with proper Next.js 15 cookie handling
@@ -88,19 +118,24 @@ export async function GET(request: NextRequest): Promise<Response> {
         const { data: { user }, error: authError } = await supabase.auth.getUser();
 
         if (authError) {
-            console.error("[WIDGET-DEBUG] Authentication error:", authError);
-            return NextResponse.json(
-                { error: "Authentication error", message: authError.message },
-                { status: 401 }
+            edgeLogger.error('Authentication error in admin diagnostic', {
+                category: LOG_CATEGORIES.AUTH,
+                error: authError.message
+            });
+
+            return errorResponse(
+                "Authentication error",
+                authError.message,
+                401
             );
         }
 
         if (!user) {
-            console.log("[WIDGET-DEBUG] No authenticated user found");
-            return NextResponse.json(
-                { error: "Not authenticated", message: "No user session found" },
-                { status: 401 }
-            );
+            edgeLogger.warn('No authenticated user found in admin diagnostic', {
+                category: LOG_CATEGORIES.AUTH
+            });
+
+            return unauthorizedError("No user session found");
         }
 
         // Check if user is admin
@@ -123,7 +158,7 @@ export async function GET(request: NextRequest): Promise<Response> {
         };
 
         // Return comprehensive diagnostic data
-        return NextResponse.json({
+        return successResponse({
             timestamp: new Date().toISOString(),
             adminAccess: {
                 isAuthenticated: !!user,
@@ -146,10 +181,15 @@ export async function GET(request: NextRequest): Promise<Response> {
                 : "You do not have admin access and shouldn't see the widget page"
         });
     } catch (error) {
-        console.error("[WIDGET-DEBUG] Error in diagnostic endpoint:", error);
-        return NextResponse.json(
-            { error: "Server error", message: String(error) },
-            { status: 500 }
+        edgeLogger.error('Error in admin diagnostic endpoint', {
+            category: LOG_CATEGORIES.SYSTEM,
+            error: error instanceof Error ? error.message : String(error)
+        });
+
+        return errorResponse(
+            "Server error",
+            error instanceof Error ? error.message : String(error),
+            500
         );
     }
 } 

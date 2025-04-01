@@ -1,8 +1,14 @@
 import { createClient } from '@/utils/supabase/server';
-import { NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
-export async function GET(request: Request) {
+export const runtime = 'edge';
+
+/**
+ * Auth callback handler for Supabase authentication
+ * Manages redirects after successful authentication based on profile status
+ */
+export async function GET(request: Request): Promise<Response> {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
   const next = searchParams.get('next') || '/chat';
@@ -20,7 +26,11 @@ export async function GET(request: Request) {
       if (user) {
         // Check if the user has a profile
         try {
-          edgeLogger.info('Auth callback: Checking if user has profile', { userId: user.id });
+          edgeLogger.info('Auth callback: Checking if user has profile', {
+            category: LOG_CATEGORIES.AUTH,
+            userId: user.id
+          });
+
           const { data: profile, error: profileError } = await supabase
             .from('sd_user_profiles')
             .select('user_id')
@@ -29,29 +39,40 @@ export async function GET(request: Request) {
 
           if (profileError || !profile) {
             // User doesn't have a profile, redirect to profile setup
-            edgeLogger.info('Auth callback: No profile found, redirecting to profile setup', { userId: user.id });
-            return NextResponse.redirect(`${origin}/profile`);
+            edgeLogger.info('Auth callback: No profile found, redirecting to profile setup', {
+              category: LOG_CATEGORIES.AUTH,
+              userId: user.id
+            });
+
+            return Response.redirect(`${origin}/profile`);
           }
 
           // User has a profile, redirect to the next page
-          edgeLogger.info('Auth callback: Profile found, redirecting to next page', { userId: user.id, next });
-          return NextResponse.redirect(`${origin}${next}`);
+          edgeLogger.info('Auth callback: Profile found, redirecting to next page', {
+            category: LOG_CATEGORIES.AUTH,
+            userId: user.id,
+            next
+          });
+
+          return Response.redirect(`${origin}${next}`);
         } catch (error) {
           // Log the error but continue with the redirect
           edgeLogger.error('Auth callback: Error checking profile', {
+            category: LOG_CATEGORIES.AUTH,
             error: error instanceof Error ? error.message : String(error),
             userId: user.id
           });
+
           // In case of error, redirect to profile page to be safe
-          return NextResponse.redirect(`${origin}/profile`);
+          return Response.redirect(`${origin}/profile`);
         }
       }
 
       // If we couldn't get the user, redirect to the next page anyway
-      return NextResponse.redirect(`${origin}${next}`);
+      return Response.redirect(`${origin}${next}`);
     }
   }
 
   // If there's no code or an error occurred, redirect to the login page
-  return NextResponse.redirect(`${origin}/login`);
+  return Response.redirect(`${origin}/login`);
 }

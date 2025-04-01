@@ -1,7 +1,9 @@
-import { NextResponse } from 'next/server';
 import { cacheService } from '@/lib/cache/cache-service';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { successResponse, errorResponse } from '@/lib/utils/route-handler';
+
+export const runtime = 'edge';
 
 /**
  * Debug endpoint for inspecting Redis cache entries
@@ -11,7 +13,7 @@ import { LOG_CATEGORIES } from '@/lib/logger/constants';
  * 
  * Example usage: /api/debug/cache?key=global:rag:4525a018453d5765
  */
-export async function GET(request: Request) {
+export async function GET(request: Request): Promise<Response> {
   const { searchParams } = new URL(request.url);
   const key = searchParams.get('key') || 'global:rag:4525a018453d5765';
 
@@ -29,8 +31,8 @@ export async function GET(request: Request) {
     let parseError = null;
 
     try {
-      if (typeof rawValue === 'string' && 
-          (rawValue.startsWith('{') || rawValue.startsWith('['))) {
+      if (typeof rawValue === 'string' &&
+        (rawValue.startsWith('{') || rawValue.startsWith('['))) {
         parsedValue = JSON.parse(rawValue);
       }
     } catch (error) {
@@ -43,7 +45,7 @@ export async function GET(request: Request) {
     // Get stats about the key
     const exists = await cacheService.exists(key);
 
-    return NextResponse.json({
+    return successResponse({
       key,
       exists,
       rawValue,
@@ -57,8 +59,6 @@ export async function GET(request: Request) {
       parseError,
       parsedValue,
       timestamp: new Date().toISOString()
-    }, {
-      status: 200
     });
   } catch (error) {
     edgeLogger.error('Cache debug error', {
@@ -67,10 +67,10 @@ export async function GET(request: Request) {
       error: error instanceof Error ? error.message : String(error)
     });
 
-    return NextResponse.json({
-      error: error instanceof Error ? error.message : String(error)
-    }, {
-      status: 500
-    });
+    return errorResponse(
+      'Error accessing cache',
+      error,
+      500
+    );
   }
 } 

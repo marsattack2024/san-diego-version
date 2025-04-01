@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { successResponse, errorResponse } from '@/lib/utils/route-handler';
 
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
  * Simple ping endpoint to wake up serverless functions
  * Used by the chat widget to pre-warm the API infrastructure on load
  */
-export async function HEAD() {
+export async function HEAD(): Promise<Response> {
     return new Response(null, {
         status: 200,
         headers: {
@@ -18,15 +18,15 @@ export async function HEAD() {
 }
 
 // Ping endpoint to keep edge functions warm
-export async function GET(req: NextRequest) {
+export async function GET(req: Request): Promise<Response> {
     try {
         edgeLogger.info('Ping received', {
             timestamp: new Date().toISOString(),
-            path: req.nextUrl.pathname
+            path: new URL(req.url).pathname
         });
 
         // Create a wakeup ping to the widget API to keep it warm
-        const widgetApiUrl = new URL('/api/widget-chat', req.nextUrl.origin);
+        const widgetApiUrl = new URL('/api/widget-chat', new URL(req.url).origin);
         const wakeupResponse = await fetch(widgetApiUrl.toString(), {
             method: 'GET',
             headers: {
@@ -43,23 +43,23 @@ export async function GET(req: NextRequest) {
             widgetStatus = `error: ${wakeupResponse.status}`;
         }
 
-        return NextResponse.json({
+        return successResponse({
             status: 'ok',
             timestamp: new Date().toISOString(),
             services: {
                 widget: widgetStatus
             }
-        }, { status: 200 });
+        });
     } catch (error) {
         edgeLogger.error('Ping error', {
             error: error instanceof Error ? error.message : String(error),
             stack: error instanceof Error ? error.stack : undefined,
         });
 
-        return NextResponse.json({
-            status: 'error',
-            timestamp: new Date().toISOString(),
-            message: 'Failed to ping services'
-        }, { status: 500 });
+        return errorResponse(
+            'Failed to ping services',
+            error,
+            500
+        );
     }
 } 

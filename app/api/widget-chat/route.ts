@@ -10,7 +10,7 @@ import { createChatEngine } from '@/lib/chat-engine/core';
 import { widgetTools } from '@/lib/tools/registry.tool';
 import { prompts } from '@/lib/chat-engine/prompts';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { NextRequest } from 'next/server';
+import { successResponse, errorResponse } from '@/lib/utils/route-handler';
 
 export const runtime = 'edge';
 export const maxDuration = 30; // 30 seconds max duration for widget requests
@@ -30,7 +30,7 @@ function getAllowedOrigins(): string[] {
 /**
  * Function to add CORS headers to a response
  */
-function addCorsHeaders(response: Response, req: NextRequest): Response {
+function addCorsHeaders(response: Response, req: Request): Response {
   const origin = req.headers.get('origin') || '';
   const allowedOrigins = getAllowedOrigins();
   const isAllowedOrigin = allowedOrigins.includes(origin) || allowedOrigins.includes('*');
@@ -55,13 +55,13 @@ function addCorsHeaders(response: Response, req: NextRequest): Response {
 }
 
 // Handle OPTIONS requests for CORS preflight
-export async function OPTIONS(req: NextRequest) {
+export async function OPTIONS(req: Request): Promise<Response> {
   const response = new Response(null, { status: 204 });
   return addCorsHeaders(response, req);
 }
 
 // Add GET method for wakeup ping
-export async function GET(req: NextRequest) {
+export async function GET(req: Request): Promise<Response> {
   // Check if this is a wakeup ping
   const isWakeupPing = req.headers.get('x-wakeup-ping') === 'true';
 
@@ -70,26 +70,22 @@ export async function GET(req: NextRequest) {
       timestamp: new Date().toISOString()
     });
 
-    return addCorsHeaders(
-      new Response(
-        JSON.stringify({ status: 'online', timestamp: new Date().toISOString() }),
-        { status: 200, headers: defaultHeaders }
-      ),
-      req
-    );
+    const response = successResponse({
+      status: 'online',
+      timestamp: new Date().toISOString()
+    });
+
+    return addCorsHeaders(response, req);
   }
 
   // Return a generic response for other GET requests
   return addCorsHeaders(
-    new Response(
-      JSON.stringify({ error: 'Method not allowed', message: 'Use POST to interact with the widget' }),
-      { status: 405, headers: defaultHeaders }
-    ),
+    errorResponse('Method not allowed', 'Use POST to interact with the widget', 405),
     req
   );
 }
 
-export async function POST(req: NextRequest) {
+export async function POST(req: Request): Promise<Response> {
   try {
     // Create a configured chat engine instance for the widget chat
     const engine = createChatEngine({
@@ -116,18 +112,18 @@ export async function POST(req: NextRequest) {
       error: error instanceof Error ? error.message : String(error)
     });
 
-    // Return a friendly error message
-    return addCorsHeaders(
-      new Response(
-        "I apologize, but I encountered an error processing your request. Please try again with a different question.",
-        {
-          status: 200, // Use 200 to allow the error to display in the widget
-          headers: {
-            'Content-Type': 'text/plain'
-          }
+    // Return a friendly error message using a plain text response
+    // Note: Using 200 here to allow the error to display properly in the widget
+    const response = new Response(
+      "I apologize, but I encountered an error processing your request. Please try again with a different question.",
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'text/plain'
         }
-      ),
-      req
+      }
     );
+
+    return addCorsHeaders(response, req);
   }
 } 

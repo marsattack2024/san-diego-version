@@ -1,9 +1,14 @@
-import { NextResponse } from 'next/server';
 import { cookies } from 'next/headers';
 import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { SupabaseClient } from '@supabase/supabase-js';
+
+export const runtime = 'edge';
 
 // Helper to check if a user is an admin
-async function isAdmin(supabase: any, userId: string) {
+async function isAdmin(supabase: SupabaseClient, userId: string): Promise<boolean> {
   const { data, error } = await supabase.rpc('is_admin', { uid: userId });
   if (error) return false;
   return !!data;
@@ -44,13 +49,13 @@ export async function POST(request: Request): Promise<Response> {
   // Verify the user is authenticated and an admin
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return unauthorizedError('Authentication required');
   }
 
   // Check if user is an admin
   const admin = await isAdmin(supabase, user.id);
   if (!admin) {
-    return NextResponse.json({ error: 'Forbidden - You do not have admin privileges' }, { status: 403 });
+    return errorResponse('Forbidden - You do not have admin privileges', null, 403);
   }
 
   try {
@@ -58,14 +63,18 @@ export async function POST(request: Request): Promise<Response> {
     const { email } = body;
 
     if (!email) {
-      return NextResponse.json({ error: 'Email is required' }, { status: 400 });
+      return errorResponse('Email is required', null, 400);
     }
+
+    edgeLogger.info('Attempting to invite user', {
+      category: LOG_CATEGORIES.AUTH,
+      adminId: user.id,
+      email: email
+    });
 
     // Invite the user using the admin API
     if (!process.env.SUPABASE_KEY) {
-      return NextResponse.json({
-        error: 'Service role key is required for user invitations'
-      }, { status: 500 });
+      return errorResponse('Service role key is required for user invitations', null, 500);
     }
 
     try {
@@ -80,24 +89,37 @@ export async function POST(request: Request): Promise<Response> {
         // If the user already exists, return a friendly message
         if (error.message?.includes('already been registered') ||
           error.message?.includes('already exists')) {
-          return NextResponse.json({
+
+          edgeLogger.info('User already exists', {
+            category: LOG_CATEGORIES.AUTH,
+            email: email
+          });
+
+          return successResponse({
             message: 'User with this email already exists',
             status: 'exists'
-          }, { status: 200 }); // Return 200 for this case
+          });
         }
 
-        console.error('Error inviting user:', error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+        edgeLogger.error('Error inviting user', {
+          category: LOG_CATEGORIES.AUTH,
+          error: error.message,
+          email: email
+        });
+
+        return errorResponse(error.message, null, 500);
       }
 
       // Verify we have user data
       if (!data?.user) {
-        return NextResponse.json({
-          error: 'Invitation succeeded but no user data returned'
-        }, { status: 500 });
+        return errorResponse('Invitation succeeded but no user data returned', null, 500);
       }
 
-      console.log('User invited successfully:', data.user.id);
+      edgeLogger.info('User invited successfully', {
+        category: LOG_CATEGORIES.AUTH,
+        userId: data.user.id,
+        email: email
+      });
 
       // Create a minimal profile record so the user appears in the admin dashboard
       try {
@@ -118,30 +140,55 @@ export async function POST(request: Request): Promise<Response> {
           }]);
 
         if (profileError) {
-          console.warn('Created user but failed to create profile:', profileError);
+          edgeLogger.warn('Created user but failed to create profile', {
+            category: LOG_CATEGORIES.AUTH,
+            error: profileError,
+            userId: data.user.id
+          });
           // Don't fail the request, just log the warning
         } else {
-          console.log('Created placeholder profile for user:', data.user.id);
+          edgeLogger.info('Created placeholder profile for user', {
+            category: LOG_CATEGORIES.AUTH,
+            userId: data.user.id
+          });
         }
       } catch (profileErr) {
-        console.warn('Error creating placeholder profile:', profileErr);
+        edgeLogger.warn('Error creating placeholder profile', {
+          category: LOG_CATEGORIES.AUTH,
+          error: profileErr instanceof Error ? profileErr.message : String(profileErr),
+          userId: data.user.id
+        });
         // Don't fail the request, just log the warning
       }
 
       // Return success response with the user data
-      return NextResponse.json({
+      return successResponse({
         message: 'User invitation email sent successfully',
         user: data.user
       });
     } catch (error) {
-      console.error("Exception during user invitation:", error);
-      return NextResponse.json({
-        error: 'Exception during user invitation',
-        details: error instanceof Error ? error.message : String(error)
-      }, { status: 500 });
+      edgeLogger.error('Exception during user invitation', {
+        category: LOG_CATEGORIES.AUTH,
+        error: error instanceof Error ? error.message : String(error),
+        email: email
+      });
+
+      return errorResponse(
+        'Exception during user invitation',
+        error instanceof Error ? error.message : String(error),
+        500
+      );
     }
   } catch (error) {
-    console.error('Error in invite user API:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    edgeLogger.error('Error in invite user API', {
+      category: LOG_CATEGORIES.AUTH,
+      error: error instanceof Error ? error.message : String(error)
+    });
+
+    return errorResponse(
+      'Internal Server Error',
+      error instanceof Error ? error.message : String(error),
+      500
+    );
   }
 }

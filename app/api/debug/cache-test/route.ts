@@ -1,8 +1,10 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { edgeLogger } from '../../../../lib/logger/edge-logger';
-import { LOG_CATEGORIES } from '../../../../lib/logger/constants';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { Redis } from '@upstash/redis';
 import { cacheService } from '@/lib/cache/cache-service';
+import { successResponse, errorResponse } from '@/lib/utils/route-handler';
+
+export const runtime = 'edge';
 
 /**
  * API endpoint to test the Redis caching system.
@@ -11,7 +13,7 @@ import { cacheService } from '@/lib/cache/cache-service';
  * NOTE: This endpoint does not require authentication for testing purposes only.
  * It should be removed or secured in production.
  */
-export async function GET(request: Request) {
+export async function GET(request: Request): Promise<Response> {
   const { searchParams } = new URL(request.url);
   const operation = searchParams.get('operation') || 'get';
   const key = searchParams.get('key') || 'test-key';
@@ -20,13 +22,13 @@ export async function GET(request: Request) {
   const query = searchParams.get('query') || 'test query';
   const url = searchParams.get('url') || 'https://example.com';
   const options = searchParams.get('options') ? JSON.parse(searchParams.get('options')!) : { tenantId: 'test' };
-  
+
   const runtime = typeof (globalThis as any).EdgeRuntime === 'string' ? 'edge' : 'node';
-  
+
   const startTime = Date.now();
   let result: any = null;
   let error: any = null;
-  
+
   try {
     edgeLogger.info('Cache test operation', {
       category: LOG_CATEGORIES.SYSTEM,
@@ -35,7 +37,7 @@ export async function GET(request: Request) {
       runtime,
       env: process.env.NODE_ENV
     });
-    
+
     // Test different cache operations based on the "operation" parameter
     switch (operation) {
       case 'set': {
@@ -43,23 +45,23 @@ export async function GET(request: Request) {
         result = { success: true, message: `Value set for key: ${key}` };
         break;
       }
-      
+
       case 'get': {
         const cachedValue = await cacheService.get(key);
-        result = { 
+        result = {
           success: true,
           message: cachedValue ? `Value retrieved for key: ${key}` : `No value found for key: ${key}`,
           value: cachedValue
         };
         break;
       }
-      
+
       case 'delete': {
         await cacheService.delete(key);
         result = { success: true, message: `Key deleted: ${key}` };
         break;
       }
-      
+
       case 'rag': {
         // Test RAG-specific methods
         if (operation.includes('set')) {
@@ -76,7 +78,7 @@ export async function GET(request: Request) {
         }
         break;
       }
-      
+
       case 'scraper': {
         // Test scraper-specific methods
         if (operation.includes('set')) {
@@ -93,7 +95,7 @@ export async function GET(request: Request) {
         }
         break;
       }
-      
+
       case 'deep-search': {
         // Test deep search-specific methods
         if (operation.includes('set')) {
@@ -110,37 +112,50 @@ export async function GET(request: Request) {
         }
         break;
       }
-      
+
       default: {
         result = { success: false, message: `Unknown operation: ${operation}` };
       }
     }
+
+    const duration = Date.now() - startTime;
+
+    return successResponse({
+      operation,
+      key,
+      runtime,
+      environment: process.env.NODE_ENV,
+      durationMs: duration,
+      result,
+      timestamp: new Date().toISOString()
+    });
   } catch (err) {
     error = {
       message: err instanceof Error ? err.message : String(err),
       stack: err instanceof Error ? err.stack : 'No stack available'
     };
-    
+
     edgeLogger.error('Cache test error', {
       category: LOG_CATEGORIES.SYSTEM,
       operation: `cache_test_error`,
       error: error.message,
       runtime
     });
+
+    const duration = Date.now() - startTime;
+
+    return errorResponse(
+      'Cache test error',
+      {
+        operation,
+        key,
+        runtime,
+        environment: process.env.NODE_ENV,
+        durationMs: duration,
+        error,
+        timestamp: new Date().toISOString()
+      },
+      500
+    );
   }
-  
-  const duration = Date.now() - startTime;
-  
-  return NextResponse.json({
-    operation,
-    key,
-    runtime,
-    environment: process.env.NODE_ENV,
-    durationMs: duration,
-    result,
-    error,
-    timestamp: new Date().toISOString()
-  }, {
-    status: error ? 500 : 200
-  });
 } 

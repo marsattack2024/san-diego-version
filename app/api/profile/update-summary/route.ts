@@ -1,8 +1,9 @@
-import { NextResponse } from 'next/server';
 import { createClient } from '@/utils/supabase/server';
 import { logger } from '@/lib/logger';
 import { generateWebsiteSummary } from '@/lib/agents/tools/website-summarizer';
+import { successResponse, errorResponse, notFoundError } from '@/lib/utils/route-handler';
 
+export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60; // Maximum allowed duration for Hobby plan (60 seconds)
 
@@ -12,7 +13,7 @@ const SAFETY_TIMEOUT_MS = 55000; // 55 seconds
 /**
  * Endpoint to generate and update a user's profile website summary
  */
-export async function POST(request: Request) {
+export async function POST(request: Request): Promise<Response> {
   const startTime = Date.now();
   const operation = 'update_website_summary';
 
@@ -31,18 +32,12 @@ export async function POST(request: Request) {
     const { url, userId } = await request.json();
 
     if (!userId || !url) {
-      return NextResponse.json(
-        { error: 'User ID and URL are required' },
-        { status: 400 }
-      );
+      return errorResponse('User ID and URL are required', null, 400);
     }
 
     // Validate URL starts with https://
     if (!url.startsWith('https://')) {
-      return NextResponse.json(
-        { error: 'URL must start with https://' },
-        { status: 400 }
-      );
+      return errorResponse('URL must start with https://', null, 400);
     }
 
     logger.info('Starting website summary generation and profile update', {
@@ -68,18 +63,12 @@ export async function POST(request: Request) {
         operation
       });
 
-      return NextResponse.json(
-        { error: 'Error checking user profile', details: userError.message },
-        { status: 500 }
-      );
+      return errorResponse('Error checking user profile', userError.message, 500);
     }
 
     if (!user) {
       logger.warn('User profile not found', { userId, operation });
-      return NextResponse.json(
-        { error: 'User profile not found' },
-        { status: 404 }
-      );
+      return notFoundError('User profile not found');
     }
 
     // Generate the summary and update the profile with timeout safety
@@ -165,17 +154,17 @@ export async function POST(request: Request) {
           operation
         });
 
-        return NextResponse.json({
-          success: false,
-          message: result.message,
-          timedOut: true
-        }, { status: 408 }); // 408 Request Timeout
+        return errorResponse(
+          'Processing is taking longer than expected. Please try again later.',
+          { timedOut: true },
+          408
+        );
       }
 
       // Return the result from processing
-      return NextResponse.json(result, {
-        status: result.success ? 200 : 500
-      });
+      return result.success
+        ? successResponse(result)
+        : errorResponse(result.message, null, 500);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
 
@@ -187,10 +176,7 @@ export async function POST(request: Request) {
         operation
       });
 
-      return NextResponse.json({
-        success: false,
-        message: 'Error generating website summary'
-      }, { status: 500 });
+      return errorResponse('Error generating website summary', error, 500);
     }
 
   } catch (error) {
@@ -202,9 +188,6 @@ export async function POST(request: Request) {
       operation
     });
 
-    return NextResponse.json(
-      { error: 'Internal server error', details: errorMessage },
-      { status: 500 }
-    );
+    return errorResponse('Internal server error', error, 500);
   }
 }

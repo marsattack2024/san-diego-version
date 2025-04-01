@@ -79,7 +79,7 @@ const config: Config = {
     require('tailwindcss-animate'),
     require('@tailwindcss/typography'),
     // Add custom scrollbar styles
-    function ({ addUtilities }) {
+    function ({ addUtilities }: { addUtilities: (utilities: Record<string, any>) => void }) {
       const newUtilities = {
         '.scrollbar-thin': {
           scrollbarWidth: 'thin',

@@ -1,63 +1,63 @@
-import { NextResponse } from 'next/server';
 import { createClient } from '@/utils/supabase/server';
-import { logger } from '@/lib/logger';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { successResponse, errorResponse, validationError } from '@/lib/utils/route-handler';
+
+export const runtime = 'edge';
 
 /**
  * Endpoint to send client-side notifications for long-running processes
  * This is designed to notify users when async processes like website summarization complete
  */
-export async function POST(request: Request) {
+export async function POST(request: Request): Promise<Response> {
   const operation = 'profile_notification';
-  
+
   try {
     // Get request data
     const { userId, type, message } = await request.json();
-    
+
     if (!userId || !type || !message) {
-      return NextResponse.json(
-        { error: 'User ID, type, and message are required' },
-        { status: 400 }
-      );
+      return validationError('User ID, type, and message are required');
     }
-    
+
     // Validate notification type
     const validTypes = ['success', 'error', 'info', 'warning'];
     if (!validTypes.includes(type)) {
-      return NextResponse.json(
-        { error: 'Invalid notification type' },
-        { status: 400 }
-      );
+      return validationError('Invalid notification type');
     }
-    
-    logger.info('Sending user notification', {
+
+    edgeLogger.info('Sending user notification', {
+      category: LOG_CATEGORIES.SYSTEM,
       userId,
       type,
       operation
     });
-    
+
     // Get authenticated Supabase client (keeping this for future implementation)
     // Commented to avoid linter warning until implementation is ready
     // const supabase = await createClient();
-    
+
     // For future implementation: Store notifications in database here
-    
-    return NextResponse.json({
+
+    return successResponse({
       success: true,
       message: 'Notification sent successfully'
     });
-    
+
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    
-    logger.error('Unexpected error in notification API', {
+
+    edgeLogger.error('Unexpected error in notification API', {
+      category: LOG_CATEGORIES.SYSTEM,
       error: errorMessage,
       stack: error instanceof Error ? error.stack : undefined,
       operation
     });
-    
-    return NextResponse.json(
-      { error: 'Internal server error', details: errorMessage },
-      { status: 500 }
+
+    return errorResponse(
+      'Internal server error',
+      errorMessage,
+      500
     );
   }
 }
