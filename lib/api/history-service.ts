@@ -1042,25 +1042,53 @@ export const historyService = {
   },
 
   /**
-   * Invalidate cache and clear any stale pending requests
+   * Invalidates all cached history data and resets failure states
+   * This is used when manually resetting authentication or for force refreshing
    */
   invalidateCache(): void {
-    const operationId = Math.random().toString(36).substring(2, 10);
-    edgeLogger.debug(`[History:${operationId}] Invalidating chat history cache`);
-
-    const cacheKey = 'chat_history';
-
-    // Clear the cache
     try {
-      clientCache.remove(cacheKey);
-    } catch (error: any) {
-      edgeLogger.warn(`[History:${operationId}] Error clearing history cache:`, error);
+      // Clear the chat history from client cache
+      clientCache.remove('chat_history');
+
+      // Reset the auth failure state
+      setAuthFailureState(false);
+
+      // Clear all recent unauthorized requests
+      recentUnauthorizedRequests = [];
+
+      // Reset other tracking variables
+      authFailureCount = 0;
+      authBackoffDuration = MIN_AUTH_COOLDOWN;
+      isInAuthFailureCooldown = false;
+
+      // Clear localStorage keys related to auth failures
+      clientCache.remove(AUTH_FAILURE_KEY, true);
+      clientCache.remove(AUTH_FAILURE_COUNT_KEY, true);
+      clientCache.remove(AUTH_FAILURE_LAST_TIME_KEY, true);
+      clientCache.remove(AUTH_BACKOFF_DURATION_KEY, true);
+
+      // Also clear auth ready state to force recheck
+      clientCache.remove('auth_ready_state', true);
+      clientCache.remove('auth_ready_timestamp', true);
+
+      // Log complete reset
+      edgeLogger.info('History cache and auth failure state completely reset', {
+        category: LOG_CATEGORIES.SYSTEM,
+        operation: 'invalidate_cache',
+        cookieCheck: this.checkForAuthCookies() ? 'has_cookies' : 'no_cookies'
+      });
+
+      // Display a clear debug console message for developers
+      console.debug(
+        '%c[HistoryService] AUTH STATE RESET COMPLETELY',
+        'background: #4CAF50; color: white; padding: 2px 4px; border-radius: 2px; font-weight: bold;'
+      );
+    } catch (error) {
+      edgeLogger.error('Error invalidating history cache', {
+        category: LOG_CATEGORIES.SYSTEM,
+        error: error instanceof Error ? error.message : String(error)
+      });
     }
-
-    // Clean up any stale pending requests
-    pendingRequests[cacheKey] = null;
-
-    edgeLogger.debug(`[History:${operationId}] Chat history cache invalidated`);
   },
 
   /**

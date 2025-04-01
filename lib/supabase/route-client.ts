@@ -10,6 +10,7 @@ import { createServerClient } from '@supabase/ssr';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { createStandardCookieHandler } from './cookie-utils';
 
 /**
  * Creates a standard Supabase client for route handlers
@@ -36,26 +37,7 @@ export async function createRouteHandlerClient(): Promise<SupabaseClient> {
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
             {
-                cookies: {
-                    getAll() {
-                        return cookieStore.getAll();
-                    },
-                    setAll(cookiesToSet) {
-                        try {
-                            cookiesToSet.forEach(({ name, value, options }) =>
-                                cookieStore.set(name, value, options)
-                            );
-                        } catch (error) {
-                            // The `setAll` method was called from a Server Component.
-                            // This can be ignored if you have middleware refreshing
-                            // user sessions.
-                            edgeLogger.debug('Cookie set failed in Server Component (expected)', {
-                                category: LOG_CATEGORIES.SYSTEM,
-                                error: error instanceof Error ? error.message : String(error)
-                            });
-                        }
-                    },
-                },
+                cookies: createStandardCookieHandler(cookieStore)
             }
         );
     } catch (error) {
@@ -101,24 +83,7 @@ export async function createRouteHandlerAdminClient(): Promise<SupabaseClient> {
             supabaseUrl,
             serviceRoleKey,
             {
-                cookies: {
-                    getAll() {
-                        return cookieStore.getAll();
-                    },
-                    setAll(cookiesToSet) {
-                        try {
-                            cookiesToSet.forEach(({ name, value, options }) =>
-                                cookieStore.set(name, value, options)
-                            );
-                        } catch (error) {
-                            // This can be ignored in Server Components
-                            edgeLogger.debug('Cookie set failed in Server Component (expected)', {
-                                category: LOG_CATEGORIES.SYSTEM,
-                                error: error instanceof Error ? error.message : String(error)
-                            });
-                        }
-                    },
-                },
+                cookies: createStandardCookieHandler(cookieStore)
             }
         );
     } catch (error) {

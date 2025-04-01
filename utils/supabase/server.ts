@@ -3,13 +3,15 @@ import { createServerClient } from '@supabase/ssr'
 import { cache } from 'react'
 import { type SupabaseClient } from '@supabase/supabase-js'
 import { edgeLogger } from '@/lib/logger/edge-logger'
+import { createStandardCookieHandler } from '@/lib/supabase/cookie-utils'
+import { LOG_CATEGORIES } from '@/lib/logger/constants'
 
 export const createClient = cache(async () => {
   const cookieStore = await cookies()
 
   // Debug logging for environment variables
   edgeLogger.info('Creating Supabase client', {
-    category: 'system',
+    category: LOG_CATEGORIES.SYSTEM,
     hasSupabaseUrl: !!process.env.NEXT_PUBLIC_SUPABASE_URL,
     hasAnonKey: !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
     urlPrefix: process.env.NEXT_PUBLIC_SUPABASE_URL?.substring(0, 10) + '...',
@@ -20,22 +22,7 @@ export const createClient = cache(async () => {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            )
-          } catch {
-            // The `setAll` method was called from a Server Component.
-            // This can be ignored if you have middleware refreshing
-            // user sessions.
-          }
-        },
-      },
+      cookies: createStandardCookieHandler(cookieStore)
     }
   )
 })
@@ -50,7 +37,7 @@ export const createAdminClient = cache(async () => {
 
     // Debug logging for admin client
     edgeLogger.info('Creating Supabase admin client', {
-      category: 'system',
+      category: LOG_CATEGORIES.SYSTEM,
       hasSupabaseUrl: !!supabaseUrl,
       hasServiceRoleKey: !!serviceRoleKey,
       hasSupabaseKey: !!process.env.SUPABASE_KEY,
@@ -61,7 +48,7 @@ export const createAdminClient = cache(async () => {
 
     if (!serviceRoleKey) {
       edgeLogger.error('Missing Supabase service role key. Admin operations will fail.', {
-        category: 'system',
+        category: LOG_CATEGORIES.SYSTEM,
         important: true
       })
       throw new Error('Missing SUPABASE_SERVICE_ROLE_KEY or SUPABASE_KEY environment variable')
@@ -69,7 +56,7 @@ export const createAdminClient = cache(async () => {
 
     if (!supabaseUrl) {
       edgeLogger.error('Missing Supabase URL. Admin operations will fail.', {
-        category: 'system',
+        category: LOG_CATEGORIES.SYSTEM,
         important: true
       })
       throw new Error('Missing NEXT_PUBLIC_SUPABASE_URL environment variable')
@@ -80,25 +67,12 @@ export const createAdminClient = cache(async () => {
       supabaseUrl,
       serviceRoleKey,
       {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll(cookiesToSet) {
-            try {
-              cookiesToSet.forEach(({ name, value, options }) =>
-                cookieStore.set(name, value, options)
-              )
-            } catch {
-              // This can be ignored in Server Components
-            }
-          }
-        }
+        cookies: createStandardCookieHandler(cookieStore)
       }
     )
   } catch (error) {
     edgeLogger.error('Failed to create admin client', {
-      category: 'system',
+      category: LOG_CATEGORIES.SYSTEM,
       error: error instanceof Error ? error.message : String(error),
       important: true
     })

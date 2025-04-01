@@ -1,6 +1,8 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 import { edgeLogger } from '@/lib/logger/edge-logger'
+import { createStandardCookieHandler, setEnhancedCookie } from '@/lib/supabase/cookie-utils'
+import { LOG_CATEGORIES } from '@/lib/logger/constants'
 
 export async function updateSession(request: NextRequest) {
   // Create a mutable copy of the request headers
@@ -15,7 +17,7 @@ export async function updateSession(request: NextRequest) {
   });
 
   try {
-    // Create standard client for auth
+    // Create standard client for auth using the standardized cookie handler
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -29,15 +31,7 @@ export async function updateSession(request: NextRequest) {
               // First apply cookies to the request object to ensure they're available
               // for the current request
               cookiesToSet.forEach(({ name, value, options }) => {
-                try {
-                  request.cookies.set(name, value);
-                } catch (err) {
-                  edgeLogger.debug('Error setting cookie on request', {
-                    category: 'auth',
-                    cookieName: name,
-                    error: err instanceof Error ? err.message : String(err)
-                  });
-                }
+                setEnhancedCookie(request.cookies, name, value, options);
               });
 
               // Then create a fresh response with updated cookies
@@ -47,43 +41,22 @@ export async function updateSession(request: NextRequest) {
                 },
               });
 
-              // Finally set cookies on the response with improved settings
+              // Finally set cookies on the response using our enhanced cookie setter
               cookiesToSet.forEach(({ name, value, options }) => {
-                try {
-                  // Enhanced cookie settings for better persistence
-                  const enhancedOptions = {
-                    ...options,
-                    path: '/',
-                    sameSite: 'lax' as 'lax' | 'strict' | 'none',
-                    secure: process.env.NODE_ENV === 'production',
-                    // Use longer maxAge for auth cookies
-                    ...(name.includes('-auth-token') ? {
-                      maxAge: 60 * 60 * 24 * 7, // 7 days
-                      httpOnly: true,
-                    } : {})
-                  };
-
-                  supabaseResponse.cookies.set(name, value, enhancedOptions);
-                } catch (err) {
-                  edgeLogger.debug('Error setting cookie on response', {
-                    category: 'auth',
-                    cookieName: name,
-                    error: err instanceof Error ? err.message : String(err)
-                  });
-                }
+                setEnhancedCookie(supabaseResponse.cookies, name, value, options);
               });
 
               // Log the cookies we're setting for debugging
               if (cookiesToSet.some(cookie => cookie.name.includes('-auth-token'))) {
                 edgeLogger.debug('Setting auth cookies in middleware', {
-                  category: 'auth',
+                  category: LOG_CATEGORIES.AUTH,
                   cookieCount: cookiesToSet.length,
                   cookieNames: cookiesToSet.map(c => c.name)
                 });
               }
             } catch (error) {
               edgeLogger.error('Error in cookie setAll', {
-                category: 'auth',
+                category: LOG_CATEGORIES.AUTH,
                 error: error instanceof Error ? error.message : String(error),
               });
             }
@@ -145,7 +118,7 @@ export async function updateSession(request: NextRequest) {
 
       if (needsAdminCheck) {
         edgeLogger.debug(`[updateSession] Checking admin status for: ${user.id.substring(0, 8)}...`, {
-          category: 'auth',
+          category: LOG_CATEGORIES.AUTH,
           level: 'debug'
         });
 
@@ -167,13 +140,13 @@ export async function updateSession(request: NextRequest) {
             }
           );
           edgeLogger.debug('[updateSession] Using service role key for admin check', {
-            category: 'auth',
+            category: LOG_CATEGORIES.AUTH,
             level: 'debug'
           });
         } else {
           adminClient = supabase;
           edgeLogger.warn('[updateSession] ⚠️ No service role key available, admin check may fail due to RLS', {
-            category: 'auth',
+            category: LOG_CATEGORIES.AUTH,
             level: 'warn'
           });
         }
@@ -191,38 +164,32 @@ export async function updateSession(request: NextRequest) {
         if (!profileError && profileData?.is_admin === true) {
           isAdminStatus = 'true';
           edgeLogger.debug('[updateSession] User is admin via profile check', {
-            category: 'auth',
+            category: LOG_CATEGORIES.AUTH,
             userId: user.id,
             level: 'debug'
           });
         } else if (profileError) {
           edgeLogger.warn('[updateSession] Profile admin check error', {
-            category: 'auth',
+            category: LOG_CATEGORIES.AUTH,
             error: profileError.message,
             level: 'warn'
           });
         } else {
           edgeLogger.debug('[updateSession] User is not an admin', {
-            category: 'auth',
+            category: LOG_CATEGORIES.AUTH,
             userId: user.id,
             level: 'debug'
           });
         }
 
         // Set admin status in cookies with timestamp - for both request and response
-        request.cookies.set('x-is-admin', isAdminStatus);
-        request.cookies.set('x-is-admin-time', now.toString());
-        supabaseResponse.cookies.set('x-is-admin', isAdminStatus, {
-          path: '/',
+        setEnhancedCookie(request.cookies, 'x-is-admin', isAdminStatus);
+        setEnhancedCookie(request.cookies, 'x-is-admin-time', now.toString());
+        setEnhancedCookie(supabaseResponse.cookies, 'x-is-admin', isAdminStatus, {
           maxAge: 60 * 60 * 24, // Cookie lasts 24 hours, though we'll refresh it earlier
-          sameSite: 'lax' as 'lax' | 'strict' | 'none',
-          secure: process.env.NODE_ENV === 'production'
         });
-        supabaseResponse.cookies.set('x-is-admin-time', now.toString(), {
-          path: '/',
+        setEnhancedCookie(supabaseResponse.cookies, 'x-is-admin-time', now.toString(), {
           maxAge: 60 * 60 * 24,
-          sameSite: 'lax' as 'lax' | 'strict' | 'none',
-          secure: process.env.NODE_ENV === 'production'
         });
 
         // Also set in headers for immediate use
@@ -237,7 +204,7 @@ export async function updateSession(request: NextRequest) {
         // Only log when status is true to reduce noise
         if (isAdminStatus === 'true') {
           edgeLogger.debug('[updateSession] Using cached admin status from cookie (true)', {
-            category: 'auth',
+            category: LOG_CATEGORIES.AUTH,
             level: 'debug'
           });
         }
@@ -255,17 +222,13 @@ export async function updateSession(request: NextRequest) {
       supabaseResponse.headers.set('x-has-profile', hasProfile);
 
       // Set a session health check cookie to help client-side code detect auth status
-      // This cookie is checked by client-side code to ensure the session is healthy
-      supabaseResponse.cookies.set('x-session-health', 'active', {
-        path: '/',
+      setEnhancedCookie(supabaseResponse.cookies, 'x-session-health', 'active', {
         maxAge: 60 * 60 * 24, // 24 hours
-        sameSite: 'lax' as 'lax' | 'strict' | 'none',
-        secure: process.env.NODE_ENV === 'production'
       });
 
       // Log that the session is authenticated and healthy
       edgeLogger.debug('Session authenticated and healthy', {
-        category: 'auth',
+        category: LOG_CATEGORIES.AUTH,
         userId: user.id.substring(0, 8) + '...',
         path: pathname
       });
@@ -300,18 +263,15 @@ export async function updateSession(request: NextRequest) {
 
         // Log at debug level with proper category
         edgeLogger.debug(`Setting explicit unauthenticated headers for ${pathname}`, {
-          category: 'auth',
+          category: LOG_CATEGORIES.AUTH,
           hasAuthCookies,
           level: 'debug'
         });
       }
 
       // Clear session health cookie for unauthenticated users
-      supabaseResponse.cookies.set('x-session-health', '', {
-        path: '/',
+      setEnhancedCookie(supabaseResponse.cookies, 'x-session-health', '', {
         maxAge: 0, // Expire immediately
-        sameSite: 'lax' as 'lax' | 'strict' | 'none',
-        secure: process.env.NODE_ENV === 'production'
       });
     }
 
@@ -352,7 +312,7 @@ export async function updateSession(request: NextRequest) {
   } catch (error) {
     // Log the error but don't break the app
     edgeLogger.error('Error in updateSession middleware', {
-      category: 'auth',
+      category: LOG_CATEGORIES.AUTH,
       error: error instanceof Error ? error.message : String(error),
       important: true
     });
@@ -371,17 +331,13 @@ export function createClient(request: NextRequest, response: NextResponse) {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll()
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
-          cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options)
-          )
-        },
-      },
+      cookies: createStandardCookieHandler({
+        getAll: () => request.cookies.getAll(),
+        set: (name: string, value: string, options?: any) => {
+          request.cookies.set(name, value);
+          response.cookies.set(name, value, options);
+        }
+      })
     }
   )
 }
