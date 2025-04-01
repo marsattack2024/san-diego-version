@@ -6,10 +6,10 @@ import type { Message } from 'ai';
 
 export async function GET(
     request: NextRequest,
-    context: { params: { id: string } }
+    { params }: { params: { id: string } }
 ): Promise<NextResponse> {
     try {
-        const chatId = context.params.id;
+        const chatId = params.id;
 
         // Basic validation
         if (!chatId) {
