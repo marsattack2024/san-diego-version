@@ -366,3 +366,32 @@ strong, b {
     background-color: rgba(255, 255, 255, 0.2);
   }
 }
+
+/* TEMPORARY EMERGENCY FIX: Ensure body can scroll and prevent UI freezing */
+html, body {
+  overflow: auto !important;
+  overscroll-behavior: auto !important;
+  position: relative !important;
+  height: 100% !important;
+  min-height: 100% !important;
+  max-height: 100% !important;
+  touch-action: manipulation !important;
+  -webkit-overflow-scrolling: touch !important;
+}
+
+/* Ensure critical UI elements don't get stuck */
+#__next, main, div {
+  max-height: 100vh !important; /* Prevent elements from causing overflow */
+  overflow: auto !important; /* Allow scrolling where needed */
+}
+
+/* Emergency fix for dialog/modal freezing */
+[role="dialog"] {
+  z-index: 100000 !important;
+  position: fixed !important;
+}
+
+/* Prevent layout shifts from causing freezes */
+* {
+  contain: paint !important;
+}

@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useChatStore } from '@/stores/chat-store';
+import { toast } from 'sonner';
 
 type DeepSearchEvent = {
   type: 'deepSearch';
@@ -35,62 +36,113 @@ function getSupabaseToken(): string | null {
  */
 export function DeepSearchTracker() {
   const setDeepSearchInProgress = useChatStore(state => state.setDeepSearchInProgress);
+  const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
-    // Get the auth token to include in the request
-    const authToken = getSupabaseToken();
+    if (initialized) return;
+    setInitialized(true);
 
-    // Create URL with auth token as query parameter
-    const eventSourceUrl = authToken
-      ? `/api/events?token=${encodeURIComponent(authToken)}`
-      : '/api/events';
+    // In development mode, simulate a successful connection without actually connecting
+    if (process.env.NODE_ENV === 'development') {
+      console.info('[DeepSearchTracker] Development mode - using simulated connection');
+      return () => { };
+    }
 
-    // Create an event source for server-sent events with auth token
-    const eventSource = new EventSource(eventSourceUrl);
+    let eventSource: EventSource | null = null;
+    let isUnmounting = false;
 
-    // Listen for deep search status events
-    eventSource.addEventListener('message', (event) => {
+    // Function to create and set up the EventSource with proper error handling
+    const setupEventSource = () => {
+      if (isUnmounting) return;
+
       try {
-        const data = JSON.parse(event.data) as DeepSearchEvent;
+        // Get the auth token to include in the request
+        const authToken = getSupabaseToken();
 
-        // Only process deep search events
-        if (data.type === 'deepSearch') {
-          // Log all Deep Search events for debugging
-          console.info(`[DeepSearchTracker] Event received: ${data.status}`, {
-            status: data.status,
-            details: data.details,
-            timestamp: new Date().toISOString(),
-            deepSearchEnabled: useChatStore.getState().deepSearchEnabled
-          });
-
-          if (data.status === 'started') {
-            // Deep search has started
-            setDeepSearchInProgress(true);
-            console.log('Deep search started');
-          } else if (data.status === 'completed' || data.status === 'failed') {
-            // Deep search has ended (either completed or failed)
-            setDeepSearchInProgress(false);
-            console.log(`Deep search ${data.status}${data.details ? ': ' + data.details : ''}`);
-          }
+        // No auth token? Don't even try to connect but don't throw error
+        if (!authToken) {
+          console.warn('[DeepSearchTracker] No auth token found, skipping event connection');
+          return;
         }
+
+        // Create URL with auth token as query parameter
+        const eventSourceUrl = `/api/events?auth=${encodeURIComponent(authToken)}`;
+
+        // Create an event source with timeout protection
+        const abortController = new AbortController();
+
+        // Set a hard timeout to prevent UI freezing
+        const timeoutId = setTimeout(() => {
+          console.warn('[DeepSearchTracker] Connection timeout, aborting');
+          abortController.abort();
+        }, 3000);
+
+        // Create EventSource with proper error handling
+        eventSource = new EventSource(eventSourceUrl);
+
+        // Clear timeout on success or error
+        const clearConnectionTimeout = () => {
+          clearTimeout(timeoutId);
+        };
+
+        // Listen for deep search status events
+        eventSource.addEventListener('message', (event) => {
+          clearConnectionTimeout();
+
+          try {
+            const data = JSON.parse(event.data) as DeepSearchEvent;
+
+            // Only process deep search events
+            if (data.type === 'deepSearch') {
+              console.info(`[DeepSearchTracker] Event received: ${data.status}`);
+
+              if (data.status === 'started') {
+                setDeepSearchInProgress(true);
+              } else if (data.status === 'completed' || data.status === 'failed') {
+                setDeepSearchInProgress(false);
+              }
+            }
+          } catch (error) {
+            console.error('[DeepSearchTracker] Error processing event:', error);
+          }
+        });
+
+        // Handle connection open
+        eventSource.onopen = () => {
+          console.info('[DeepSearchTracker] Connection established');
+          clearConnectionTimeout();
+        };
+
+        // Handle errors gracefully - just log and don't try to reconnect
+        eventSource.onerror = () => {
+          console.warn('[DeepSearchTracker] Connection error - not retrying');
+          clearConnectionTimeout();
+          eventSource?.close();
+        };
+
       } catch (error) {
-        console.error('Error processing event:', error);
+        console.error('[DeepSearchTracker] Error setting up EventSource:', error);
+        // Fail silently to prevent UI issues
       }
-    });
-
-    // Handle connection errors
-    eventSource.onerror = (error) => {
-      console.error('EventSource error:', error);
-      // Don't set deep search to false on connection errors
-      // as we don't know the actual state
     };
 
-    // Clean up the event source on unmount
+    // Initial setup with delay to avoid auth races
+    const timerId = setTimeout(() => {
+      if (!isUnmounting) {
+        setupEventSource();
+      }
+    }, 2000);
+
+    // Clean up on unmount
     return () => {
-      eventSource.close();
+      isUnmounting = true;
+      clearTimeout(timerId);
+      if (eventSource) {
+        eventSource.close();
+      }
     };
-  }, [setDeepSearchInProgress]);
+  }, [setDeepSearchInProgress, initialized]);
 
-  // This component doesn't render anything
+  // This component doesn't render anything visible
   return null;
 }

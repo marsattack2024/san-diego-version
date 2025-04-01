@@ -28,7 +28,12 @@ export function AppSidebar({ user: serverUser }: { user: User | undefined }) {
   const [user, setUser] = useState<User | undefined>(serverUser);
   const [isCreatingChat, setIsCreatingChat] = useState(false);
   const { width } = useWindowSize();
+  const [isMounted, setIsMounted] = useState(false);
   const isMobile = width < 768;
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   // If no user was provided from the server, try to get it on the client side
   useEffect(() => {
@@ -81,6 +86,10 @@ export function AppSidebar({ user: serverUser }: { user: User | undefined }) {
 
     debugAuth();
   }, []);
+
+  if (!isMounted) {
+    return null;
+  }
 
   return (
     <Sidebar

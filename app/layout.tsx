@@ -3,12 +3,13 @@ import type { Metadata } from 'next';
 import { Toaster } from 'sonner';
 import { GeistSans } from 'geist/font/sans';
 import { GeistMono } from 'geist/font/mono';
+import { cn } from '@/lib/utils';
 
 import { ThemeProvider } from '@/components/theme-provider';
-import { DeepSearchTracker } from '@/components/deep-search-tracker';
 import { AuthProvider } from '@/utils/supabase/auth-provider';
 import { AuthHeadersSetup } from '@/components/auth-headers-setup';
 import { logApplicationStartup } from '@/lib/logger/edge-logger';
+import { DeepSearchTracker } from '@/components/deep-search-tracker';
 
 import './globals.css';
 
@@ -42,23 +43,14 @@ const THEME_COLOR_SCRIPT = `\
   updateThemeColor();
 })();`;
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
-  // Log application startup once at root layout initialization
-  // This ensures we only log startup once per instance
-  logApplicationStartup();
-
+}: {
+  children: React.ReactNode
+}) {
   return (
-    <html
-      lang="en"
-      className={`${GeistSans.variable} ${GeistMono.variable}`}
-      // `next-themes` injects an extra classname to the body element to avoid
-      // visual flicker before hydration. Hence the `suppressHydrationWarning`
-      // prop is necessary to avoid the React hydration mismatch warning.
-      // https://github.com/pacocoursey/next-themes?tab=readme-ov-file#with-app
+    <html lang="en"
+      className={cn("bg-background", GeistSans.variable, GeistMono.variable)}
       suppressHydrationWarning
     >
       <head>
@@ -70,7 +62,7 @@ export default async function RootLayout({
         <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
         <link rel="icon" href="/favicon.ico" sizes="any" />
       </head>
-      <body className="antialiased h-full flex flex-col" suppressHydrationWarning>
+      <body className={cn("min-h-screen font-sans antialiased")}>
         <ThemeProvider
           attribute="class"
           defaultTheme="system"
@@ -78,13 +70,18 @@ export default async function RootLayout({
           disableTransitionOnChange
         >
           <Toaster position="top-center" />
-          <DeepSearchTracker />
           <AuthProvider>
             <AuthHeadersSetup />
+            <div className="fixed top-2 right-2 z-50">
+              <a href="/emergency-reset" className="bg-destructive text-destructive-foreground px-2 py-1 rounded text-xs font-medium hover:bg-destructive/90">
+                Emergency Reset
+              </a>
+            </div>
+            <DeepSearchTracker />
             {children}
           </AuthProvider>
         </ThemeProvider>
       </body>
     </html>
-  );
+  )
 }

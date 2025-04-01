@@ -182,19 +182,20 @@ try {
  */
 export const historyService = {
   /**
-   * Check if we're currently in an auth failure cooldown period
-   * @returns True if in auth failure cooldown
+   * Check if we're in an auth failure cooldown state
+   * @returns Boolean indicating if we're in cooldown
    */
   isInAuthFailure(): boolean {
-    // Check for recent unauthorized responses first (fastest check)
-    // This provides immediate circuit breaking when flood is detected
-    if (recentUnauthorizedRequests.length >= UNAUTHORIZED_THRESHOLD) {
-      // Activate the circuit breaker if we hit the threshold
-      if (!isInAuthFailureCooldown) {
-        edgeLogger.warn(`Circuit breaker activating from isInAuthFailure check - ${recentUnauthorizedRequests.length} recent 401s`, { category: 'auth' });
-        setAuthFailureState(true);
+    // TEMPORARY EMERGENCY FIX: Completely bypass circuit breaker in development
+    if (typeof process !== 'undefined' && process.env.NODE_ENV === 'development') {
+      // Log this at a very low frequency to avoid console spam
+      if (Math.random() < 0.001) {
+        console.debug(
+          '%c[HistoryService] Circuit breaker DISABLED in development mode',
+          'background: #4CAF50; color: white; padding: 2px 4px; border-radius: 2px; font-weight: bold;'
+        );
       }
-      return true;
+      return false;
     }
 
     // CRITICAL FIX: Always check persistent storage next, as it is the source of truth
@@ -755,7 +756,41 @@ export const historyService = {
       }
 
       // Parse response
-      const data = await response.json();
+      console.log('[HistoryService] Response status:', response.status);
+      const rawText = await response.text(); // Get raw text first
+      console.log('[HistoryService] Raw response text length:', rawText.length);
+      console.log('[HistoryService] Raw response text sample:', rawText.substring(0, 500)); // Log beginning of text
+
+      let data;
+      try {
+        const parsedResponse = JSON.parse(rawText);
+        console.log('[HistoryService] Parsed response type:', typeof parsedResponse);
+
+        // Handle both formats: direct array or {success: true, data: [...]}
+        if (parsedResponse && typeof parsedResponse === 'object' && 'data' in parsedResponse && Array.isArray(parsedResponse.data)) {
+          // New format with success wrapper
+          console.log('[HistoryService] Detected wrapped response format');
+          data = parsedResponse.data;
+        } else if (Array.isArray(parsedResponse)) {
+          // Old direct array format
+          console.log('[HistoryService] Detected direct array response format');
+          data = parsedResponse;
+        } else {
+          // Invalid format
+          console.error('[HistoryService] Invalid response format, neither wrapped nor array:', typeof parsedResponse);
+          throw new Error('Invalid history API response format');
+        }
+
+        console.log('[HistoryService] Processed data type:', typeof data);
+        console.log('[HistoryService] Processed data is array:', Array.isArray(data));
+        console.log('[HistoryService] Processed data length:', Array.isArray(data) ? data.length : 'N/A');
+        console.log('[HistoryService] First item sample:', Array.isArray(data) && data.length > 0 ? JSON.stringify(data[0]).substring(0, 200) : 'No data');
+      } catch (e) {
+        console.error('[HistoryService] JSON PARSE FAILED:', e);
+        // Cache empty array to prevent continuous retry
+        clientCache.set('chat_history', [], CACHE_TTL_ERROR);
+        return [];
+      }
 
       // If we get an object with an error property, handle it gracefully
       if (data && typeof data === 'object' && 'error' in data) {
@@ -774,21 +809,7 @@ export const historyService = {
         return [];
       }
 
-      // Validate response format - expect an array of chat objects
-      if (!Array.isArray(data)) {
-        edgeLogger.error('Invalid history API response format', {
-          data,
-          type: typeof data,
-          operationId
-        });
-
-        // Set empty array in cache to prevent continuous spinning
-        clientCache.set('chat_history', [], CACHE_TTL_ERROR);
-
-        // Return empty array instead of throwing, to avoid spinning UI
-        return [];
-      }
-
+      // We've already validated the format in the parsing step above
       // Cache the fetched data
       clientCache.set('chat_history', data, CACHE_TTL);
 

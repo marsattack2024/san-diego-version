@@ -136,23 +136,54 @@ export const useChatStore = create<ChatState>()(
 
       // New method to synchronize conversations from history data
       syncConversationsFromHistory: (historyData: Chat[]) => {
+        console.log('[ChatStore] Starting syncConversationsFromHistory with', historyData.length, 'items');
+        console.time('[ChatStore] conversion to map');
+
+        // Convert array to map for faster access
         const conversationsMap: Record<string, Conversation> = {};
 
-        // Convert API format to store format
-        historyData.forEach(chat => {
-          conversationsMap[chat.id] = {
-            id: chat.id,
-            title: chat.title || 'Untitled Chat',
-            messages: [], // We don't load messages in bulk
-            createdAt: chat.createdAt,
-            updatedAt: chat.updatedAt || chat.createdAt, // Fallback to createdAt if updatedAt is undefined
-            agentId: ((chat as any).agentId as AgentType) || 'default',
-            deepSearchEnabled: (chat as any).deepSearchEnabled || false,
-            userId: chat.userId
-          };
-        });
+        let index = 0;
+        for (const chat of historyData) {
+          if (index === 0 || index === historyData.length - 1 || index % 10 === 0) {
+            console.log(`[ChatStore] Processing history item ${index}/${historyData.length}`);
+          }
 
-        set({ conversations: conversationsMap });
+          // Ensure chat has all required fields
+          if (!chat || !chat.id) {
+            console.warn('[ChatStore] Skipping invalid chat object:', chat);
+            index++;
+            continue;
+          }
+
+          try {
+            conversationsMap[chat.id] = {
+              id: chat.id,
+              messages: chat.messages || [],
+              createdAt: chat.createdAt || new Date().toISOString(),
+              updatedAt: chat.updatedAt || new Date().toISOString(),
+              title: chat.title || 'Untitled',
+              agentId: ((chat as any).agentId as AgentType) || 'default',
+              deepSearchEnabled: (chat as any).deepSearchEnabled || false,
+              userId: chat.userId
+            };
+          } catch (error) {
+            console.error('[ChatStore] Error processing chat item:', error, chat);
+          }
+
+          index++;
+        }
+
+        console.timeEnd('[ChatStore] conversion to map');
+        console.log('[ChatStore] Finished converting history to map, updating state with', Object.keys(conversationsMap).length, 'conversations');
+
+        try {
+          console.time('[ChatStore] state update');
+          set({ conversations: conversationsMap });
+          console.timeEnd('[ChatStore] state update');
+          console.log('[ChatStore] State updated successfully');
+        } catch (error) {
+          console.error('[ChatStore] Error updating state with conversations:', error);
+        }
 
         console.debug(`[ChatStore] Synchronized ${historyData.length} conversations from history`);
       },
@@ -160,6 +191,13 @@ export const useChatStore = create<ChatState>()(
       // New method to fetch history from API
       fetchHistory: async (forceRefresh = false) => {
         const state = get();
+
+        console.log('[ChatStore] Starting fetchHistory with state:', {
+          isLoadingHistory: state.isLoadingHistory,
+          forceRefresh,
+          historyError: state.historyError,
+          conversationCount: Object.keys(state.conversations).length
+        });
 
         // BYPASS AUTH FAILURE CIRCUIT BREAKER FOR NOW
         // This will force history fetch regardless of previous failures
@@ -184,21 +222,38 @@ export const useChatStore = create<ChatState>()(
           return;
         }
 
+        console.log('[ChatStore] Setting isLoadingHistory=true');
         set({ isLoadingHistory: true, historyError: null });
 
         try {
           console.debug(`[ChatStore] Fetching history (forceRefresh=${forceRefresh})`);
+          console.time('[ChatStore] historyService.fetchHistory');
           const historyData = await historyService.fetchHistory(forceRefresh);
+          console.timeEnd('[ChatStore] historyService.fetchHistory');
+
+          console.log('[ChatStore] Received history data:', {
+            dataType: typeof historyData,
+            isArray: Array.isArray(historyData),
+            length: Array.isArray(historyData) ? historyData.length : 'N/A',
+            sample: Array.isArray(historyData) && historyData.length > 0
+              ? JSON.stringify(historyData[0]).substring(0, 200)
+              : 'No data'
+          });
 
           // Process history data into conversations map
+          console.log('[ChatStore] Before syncConversationsFromHistory');
+          console.time('[ChatStore] syncConversationsFromHistory');
           get().syncConversationsFromHistory(historyData);
+          console.timeEnd('[ChatStore] syncConversationsFromHistory');
+          console.log('[ChatStore] After syncConversationsFromHistory');
 
+          console.log('[ChatStore] Setting isLoadingHistory=false and updating lastHistoryFetch');
           set({
             isLoadingHistory: false,
             lastHistoryFetch: Date.now()
           });
 
-          console.debug(`[ChatStore] History fetched and store updated with ${historyData.length} conversations`);
+          console.log(`[ChatStore] History fetched and store updated with ${historyData.length} conversations`);
         } catch (error) {
           console.error("Failed to fetch history:", error);
           set({
