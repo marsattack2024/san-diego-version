@@ -43,6 +43,8 @@ interface ChatState {
   isLoadingHistory: boolean; // Tracks when history is loading
   historyError: string | null; // Stores any history loading errors
   lastHistoryFetch: number | null; // Timestamp of last history fetch
+  // Add hydration tracking
+  isHydrated: boolean; // Tracks when the store has been hydrated
 
   // Actions
   createConversation: () => string;
@@ -129,6 +131,8 @@ export const useChatStore = create<ChatState>()(
       isLoadingHistory: false,
       historyError: null,
       lastHistoryFetch: null,
+      // Add hydration flag initializer
+      isHydrated: false,
 
       // New method to synchronize conversations from history data
       syncConversationsFromHistory: (historyData: Chat[]) => {
@@ -643,15 +647,25 @@ export const useChatStore = create<ChatState>()(
         set({ isLoadingHistory: true, historyError: null });
 
         try {
+          // Store the current ID to preserve it throughout the refresh
+          const idToRestore = currentId;
+
           // Fetch history data
           const data = await historyService.fetchHistory(true);
 
           // Sync conversations without changing current ID
           get().syncConversationsFromHistory(data);
 
-          // Preserve current conversation ID if it still exists in history
-          if (currentId && get().conversations[currentId]) {
-            set({ currentConversationId: currentId });
+          // Always restore the previous conversation ID if it still exists
+          if (idToRestore) {
+            const conversations = get().conversations;
+            // Check if the conversation still exists in the refreshed data
+            if (conversations[idToRestore]) {
+              console.debug(`[ChatStore] Restoring current conversation ID: ${idToRestore}`);
+              set({ currentConversationId: idToRestore });
+            } else {
+              console.debug(`[ChatStore] Previous conversation ${idToRestore} no longer exists after refresh`);
+            }
           }
 
           set({
@@ -676,14 +690,27 @@ export const useChatStore = create<ChatState>()(
         deepSearchEnabled: state.deepSearchEnabled,
         // Don't persist full conversation data, fetch from API instead
       }),
-      // Add onRehydrateStorage callback to handle hydration state
-      onRehydrateStorage: (state) => {
+      // Enhanced onRehydrateStorage callback to handle hydration state
+      onRehydrateStorage: () => {
+        // Capture a reference to the setState function after store creation
+        // We'll use this in a setTimeout to avoid the circular reference
+        let hydrationComplete = false;
+
         // Return handler that will be called when hydration is complete or fails
         return (rehydratedState, error) => {
           if (error) {
             console.error('Error rehydrating chat store:', error);
           } else {
             console.debug('[ChatStore] Hydration complete');
+            // Set a flag indicating hydration is complete
+            hydrationComplete = true;
+
+            // Use setTimeout to update the hydration state after store is fully initialized
+            setTimeout(() => {
+              if (hydrationComplete) {
+                useChatStore.setState({ isHydrated: true });
+              }
+            }, 0);
           }
         };
       },

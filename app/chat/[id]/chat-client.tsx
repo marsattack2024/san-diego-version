@@ -11,40 +11,30 @@ interface ChatClientProps {
   chatId: string;
 }
 
-// Track global hydration state
-const isStoreHydratedGlobal = { value: false };
-
+// Remove the global hydration tracking
 export function ChatClient({ chatId }: ChatClientProps) {
-  const { conversations, setCurrentConversation, createConversation, updateMessages } = useChatStore();
+  const { conversations, setCurrentConversation, updateMessages } = useChatStore();
+  // Use isHydrated from store directly
+  const isHydrated = useChatStore(state => state.isHydrated);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // Store hydration state
-  const [isStoreHydrated, setIsStoreHydrated] = useState(isStoreHydratedGlobal.value);
 
   // Keep track of whether we've already fetched messages for this chat
   const [hasFetchedMessages, setHasFetchedMessages] = useState(false);
 
-  // Check for store hydration
+  // Prioritize URL parameter by setting current conversation immediately
   useEffect(() => {
-    if (isStoreHydratedGlobal.value) {
-      setIsStoreHydrated(true);
-      return;
-    }
+    if (!isHydrated || !chatId) return;
 
-    // Wait a bit for Zustand to hydrate
-    const timer = setTimeout(() => {
-      isStoreHydratedGlobal.value = true;
-      setIsStoreHydrated(true);
-      log.debug('Chat store hydration check completed');
-    }, 150); // Increased from 100ms to give more time for hydration
-
-    return () => clearTimeout(timer);
-  }, []);
+    // Explicitly set the current conversation to match URL
+    setCurrentConversation(chatId);
+    log.debug('Setting current conversation from URL', { id: chatId });
+  }, [chatId, isHydrated, setCurrentConversation]);
 
   // Fetch the chat messages from the API
   useEffect(() => {
     // Wait for store hydration before fetching
-    if (!isStoreHydrated) {
+    if (!isHydrated) {
       log.debug('Waiting for store hydration before fetching messages');
       return;
     }
@@ -110,8 +100,10 @@ export function ChatClient({ chatId }: ChatClientProps) {
 
           // Update the messages in the store
           updateMessages(chatId, messages);
-        } else if (!conversations[chatId]) {
-          // If no messages were found but the chat ID exists, create an empty conversation
+        }
+
+        // If no messages were found but the chat ID exists, create an empty conversation
+        else {
           log.info('No messages found, creating empty conversation', { id: chatId });
 
           const timestamp = new Date().toISOString();
@@ -136,21 +128,20 @@ export function ChatClient({ chatId }: ChatClientProps) {
 
         // Set as current conversation
         setCurrentConversation(chatId);
-
+        setIsLoading(false);
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
         log.error('Error fetching chat', { id: chatId, error: errorMessage });
         setError(errorMessage);
-      } finally {
         setIsLoading(false);
       }
     }
 
     fetchChatMessages();
-  }, [chatId, conversations, setCurrentConversation, updateMessages, hasFetchedMessages, isStoreHydrated]);
+  }, [chatId, conversations, setCurrentConversation, updateMessages, hasFetchedMessages, isHydrated]);
 
   // Show loading state while store is being hydrated
-  if (!isStoreHydrated) {
+  if (!isHydrated) {
     return <div className="h-screen flex items-center justify-center">Preparing chat...</div>;
   }
 

@@ -282,28 +282,6 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     };
   }, [fetchHistory, isMobile, isPageVisible, user?.id]);
 
-  // Handle tab visibility changes
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && user?.id) {
-        // When tab becomes visible, fetch fresh data if last fetch was a while ago
-        const now = Date.now();
-        const lastFetch = lastHistoryFetch || 0;
-        const timeSinceLastFetch = now - lastFetch;
-
-        // Only refresh if it's been more than 2 minutes since last fetch
-        if (timeSinceLastFetch > 2 * 60 * 1000) {
-          console.debug(`[SidebarHistory] Tab visible after ${Math.round(timeSinceLastFetch / 1000)}s, refreshing history`);
-          // Use data-only fetch that doesn't trigger navigation
-          useChatStore.getState().refreshHistoryData();
-        }
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [lastHistoryFetch, user?.id]);
-
   // Set error message when store has errors
   useEffect(() => {
     if (historyError) {
