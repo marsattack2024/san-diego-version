@@ -9,9 +9,7 @@ export async function GET(
     context: { params: { id: string } }
 ): Promise<NextResponse> {
     try {
-        // Properly await the params object before accessing its properties
-        const params = await context.params;
-        const chatId = params.id;
+        const chatId = context.params.id;
 
         // Basic validation
         if (!chatId) {
