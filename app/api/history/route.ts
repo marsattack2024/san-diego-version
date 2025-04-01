@@ -1,5 +1,5 @@
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { createClient } from '@/utils/supabase/server';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
 
 export const runtime = 'edge';
@@ -88,8 +88,15 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     // Approach 2: Fall back to direct Supabase auth if headers aren't valid
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const supabase = await createRouteHandlerClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+    if (authError) {
+      edgeLogger.error('Error authenticating user', {
+        error: authError.message,
+        operationId
+      });
+    }
 
     if (user) {
       // Log when header auth failed but direct auth succeeded (important for debugging)
@@ -204,7 +211,7 @@ async function getHistoryForUser(userId: string, operationId: string): Promise<R
       return response;
     }
 
-    const supabase = await createClient();
+    const supabase = await createRouteHandlerClient();
 
     // Fetch user's chat sessions with Supabase query
     const { data: sessions, error } = await supabase
@@ -267,8 +274,15 @@ export async function DELETE(request: Request): Promise<Response> {
 
   try {
     // Direct authentication using Supabase
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const supabase = await createRouteHandlerClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+    if (authError) {
+      edgeLogger.error('Error authenticating user', {
+        error: authError.message,
+        operationId
+      });
+    }
 
     if (!user) {
       edgeLogger.warn('User not authenticated when deleting chat', { operationId });

@@ -1,9 +1,10 @@
 'use client';
-import { ChevronUp, User as UserIcon, Camera, Pencil, Shield } from 'lucide-react';
+import { ChevronUp, User as UserIcon, Camera, Pencil, Shield, LogOut } from 'lucide-react';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
 import { useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 
 import {
   DropdownMenu,
@@ -110,10 +111,29 @@ export function SidebarUserNav({ user }: { user: User }) {
     console.log('SidebarUserNav: Current admin status =', adminStatus);
   }, [adminStatus]);
 
-  const handleSignOut = async () => {
-    await logout(); // Use the logout function from auth store
-    router.push('/login');
-    router.refresh();
+  const handleLogout = async () => {
+    try {
+      // Use our new logout endpoint
+      const response = await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include', // Important: Include cookies
+      });
+
+      if (!response.ok) {
+        throw new Error('Logout failed');
+      }
+
+      toast.success('Signed out successfully');
+
+      // Redirect to login page
+      window.location.href = '/login';
+    } catch (error) {
+      console.error('Logout error:', error);
+      toast.error('Failed to sign out');
+    }
   };
 
   const handleAdminClick = () => {
@@ -199,14 +219,11 @@ export function SidebarUserNav({ user }: { user: User }) {
               {`Toggle ${theme === 'light' ? 'dark' : 'light'} mode`}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
-              <button
-                type="button"
-                className="w-full cursor-pointer"
-                onClick={handleSignOut}
-              >
-                Sign out
-              </button>
+            <DropdownMenuItem
+              onClick={handleLogout}
+              className="text-red-500 hover:text-red-600 focus:text-red-500 cursor-pointer">
+              <LogOut className="mr-2 h-4 w-4" />
+              <span>Logout & Reset Auth</span>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

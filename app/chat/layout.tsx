@@ -5,6 +5,7 @@ import { createClient } from '@/utils/supabase/server';
 import { cookies } from 'next/headers';
 import { ChatHeader } from '@/components/chat-header';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { AuthStatusCheck } from '@/components/auth-status-check';
 
 // Force dynamic rendering since this layout uses cookies
 export const dynamic = "force-dynamic";
@@ -62,6 +63,7 @@ export default async function ChatLayout({
       <SidebarInset className="fixed-header-offset flex-1">
         {children}
       </SidebarInset>
+      <AuthStatusCheck />
     </SidebarProvider>
   );
 }

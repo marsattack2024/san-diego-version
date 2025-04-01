@@ -249,38 +249,30 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   useEffect(() => {
     if (!user?.id) return;
 
-    console.debug('[SidebarHistory] Initial history fetch on component mount');
-    fetchHistory(false);
-  }, [fetchHistory, user?.id]);
+    // Force refresh the history on mount, bypassing the cache
+    console.debug('SidebarHistory: Initial history fetch');
+    fetchHistory(true);
 
-  // Set up polling for history updates with adaptive intervals
-  useEffect(() => {
-    if (!user?.id) return;
-
-    // Polling logic for periodic refreshes
-    const pollingInterval = isMobile ?
-      15 * 60 * 1000 : // 15 minutes for mobile
-      8 * 60 * 1000;   // 8 minutes for desktop
-
-    // Add jitter to prevent synchronized requests
-    const jitter = Math.floor(Math.random() * 45000); // 0-45s jitter
-    const effectiveInterval = pollingInterval + jitter;
-
-    console.debug(`[SidebarHistory] Setting up history polling every ${Math.round(effectiveInterval / 1000)}s`);
-
-    const intervalId = setInterval(() => {
-      // Only refresh if page is visible and user is logged in
-      if (isPageVisible() && user?.id) {
-        console.debug('[SidebarHistory] Polling: fetching history');
-        fetchHistory(false);
+    // Also regularly refresh history when tab becomes visible
+    const handleVisibilityChange = () => {
+      // Only refresh when page becomes visible and not already loading
+      if (isPageVisible() && !isLoadingHistory) {
+        console.debug('SidebarHistory: Visibility changed to visible, refreshing history');
+        fetchHistory(false); // Don't force refresh for visibility change
       }
-    }, effectiveInterval);
-
-    // Clean up interval on unmount
-    return () => {
-      clearInterval(intervalId);
     };
-  }, [fetchHistory, isMobile, isPageVisible, user?.id]);
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+
+    // Set up cleanup
+    return () => {
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
+    };
+  }, [user?.id, fetchHistory, isLoadingHistory, isPageVisible]);
 
   // Set error message when store has errors
   useEffect(() => {

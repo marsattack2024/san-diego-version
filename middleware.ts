@@ -56,30 +56,70 @@ export async function middleware(request: NextRequest) {
     });
   }
 
-  // The session cookie is updated/refreshed in the response
-  const response = await updateSession(request);
+  try {
+    // The session cookie is updated/refreshed in the response
+    const response = await updateSession(request);
 
-  // Log authentication results for debugging
-  if (pathname.startsWith('/admin')) {
-    edgeLogger.debug('Admin page auth processed', {
-      category: 'auth',
-      path: pathname,
-      status: response?.status || 'No response'
-    });
+    // CRITICAL FIX: Ensure cookies have proper attributes for better persistence
+    if (response && response.cookies) {
+      const cookies = response.cookies.getAll();
 
-    // Generic debug info for all admin routes
-    const redirectUrl = response?.headers?.get('location');
-    if (response?.redirected || redirectUrl) {
-      edgeLogger.debug('Admin route is being redirected', {
-        category: 'auth',
-        path: pathname,
-        redirectUrl: redirectUrl || 'unknown',
-        responseStatus: response?.status
+      // Reapply all auth cookies with stronger settings to prevent issues
+      cookies.forEach(cookie => {
+        if (cookie.name.includes('sb-') && cookie.name.includes('-auth-token')) {
+          // Log the cookie we're reinforcing
+          edgeLogger.debug('Reinforcing auth cookie settings', {
+            category: 'auth',
+            cookieName: cookie.name,
+          });
+
+          // Apply stronger cookie settings
+          response.cookies.set({
+            name: cookie.name,
+            value: cookie.value,
+            path: '/',
+            sameSite: 'lax',
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            maxAge: 60 * 60 * 24 * 7, // 7 days
+            priority: 'high',
+          });
+        }
       });
     }
-  }
 
-  return response;
+    // Log authentication results for debugging
+    if (pathname.startsWith('/admin')) {
+      edgeLogger.debug('Admin page auth processed', {
+        category: 'auth',
+        path: pathname,
+        status: response?.status || 'No response'
+      });
+
+      // Generic debug info for all admin routes
+      const redirectUrl = response?.headers?.get('location');
+      if (response?.redirected || redirectUrl) {
+        edgeLogger.debug('Admin route is being redirected', {
+          category: 'auth',
+          path: pathname,
+          redirectUrl: redirectUrl || 'unknown',
+          responseStatus: response?.status
+        });
+      }
+    }
+
+    return response;
+  } catch (error) {
+    edgeLogger.error('Middleware error processing request', {
+      category: 'auth',
+      path: pathname,
+      error: error instanceof Error ? error.message : String(error),
+      important: true
+    });
+
+    // Return next response if middleware fails to prevent breaking the app
+    return NextResponse.next();
+  }
 }
 
 export const config = {

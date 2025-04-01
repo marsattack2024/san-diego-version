@@ -13,13 +13,14 @@ import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
 /**
  * Creates a standard Supabase client for route handlers
- * with proper cookie handling and error logging
+ * with proper cookie handling and error logging that is 
+ * compatible with the middleware cookie handling
  * 
  * @returns Promise<SupabaseClient> - A properly configured Supabase client
  */
 export async function createRouteHandlerClient(): Promise<SupabaseClient> {
     try {
-        // Get cookies - make sure to await this
+        // Get the cookie store - must await
         const cookieStore = await cookies();
 
         // Log the creation attempt
@@ -29,6 +30,8 @@ export async function createRouteHandlerClient(): Promise<SupabaseClient> {
             hasAnonKey: !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
         });
 
+        // IMPORTANT: This must use the identical pattern to our middleware
+        // to ensure cookie handling is consistent across the app
         return createServerClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -51,8 +54,8 @@ export async function createRouteHandlerClient(): Promise<SupabaseClient> {
                                 error: error instanceof Error ? error.message : String(error)
                             });
                         }
-                    }
-                }
+                    },
+                },
             }
         );
     } catch (error) {
@@ -76,7 +79,7 @@ export async function createRouteHandlerClient(): Promise<SupabaseClient> {
  */
 export async function createRouteHandlerAdminClient(): Promise<SupabaseClient> {
     try {
-        // Get cookies - make sure to await this
+        // Get the cookie store - must await
         const cookieStore = await cookies();
 
         const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -92,6 +95,8 @@ export async function createRouteHandlerAdminClient(): Promise<SupabaseClient> {
             hasServiceRoleKey: !!serviceRoleKey
         });
 
+        // IMPORTANT: This must use the identical pattern to our middleware
+        // to ensure cookie handling is consistent across the app
         return createServerClient(
             supabaseUrl,
             serviceRoleKey,
@@ -112,8 +117,8 @@ export async function createRouteHandlerAdminClient(): Promise<SupabaseClient> {
                                 error: error instanceof Error ? error.message : String(error)
                             });
                         }
-                    }
-                }
+                    },
+                },
             }
         );
     } catch (error) {

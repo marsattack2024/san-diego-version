@@ -3,251 +3,363 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { edgeLogger } from '@/lib/logger/edge-logger'
 
 export async function updateSession(request: NextRequest) {
+  // Create a mutable copy of the request headers
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set('x-url', request.url);
+
+  // Create a response that will be used to hold our updated cookies
   let supabaseResponse = NextResponse.next({
-    request,
-  })
+    request: {
+      headers: requestHeaders,
+    },
+  });
 
-  // Create standard client for auth
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll()
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => request.cookies.set(name, value))
-          supabaseResponse = NextResponse.next({
-            request,
-          })
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
-          )
-        },
-      },
-    }
-  )
+  try {
+    // Create standard client for auth
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return request.cookies.getAll()
+          },
+          setAll(cookiesToSet) {
+            try {
+              // First apply cookies to the request object to ensure they're available
+              // for the current request
+              cookiesToSet.forEach(({ name, value, options }) => {
+                try {
+                  request.cookies.set(name, value);
+                } catch (err) {
+                  edgeLogger.debug('Error setting cookie on request', {
+                    category: 'auth',
+                    cookieName: name,
+                    error: err instanceof Error ? err.message : String(err)
+                  });
+                }
+              });
 
-  // IMPORTANT: Do not add any logic between createServerClient and
-  // supabase.auth.getUser() to avoid session refresh issues
-  const { data: { user } } = await supabase.auth.getUser()
+              // Then create a fresh response with updated cookies
+              supabaseResponse = NextResponse.next({
+                request: {
+                  headers: requestHeaders,
+                },
+              });
 
-  // Get the pathname from the request
-  const { pathname } = request.nextUrl
+              // Finally set cookies on the response with improved settings
+              cookiesToSet.forEach(({ name, value, options }) => {
+                try {
+                  // Enhanced cookie settings for better persistence
+                  const enhancedOptions = {
+                    ...options,
+                    path: '/',
+                    sameSite: 'lax' as 'lax' | 'strict' | 'none',
+                    secure: process.env.NODE_ENV === 'production',
+                    // Use longer maxAge for auth cookies
+                    ...(name.includes('-auth-token') ? {
+                      maxAge: 60 * 60 * 24 * 7, // 7 days
+                      httpOnly: true,
+                    } : {})
+                  };
 
-  // Calculate auth completion time for client diagnostics
-  const authCompletionTime = Date.now();
-  const authTimestamp = authCompletionTime.toString();
+                  supabaseResponse.cookies.set(name, value, enhancedOptions);
+                } catch (err) {
+                  edgeLogger.debug('Error setting cookie on response', {
+                    category: 'auth',
+                    cookieName: name,
+                    error: err instanceof Error ? err.message : String(err)
+                  });
+                }
+              });
 
-  // Set a common header for ALL requests indicating auth check is complete
-  // This is a critical signal that client code can use to determine when auth is ready
-  request.headers.set('x-auth-ready', 'true');
-  supabaseResponse.headers.set('x-auth-ready', 'true');
-  request.headers.set('x-auth-ready-time', authTimestamp);
-  supabaseResponse.headers.set('x-auth-ready-time', authTimestamp);
-
-  // Set auth headers for authenticated users - BOTH request and response headers
-  if (user) {
-    // Common headers to set
-    const authHeaders = {
-      'x-supabase-auth': user.id,
-      'x-auth-valid': 'true',
-      'x-auth-time': authTimestamp,
-      'x-auth-state': 'authenticated'
-    };
-
-    // Set headers on both request and response
-    Object.entries(authHeaders).forEach(([key, value]) => {
-      request.headers.set(key, value);
-      supabaseResponse.headers.set(key, value);
-    });
-
-    // ADMIN CHECK SIMPLIFIED: Check if user is an admin using profile table as single source of truth
-    // Only check if:
-    // 1. No admin cookie exists, or
-    // 2. Admin cookie is older than cache time, or
-    // 3. Path indicates it's an admin page or admin-related API
-    const adminCookie = request.cookies.get('x-is-admin');
-    const adminCookieTimestamp = request.cookies.get('x-is-admin-time');
-    const now = Date.now();
-    const adminCookieAge = adminCookieTimestamp ? now - parseInt(adminCookieTimestamp.value || '0') : Infinity;
-    const adminCacheTime = 30 * 60 * 1000; // 30 minutes cache (extended from 5 minutes)
-
-    const needsAdminCheck = !adminCookie ||
-      adminCookieAge > adminCacheTime ||
-      request.nextUrl.pathname.startsWith('/admin') ||
-      request.nextUrl.pathname.startsWith('/api/admin') ||
-      request.nextUrl.pathname === '/api/auth/admin-status';
-
-    if (needsAdminCheck) {
-      edgeLogger.debug(`[updateSession] Checking admin status for: ${user.id.substring(0, 8)}...`, {
-        category: 'auth',
-        level: 'debug'
-      });
-
-      // Create a service role client to bypass RLS
-      let adminClient;
-      const hasServiceKey = !!process.env.SUPABASE_KEY;
-
-      if (hasServiceKey) {
-        // Create a service role client without cookies (we don't need them for this check)
-        adminClient = createServerClient(
-          process.env.NEXT_PUBLIC_SUPABASE_URL!,
-          process.env.SUPABASE_KEY!, // Service role key bypasses RLS
-          {
-            // Minimal cookie config since we're just doing a quick DB check
-            cookies: {
-              getAll() { return [] },
-              setAll() { /* noop */ }
+              // Log the cookies we're setting for debugging
+              if (cookiesToSet.some(cookie => cookie.name.includes('-auth-token'))) {
+                edgeLogger.debug('Setting auth cookies in middleware', {
+                  category: 'auth',
+                  cookieCount: cookiesToSet.length,
+                  cookieNames: cookiesToSet.map(c => c.name)
+                });
+              }
+            } catch (error) {
+              edgeLogger.error('Error in cookie setAll', {
+                category: 'auth',
+                error: error instanceof Error ? error.message : String(error),
+              });
             }
-          }
-        );
-        edgeLogger.debug('[updateSession] Using service role key for admin check', {
+          },
+        },
+      }
+    );
+
+    // IMPORTANT: Do not add any logic between createServerClient and
+    // supabase.auth.getUser() to avoid session refresh issues
+    const { data: { user } } = await supabase.auth.getUser();
+
+    // Get the pathname from the request
+    const { pathname } = request.nextUrl;
+
+    // Calculate auth completion time for client diagnostics
+    const authCompletionTime = Date.now();
+    const authTimestamp = authCompletionTime.toString();
+
+    // Set a common header for ALL requests indicating auth check is complete
+    // This is a critical signal that client code can use to determine when auth is ready
+    requestHeaders.set('x-auth-ready', 'true');
+    supabaseResponse.headers.set('x-auth-ready', 'true');
+    requestHeaders.set('x-auth-ready-time', authTimestamp);
+    supabaseResponse.headers.set('x-auth-ready-time', authTimestamp);
+
+    // Set auth headers for authenticated users - BOTH request and response headers
+    if (user) {
+      // Common headers to set
+      const authHeaders = {
+        'x-supabase-auth': user.id,
+        'x-auth-valid': 'true',
+        'x-auth-time': authTimestamp,
+        'x-auth-state': 'authenticated'
+      };
+
+      // Set headers on both request and response
+      Object.entries(authHeaders).forEach(([key, value]) => {
+        requestHeaders.set(key, value);
+        supabaseResponse.headers.set(key, value);
+      });
+
+      // ADMIN CHECK SIMPLIFIED: Check if user is an admin using profile table as single source of truth
+      // Only check if:
+      // 1. No admin cookie exists, or
+      // 2. Admin cookie is older than cache time, or
+      // 3. Path indicates it's an admin page or admin-related API
+      const adminCookie = request.cookies.get('x-is-admin');
+      const adminCookieTimestamp = request.cookies.get('x-is-admin-time');
+      const now = Date.now();
+      const adminCookieAge = adminCookieTimestamp ? now - parseInt(adminCookieTimestamp.value || '0') : Infinity;
+      const adminCacheTime = 30 * 60 * 1000; // 30 minutes cache (extended from 5 minutes)
+
+      const needsAdminCheck = !adminCookie ||
+        adminCookieAge > adminCacheTime ||
+        request.nextUrl.pathname.startsWith('/admin') ||
+        request.nextUrl.pathname.startsWith('/api/admin') ||
+        request.nextUrl.pathname === '/api/auth/admin-status';
+
+      if (needsAdminCheck) {
+        edgeLogger.debug(`[updateSession] Checking admin status for: ${user.id.substring(0, 8)}...`, {
           category: 'auth',
           level: 'debug'
         });
-      } else {
-        adminClient = supabase;
-        edgeLogger.warn('[updateSession] ⚠️ No service role key available, admin check may fail due to RLS', {
-          category: 'auth',
-          level: 'warn'
+
+        // Create a service role client to bypass RLS
+        let adminClient;
+        const hasServiceKey = !!process.env.SUPABASE_KEY;
+
+        if (hasServiceKey) {
+          // Create a service role client without cookies (we don't need them for this check)
+          adminClient = createServerClient(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.SUPABASE_KEY!, // Service role key bypasses RLS
+            {
+              // Minimal cookie config since we're just doing a quick DB check
+              cookies: {
+                getAll() { return [] },
+                setAll() { /* noop */ }
+              }
+            }
+          );
+          edgeLogger.debug('[updateSession] Using service role key for admin check', {
+            category: 'auth',
+            level: 'debug'
+          });
+        } else {
+          adminClient = supabase;
+          edgeLogger.warn('[updateSession] ⚠️ No service role key available, admin check may fail due to RLS', {
+            category: 'auth',
+            level: 'warn'
+          });
+        }
+
+        // Check admin status directly in profile table - single source of truth
+        const { data: profileData, error: profileError } = await adminClient
+          .from('sd_user_profiles')
+          .select('is_admin')
+          .eq('user_id', user.id)
+          .single();
+
+        // Set admin status based on profile table result
+        let isAdminStatus = 'false';
+
+        if (!profileError && profileData?.is_admin === true) {
+          isAdminStatus = 'true';
+          edgeLogger.debug('[updateSession] User is admin via profile check', {
+            category: 'auth',
+            userId: user.id,
+            level: 'debug'
+          });
+        } else if (profileError) {
+          edgeLogger.warn('[updateSession] Profile admin check error', {
+            category: 'auth',
+            error: profileError.message,
+            level: 'warn'
+          });
+        } else {
+          edgeLogger.debug('[updateSession] User is not an admin', {
+            category: 'auth',
+            userId: user.id,
+            level: 'debug'
+          });
+        }
+
+        // Set admin status in cookies with timestamp - for both request and response
+        request.cookies.set('x-is-admin', isAdminStatus);
+        request.cookies.set('x-is-admin-time', now.toString());
+        supabaseResponse.cookies.set('x-is-admin', isAdminStatus, {
+          path: '/',
+          maxAge: 60 * 60 * 24, // Cookie lasts 24 hours, though we'll refresh it earlier
+          sameSite: 'lax' as 'lax' | 'strict' | 'none',
+          secure: process.env.NODE_ENV === 'production'
         });
+        supabaseResponse.cookies.set('x-is-admin-time', now.toString(), {
+          path: '/',
+          maxAge: 60 * 60 * 24,
+          sameSite: 'lax' as 'lax' | 'strict' | 'none',
+          secure: process.env.NODE_ENV === 'production'
+        });
+
+        // Also set in headers for immediate use
+        requestHeaders.set('x-is-admin', isAdminStatus);
+        supabaseResponse.headers.set('x-is-admin', isAdminStatus);
+      } else {
+        // Reuse existing admin status from cookie
+        const isAdminStatus = adminCookie?.value || 'false';
+        requestHeaders.set('x-is-admin', isAdminStatus);
+        supabaseResponse.headers.set('x-is-admin', isAdminStatus);
+
+        // Only log when status is true to reduce noise
+        if (isAdminStatus === 'true') {
+          edgeLogger.debug('[updateSession] Using cached admin status from cookie (true)', {
+            category: 'auth',
+            level: 'debug'
+          });
+        }
       }
 
-      // Check admin status directly in profile table - single source of truth
-      const { data: profileData, error: profileError } = await adminClient
+      // Check if user has a profile
+      const { data: profile } = await supabase
         .from('sd_user_profiles')
-        .select('is_admin')
+        .select('id')
         .eq('user_id', user.id)
-        .single();
+        .single()
 
-      // Set admin status based on profile table result
-      let isAdminStatus = 'false';
+      const hasProfile = profile ? 'true' : 'false';
+      requestHeaders.set('x-has-profile', hasProfile);
+      supabaseResponse.headers.set('x-has-profile', hasProfile);
 
-      if (!profileError && profileData?.is_admin === true) {
-        isAdminStatus = 'true';
-        edgeLogger.debug('[updateSession] User is admin via profile check', {
+      // Set a session health check cookie to help client-side code detect auth status
+      // This cookie is checked by client-side code to ensure the session is healthy
+      supabaseResponse.cookies.set('x-session-health', 'active', {
+        path: '/',
+        maxAge: 60 * 60 * 24, // 24 hours
+        sameSite: 'lax' as 'lax' | 'strict' | 'none',
+        secure: process.env.NODE_ENV === 'production'
+      });
+
+      // Log that the session is authenticated and healthy
+      edgeLogger.debug('Session authenticated and healthy', {
+        category: 'auth',
+        userId: user.id.substring(0, 8) + '...',
+        path: pathname
+      });
+    }
+    // For unauthenticated users, set explicit headers for ALL API routes 
+    // This ensures consistent auth header patterns for all routes
+    else {
+      // Set explicit "not authenticated" headers
+      const unauthHeaders = {
+        'x-supabase-auth': 'anonymous',
+        'x-auth-valid': 'false',
+        'x-auth-time': authTimestamp,
+        'x-has-profile': 'false',
+        'x-is-admin': 'false', // Explicitly set non-admin for unauthenticated users
+        'x-auth-state': 'unauthenticated'
+      };
+
+      // Set on both request and response
+      Object.entries(unauthHeaders).forEach(([key, value]) => {
+        requestHeaders.set(key, value);
+        supabaseResponse.headers.set(key, value);
+      });
+
+      // Special cookie presence check for debugging
+      if (pathname.startsWith('/api/')) {
+        // Make sure the request has the auth cookie info in a header
+        // This helps with client-side debugging
+        const cookieHeader = request.headers.get('cookie') || '';
+        const hasAuthCookies = cookieHeader.includes('sb-') && cookieHeader.includes('-auth-token');
+        requestHeaders.set('x-has-auth-cookies', hasAuthCookies ? 'true' : 'false');
+        supabaseResponse.headers.set('x-has-auth-cookies', hasAuthCookies ? 'true' : 'false');
+
+        // Log at debug level with proper category
+        edgeLogger.debug(`Setting explicit unauthenticated headers for ${pathname}`, {
           category: 'auth',
-          userId: user.id,
-          level: 'debug'
-        });
-      } else if (profileError) {
-        edgeLogger.warn('[updateSession] Profile admin check error', {
-          category: 'auth',
-          error: profileError.message,
-          level: 'warn'
-        });
-      } else {
-        edgeLogger.debug('[updateSession] User is not an admin', {
-          category: 'auth',
-          userId: user.id,
+          hasAuthCookies,
           level: 'debug'
         });
       }
 
-      // Set admin status in cookies with timestamp - for both request and response
-      request.cookies.set('x-is-admin', isAdminStatus);
-      request.cookies.set('x-is-admin-time', now.toString());
-      supabaseResponse.cookies.set('x-is-admin', isAdminStatus, {
+      // Clear session health cookie for unauthenticated users
+      supabaseResponse.cookies.set('x-session-health', '', {
         path: '/',
-        maxAge: 60 * 60 * 24, // Cookie lasts 24 hours, though we'll refresh it earlier
-        sameSite: 'lax',
+        maxAge: 0, // Expire immediately
+        sameSite: 'lax' as 'lax' | 'strict' | 'none',
         secure: process.env.NODE_ENV === 'production'
       });
-      supabaseResponse.cookies.set('x-is-admin-time', now.toString(), {
-        path: '/',
-        maxAge: 60 * 60 * 24,
-        sameSite: 'lax',
-        secure: process.env.NODE_ENV === 'production'
-      });
-
-      // Also set in headers for immediate use
-      request.headers.set('x-is-admin', isAdminStatus);
-      supabaseResponse.headers.set('x-is-admin', isAdminStatus);
-    } else {
-      // Reuse existing admin status from cookie
-      const isAdminStatus = adminCookie?.value || 'false';
-      request.headers.set('x-is-admin', isAdminStatus);
-      supabaseResponse.headers.set('x-is-admin', isAdminStatus);
-
-      // Only log when status is true to reduce noise
-      if (isAdminStatus === 'true') {
-        edgeLogger.debug('[updateSession] Using cached admin status from cookie (true)', {
-          category: 'auth',
-          level: 'debug'
-        });
-      }
     }
 
-    // Check if user has a profile
-    const { data: profile } = await supabase
-      .from('sd_user_profiles')
-      .select('id')
-      .eq('user_id', user.id)
-      .single()
+    // For history API calls, apply less strict redirection
+    // This helps prevent redirect loops during authentication issues
+    if (
+      !user &&
+      !pathname.startsWith('/login') &&
+      !pathname.startsWith('/signup') && // Allow access to signup page
+      !pathname.startsWith('/auth') &&
+      !pathname.includes('/_next') &&
+      !pathname.includes('/api/history') && // Don't redirect history API calls
+      !pathname.includes('/api/public')
+    ) {
+      // No user, redirect to login
+      const url = request.nextUrl.clone()
+      url.pathname = '/login'
 
-    const hasProfile = profile ? 'true' : 'false';
-    request.headers.set('x-has-profile', hasProfile);
-    supabaseResponse.headers.set('x-has-profile', hasProfile);
-  }
-  // For unauthenticated users, set explicit headers for ALL API routes 
-  // This ensures consistent auth header patterns for all routes
-  else {
-    // Set explicit "not authenticated" headers
-    const unauthHeaders = {
-      'x-supabase-auth': 'anonymous',
-      'x-auth-valid': 'false',
-      'x-auth-time': authTimestamp,
-      'x-has-profile': 'false',
-      'x-is-admin': 'false', // Explicitly set non-admin for unauthenticated users
-      'x-auth-state': 'unauthenticated'
-    };
+      // Create a redirect response that preserves our auth headers
+      const redirectResponse = NextResponse.redirect(url);
 
-    // Set on both request and response
-    Object.entries(unauthHeaders).forEach(([key, value]) => {
-      request.headers.set(key, value);
-      supabaseResponse.headers.set(key, value);
+      // Copy all headers and cookies from our prepared response
+      for (const [key, value] of supabaseResponse.headers.entries()) {
+        redirectResponse.headers.set(key, value);
+      }
+
+      // Copy all cookies
+      for (const cookie of supabaseResponse.cookies.getAll()) {
+        redirectResponse.cookies.set(cookie.name, cookie.value, cookie);
+      }
+
+      return redirectResponse;
+    }
+
+    // IMPORTANT: Must return the supabaseResponse object as is to maintain
+    // proper cookie handling for auth state
+    return supabaseResponse;
+  } catch (error) {
+    // Log the error but don't break the app
+    edgeLogger.error('Error in updateSession middleware', {
+      category: 'auth',
+      error: error instanceof Error ? error.message : String(error),
+      important: true
     });
 
-    // Special cookie presence check for debugging
-    if (pathname.startsWith('/api/')) {
-      // Make sure the request has the auth cookie info in a header
-      // This helps with client-side debugging
-      const cookieHeader = request.headers.get('cookie') || '';
-      const hasAuthCookies = cookieHeader.includes('sb-') && cookieHeader.includes('-auth-token');
-      request.headers.set('x-has-auth-cookies', hasAuthCookies ? 'true' : 'false');
-      supabaseResponse.headers.set('x-has-auth-cookies', hasAuthCookies ? 'true' : 'false');
-
-      // Log at debug level with proper category
-      edgeLogger.debug(`Setting explicit unauthenticated headers for ${pathname}`, {
-        category: 'auth',
-        hasAuthCookies,
-        level: 'debug'
-      });
-    }
+    // Return a response that can continue the request
+    return supabaseResponse;
   }
-
-  // For history API calls, apply less strict redirection
-  // This helps prevent redirect loops during authentication issues
-  if (
-    !user &&
-    !pathname.startsWith('/login') &&
-    !pathname.startsWith('/signup') && // Allow access to signup page
-    !pathname.startsWith('/auth') &&
-    !pathname.includes('/_next') &&
-    !pathname.includes('/api/history') && // Don't redirect history API calls
-    !pathname.includes('/api/public')
-  ) {
-    // No user, redirect to login
-    const url = request.nextUrl.clone()
-    url.pathname = '/login'
-    return NextResponse.redirect(url)
-  }
-
-  // IMPORTANT: Must return the supabaseResponse object as is to maintain
-  // proper cookie handling for auth state
-  return supabaseResponse
 }
 
 /**

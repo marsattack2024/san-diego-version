@@ -161,6 +161,13 @@ export const useChatStore = create<ChatState>()(
       fetchHistory: async (forceRefresh = false) => {
         const state = get();
 
+        // BYPASS AUTH FAILURE CIRCUIT BREAKER FOR NOW
+        // This will force history fetch regardless of previous failures
+        if (historyService.isInAuthFailure()) {
+          console.debug('[ChatStore] Bypassing auth failure circuit breaker to force history refresh');
+          historyService.resetAuthFailure();
+        }
+
         // Prevent multiple concurrent fetches unless forced
         if (state.isLoadingHistory && !forceRefresh) {
           console.debug(`[ChatStore] History fetch already in progress, skipping`);

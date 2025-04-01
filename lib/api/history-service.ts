@@ -257,23 +257,53 @@ export const historyService = {
    * @returns Array of chat objects
    */
   async fetchHistory(forceRefresh = false, isMobileOpen = false): Promise<Chat[]> {
-    // ------------------ GLOBAL REQUEST THROTTLING ------------------
-    // Check if we've made a request very recently (from ANY component)
+    // Generate operation ID for tracking
+    const operationId = Math.random().toString(36).substring(2, 10);
+
+    // Check if we're in an auth failure cooldown period
+    if (this.isInAuthFailure() && !forceRefresh) {
+      console.debug(`[HistoryService] Skipping fetchHistory due to auth failure cooldown`);
+
+      // Return cached data if available
+      try {
+        const cachedData = clientCache.get('chat_history') as Chat[] | undefined;
+        return (cachedData && Array.isArray(cachedData) && cachedData.length > 0) ? cachedData : [];
+      } catch (e) {
+        return [];
+      }
+    }
+
+    // Auto-reset the auth failure state every 2 minutes to allow retries
+    // This is a failsafe to prevent permanent lockout
+    const authInfo = this.getAuthFailureInfo();
+    if (authInfo.isInCooldown && authInfo.remainingTime > 2 * 60 * 1000) {
+      console.debug(`[HistoryService] Auto-resetting auth failure state after ${Math.round(authInfo.remainingTime / 60000)} minutes`);
+      this.resetAuthFailure();
+    }
+
+    // Add enhanced debug logging
+    console.debug(`[HistoryService] Fetching history (forceRefresh=${forceRefresh})`, {
+      inAuthFailure: this.isInAuthFailure(),
+      authInfo: this.getAuthFailureInfo(),
+      unauthorizedRequests: recentUnauthorizedRequests.length
+    });
+
+    // Create a consistent cache key
+    const cacheKey = 'chat_history';
+
+    // Use throttling to prevent too many API calls
     const now = Date.now();
     const timeSinceLastRequest = now - lastHistoryRequestTime;
 
-    // Allow bypass of throttling for mobile sidebar opening
-    if (!forceRefresh && !isMobileOpen && timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
-      // If any history request was made in the last 2 seconds, use cached data
-      edgeLogger.debug(`Global history request throttling: ${(MIN_REQUEST_INTERVAL - timeSinceLastRequest) / 1000}s throttle`, { category: 'auth' });
+    if (!forceRefresh && timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
+      console.debug(`[HistoryService] Throttling: Last request was ${Math.round(timeSinceLastRequest / 1000)}s ago`);
 
+      // Return cached data if available
       try {
-        const cachedData = clientCache.get('chat_history') as Chat[] | undefined;
-        if (cachedData && Array.isArray(cachedData) && cachedData.length > 0) {
-          return cachedData;
-        }
+        const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
+        return (cachedData && Array.isArray(cachedData) && cachedData.length > 0) ? cachedData : [];
       } catch (e) {
-        // Ignore cache errors
+        return [];
       }
     }
 
@@ -325,12 +355,8 @@ export const historyService = {
     }
 
     const startTime = performance.now();
-    const operationId = Math.random().toString(36).substring(2, 10);
 
     try {
-      // Create a unique cache key based on user
-      const cacheKey = 'chat_history';
-
       // Double-check auth failure state again (could have changed during async ops)
       if (this.isInAuthFailure()) {
         // Try to return cached data if available (preferable to empty array)

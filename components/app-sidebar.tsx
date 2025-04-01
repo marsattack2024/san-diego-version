@@ -57,6 +57,31 @@ export function AppSidebar({ user: serverUser }: { user: User | undefined }) {
     getUser();
   }, [serverUser]);
 
+  // Add debug logging for authentication state
+  useEffect(() => {
+    // Debug check for authentication state
+    const debugAuth = async () => {
+      try {
+        // Check session cookies and auth state
+        const response = await fetch('/api/auth/debug-session', {
+          method: 'GET',
+          credentials: 'include',
+        });
+
+        console.log('[AUTH DEBUG] Session check:', response.status);
+
+        if (response.ok) {
+          const data = await response.json();
+          console.log('[AUTH DEBUG] Session data:', data);
+        }
+      } catch (e) {
+        console.error('[AUTH DEBUG] Error checking session:', e);
+      }
+    };
+
+    debugAuth();
+  }, []);
+
   return (
     <Sidebar
       className="group-data-[side=left]:border-r-0"
