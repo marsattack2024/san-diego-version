@@ -198,7 +198,78 @@ class PuppeteerService {
         });
 
         // Process response
-        // ...
+        if (!response.ok) {
+            throw new Error(`Scraper returned status ${response.status}`);
+        }
+
+        const responseText = await response.text();
+        const contentType = response.headers.get('content-type') || '';
+
+        // Parse JSON response
+        let jsonData;
+        try {
+            // Check if response is already JSON
+            if (contentType.includes('application/json')) {
+                const parsedData = JSON.parse(responseText);
+
+                // Handle the API's response format where data is in [0].data
+                if (Array.isArray(parsedData) && parsedData.length > 0 && parsedData[0].data) {
+                    jsonData = parsedData[0].data;
+                } else {
+                    // Fallback for unexpected JSON structure
+                    jsonData = parsedData;
+                }
+            } else {
+                // Handle HTML/text responses by wrapping in a JSON structure
+                // Extract title if possible and create a JSON structure with the HTML content
+                const titleMatch = responseText.match(/<title[^>]*>([^<]+)<\/title>/i);
+                const title = titleMatch ? titleMatch[1].trim() : 'Untitled Page';
+
+                jsonData = {
+                    content: responseText,
+                    title: title,
+                    url: url
+                };
+            }
+        } catch (error) {
+            throw new Error('Failed to parse scraper response');
+        }
+
+        // Normalize and return the response
+        return this.normalizeScraperResponse(jsonData);
+    }
+
+    /**
+     * Normalize scraper response to a consistent format
+     * @param jsonData Raw JSON data from scraper
+     * @returns Normalized PuppeteerResponseData
+     */
+    private normalizeScraperResponse(jsonData: any): PuppeteerResponseData {
+        let result: PuppeteerResponseData;
+
+        if (Array.isArray(jsonData)) {
+            if (jsonData.length > 0 && jsonData[0].data) {
+                // Format: [{ data: {...} }]
+                result = jsonData[0].data;
+            } else if (jsonData.length > 0) {
+                // Format: [{ content, title, ... }]
+                result = jsonData[0];
+            } else {
+                throw new Error('Scraper returned empty data');
+            }
+        } else if (typeof jsonData === 'object' && jsonData !== null) {
+            // Format: { content, title, ... }
+            result = jsonData;
+        } else {
+            throw new Error('Unexpected response format from scraper');
+        }
+
+        // Ensure content field exists
+        if (!result.content && result.text) {
+            result.content = result.text;
+        }
+
+        return result;
     }
 
     /**
