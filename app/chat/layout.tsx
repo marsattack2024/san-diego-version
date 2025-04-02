@@ -58,7 +58,7 @@ export default async function ChatLayout({
 
   return (
     <SidebarProvider defaultOpen={true} className="h-full">
-      {/* <AppSidebar user={user || undefined} /> */}
+      <AppSidebar user={user || undefined} />
       {/* <ChatHeader chatId="" isReadonly={false} /> */}
       <SidebarInset className="fixed-header-offset flex-1">
         {children}

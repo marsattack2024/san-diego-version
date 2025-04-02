@@ -178,12 +178,11 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   const pathname = usePathname();
   const router = useRouter();
 
-  // Use Zustand store with selector functions for each property separately
+  // Use Zustand store selectors
   const conversations = useChatStore(state => state.conversations);
   const fetchHistory = useChatStore(state => state.fetchHistory);
   const isLoadingHistory = useChatStore(state => state.isLoadingHistory);
   const historyError = useChatStore(state => state.historyError);
-  const lastHistoryFetch = useChatStore(state => state.lastHistoryFetch);
   const deleteConversation = useChatStore(state => state.deleteConversation);
 
   // Convert conversations map to Chat array for display
@@ -198,7 +197,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     } as Chat));
   }, [conversations]);
 
-  // Local UI state (keep only UI-specific state)
+  // Local UI state
   const [isDeleting, setIsDeleting] = useState<Record<string, boolean>>({});
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -209,17 +208,6 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [renameId, setRenameId] = useState<string | null>(null);
   const [renameTitle, setRenameTitle] = useState('');
-  const [isMounted, setIsMounted] = useState(false);
-
-  // Add useEffect to set isMounted on the client
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
-
-  // Compute empty state
-  const isEmpty = useMemo(() => {
-    return historyArray.length === 0 && !isLoadingHistory;
-  }, [historyArray.length, isLoadingHistory]);
 
   // Helper functions
   const detectMobile = useCallback(() => {
@@ -251,34 +239,31 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     }
   }, [detectMobile]);
 
-  // Initial fetch history when component mounts AND IS MOUNTED
+  // ** Restore Original Initial Fetch Logic **
   useEffect(() => {
-    // Only run after mounted and if user exists
-    if (!isMounted || !user?.id) return;
+    if (!user?.id) return;
+    console.debug('[SidebarHistory] Initial history fetch on component mount (Restored Logic)');
+    fetchHistory(false); // Fetch without forcing refresh on initial mount
+  }, [fetchHistory, user?.id]);
 
-    console.debug('SidebarHistory: Initial history fetch (post-mount)');
-    fetchHistory(true); // Force refresh
+  // ** Restore Polling Logic (Optional but part of working version) **
+  useEffect(() => {
+    if (!user?.id) return;
 
-    // Also regularly refresh history when tab becomes visible
-    const handleVisibilityChange = () => {
-      // Only refresh when page becomes visible and not already loading
-      if (isPageVisible() && !isLoadingHistory) {
-        console.debug('SidebarHistory: Visibility changed to visible, refreshing history');
-        fetchHistory(false); // Don't force refresh for visibility change
+    const pollingInterval = isMobile ? 15 * 60 * 1000 : 8 * 60 * 1000;
+    const jitter = Math.floor(Math.random() * 45000);
+    const effectiveInterval = pollingInterval + jitter;
+
+    console.debug(`[SidebarHistory] Setting up history polling every ${Math.round(effectiveInterval / 1000)}s (Restored Logic)`);
+    const intervalId = setInterval(() => {
+      if (isPageVisible() && user?.id) {
+        console.debug('[SidebarHistory] Polling: fetching history (Restored Logic)');
+        fetchHistory(false);
       }
-    };
+    }, effectiveInterval);
 
-    if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', handleVisibilityChange);
-    }
-
-    // Set up cleanup
-    return () => {
-      if (typeof document !== 'undefined') {
-        document.removeEventListener('visibilitychange', handleVisibilityChange);
-      }
-    };
-  }, [user?.id, fetchHistory, isLoadingHistory, isPageVisible, isMounted]);
+    return () => clearInterval(intervalId);
+  }, [fetchHistory, isMobile, isPageVisible, user?.id]);
 
   // Set error message when store has errors
   useEffect(() => {
@@ -365,7 +350,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     return groupChatsByDate(historyArray);
   }, [historyArray]);
 
-  // Render chat sections
+  // Render chat sections - ** Restore Original Logic **
   const renderChats = useCallback((chats: Array<Chat>) => {
     if (chats.length === 0) {
       return null;
@@ -466,33 +451,15 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
         )}
       </>
     );
+    // Restore original dependencies
   }, [groupChatsByDate, handleDeleteClick, handleRenameClick, id, isDeleting, setOpenMobile, showAllOlder]);
 
-  // ** CRITICAL: Prevent rendering main content until mounted **
-  if (!isMounted) {
-    // Render a placeholder or null during SSR and initial client render
-    // This MUST match what the server renders initially
-    return (
-      <div className="sidebar-history relative h-full overflow-hidden border-r border-border">
-        {/* Optional: Render basic skeleton matching the final structure */}
-        <SidebarGroup className="flex-shrink-0 h-full overflow-hidden flex flex-col">
-          <SidebarGroupLabel>
-            {/* Simplified placeholder label */}
-          </SidebarGroupLabel>
-          <SidebarGroupContent className="overflow-y-auto pb-20">
-            <SidebarMenu>
-              {/* Skeleton items or loading indicator */}
-              <div className="flex justify-center py-8">
-                <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-              </div>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-      </div>
-    );
-  }
+  // Compute empty state
+  const isEmpty = useMemo(() => {
+    return historyArray.length === 0 && !isLoadingHistory;
+  }, [historyArray.length, isLoadingHistory]);
 
-  // Main component render (only happens client-side after mount)
+  // Main component render (original structure)
   return (
     <div className="sidebar-history relative h-full overflow-hidden border-r border-border">
       <SidebarGroup className="flex-shrink-0 h-full overflow-hidden flex flex-col">
@@ -556,8 +523,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
                 <p className="text-sm mt-1">Start a new conversation to get started</p>
               </div>
             ) : (
-              // ** TEMPORARY DEBUG: Render only first 5 items **
-              renderChats(historyArray.slice(0, 5))
+              renderChats(historyArray)
             )}
           </SidebarMenu>
         </SidebarGroupContent>

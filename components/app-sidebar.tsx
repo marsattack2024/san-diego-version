@@ -94,7 +94,7 @@ export function AppSidebar({ user: serverUser }: { user: User | undefined }) {
   return (
     <Sidebar
       className="group-data-[side=left]:border-r-0"
-      collapsible="offcanvas" // Change to offcanvas mode to fully close
+      collapsible="offcanvas"
     >
       {isMobile && (
         <SidebarHeader>
@@ -162,7 +162,9 @@ export function AppSidebar({ user: serverUser }: { user: User | undefined }) {
       <SidebarContent className={isMobile ? "pt-4" : "pt-14"}>
         <SidebarHistory user={user} />
       </SidebarContent>
-      <SidebarFooter>{user && <SidebarUserNav user={user} />}</SidebarFooter>
+      <SidebarFooter>
+        {user && <SidebarUserNav user={user} />}
+      </SidebarFooter>
     </Sidebar>
   );
 }
