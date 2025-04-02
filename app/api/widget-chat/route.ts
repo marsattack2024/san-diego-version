@@ -146,6 +146,7 @@ export async function POST(req: Request): Promise<Response> {
       systemPrompt: prompts.widget,
       maxTokens: 800,
       temperature: 0.4,
+      model: 'gpt-4o-mini', // Use the smaller, faster model for the widget
       useWebScraper: false,
       useDeepSearch: false,
       operationName: `widget_chat_${operationId}`,
