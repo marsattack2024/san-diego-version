@@ -87,7 +87,10 @@ export function notFoundError(message = "Not found"): Response {
 
 /**
  * Route handler wrapper with standardized error handling
- * Compatible with Next.js 15 route handlers
+ * Compatible with Next.js 15 route handlers with dynamic route parameters
+ * 
+ * IMPORTANT: For non-dynamic routes (without URL parameters), use direct function exports
+ * instead as they are more reliable in production builds.
  * 
  * @param handler The route handler function
  * @returns A wrapped handler with error handling
@@ -108,26 +111,59 @@ export function withErrorHandling<T extends Record<string, string> = Record<stri
 }
 
 /**
- * A template for creating standard route handlers
+ * Templates for creating standard route handlers
  */
-export const createRouteTemplate = `
+
+/**
+ * Template for non-dynamic routes (no URL parameters)
+ * 
+ * This pattern is more reliable in Next.js 15 production builds.
+ */
+export const createNonDynamicRouteTemplate = `
+/**
+ * Route handler for [describe purpose]
+ */
+import { NextResponse } from 'next/server';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { successResponse, errorResponse } from '@/lib/utils/route-handler';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
+
+export const runtime = 'edge';
+
+export async function GET(request: Request): Promise<Response> {
+  try {
+    // Logic goes here...
+    
+    // Return standardized response
+    return successResponse({ data: "Your response data" });
+  } catch (error) {
+    return errorResponse("Specific error message", error);
+  }
+}
+`;
+
+/**
+ * Template for dynamic routes (with URL parameters)
+ */
+export const createDynamicRouteTemplate = `
 /**
  * Route handler for [describe purpose]
  */
 import { NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { successResponse, errorResponse, withErrorHandling } from '@/lib/utils/route-handler';
-import type { RouteContext } from '@/lib/types/route-handlers';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
+import type { IdParam } from '@/lib/types/route-handlers';
 
 export const runtime = 'edge';
 
 export const GET = withErrorHandling(async (
   request: Request,
-  context: RouteContext<{ id: string }>
+  { params }: IdParam
 ): Promise<Response> => {
   try {
     // Extract path params by awaiting the Promise
-    const { id } = await context.params;
+    const { id } = await params;
     
     // Logic goes here...
     
@@ -137,4 +173,7 @@ export const GET = withErrorHandling(async (
     return errorResponse("Specific error message", error);
   }
 });
-`; 
+`;
+
+// For backward compatibility
+export const createRouteTemplate = createDynamicRouteTemplate; 

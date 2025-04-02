@@ -11,7 +11,36 @@ Next.js 15 requires specific patterns for route handlers:
 3. **Request Type**: Standard `Request` type is preferred over `NextRequest`
 4. **Runtime Declaration**: Explicit declaration improves deployment consistency
 
-## Standardized Route Handler Template
+## Important Note About Non-Dynamic Routes
+
+For non-dynamic routes (those without URL parameters), we've found that using direct function exports is more reliable in production builds than using the `withErrorHandling` wrapper. This is because Next.js 15 production builds have stricter type checking than development builds.
+
+For non-dynamic routes, use this pattern:
+
+```typescript
+/**
+ * Route handler for [describe purpose]
+ */
+import { NextResponse } from 'next/server';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { successResponse, errorResponse } from '@/lib/utils/route-handler';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
+
+export const runtime = 'edge';
+
+export async function GET(request: Request): Promise<Response> {
+  try {
+    // Your logic here...
+    return successResponse({ data: "Your response data" });
+  } catch (error) {
+    return errorResponse("Specific error message", error);
+  }
+}
+```
+
+For dynamic routes (with URL parameters), the `withErrorHandling` wrapper works well:
+
+## Standardized Route Handler Template for Dynamic Routes
 
 ```typescript
 /**
@@ -79,7 +108,7 @@ return unauthorizedError();
 return notFoundError();
 ```
 
-### Error Handling Wrapper
+### Error Handling Wrapper (For Dynamic Routes)
 
 ```typescript
 export const GET = withErrorHandling(async (
@@ -125,7 +154,9 @@ When updating existing route handlers, follow these steps:
 3. **Change Return Type**: Update to `Promise<Response>`
 4. **Add Runtime Declaration**: Add `export const runtime = 'edge';` if missing
 5. **Use Response Utilities**: Replace custom response code with utility functions
-6. **Apply Error Handling**: Add the withErrorHandling wrapper
+6. **Consider Route Type**:
+   - For dynamic routes with parameters: Use the `withErrorHandling` wrapper
+   - For non-dynamic routes: Use direct function exports (more reliable in production)
 
 ## Example: Before and After
 
@@ -145,7 +176,7 @@ export async function GET(
 }
 ```
 
-### After:
+### After (Dynamic Route):
 ```typescript
 import { successResponse, errorResponse, withErrorHandling } from '@/lib/utils/route-handler';
 import type { IdParam } from '@/lib/types/route-handlers';
@@ -162,13 +193,29 @@ export const GET = withErrorHandling(async (
 });
 ```
 
+### After (Non-Dynamic Route):
+```typescript
+import { successResponse, errorResponse } from '@/lib/utils/route-handler';
+
+export const runtime = 'edge';
+
+export async function GET(request: Request): Promise<Response> {
+  try {
+    // Logic goes here...
+    return successResponse(data);
+  } catch (error) {
+    return errorResponse("Error processing request", error);
+  }
+}
+```
+
 ## Migration to Next.js 15 Route Handlers
 
 This document tracks the progress of our migration of API routes to Next.js 15 route handlers.
 
 ### Migration Status
 
-- Routes migrated: 35 / 36 (97%)
+- Routes migrated: 36 / 36 (100%)
 
 #### Current Standards
 
@@ -183,11 +230,14 @@ All route handlers should:
 4. Use the proper error handling and logging patterns with `edgeLogger` instead of `console.log`
 5. Use `cookies()` from next/headers to obtain cookie store (with await!)
 6. Use `createRouteHandlerClient()` utility function for consistent Supabase client creation
+7. Choose the proper pattern based on route type:
+   - For non-dynamic routes: Use direct async function exports
+   - For dynamic routes: Use `withErrorHandling` wrapper with proper param types
 
 #### Recently Standardized Routes
 
-- ✅ `app/api/chat/update-title/route.ts` - Title generation for chat sessions (parameters standardized to use `sessionId` instead of `chatId`)
-- ✅ `app/api/chat/session/route.ts` - Chat session management with standardized parameters
+- ✅ `app/api/chat/update-title/route.ts` - Title generation for chat sessions 
+- ✅ `app/api/chat/session/route.ts` - Chat session management (fixed for production builds)
 
 #### Routes Still Being Standardized
 
