@@ -243,44 +243,44 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
     }
   }, [detectMobile]);
 
-  // ** Revised Initial Fetch Logic **
+  // ** Revised Initial Fetch Logic - Triggering on isAuthenticated **
   useEffect(() => {
-    // Only fetch if we have a user object AND we are not already loading history
-    if (auth.user && !isLoadingHistory) {
-      console.debug('[SidebarHistory] Auth user present and not loading, triggering initial fetch', { userId: auth.user.id });
+    // Fetch only when authenticated AND not already loading history
+    if (auth.isAuthenticated && !isLoadingHistory) {
+      console.debug('[SidebarHistory] Authenticated and not loading, triggering initial fetch', { userId: auth.user?.id });
       fetchHistory(false); // Fetch without forcing refresh 
     } else {
       // Log why we skipped
       console.debug('[SidebarHistory] Skipping initial fetch:', {
-        hasUserObject: !!auth.user,
+        isAuthenticated: auth.isAuthenticated,
         isLoadingHistory: isLoadingHistory,
         isAuthLoading: auth.isLoading // Keep for context
       });
     }
-    // Dependency array: Re-run when the auth.user object reference changes or loading state changes
-  }, [auth.user, fetchHistory, isLoadingHistory]);
+    // Dependency array: Re-run when isAuthenticated changes or loading state changes
+  }, [auth.isAuthenticated, fetchHistory, isLoadingHistory]);
 
-  // ** Polling Logic - ensure it also uses the correct user check **
+  // ** Polling Logic - ensure it also uses the correct auth check **
   useEffect(() => {
-    // Wait for user object before starting polling
-    if (!auth.user || isLoadingHistory) return; // Check for auth.user object
+    // Wait for authentication before starting polling
+    if (!auth.isAuthenticated || isLoadingHistory) return;
 
     const pollingInterval = isMobile ? 15 * 60 * 1000 : 8 * 60 * 1000;
     const jitter = Math.floor(Math.random() * 45000);
     const effectiveInterval = pollingInterval + jitter;
 
-    console.debug(`[SidebarHistory] Setting up history polling every ${Math.round(effectiveInterval / 1000)}s`);
+    console.debug(`[SidebarHistory] Setting up history polling every ${Math.round(effectiveInterval / 1000)}s (Authenticated)`);
     const intervalId = setInterval(() => {
-      // Check visibility and user object again inside interval
-      if (isPageVisible() && auth.user) {
-        console.debug('[SidebarHistory] Polling: fetching history');
+      // Check visibility and authentication again inside interval
+      if (isPageVisible() && auth.isAuthenticated) {
+        console.debug('[SidebarHistory] Polling: fetching history (Authenticated)');
         fetchHistory(false);
       }
     }, effectiveInterval);
 
     return () => clearInterval(intervalId);
-    // Dependency array: Re-run polling setup if user object or visibility function changes
-  }, [fetchHistory, isMobile, isPageVisible, auth.user, isLoadingHistory]);
+    // Dependency array: Re-run polling setup if isAuthenticated or visibility function changes
+  }, [fetchHistory, isMobile, isPageVisible, auth.isAuthenticated, isLoadingHistory]);
 
   // Set error message when store has errors
   useEffect(() => {
