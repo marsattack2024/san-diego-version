@@ -467,15 +467,38 @@ export class ChatEngineFacade {
                             userContent,
                             contextUserId,
                             lastUserMessage.id
-                        ).catch(error => {
-                            edgeLogger.error('Failed to save user message', {
-                                category: LOG_CATEGORIES.SYSTEM,
-                                operation: this.config.operationName,
-                                operationId,
-                                sessionId: chatId,
-                                error: error instanceof Error ? error.message : String(error)
+                        )
+                            .then(result => {
+                                if (!result.success) {
+                                    edgeLogger.error('Persistence service reported failure saving user message', {
+                                        category: LOG_CATEGORIES.SYSTEM,
+                                        operation: this.config.operationName,
+                                        operationId,
+                                        sessionId: chatId,
+                                        messageId: lastUserMessage.id,
+                                        error: result.error || 'Unknown persistence error'
+                                    });
+                                } else {
+                                    edgeLogger.debug('User message save initiated successfully (non-blocking)', {
+                                        category: LOG_CATEGORIES.SYSTEM,
+                                        operation: this.config.operationName,
+                                        operationId,
+                                        sessionId: chatId,
+                                        messageId: lastUserMessage.id
+                                    });
+                                }
+                            })
+                            .catch(error => {
+                                // This catch is less likely to trigger if saveUserMessage handles its own errors,
+                                // but keep it for unexpected exceptions.
+                                edgeLogger.error('Unexpected error during async user message save call', {
+                                    category: LOG_CATEGORIES.SYSTEM,
+                                    operation: this.config.operationName,
+                                    operationId,
+                                    sessionId: chatId,
+                                    error: error instanceof Error ? error.message : String(error)
+                                });
                             });
-                        });
                     }
                 }
 

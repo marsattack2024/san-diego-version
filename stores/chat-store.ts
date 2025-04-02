@@ -178,9 +178,49 @@ export const useChatStore = create<ChatState>()(
 
         try {
           console.time('[ChatStore] state update');
-          set({ conversations: conversationsMap });
+          set((state) => {
+            // Get the current state conversations
+            const existingConversations = state.conversations;
+
+            // Create a new merged map
+            const mergedConversations: Record<string, Conversation> = { ...existingConversations };
+
+            // --> ADD LOGGING HERE <--
+            console.debug('[ChatStore] Pre-merge state', {
+              category: 'chat',
+              operation: 'syncConversationsFromHistory',
+              existingCount: Object.keys(existingConversations).length,
+              fetchedCount: Object.keys(conversationsMap).length,
+              // Log keys to see IDs
+              existingKeys: JSON.stringify(Object.keys(existingConversations)),
+              fetchedKeys: JSON.stringify(Object.keys(conversationsMap))
+            });
+            // --> END ADD LOGGING <--
+
+            // Update or add conversations from the fetched data
+            for (const chatId in conversationsMap) {
+              mergedConversations[chatId] = {
+                ...(existingConversations[chatId] || {}), // Keep existing data if any
+                ...conversationsMap[chatId] // Overwrite with newer fetched data
+              };
+            }
+
+            // --> MOVE/ENHANCE LOGGING <--
+            // Log the final merged map *before* returning it
+            console.debug(`[ChatStore] Merged state result`, {
+              category: 'chat',
+              operation: 'syncConversationsFromHistory',
+              mergedCount: Object.keys(mergedConversations).length,
+              // Log merged keys
+              mergedKeys: JSON.stringify(Object.keys(mergedConversations)),
+              fetchedCount: Object.keys(conversationsMap).length // Repeat for context
+            });
+            // --> END MOVE/ENHANCE LOGGING <--
+
+            return { conversations: mergedConversations };
+          });
           console.timeEnd('[ChatStore] state update');
-          console.log('[ChatStore] State updated successfully');
+          console.log('[ChatStore] State updated successfully via merge');
         } catch (error) {
           console.error('[ChatStore] Error updating state with conversations:', error);
         }
@@ -235,6 +275,18 @@ export const useChatStore = create<ChatState>()(
           if (timerStarted) {
             console.timeEnd('[ChatStore] historyService.fetchHistory');
           }
+
+          // --> ADD LOGGING HERE <--
+          console.debug('[ChatStore] Raw data from historyService.fetchHistory', {
+            category: 'chat', // Use 'chat' for history loading as per rules
+            operation: 'fetchHistory',
+            dataType: typeof historyData,
+            isArray: Array.isArray(historyData),
+            count: Array.isArray(historyData) ? historyData.length : 'N/A',
+            // Log first item safely
+            sample: Array.isArray(historyData) && historyData.length > 0 ? JSON.stringify(historyData[0]).substring(0, 100) + '...' : '[]'
+          });
+          // --> END ADD LOGGING <--
 
           console.log('[ChatStore] Received history data:', {
             dataType: typeof historyData,

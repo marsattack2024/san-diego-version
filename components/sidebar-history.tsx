@@ -56,6 +56,7 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { useChatStore, type Conversation } from '@/stores/chat-store';
 import { shallow } from 'zustand/shallow';
+import { useAuth } from '@/utils/supabase/auth-provider';
 
 // Consistent type definition for grouped chats
 type GroupedChats = {
@@ -171,12 +172,15 @@ const PureChatItem = ({
   );
 };
 
-const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
+const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) => {
   const { setOpenMobile, openMobile } = useSidebar();
   const params = useParams();
   const id = params?.id as string;
   const pathname = usePathname();
   const router = useRouter();
+
+  // Get auth state
+  const auth = useAuth();
 
   // Use Zustand store selectors
   const conversations = useChatStore(state => state.conversations);
@@ -239,31 +243,44 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     }
   }, [detectMobile]);
 
-  // ** Restore Original Initial Fetch Logic **
+  // ** Revised Initial Fetch Logic **
   useEffect(() => {
-    if (!user?.id) return;
-    console.debug('[SidebarHistory] Initial history fetch on component mount (Restored Logic)');
-    fetchHistory(false); // Fetch without forcing refresh on initial mount
-  }, [fetchHistory, user?.id]);
+    // Only fetch if we have a user object AND we are not already loading history
+    if (auth.user && !isLoadingHistory) {
+      console.debug('[SidebarHistory] Auth user present and not loading, triggering initial fetch', { userId: auth.user.id });
+      fetchHistory(false); // Fetch without forcing refresh 
+    } else {
+      // Log why we skipped
+      console.debug('[SidebarHistory] Skipping initial fetch:', {
+        hasUserObject: !!auth.user,
+        isLoadingHistory: isLoadingHistory,
+        isAuthLoading: auth.isLoading // Keep for context
+      });
+    }
+    // Dependency array: Re-run when the auth.user object reference changes or loading state changes
+  }, [auth.user, fetchHistory, isLoadingHistory]);
 
-  // ** Restore Polling Logic (Optional but part of working version) **
+  // ** Polling Logic - ensure it also uses the correct user check **
   useEffect(() => {
-    if (!user?.id) return;
+    // Wait for user object before starting polling
+    if (!auth.user || isLoadingHistory) return; // Check for auth.user object
 
     const pollingInterval = isMobile ? 15 * 60 * 1000 : 8 * 60 * 1000;
     const jitter = Math.floor(Math.random() * 45000);
     const effectiveInterval = pollingInterval + jitter;
 
-    console.debug(`[SidebarHistory] Setting up history polling every ${Math.round(effectiveInterval / 1000)}s (Restored Logic)`);
+    console.debug(`[SidebarHistory] Setting up history polling every ${Math.round(effectiveInterval / 1000)}s`);
     const intervalId = setInterval(() => {
-      if (isPageVisible() && user?.id) {
-        console.debug('[SidebarHistory] Polling: fetching history (Restored Logic)');
+      // Check visibility and user object again inside interval
+      if (isPageVisible() && auth.user) {
+        console.debug('[SidebarHistory] Polling: fetching history');
         fetchHistory(false);
       }
     }, effectiveInterval);
 
     return () => clearInterval(intervalId);
-  }, [fetchHistory, isMobile, isPageVisible, user?.id]);
+    // Dependency array: Re-run polling setup if user object or visibility function changes
+  }, [fetchHistory, isMobile, isPageVisible, auth.user, isLoadingHistory]);
 
   // Set error message when store has errors
   useEffect(() => {

@@ -307,28 +307,17 @@ The chat engine refactoring is now complete! The monolithic implementation has b
     *   **Why:** Ensures that developers can properly integrate and troubleshoot the widget in various environments.
     *   **Rules:** Provides clear documentation following project standards.
 
-## Phase 10.5: Post-Refactor Troubleshooting & Fixes
+## Phase 10.5: Post-Fix History & Persistence Issues (In Progress)
 
-After completing the primary refactoring phases, a critical issue was identified where message content sent from the client (`useChat`) was being lost before reaching the AI model, resulting in responses like "It appears your message didn't come through."
+Following the resolution of the message content loss, new issues related to chat history persistence and display have been observed:
 
-**Problem Analysis:**
+1.  **User Message Persistence Failure:**
+    *   **Symptom:** When a new message is sent, the assistant's response is saved correctly and persists after a page refresh. However, the user's own message is *not* saved and disappears upon refresh.
+    *   **Hypothesis:** Potential issue in the `ChatEngineFacade` logic that calls `saveUserMessage`, or within the `MessagePersistenceService.saveUserMessage` method itself (e.g., error during DB insert, incorrect parameters, silent failure due to non-blocking call).
 
-1.  **Initial Symptom:** Logs showed that messages arriving at the `AIStreamService` (and sometimes even earlier in the `ChatEngineFacade`) had empty `content`, despite the client sending valid data in both `content` and `parts`.
-2.  **Investigation Path:**
-    *   **Message Standardization (`message-utils.ts`):** Verified that the `standardizeMessage` function correctly handled `parts` extraction when `content` was empty. This was ruled out as the primary cause.
-    *   **AI Stream Service (`ai-stream.service.ts`):** Identified that messages were passed to the Vercel AI SDK's `streamText` function without being converted to the required `CoreMessage` format.
-    *   **Chat Engine Facade (`chat-engine.facade.ts`):** Discovered the root cause in the Zod schema (`chatRequestSchema`) used for validating the incoming request body. The schema definition for the `message` field was incomplete when handling object-based messages, causing Zod to parse the object but discard its internal properties (`id`, `role`, `content`, `parts`).
-
-**Fixes Implemented:**
-
-1.  **`convertToCoreMessages` Added (`ai-stream.service.ts`):**
-    *   **Action:** Imported `convertToCoreMessages` from `ai`.
-    *   **Action:** Added a step to convert the `standardizedMessages` array to `CoreMessage` format right before calling `streamText`.
-    *   **Why:** Ensures messages are in the exact format expected by the Vercel AI SDK's core functions, preventing misinterpretation.
-
-2.  **Zod Schema Corrected (`chat-engine.facade.ts`):**
-    *   **Action:** Updated the `chatRequestSchema` to accurately define the expected structure of the `message` field when it's an object, including `id`, `role`, `content`, `parts`, and `createdAt`.
-    *   **Why:** Prevents Zod from incorrectly stripping properties from valid incoming message objects during request body parsing, preserving the content early in the pipeline.
+2.  **Sidebar History Display Issue:**
+    *   **Symptom:** The chat history list component in the UI sidebar only displays a single message, even when more messages exist in the history.
+    *   **Hypothesis:** Likely a frontend issue related to data fetching, state management, or rendering logic for the history list component. To be addressed after the persistence issue is resolved.
 
 These fixes successfully resolved the message content loss issue.
 
