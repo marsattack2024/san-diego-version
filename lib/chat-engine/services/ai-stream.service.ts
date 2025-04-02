@@ -1,4 +1,4 @@
-import { CoreMessage, Message, StreamTextResult, Tool, ToolCall, ToolResult, streamText } from 'ai';
+import { CoreMessage, Message, StreamTextResult, Tool, ToolCall, ToolResult, streamText, convertToCoreMessages } from 'ai';
 import { openai } from '@ai-sdk/openai';
 import { ChatEngineContext } from '@/lib/chat-engine/types';
 import { ChatEngineConfig } from '../chat-engine.config';
@@ -127,9 +127,19 @@ export class AIStreamService {
             // --- Invoke streamText --- 
             const allToolCalls: ToolCall<string, any>[] = []; // Use generic ToolCall
 
+            // Convert standardized messages to CoreMessages before sending to streamText
+            const coreMessages = convertToCoreMessages(standardizedMessages);
+
+            edgeLogger.debug('Converted messages to CoreMessage format', {
+                category: LOG_CATEGORIES.LLM,
+                operation: operationName,
+                requestId,
+                coreMessageCount: coreMessages.length
+            });
+
             const result = await streamText({
                 model: openai(config.model || 'gpt-4o'),
-                messages: standardizedMessages, // Now using standardized messages
+                messages: coreMessages, // Use CoreMessages now
                 system: systemContent, // Pass system prompt here
                 tools: config.tools,
                 temperature: config.temperature,

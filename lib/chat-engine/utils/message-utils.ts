@@ -66,8 +66,8 @@ export function standardizeMessage(
         ? message.parts
         : undefined;
 
-    // Priority 1: Use existing string content if available
-    if (typeof message.content === 'string') {
+    // Priority 1: Use existing string content if available and not empty
+    if (typeof message.content === 'string' && message.content.trim() !== '') {
         content = message.content;
     }
     // Priority 2: Try to extract content from parts array
@@ -211,23 +211,28 @@ export function isValidMessage(message: any): boolean {
 export function extractMessageContent(message: any): string {
     if (!message) return '';
 
-    // Case 1: Direct string content
-    if (typeof message.content === 'string') {
+    // Case 1: Direct string content if not empty
+    if (typeof message.content === 'string' && message.content.trim() !== '') {
         return message.content;
     }
 
-    // Case 2: Extract from parts
+    // Case 2: Extract from parts (prioritize this when content is empty)
     if (message.parts && Array.isArray(message.parts)) {
         const textPart = message.parts.find((part: MessagePart) =>
             part && part.type === 'text' && typeof part.text === 'string'
         );
 
-        if (textPart) {
+        if (textPart && textPart.text) {
             return textPart.text as string;
         }
     }
 
-    // Case 3: Object content
+    // Case 3: Use empty content string if available
+    if (typeof message.content === 'string') {
+        return message.content;
+    }
+
+    // Case 4: Object content
     if (message.content && typeof message.content === 'object') {
         try {
             return JSON.stringify(message.content);

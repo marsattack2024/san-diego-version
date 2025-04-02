@@ -23,14 +23,32 @@ import { handleCors } from '@/lib/utils/http-utils';
 import { extractToolsUsed } from './utils/tool-utils';
 import { standardizeMessages, extractMessageContent } from './utils/message-utils';
 
-// Zod schema for validating the request body
+// Define schema for the parts array
+const messagePartSchema = z.object({
+    type: z.string(),
+    text: z.string().optional(),
+    // Allow other properties if needed for different part types
+}).passthrough(); // Use passthrough if parts can have varying structures
+
+// Corrected Zod schema for validating the request body
 const chatRequestSchema = z.object({
-    message: z.string().or(z.object({})).optional(),
+    message: z.union([
+        z.string(), // Allow simple string message
+        z.object({  // Define the expected object structure
+            id: z.string().optional(), // useChat might not send ID initially
+            role: z.enum(['user', 'assistant', 'system', 'tool', 'function']),
+            content: z.string().or(z.object({})).or(z.null()).optional(), // Content can be string, object, or null
+            parts: z.array(messagePartSchema).optional(), // Parts array with defined structure
+            createdAt: z.string().datetime().optional().or(z.date().optional()) // Allow date string or object
+        }).passthrough() // Allow other potential fields from SDK
+    ]).optional(),
     messages: z.array(z.object({
         id: z.string(),
         role: z.enum(['user', 'assistant', 'system', 'tool', 'function']),
-        content: z.string().or(z.object({})).or(z.null())
-    })).optional(),
+        content: z.string().or(z.object({})).or(z.null()),
+        parts: z.array(messagePartSchema).optional(), // Add parts here too
+        createdAt: z.string().datetime().optional().or(z.date().optional()) // Allow date string or object
+    }).passthrough()).optional(),
     id: z.string().uuid().optional(),
     sessionId: z.string().uuid().optional(),
     agentId: z.string().optional(),
@@ -122,11 +140,28 @@ export class ChatEngineFacade {
 
         // Parse and validate the request body
         let body: ChatRequestBody;
+        let rawBodyForLogging: any;
         try {
-            const rawBody = await req.json();
-            const result = chatRequestSchema.safeParse(rawBody);
+            rawBodyForLogging = await req.json();
+            // Add detailed logging BEFORE parsing
+            edgeLogger.debug('Raw request body received', {
+                category: LOG_CATEGORIES.SYSTEM,
+                operation: this.config.operationName,
+                operationId,
+                body: JSON.stringify(rawBodyForLogging) // Stringify to log cleanly
+            });
+
+            const result = chatRequestSchema.safeParse(rawBodyForLogging);
 
             if (!result.success) {
+                // Log parsing error details
+                edgeLogger.error('Zod schema validation failed', {
+                    category: LOG_CATEGORIES.SYSTEM,
+                    operation: this.config.operationName,
+                    operationId,
+                    error: JSON.stringify(result.error.format()), // Stringify the Zod error object
+                    important: true
+                });
                 const errorResponse = new Response(
                     JSON.stringify({
                         error: 'Invalid request body',
@@ -141,7 +176,22 @@ export class ChatEngineFacade {
             }
 
             body = result.data;
+            // Add detailed logging AFTER parsing
+            edgeLogger.debug('Parsed request body (Zod)', {
+                category: LOG_CATEGORIES.SYSTEM,
+                operation: this.config.operationName,
+                operationId,
+                parsedBody: JSON.stringify(body) // Log the successfully parsed body
+            });
         } catch (error) {
+            edgeLogger.error('Failed to parse JSON body', {
+                category: LOG_CATEGORIES.SYSTEM,
+                operation: this.config.operationName,
+                operationId,
+                error: error instanceof Error ? error.message : String(error),
+                rawBodyAttempted: JSON.stringify(rawBodyForLogging), // Log what we tried to parse
+                important: true
+            });
             const errorResponse = new Response(
                 JSON.stringify({ error: 'Invalid JSON body' }),
                 { status: 400, headers: { 'Content-Type': 'application/json' } }
@@ -151,6 +201,14 @@ export class ChatEngineFacade {
 
         // Extract key parameters
         const { message, messages, id, sessionId = crypto.randomUUID() } = body;
+
+        // Add detailed logging for the extracted message object
+        edgeLogger.debug('Extracted message object before standardization', {
+            category: LOG_CATEGORIES.CHAT,
+            operation: this.config.operationName,
+            operationId,
+            messageObject: JSON.stringify(message) // Log the exact object
+        });
 
         // Validate the request
         if ((!message && !messages) || (!id && !sessionId)) {
@@ -253,6 +311,13 @@ export class ChatEngineFacade {
                         validateRole: true,
                         preserveId: true
                     });
+                    // Add logging for standardized array
+                    edgeLogger.debug('Standardized message array', {
+                        category: LOG_CATEGORIES.CHAT,
+                        operation: this.config.operationName,
+                        operationId,
+                        standardized: JSON.stringify(chatMessages.slice(0, 1)) // Log first item sample
+                    });
                 } else if (message && typeof message === 'string') {
                     // Simple string message format
                     chatMessages = standardizeMessages({
@@ -263,13 +328,61 @@ export class ChatEngineFacade {
                         operationId,
                         validateRole: false
                     });
+                    edgeLogger.debug('Standardized string message', {
+                        category: LOG_CATEGORIES.CHAT,
+                        operation: this.config.operationName,
+                        operationId,
+                        message: message
+                    });
                 } else if (message && typeof message === 'object') {
                     // Single message object format (from Vercel AI SDK)
-                    chatMessages = standardizeMessages(message, {
+                    const messageObj = message as Record<string, any>; // Keep this casting for checks
+
+                    // Add logging right before standardization for the object case
+                    edgeLogger.debug('Standardizing single message object', {
+                        category: LOG_CATEGORIES.CHAT,
+                        operation: this.config.operationName,
+                        operationId,
+                        objectToStandardize: JSON.stringify(messageObj)
+                    });
+
+                    const hasParts = messageObj.parts && Array.isArray(messageObj.parts) && messageObj.parts.length > 0;
+                    const hasContent = typeof messageObj.content === 'string' && messageObj.content.trim() !== '';
+
+                    if (hasParts || hasContent) {
+                        edgeLogger.debug('Message object has content or parts', {
+                            category: LOG_CATEGORIES.CHAT,
+                            operation: this.config.operationName,
+                            operationId,
+                            hasParts,
+                            partsLength: hasParts ? messageObj.parts.length : 0,
+                            hasContent,
+                            contentPreview: hasContent ? messageObj.content.substring(0, 50) : 'none'
+                        });
+                    } else {
+                        // This warning should ideally not trigger now with the corrected schema
+                        edgeLogger.warn('Message object appears to have neither content nor parts AFTER parsing', {
+                            category: LOG_CATEGORIES.CHAT,
+                            operation: this.config.operationName,
+                            operationId,
+                            messageKeys: Object.keys(messageObj).join(',')
+                        });
+                    }
+
+                    // Pass the potentially corrected message object
+                    chatMessages = standardizeMessages(messageObj, {
                         operationId,
                         validateRole: true,
                         defaultRole: 'user',
                         preserveId: true
+                    });
+
+                    // Add logging right after standardization for the object case
+                    edgeLogger.debug('Result of standardizing single message object', {
+                        category: LOG_CATEGORIES.CHAT,
+                        operation: this.config.operationName,
+                        operationId,
+                        standardized: JSON.stringify(chatMessages)
                     });
                 } else {
                     chatLogger.error('Invalid message format', 'Format validation failed', {
@@ -302,6 +415,21 @@ export class ChatEngineFacade {
                         content: 'Hello',
                         createdAt: new Date()
                     }];
+                } else {
+                    // Log the FINAL standardized message content for debugging
+                    edgeLogger.debug('Final standardized messages before context build', {
+                        category: LOG_CATEGORIES.CHAT,
+                        operation: this.config.operationName,
+                        operationId,
+                        messageCount: chatMessages.length,
+                        // Log first message cleanly
+                        sample: chatMessages.length > 0 ? JSON.stringify({
+                            id: chatMessages[0].id,
+                            role: chatMessages[0].role,
+                            contentLength: chatMessages[0].content?.length ?? 0,
+                            hasParts: !!(chatMessages[0] as any).parts
+                        }) : 'none'
+                    });
                 }
 
                 // Build the context using the context service
