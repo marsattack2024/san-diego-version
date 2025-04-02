@@ -264,6 +264,19 @@ export async function POST(req: Request): Promise<Response> {
     try {
       if (response.ok) {
         responseBody = await response.json();
+
+        // Add detailed logging of the response structure
+        edgeLogger.info('Perplexity API response structure', {
+          operation: 'perplexity_response_structure',
+          operationId,
+          hasChoices: !!responseBody.choices,
+          choicesIsArray: Array.isArray(responseBody.choices),
+          choicesLength: Array.isArray(responseBody.choices) ? responseBody.choices.length : 0,
+          hasFirstChoice: Array.isArray(responseBody.choices) && responseBody.choices.length > 0,
+          firstChoiceHasMessage: Array.isArray(responseBody.choices) && responseBody.choices.length > 0 && !!responseBody.choices[0].message,
+          responseKeys: Object.keys(responseBody),
+          important: true
+        });
       } else {
         responseBody = await response.text();
 
@@ -311,10 +324,25 @@ export async function POST(req: Request): Promise<Response> {
       return errorResponse('Perplexity API error', responseBody, statusCode);
     }
 
-    // Return the Perplexity API response
+    // Log the complete response structure for debugging
+    edgeLogger.info('Perplexity API response structure detail', {
+      operation: 'perplexity_response_structure_detail',
+      operationId,
+      hasChoices: !!responseBody.choices,
+      choicesLength: responseBody.choices?.length || 0,
+      topLevelKeys: Object.keys(responseBody),
+      modelName: responseBody.model || model,
+      choicesType: Array.isArray(responseBody.choices) ? 'array' : typeof responseBody.choices,
+      important: true
+    });
+
+    // Ensure the response body maintains the correct structure expected by the perplexity service
+    // The key structure we need in the response:
+    // 1. success: true - to indicate the request succeeded
+    // 2. data: the actual Perplexity API response with choices array
     return successResponse({
       success: true,
-      data: responseBody,
+      data: responseBody, // Important: Don't modify the structure of the responseBody
       model,
       timing: { total: duration }
     });

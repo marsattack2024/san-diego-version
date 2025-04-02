@@ -882,6 +882,8 @@ export class ChatEngine {
                             credentials: 'include',
                             cache: 'no-store', // Ensure fresh data - no caching
                             body: JSON.stringify({
+                                // Using standardized parameter names: 'sessionId' instead of 'chatId'
+                                // to align with the session-focused architecture
                                 sessionId: context.sessionId,
                                 content: messageContent,
                                 userId: context.userId

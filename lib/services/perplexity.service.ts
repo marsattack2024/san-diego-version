@@ -81,7 +81,7 @@ class PerplexityService {
                     queryLength: query.length,
                     responseLength: cachedResults.content.length
                 });
-                
+
                 return cachedResults;
             }
 
@@ -192,7 +192,60 @@ class PerplexityService {
             }
 
             // Extract and format the response data
-            const data = result.data;
+            let data = result.data;
+
+            // Add validation to prevent "Cannot read properties of undefined" error
+            if (!data || !data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
+                // Try to handle nested structure where data itself might contain the full Perplexity response
+                if (data && typeof data === 'object' && 'choices' in data) {
+                    // The structure is already correct
+                } else if (data && typeof data === 'object') {
+                    // Log the actual structure received
+                    edgeLogger.info("Perplexity API response structure details", {
+                        category: LOG_CATEGORIES.TOOLS,
+                        operation: "perplexity_response_structure_details",
+                        operationId,
+                        dataKeys: Object.keys(data),
+                        dataType: typeof data
+                    });
+
+                    // Check if data itself contains the Perplexity API response structure
+                    const possibleNestedData = Object.values(data).find(
+                        value => value && typeof value === 'object' && 'choices' in value
+                    );
+
+                    if (possibleNestedData) {
+                        data = possibleNestedData;
+                    } else {
+                        edgeLogger.error("Invalid Perplexity API response format", {
+                            category: LOG_CATEGORIES.TOOLS,
+                            operation: "perplexity_invalid_response",
+                            operationId,
+                            dataKeys: Object.keys(data),
+                            dataKeyValues: Object.keys(data).map(key =>
+                                `${key}: ${typeof data[key]}`
+                            ).join(', '),
+                            important: true
+                        });
+                        throw new Error('Invalid response format from Perplexity API: missing choices array');
+                    }
+                } else {
+                    throw new Error('Invalid response format from Perplexity API: missing choices array');
+                }
+            }
+
+            // Additional validation for message structure
+            if (!data.choices[0] || !data.choices[0].message) {
+                edgeLogger.error("Missing message in Perplexity API response", {
+                    category: LOG_CATEGORIES.TOOLS,
+                    operation: "perplexity_invalid_choice",
+                    operationId,
+                    firstChoice: JSON.stringify(data.choices[0]),
+                    important: true
+                });
+                throw new Error('Invalid response format from Perplexity API: missing message in first choice');
+            }
+
             const content = data.choices[0].message.content;
             const duration = Date.now() - startTime;
 
@@ -214,7 +267,7 @@ class PerplexityService {
 
             // Cache the search result
             await cacheService.setDeepSearchResults(query, searchResult);
-            
+
             edgeLogger.debug("Perplexity result cached", {
                 category: LOG_CATEGORIES.TOOLS,
                 operation: "perplexity_result_cached",

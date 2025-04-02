@@ -1,10 +1,8 @@
-import { cookies } from 'next/headers';
-import { createServerClient } from '@supabase/ssr';
-import { createClient } from '@/utils/supabase/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { z } from 'zod';
-import { successResponse, errorResponse, unauthorizedError, validationError } from '@/lib/utils/route-handler';
+import { successResponse, errorResponse, unauthorizedError, validationError, withErrorHandling } from '@/lib/utils/route-handler';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 
 // Declare edge runtime
 export const runtime = 'edge';
@@ -19,7 +17,9 @@ const sessionSchema = z.object({
 /**
  * POST handler to create a new chat session
  */
-export async function POST(request: Request): Promise<Response> {
+export const POST = withErrorHandling(async (
+    request: Request
+): Promise<Response> => {
     const operationId = `create_session_${Math.random().toString(36).substring(2, 10)}`;
 
     edgeLogger.debug('Creating new chat session', {
@@ -60,7 +60,7 @@ export async function POST(request: Request): Promise<Response> {
         }
 
         // Authenticate user
-        const supabase = await createClient();
+        const supabase = await createRouteHandlerClient();
         const { data: { user }, error: authError } = await supabase.auth.getUser();
 
         if (authError || !user) {
@@ -125,12 +125,14 @@ export async function POST(request: Request): Promise<Response> {
             500
         );
     }
-}
+});
 
 /**
  * GET handler to retrieve all sessions for the authenticated user
  */
-export async function GET(request: Request): Promise<Response> {
+export const GET = withErrorHandling(async (
+    request: Request
+): Promise<Response> => {
     const operationId = `get_sessions_${Math.random().toString(36).substring(2, 10)}`;
 
     edgeLogger.debug('Retrieving chat sessions', {
@@ -140,31 +142,8 @@ export async function GET(request: Request): Promise<Response> {
     });
 
     try {
-        // Get cookies - make sure to await this
-        const cookieStore = await cookies();
-
-        const supabase = createServerClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-            {
-                cookies: {
-                    getAll() {
-                        return cookieStore.getAll();
-                    },
-                    setAll(cookiesToSet) {
-                        try {
-                            cookiesToSet.forEach(({ name, value, options }) =>
-                                cookieStore.set(name, value, options)
-                            );
-                        } catch {
-                            // The `setAll` method was called from a Server Component.
-                            // This can be ignored if you have middleware refreshing
-                            // user sessions.
-                        }
-                    },
-                },
-            }
-        );
+        // Get Supabase client with the standardized utility
+        const supabase = await createRouteHandlerClient();
 
         // Verify the user is authenticated
         const { data: { user } } = await supabase.auth.getUser();
@@ -174,7 +153,7 @@ export async function GET(request: Request): Promise<Response> {
 
         // Get the user's chat sessions
         const { data: sessions, error } = await supabase
-            .from('sd_chats')
+            .from('sd_chat_sessions')
             .select('id, title, created_at, updated_at')
             .eq('user_id', user.id)
             .order('updated_at', { ascending: false });
@@ -208,4 +187,4 @@ export async function GET(request: Request): Promise<Response> {
             500
         );
     }
-} 
+}); 
