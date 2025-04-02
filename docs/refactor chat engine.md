@@ -77,13 +77,14 @@
 
 ## Phase 6: Title Generation Service Integration
 
--   [x] **Session Title Generation (`lib/chat/title-service.ts`)**
-    *   **Action:** Identify the title generation logic within the `onFinish` callback in `core.ts`.
-    *   **Action:** Move this logic into the *existing* `lib/chat/title-service.ts`. Refactor the service if needed to accept necessary parameters (e.g., `sessionId`, `userId`, message content/context) and encapsulate the logic for checking conditions (message count) and making the API call to `/api/chat/update-title`.
-    *   **Action:** Ensure the API call uses standard `fetch` and includes necessary authentication headers (this might involve coordinating with the `AuthService` or passing tokens).
-    *   **Action:** *Crucially, remove any client-side state updates (e.g., Zustand) from this backend service.* Title updates on the client should be handled via other mechanisms (e.g., refetching, SSE, Zustand actions triggered by API call success *on the client*).
-    *   **Why:** Decouples a distinct feature/process from the core engine's streaming callback. Removes problematic frontend state coupling from the backend.
-    *   **Rules:** Follows SRP, ESM, TypeScript. API call logic should be robust. Logging should use `CHAT` category. Frontend/Backend separation (`project-rules`).
+-   [x] **Session Title Generation (`lib/chat/title-service.ts` & `/api/chat/update-title`)**
+    *   **Action:** Confirmed architecture decision: Use API call trigger.
+    *   **Action:** Modified `lib/chat/title-service.ts` (`triggerTitleGenerationViaApi`) to check conditions and make `fetch` call to `/api/chat/update-title`.
+    *   **Action:** Moved `cleanTitle`, `updateTitleInDatabase` to `lib/chat/title-utils.ts`.
+    *   **Action:** Modified API route `/api/chat/update-title/route.ts` to perform AI generation (`generateText`) and DB update (`updateTitleInDatabase`) directly.
+    *   **Action:** Refined logging calls in both files to match logger capabilities and resolve linter errors.
+    *   **Why:** Decouples title generation trigger from implementation, allows independent scaling/deployment, aligns with testing strategy.
+    *   **Rules:** Follows SRP, ESM, TypeScript. API call logic robust. Logging adheres to rules. Frontend/Backend separation.
 
 ## Phase 7: Message Persistence Refinement
 
