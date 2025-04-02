@@ -6,7 +6,7 @@
  * specialized agent is selected based on message content.
  */
 
-import { createChatEngine } from '@/lib/chat-engine/core';
+import { createChatEngine } from '@/lib/chat-engine/chat-engine.facade';
 import { detectAgentType, createAgentToolSet } from '@/lib/chat-engine/agent-router';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';

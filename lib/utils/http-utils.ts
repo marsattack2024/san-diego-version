@@ -16,7 +16,15 @@ export function handleCors(response: Response, req: Request, corsEnabled: boolea
     // Get allowed origins from environment or use default
     const allowedOrigins = process.env.WIDGET_ALLOWED_ORIGINS
         ? process.env.WIDGET_ALLOWED_ORIGINS.split(',')
-        : ['http://localhost:3000']; // Consider making this default configurable
+        : [
+            'http://localhost:3000',
+            'https://localhost:3000',
+            // Add Vercel production deployment URLs
+            'https://san-diego-version.vercel.app',
+            'https://san-diego-version-git-main.vercel.app',
+            // Include Vercel preview deployments (with wildcard for branch previews)
+            ...(process.env.VERCEL_URL ? [`https://${process.env.VERCEL_URL}`] : [])
+        ];
 
     const isAllowedOrigin = allowedOrigins.includes(origin) || allowedOrigins.includes('*');
 

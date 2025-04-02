@@ -91,7 +91,7 @@ vi.stubGlobal('fetch', vi.fn().mockImplementation(() =>
 ));
 
 // Import modules after mocking
-import { createChatEngine, ChatEngine } from '@/lib/chat-engine/core';
+import { createChatEngine, ChatEngineFacade } from '@/lib/chat-engine/chat-engine.facade';
 import { detectAgentType } from '@/lib/chat-engine/agent-router';
 import { createToolSet } from '@/lib/tools/registry.tool';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';

@@ -6,7 +6,7 @@
  * and only maintaining widget-specific configuration here.
  */
 
-import { createChatEngine } from '@/lib/chat-engine/core';
+import { createChatEngine } from '@/lib/chat-engine/chat-engine.facade';
 import { widgetTools } from '@/lib/tools/registry.tool';
 import { prompts } from '@/lib/chat-engine/prompts';
 import { edgeLogger } from '@/lib/logger/edge-logger';

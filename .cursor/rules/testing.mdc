@@ -3,350 +3,387 @@ description: Use these instructions for all testing scripts
 globs: 
 alwaysApply: false
 ---
-AI Agent Cursor Rules
-State Management Rules
+# Agent-Friendly Testing Guidelines
 
-Zustand Integration
+This document outlines our standardized testing approach using Vitest, optimized for agent-based workflows in Cursor.
 
-Use Zustand persist middleware for client-side state persistence
-Never attempt to update Zustand stores directly from server-side code
-Follow the pattern of API call → response → client update
-Implement optimistic updates with fallback mechanisms
+## Quick Reference for Agents
 
+- **Framework**: Vitest
+- **Directory Structure**: Tests mirror source code structure (`tests/unit/`, `tests/integration/`)
+- **Core Utilities**: Located in `tests/helpers/`
+- **Default Environment**: Node.js with ESM support
+- **Mocking Approach**: Uses `vi.mock()` for modules, `vi.fn()` for functions, `vi.spyOn()` for methods
 
-Middleware Interaction
+## Framework Overview
 
-Respect rate limits defined in /lib/middleware/rate-limit.ts
-Handle authentication as defined by the auth middleware chain
-Process requests through the CORS middleware when accessing external resources
+We use **Vitest** as our primary testing framework, which offers:
 
+- Native ESM support (crucial for our Next.js project)
+- Fast parallel test execution
+- TypeScript integration
+- Intuitive mocking capabilities
+- Code coverage reporting
 
-Error Handling
+## Directory Structure
 
-Follow standardized error logging as defined in test patterns
-Include appropriate LOG_CATEGORIES in all log messages
-Structure error responses consistently with error codes
+Tests are organized to mirror the source code:
 
+```
+tests/
+├── helpers/             # Shared testing utilities
+├── unit/                # Unit tests for individual components
+│   ├── lib/             # Tests for library code
+│   ├── services/        # Tests for services
+│   ├── components/      # Tests for UI components
+│   └── stores/          # Tests for state management
+├── integration/         # Integration tests across components
+├── setup.ts             # Global setup/teardown
+└── README.md            # Test documentation
+```
 
+## Core Testing Utilities
 
-Testing Compliance
+The `tests/helpers/` directory contains reusable utilities:
 
-Mocking Requirements
+1. **Environment Management** (`env-loader.ts`)
+   - Loads environment variables from `.env.test`
+   - Provides typed access with defaults
+   - Validates required testing variables
 
-Support mocking through Vitest's vi.mock() interface
-Implement test-friendly interfaces for all services
-Expose internal state for verification when in test mode
+2. **Logger Mocking** (`mock-logger.ts`)
+   - Captures log messages for verification
+   - Prevents console clutter during tests
 
+3. **External Service Mocks** (`mock-clients.ts`)
+   - Mock implementations of Redis, Supabase, OpenAI, and AI SDK
+   - In-memory versions for testing
 
-Logging Standards
+4. **Test Utilities** (`test-utils.ts`)
+   - Timing utilities for async operations
+   - Global setup/teardown functions
 
-Log all state transitions with appropriate categories
-Include performance metrics in logs for critical operations
-Mask sensitive user information in logs
+## Cursor-Specific Testing Guidelines
 
+### 1. Test File Creation
 
-Error Simulation
+When an agent is asked to create a test file:
 
-Support controlled failure modes for testing error paths
-Implement fallback behaviors when primary operations fail
-Expose hooks for test verification of error handling
+1. **Identify the correct location**: Place the test in the corresponding directory that mirrors the source code
+2. **Import Vitest utilities first**: Always start with `import { describe, expect, it, beforeEach, vi } from 'vitest';`
+3. **Set up logger mocks before other imports**: Use `setupLoggerMock()` before importing modules that use logging
+4. **Structure with describe/it nesting**: Group related tests logically
 
+Example test file structure:
 
-
-Implementation Pattern
-typescriptCopy// Example implementation following your standards
-import { cacheService } from '@/lib/cache/cache-service';
-import { edgeLogger } from '@/lib/logger/edge-logger';
-import { LOG_CATEGORIES } from '@/lib/logger/constants';
-
-export class AIAgentCursor {
-  private readonly lockPrefix = 'agent-cursor:';
-  private readonly lockTTL = 30; // seconds
-  
-  /**
-   * Updates the cursor position with appropriate locking and logging
-   * @param userId User ID 
-   * @param sessionId Session ID
-   * @param position New cursor position
-   */
-  async updatePosition(userId: string, sessionId: string, position: number): Promise<boolean> {
-    const startTime = Date.now();
-    const lockKey = `${this.lockPrefix}${sessionId}`;
-    
-    try {
-      // Attempt to acquire lock
-      const lockAcquired = await cacheService.setNX(lockKey, '1', this.lockTTL);
-      
-      if (!lockAcquired) {
-        edgeLogger.warn('Cursor update already in progress', {
-          category: LOG_CATEGORIES.AGENT,
-          sessionId,
-          userId: this.maskUserId(userId),
-          operation: 'updatePosition'
-        });
-        return false;
-      }
-      
-      // Perform the actual update
-      const success = await this.performPositionUpdate(sessionId, position);
-      
-      // Log completion
-      const duration = Date.now() - startTime;
-      edgeLogger.info('Cursor position updated', {
-        category: LOG_CATEGORIES.AGENT,
-        sessionId,
-        userId: this.maskUserId(userId),
-        operation: 'updatePosition',
-        durationMs: duration,
-        success
-      });
-      
-      return success;
-    } catch (error) {
-      // Log error with full context
-      edgeLogger.error('Failed to update cursor position', {
-        category: LOG_CATEGORIES.AGENT,
-        sessionId,
-        userId: this.maskUserId(userId),
-        operation: 'updatePosition',
-        error,
-        important: true
-      });
-      
-      return false;
-    } finally {
-      // Always release lock
-      await cacheService.delete(lockKey).catch(err => {
-        edgeLogger.warn('Failed to release cursor lock', {
-          category: LOG_CATEGORIES.AGENT,
-          sessionId,
-          operation: 'releaseLock',
-          error: err
-        });
-      });
-    }
-  }
-  
-  /**
-   * Performs the actual update operation
-   * @private
-   */
-  private async performPositionUpdate(sessionId: string, position: number): Promise<boolean> {
-    // Implementation here
-    return true;
-  }
-  
-  /**
-   * Masks user ID for privacy in logs
-   * @private
-   */
-  private maskUserId(userId: string): string {
-    if (!userId) return 'unknown';
-    return userId.substring(0, 8) + '...';
-  }
-}
-Client-Side Integration
-typescriptCopy// Store definition following your Zustand pattern
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
-
-interface CursorState {
-  positions: Record<string, number>;
-  updatePosition: (sessionId: string, position: number) => Promise<void>;
-}
-
-export const useCursorStore = create<CursorState>()(
-  persist(
-    (set, get) => ({
-      positions: {},
-      
-      updatePosition: async (sessionId, position) => {
-        // Optimistic update
-        set(state => ({
-          positions: {
-            ...state.positions,
-            [sessionId]: position
-          }
-        }));
-        
-        try {
-          // Send to server
-          const response = await fetch('/api/agent/cursor', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sessionId, position })
-          });
-          
-          if (!response.ok) {
-            throw new Error(`Failed to update cursor: ${response.status}`);
-          }
-        } catch (error) {
-          console.error('Cursor update failed:', error);
-          
-          // Revert optimistic update on failure
-          set(state => {
-            const newPositions = { ...state.positions };
-            delete newPositions[sessionId]; // Remove failed update
-            return { positions: newPositions };
-          });
-        }
-      }
-    }),
-    {
-      name: 'cursor-storage'
-    }
-  )
-);
-API Endpoint Implementation
-typescriptCopy// api/agent/cursor/route.ts
-import { NextRequest, NextResponse } from 'next/server';
-import { edgeLogger } from '@/lib/logger/edge-logger';
-import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { rateLimit } from '@/lib/middleware/rate-limit';
-import { corsMiddleware } from '@/lib/middleware/cors';
-import { AIAgentCursor } from '@/lib/agent/cursor';
-
-const cursor = new AIAgentCursor();
-
-export async function POST(req: NextRequest) {
-  // Apply middleware
-  const corsResult = await corsMiddleware(req);
-  if (corsResult.status !== 200) {
-    return corsResult;
-  }
-  
-  // Apply rate limiting
-  const rateLimit = await apiRateLimit(req);
-  if (rateLimit.status !== 200) {
-    return rateLimit;
-  }
-  
-  try {
-    const { sessionId, position } = await req.json();
-    
-    // Validation
-    if (!sessionId || typeof position !== 'number') {
-      return NextResponse.json(
-        { error: 'Invalid input' },
-        { status: 400 }
-      );
-    }
-    
-    // Extract user ID from auth
-    const { supabase } = await createServerSupabaseClient({ req });
-    const { data: { user } } = await supabase.auth.getUser();
-    
-    if (!user) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      );
-    }
-    
-    // Update position
-    const success = await cursor.updatePosition(user.id, sessionId, position);
-    
-    if (success) {
-      return NextResponse.json({ success: true });
-    } else {
-      return NextResponse.json(
-        { error: 'Failed to update cursor' },
-        { status: 500 }
-      );
-    }
-  } catch (error) {
-    edgeLogger.error('Error in cursor update endpoint', {
-      category: LOG_CATEGORIES.API,
-      error,
-      important: true
-    });
-    
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
-  }
-}
-Test Implementation
-typescriptCopy// tests/unit/agent/cursor.test.ts
+```typescript
+// 1. Import Vitest utilities
 import { describe, expect, it, beforeEach, vi } from 'vitest';
+
+// 2. Import and setup mocks
 import { setupLoggerMock, mockLogger } from '@/tests/helpers/mock-logger';
-
-// Set up mocks before importing modules that use them
 setupLoggerMock();
-vi.mock('@/lib/cache/cache-service');
 
-// Import the code to test
-import { AIAgentCursor } from '@/lib/agent/cursor';
-import { cacheService } from '@/lib/cache/cache-service';
-import { LOG_CATEGORIES } from '@/lib/logger/constants';
+// 3. Set up other mocks
+vi.mock('@/lib/cache/cache-service', () => ({
+  cacheService: {
+    get: vi.fn(),
+    set: vi.fn()
+  }
+}));
 
-describe('AIAgentCursor', () => {
-  let cursor: AIAgentCursor;
-  const userId = '5c80df74-1e2b-4435-89eb-b61b740120e9';
-  const sessionId = 'test-session-id';
+// 4. Import the module under test
+import { MyService } from '@/services/my-service';
+
+// 5. Test suite structure
+describe('MyService', () => {
+  let service: MyService;
   
-  beforeEach(async () => {
-    // Reset mocks
+  beforeEach(() => {
     mockLogger.reset();
-    vi.clearAllMocks();
-    
-    // Initialize service
-    cursor = new AIAgentCursor();
-    
-    // Mock cache service methods
-    vi.mocked(cacheService.setNX).mockResolvedValue(true);
-    vi.mocked(cacheService.delete).mockResolvedValue(1);
+    service = new MyService();
   });
   
-  describe('#updatePosition', () => {
-    it('should successfully update cursor position', async () => {
+  describe('#methodName', () => {
+    it('should do the expected behavior', async () => {
       // Arrange
-      const position = 42;
       
       // Act
-      const result = await cursor.updatePosition(userId, sessionId, position);
       
       // Assert
-      expect(result).toBe(true);
-      
-      // Verify logging
-      expect(mockLogger.info).toHaveBeenCalledWith(
-        'Cursor position updated',
-        expect.objectContaining({
-          category: LOG_CATEGORIES.AGENT,
-          sessionId,
-          operation: 'updatePosition',
-          success: true
-        })
-      );
-      
-      // Verify lock was acquired and released
-      expect(cacheService.setNX).toHaveBeenCalled();
-      expect(cacheService.delete).toHaveBeenCalled();
     });
-    
-    it('should handle lock acquisition failure', async () => {
-      // Arrange
-      vi.mocked(cacheService.setNX).mockResolvedValue(false);
-      
-      // Act
-      const result = await cursor.updatePosition(userId, sessionId, 42);
-      
-      // Assert
-      expect(result).toBe(false);
-      
-      // Verify logging
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        'Cursor update already in progress',
-        expect.objectContaining({
-          category: LOG_CATEGORIES.AGENT,
-          sessionId
-        })
-      );
-    });
-    
-    // Additional tests...
   });
 });
-These patterns maintain consistency with your existing middleware architecture and testing framework while implementing cursor functionality for your AI agent.
+```
+
+### 2. Mocking Best Practices for Agents
+
+When implementing mocks, follow these principles:
+
+1. **Module mocking order matters**:
+   - Define mocks before importing the module under test
+   - Don't reference variables inside `vi.mock()` that are defined later
+
+2. **Use the appropriate mocking technique**:
+   - `vi.mock()` for module-level mocking
+   - `vi.fn()` for function mocking
+   - `vi.spyOn()` for method mocking on instances
+
+3. **Reset mocks between tests**:
+   - Use `vi.clearAllMocks()` in `beforeEach`
+   - Reset the logger with `mockLogger.reset()`
+
+4. **For partial module mocking**:
+   - Use `importOriginal` to keep original functionality
+   - Only override specific parts
+
+```typescript
+// Example of correct module mocking
+vi.mock('@/lib/cache/cache-service', () => {
+  // Define mock inside the factory function
+  const mockCache = {
+    get: vi.fn(),
+    set: vi.fn()
+  };
+  
+  return {
+    cacheService: mockCache
+  };
+});
+
+// Example of partial module mocking
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    edgeLogger: {
+      info: vi.fn(),
+      error: vi.fn()
+    }
+  };
+});
+```
+
+### 3. Testing Asynchronous Code
+
+When testing async code:
+
+1. **Always use `async/await` syntax** for clarity
+2. **Test both success and error paths**
+3. **Verify error handling and logging**
+
+```typescript
+it('should handle async errors correctly', async () => {
+  // Arrange
+  vi.mocked(cacheService.get).mockRejectedValue(new Error('Redis error'));
+  
+  // Act
+  await service.someAsyncMethod();
+  
+  // Assert
+  expect(mockLogger.error).toHaveBeenCalledWith(
+    expect.stringContaining('Failed'),
+    expect.objectContaining({
+      category: LOG_CATEGORIES.CACHE,
+      error: expect.any(Error)
+    })
+  );
+});
+```
+
+### 4. Verification Guidelines
+
+For comprehensive test assertions:
+
+1. **Test both return values and side effects**
+2. **Verify logging with appropriate categories**
+3. **Check both happy path and error conditions**
+4. **Validate performance metrics where relevant**
+
+```typescript
+// Example of comprehensive assertion
+expect(result).toEqual(expectedValue);
+expect(mockLogger.info).toHaveBeenCalledWith(
+  expect.stringContaining('Success'),
+  expect.objectContaining({
+    category: LOG_CATEGORIES.API,
+    durationMs: expect.any(Number)
+  })
+);
+```
+
+### 5. Testing UI Components (React)
+
+For UI component testing:
+
+1. **Mock the store/context** the component uses
+2. **Test rendering with different states**
+3. **Verify event handlers work correctly**
+4. **Test accessibility concerns**
+
+```typescript
+// Example for React component testing
+vi.mock('@/stores/chat-store', () => ({
+  useChatStore: vi.fn().mockReturnValue({
+    conversations: [
+      { id: '1', title: 'Test Chat' }
+    ],
+    addConversation: vi.fn()
+  })
+}));
+
+// Then test component behavior
+```
+
+## Test Examples for Common Scenarios
+
+### 1. Service Layer Testing
+
+```typescript
+// Service test example
+describe('DocumentRetrievalService', () => {
+  describe('#fetchDocument', () => {
+    it('should return cached document when available', async () => {
+      // Arrange
+      const docId = 'test-id';
+      const cachedDoc = { id: docId, content: 'test' };
+      vi.mocked(cacheService.get).mockResolvedValue(cachedDoc);
+      
+      // Act
+      const result = await documentService.fetchDocument(docId);
+      
+      // Assert
+      expect(result).toEqual(cachedDoc);
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        expect.stringContaining('Cache hit'),
+        expect.objectContaining({
+          category: LOG_CATEGORIES.CACHE,
+          documentId: docId
+        })
+      );
+    });
+    
+    it('should fetch from database when cache misses', async () => {
+      // Test implementation
+    });
+  });
+});
+```
+
+### 2. Store/State Management Testing
+
+```typescript
+// Store test example
+describe('ChatStore', () => {
+  describe('#addMessage', () => {
+    it('should add message optimistically', () => {
+      // Arrange
+      const store = useChatStore.getState();
+      const chatId = 'test-chat';
+      const message = { id: 'msg1', content: 'Test' };
+      
+      // Act
+      store.addMessage(chatId, message);
+      
+      // Assert
+      const updatedState = useChatStore.getState();
+      expect(updatedState.conversations[chatId].messages).toContainEqual(message);
+    });
+    
+    it('should handle server errors', async () => {
+      // Test implementation
+    });
+  });
+});
+```
+
+## Common Testing Issues and Solutions
+
+### 1. "Cannot access X before initialization" with vi.mock()
+
+This error occurs due to the hoisting behavior of `vi.mock()`.
+
+**Solution**:
+- Define mock implementations inside the factory function
+- Follow correct import ordering
+- Update mock behavior in `beforeEach`
+
+```typescript
+// Correct approach
+vi.mock('@/utils/supabase/server', () => {
+  return {
+    createClient: vi.fn().mockImplementation(() => ({
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis()
+    }))
+  };
+});
+
+// Then in beforeEach, update for specific tests
+beforeEach(() => {
+  vi.mocked(createClient).mockImplementation(() => ({
+    from: vi.fn().mockReturnThis(),
+    select: vi.fn().mockReturnValue({ data: testData, error: null })
+  }));
+});
+```
+
+### 2. Tests Passing in Isolation but Failing Together
+
+**Solution**:
+- Reset mocks in `beforeEach`
+- Restore global overrides in `afterEach`
+- Avoid shared state in imports
+
+```typescript
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockLogger.reset();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+```
+
+### 3. Missing Global Dependencies in Test Environment
+
+**Solution**:
+- Mock global objects with `vi.stubGlobal`
+- Configure Vitest with appropriate environment options
+
+```typescript
+beforeEach(() => {
+  vi.stubGlobal('crypto', {
+    randomUUID: () => 'test-uuid-12345'
+  });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+```
+
+## Checklist for Agents When Writing Tests
+
+✅ Start with the proper imports and mock setup  
+✅ Place the test file in the correct directory  
+✅ Structure tests logically with describe/it  
+✅ Mock external dependencies appropriately  
+✅ Reset mocks between tests  
+✅ Test both happy paths and error conditions  
+✅ Verify logging behavior  
+✅ Include performance metrics assertions  
+✅ Test asynchronous behavior correctly  
+✅ Follow AAA pattern (Arrange-Act-Assert)
+
+## Generating Tests with Cursor
+
+When using Cursor to generate tests:
+
+1. Navigate to the file you want to test
+2. Use the command palette to select "Generate Test"
+3. Cursor will create a test file following these guidelines
+4. Review the generated test and adjust as needed
+
+For more help, use `/test` commands in Cursor to access testing utilities.

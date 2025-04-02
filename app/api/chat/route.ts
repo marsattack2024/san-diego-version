@@ -6,7 +6,7 @@
  * to the chat engine components.
  */
 
-import { createChatEngine } from '@/lib/chat-engine/core';
+import { createChatEngine } from '@/lib/chat-engine/chat-engine.facade';
 import { detectAgentType } from '@/lib/chat-engine/agent-router';
 import { createToolSet } from '@/lib/tools/registry.tool';
 import { prompts } from '@/lib/chat-engine/prompts';

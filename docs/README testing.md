@@ -286,6 +286,85 @@ vi.mock('@upstash/redis', () => {
 });
 ```
 
+### Partial Module Mocking
+
+Sometimes you need to mock only specific parts of a module while keeping the rest of the module functionality intact. Vitest provides the `importOriginal` helper for this:
+
+```typescript
+// Mock only specific parts of a module
+vi.mock('@/lib/logger/edge-logger', async (importOriginal) => {
+  // Get the original module
+  const actual = await importOriginal();
+  
+  // Return a merged version with your mocks
+  return {
+    ...actual, // Keep all original exports
+    edgeLogger: {
+      ...actual.edgeLogger, // Keep original logger methods
+      error: vi.fn(), // Mock only the error method
+      warn: vi.fn()    // Mock only the warn method
+    }
+  };
+});
+```
+
+This approach is particularly useful when:
+1. You need to mock only a few methods but keep the rest of the module behavior
+2. The module has constants or configurations that are referenced by the code under test
+3. You're seeing errors like "No X export is defined on the Y mock"
+
+For example, when mocking a logger module that also exports constants:
+
+```typescript
+// Original module exports both a logger and constants
+// logger-constants.ts
+export const LOG_CATEGORIES = {
+  API: 'api',
+  CACHE: 'cache'
+};
+
+export const THRESHOLDS = {
+  RAG_TIMEOUT: 5000
+};
+
+// logger.ts
+export const edgeLogger = {
+  info: (msg, meta) => console.log(msg, meta),
+  error: (msg, meta) => console.error(msg, meta)
+};
+```
+
+When mocking this module, make sure to include the constants:
+
+```typescript
+// Correct mock that preserves constants
+vi.mock('@/lib/logger', () => ({
+  edgeLogger: {
+    info: vi.fn(),
+    error: vi.fn()
+  },
+  LOG_CATEGORIES: {
+    API: 'api',
+    CACHE: 'cache'
+  },
+  THRESHOLDS: {
+    RAG_TIMEOUT: 5000
+  }
+}));
+
+// Or using importOriginal for more maintainability
+vi.mock('@/lib/logger', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    edgeLogger: {
+      info: vi.fn(),
+      error: vi.fn()
+    }
+  };
+});
+```
+
 ## Logging Standards in Tests
 
 To ensure clean test output and proper verification of logging:
@@ -700,3 +779,145 @@ function setupFailedOpenAIMock() {
 5. **Missing Error Tests**: Include explicit tests for error paths, not just happy paths
 
 By following these guidelines, we ensure comprehensive testing of the title generation service with appropriate coverage of all functionality, error handling, and integration points.
+
+## Common Testing Issues and Solutions
+
+### Issue: "Cannot access X before initialization" with vi.mock()
+
+This error occurs due to the hoisting behavior of `vi.mock()` calls. Vitest automatically moves these calls to the top of the file, so any variables referenced inside the mock factory function must be defined before this hoisting occurs.
+
+#### Example Error:
+
+```
+ReferenceError: Cannot access 'mockSupabase' before initialization
+```
+
+#### Solution:
+
+1. Don't reference variables defined in the test file inside a `vi.mock()` factory:
+
+   ```typescript
+   // ❌ INCORRECT
+   const mockSupabase = { from: vi.fn() };
+   vi.mock('@/utils/supabase/server', () => ({
+     createClient: vi.fn().mockResolvedValue(mockSupabase)
+   }));
+   
+   // ✅ CORRECT
+   vi.mock('@/utils/supabase/server', () => {
+     const mockSupabaseClient = { from: vi.fn() };
+     return {
+       createClient: vi.fn().mockResolvedValue(mockSupabaseClient)
+     };
+   });
+   ```
+
+2. Follow the correct ordering of imports and mocks:
+
+   ```typescript
+   // First, import Vitest
+   import { vi, describe, it, expect } from 'vitest';
+   
+   // Next, set up logger mocks before importing code that uses the logger
+   import { setupLoggerMock } from '../../helpers/mock-logger';
+   const mockLogger = setupLoggerMock();
+   
+   // Then, mock any modules used by the code under test
+   vi.mock('@/utils/supabase/server', () => {
+     // mock implementation
+   });
+   
+   // Finally, import the module under test
+   import { MyService } from '@/services/my-service';
+   ```
+
+3. Initialize mock functions in `beforeEach` after importing:
+
+   ```typescript
+   import { createClient } from '@/utils/supabase/server';
+   
+   describe('MyTest', () => {
+     beforeEach(() => {
+       // Now we can update the mock behavior for each test
+       (createClient as unknown as Mock).mockImplementation(() => ({
+         from: vi.fn().mockReturnThis(),
+         select: vi.fn().mockReturnValue(/* test-specific value */)
+       }));
+     });
+   });
+   ```
+
+### Issue: Tests Passing in Isolation but Failing Together
+
+Sometimes tests pass when run individually but fail when run together. This usually points to shared state between tests.
+
+#### Solution:
+
+1. Reset mocks in `beforeEach` to ensure each test starts with a clean slate:
+
+   ```typescript
+   beforeEach(() => {
+     vi.clearAllMocks();
+     mockLogger.reset();
+   });
+   ```
+
+2. Restore any global overrides in `afterEach`:
+
+   ```typescript
+   afterEach(() => {
+     vi.unstubAllGlobals();
+   });
+   ```
+
+3. Avoid shared state in imports - use functions that create new instances instead:
+
+   ```typescript
+   // ❌ INCORRECT: Shared state in imports
+   export const sharedCache = new Map();
+   
+   // ✅ CORRECT: Factory function for clean instances
+   export function createCache() {
+     return new Map();
+   }
+   ```
+
+### Issue: Missing Global Dependencies in Test Environment
+
+Tests may fail because the Node.js test environment lacks browser globals like `fetch` or `crypto`.
+
+#### Solution:
+
+1. Mock global objects with `vi.stubGlobal`:
+
+   ```typescript
+   beforeEach(() => {
+     vi.stubGlobal('crypto', {
+       randomUUID: () => 'test-uuid-12345678'
+     });
+     
+     global.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: 'test' })));
+   });
+   
+   afterEach(() => {
+     vi.unstubAllGlobals();
+   });
+   ```
+
+2. For `fetch`, Vitest provides a built-in polyfill if you configure it in `vitest.config.ts`:
+
+   ```typescript
+   export default defineConfig({
+     test: {
+       environment: 'node',
+       setupFiles: ['./tests/setup.ts'],
+       globals: true,
+       environmentOptions: {
+         jsdom: {
+           // Add fetch and other browser APIs
+           customExports: ['fetch', 'Response', 'Request', 'Headers']
+         }
+       }
+     }
+   });
+   ```
