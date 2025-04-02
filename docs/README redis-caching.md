@@ -4,18 +4,102 @@ This document outlines the Redis caching architecture in our application, using 
 
 ## Current Architecture
 
-The application uses a standardized caching approach through a central `CacheService` class:
+The application uses a standardized caching approach through a central `CacheService` class and unified Redis client:
 
-1. **Centralized Cache Service (`cacheService`)** - Core implementation in `lib/cache/cache-service.ts` with consistent interface.
-2. **Domain-specific Methods** - Specialized methods for RAG results, web scraping, and deep search.
-3. **Edge Compatibility** - Works in both Edge and Node.js environments with proper fallbacks.
-4. **Complete Error Handling** - Graceful degradation with in-memory fallback when Redis is unavailable.
-5. **Diagnostic Tools** - Debug endpoints in `/app/api/debug/cache/` and related routes.
+1. **Standardized Redis Client** - Unified client implementation in `lib/utils/redis-client.ts` provides consistent connection handling across the application
+2. **Centralized Cache Service (`cacheService`)** - Core implementation in `lib/cache/cache-service.ts` with consistent interface
+3. **Domain-specific Methods** - Specialized methods for RAG results, web scraping, and deep search
+4. **Edge Compatibility** - Works in both Edge and Node.js environments with proper fallbacks
+5. **Complete Error Handling** - Graceful degradation with in-memory fallback when Redis is unavailable
+6. **Diagnostic Tools** - Debug endpoints in `/app/api/debug/cache/` and enhanced Redis test utilities in `/app/api/debug/redis-test/`
+
+## Standardized Redis Client
+
+The application now uses a standardized Redis client implementation to ensure consistent connection handling, error recovery, and configuration across the entire codebase.
+
+### Key Features
+
+- **Singleton Pattern** - Provides a shared Redis client instance to minimize connection overhead
+- **Connection Priority** - Attempts connections in a consistent order:
+  1. Vercel KV REST API (`KV_REST_API_URL` + `KV_REST_API_TOKEN`)
+  2. Upstash Redis REST API (`UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN`)
+  3. Redis URL (`REDIS_URL`)
+  4. Standard Redis connection parameters (`REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`)
+- **Automatic Fallback** - Switches to in-memory implementation when Redis is unavailable
+- **Comprehensive Error Handling** - Graceful error recovery with detailed logging
+- **Complete API Compatibility** - Implements all Redis methods needed by the application
+
+### Implementation
+
+The Redis client is implemented in `lib/utils/redis-client.ts` and provides these key functions:
+
+```typescript
+// Get the shared Redis client instance (singleton pattern)
+export async function getRedisClient(): Promise<Redis | any> {
+  if (!redisClientPromise) {
+    redisClientPromise = createRedisClient();
+  }
+  
+  return redisClientPromise;
+}
+
+// Create a fresh Redis client (for specialized use cases)
+export async function createFreshRedisClient(): Promise<Redis | any> {
+  return createRedisClient();
+}
+
+// Reset the Redis client singleton (useful for testing or recovery)
+export function resetRedisClient(): void {
+  redisClientPromise = null;
+}
+```
+
+### Connection Management
+
+The client implements a robust connection strategy with detailed logging:
+
+```typescript
+async function createRedisClient(): Promise<Redis | any> {
+  // Check for connection details with specific priority
+  const kvRestUrl = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
+  const kvRestToken = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+  const redisUrl = process.env.REDIS_URL;
+  const redisHost = process.env.REDIS_HOST;
+  
+  // Log initialization with environment details
+  edgeLogger.info('Initializing Redis client', {
+    category: LOG_CATEGORIES.SYSTEM,
+    operation: 'redis_init',
+    envVarsPresent: {
+      KV_REST_API_URL: !!kvRestUrl,
+      KV_REST_API_TOKEN: !!kvRestToken,
+      REDIS_URL: !!redisUrl,
+      REDIS_HOST: !!redisHost
+    }
+  });
+  
+  try {
+    // Try connections in priority order with complete error handling
+    // Falls back to in-memory implementation when needed
+  } catch (error) {
+    // Detailed error logging and graceful fallback
+  }
+}
+```
+
+### Integration Points
+
+The standardized Redis client has been integrated with:
+
+1. **Cache Service** (`lib/cache/cache-service.ts`) - Primary interface for all caching operations
+2. **Rate Limiting** (`lib/widget/rate-limit.ts`) - For distributed rate limiting
+3. **Debug Endpoints** - For cache inspection, repair, and testing
 
 ## Architecture Overview
 
 ### Core Components
 
+- **`redis-client.ts`** - Standardized Redis client implementation
 - **`CacheService` Class** - Primary interface for all caching operations
 - **`constants.ts`** - Centralized TTL values and namespace prefixes
 - **Edge-compatible Key Generation** - Using Web Crypto API for consistent hashing
@@ -32,6 +116,7 @@ The cache service is integrated with these key application components:
 2. **Web Scraper** (`puppeteer.service.ts`) - Caches scraped web content
 3. **Deep Search** (`perplexity.service.ts`) - Caches Perplexity API responses
 4. **Chat Title Generator** (`title-service.ts`) - Caches generated conversation titles
+5. **Rate Limiting** (`rate-limit.ts`) - For widget chat rate limiting
 
 ### Cache Namespaces
 
@@ -88,16 +173,18 @@ private async hashKey(input: string): Promise<string> {
 
 ### In-memory Fallback
 
-The service provides automatic fallback to in-memory caching when Redis is unavailable:
+The Redis client provides automatic fallback to in-memory implementation when Redis is unavailable:
 
 ```typescript
 function createInMemoryFallback() {
   const store = new Map<string, { value: any, expiry: number | null }>();
   
   edgeLogger.info('Creating in-memory cache fallback', {
-    category: LOG_CATEGORIES.SYSTEM
+    category: LOG_CATEGORIES.SYSTEM,
+    operation: 'redis_fallback_init'
   });
   
+  // Implement Redis-compatible interface with in-memory storage
   return {
     async set(key: string, value: any, options?: { ex?: number }): Promise<string> {
       const expiry = options?.ex ? Date.now() + (options.ex * 1000) : null;
@@ -132,6 +219,16 @@ function createInMemoryFallback() {
       }
       
       return 1;
+    },
+    
+    async eval(): Promise<any> {
+      // Simple stub for eval
+      return 0;
+    },
+    
+    async ttl(): Promise<number> {
+      // Simple stub for ttl
+      return 0;
     }
   };
 }
@@ -143,17 +240,58 @@ This implementation ensures:
 2. **Transparent Switch** - Applications using the cache service don't need to handle the fallback
 3. **TTL Support** - In-memory implementation supports expiration just like Redis
 4. **Proper Logging** - Logs when fallback is activated for monitoring
+5. **API Compatibility** - Implements all required Redis methods used by the application
 
-### Error Handling
+### Diagnostic Utilities
 
-Comprehensive error handling ensures the application remains functional even when caching fails:
+The application now includes enhanced Redis diagnostic tools:
 
-1. **Connection Failures** - Automatically falls back to in-memory caching
-2. **Operation Errors** - Individual operation failures are logged but don't throw exceptions
-3. **Serialization Issues** - Handles parsing errors with appropriate logging
-4. **Cache Repair Tools** - Debug endpoints to fix serialization issues
+1. **Redis Test Endpoint** (`/api/debug/redis-test`) - Tests Redis connectivity and reports detailed results
+2. **Cache Inspector** (`/api/debug/cache-inspector`) - Inspects cached values with parsing diagnostics
+3. **Cache Repair** (`/api/debug/cache-repair`) - Fixes serialization issues in cached values
 
-### Performance Monitoring
+Example of using the Redis test endpoint:
+```
+# Test the singleton Redis client
+GET /api/debug/redis-test
+
+# Test with a fresh Redis client instance
+GET /api/debug/redis-test?mode=fresh
+
+# Reset the Redis client singleton and test
+GET /api/debug/redis-test?reset=true
+```
+
+Response includes detailed diagnostic information:
+```json
+{
+  "success": true,
+  "mode": "singleton",
+  "reset": false,
+  "metrics": {
+    "totalTimeMs": 123
+  },
+  "tests": {
+    "writeSuccessful": true,
+    "readSuccessful": true,
+    "readValueCorrect": true,
+    "deletionSuccessful": true
+  },
+  "client": {
+    "implementation": "redis",
+    "mode": "singleton"
+  },
+  "environment": {
+    "KV_REST_API_URL": true,
+    "KV_REST_API_TOKEN": true,
+    "REDIS_URL": true,
+    "REDIS_TOKEN": false,
+    "VERCEL_ENV": "development"
+  }
+}
+```
+
+## Performance Monitoring
 
 The cache service includes built-in performance monitoring:
 
@@ -200,410 +338,89 @@ This provides:
 - Hit rate calculation for monitoring efficiency
 - Detailed logging for troubleshooting
 
-## Domain-specific Methods
+## Best Practices for Using Redis
 
-### RAG-specific Caching
-
-The `findSimilarDocumentsOptimized` function in `document-retrieval.ts` uses cache for RAG results:
+### 1. Always use the Standardized Client
 
 ```typescript
-export async function findSimilarDocumentsOptimized(
-    queryText: string,
-    options: DocumentSearchOptions = {}
-): Promise<{ documents: RetrievedDocument[], metrics: DocumentSearchMetrics }> {
-    const ragOperationId = `rag-${Date.now().toString(36)}`;
-    const startTime = performance.now();
-    const tenantId = options.tenantId || 'global';
+// Import from the standardized location
+import { getRedisClient } from '@/lib/utils/redis-client';
 
-    try {
-        // Use the cacheService for RAG results, passing options with tenantId
-        const cachedResults = await cacheService.getRagResults<{
-            documents: RetrievedDocument[],
-            metrics: DocumentSearchMetrics
-        }>(queryText, { 
-            tenantId, 
-            metadataFilter: options.metadataFilter,
-            limit: options.limit 
-        });
+// Use the shared client instance
+const redis = await getRedisClient();
 
-        if (cachedResults) {
-            edgeLogger.info('Using cached RAG results', {
-                operation: OPERATION_TYPES.RAG_SEARCH,
-                ragOperationId,
-                documentCount: cachedResults.documents.length,
-                source: 'cache'
-            });
-
-            // Add fromCache flag for transparency
-            return {
-                ...cachedResults,
-                metrics: {
-                    ...cachedResults.metrics,
-                    fromCache: true
-                }
-            };
-        }
-
-        // No valid cache hit, perform the search
-        const documents = await findSimilarDocuments(queryText, options);
-        const retrievalTimeMs = Math.round(performance.now() - startTime);
-
-        // Calculate metrics
-        const metrics = calculateSearchMetrics(documents, retrievalTimeMs);
-
-        // Create result object
-        const result = { documents, metrics };
-
-        // Cache the results using the standardized approach
-        await cacheService.setRagResults(queryText, result, {
-            tenantId,
-            metadataFilter: options.metadataFilter,
-            limit: options.limit
-        });
-
-        return result;
-    } catch (error) {
-        // Error handling
-    }
-}
+// Or create a fresh client for specialized cases
+const freshRedis = await createFreshRedisClient();
 ```
 
-The implementation in `CacheService` handles complex query parameters:
+### 2. Use the Cache Service for Business Logic
 
 ```typescript
-async getRagResults<T>(query: string, options?: any): Promise<T | null> {
-  // Normalize inputs
-  const normalizedQuery = query.toLowerCase().trim();
-  
-  // Create a stable representation of the query and options
-  const keyContent = {
-    q: normalizedQuery,
-    opts: options || {}
-  };
-  
-  // Generate a hash for the cache key
-  const hashInput = this.stableStringify(keyContent);
-  const hashedKey = await this.hashKey(hashInput);
-  
-  return this.get<T>(this.generateKey(hashedKey, CACHE_NAMESPACES.RAG));
-}
+import { cacheService } from '@/lib/cache/cache-service';
+
+// Basic caching
+await cacheService.set('my-key', myValue, { ttl: 3600 });
+const value = await cacheService.get('my-key');
+
+// Domain-specific caching
+await cacheService.setRagResults(query, ragResults);
+const cachedResults = await cacheService.getRagResults(query);
 ```
 
-### Web Scraper Caching
-
-The `PuppeteerService` class caches scraped content:
+### 3. Implement Proper Error Handling
 
 ```typescript
-// Check cache first
-const cachedContent = await cacheService.getScrapedContent(sanitizedUrl);
-if (cachedContent) {
-    // Use cached content
-    return formatScrapedContent(cachedContent);
+try {
+  const value = await cacheService.get('my-key');
+  // Use the value if available
+} catch (error) {
+  // Log the error but continue - don't let cache failures break the application
+  logger.error('Cache error', { error });
+  // Proceed with a fallback approach
 }
-
-// If no cache hit, scrape the URL and then cache the result
-const result = await this.callPuppeteerScraper(sanitizedUrl);
-await cacheService.setScrapedContent(sanitizedUrl, JSON.stringify(result));
 ```
 
-The implementation in `CacheService`:
+### 4. Add New Cache Methods to the Service
+
+When adding new cached content types, extend the `CacheService` interface and implementation rather than accessing Redis directly:
 
 ```typescript
-async getScrapedContent(url: string): Promise<string | null> {
-  // Normalize URL
-  const normalizedUrl = url.toLowerCase().trim();
-  const hashedUrl = await this.hashKey(normalizedUrl);
+// In cache-service.ts
+export interface CacheServiceInterface {
+  // Existing methods...
   
-  return this.get<string>(this.generateKey(hashedUrl, CACHE_NAMESPACES.SCRAPER));
-}
-
-async setScrapedContent(url: string, content: string): Promise<void> {
-  // Normalize URL
-  const normalizedUrl = url.toLowerCase().trim();
-  const hashedUrl = await this.hashKey(normalizedUrl);
-  
-  return this.set<string>(
-    this.generateKey(hashedUrl, CACHE_NAMESPACES.SCRAPER),
-    content,
-    { ttl: CACHE_TTL.SCRAPER }
-  );
+  // Add new methods
+  getMyNewContentType(id: string): Promise<MyType | null>;
+  setMyNewContentType(id: string, content: MyType): Promise<void>;
 }
 ```
 
-### Deep Search Caching
+## Troubleshooting
 
-The `PerplexityService` implements caching for deep search results:
+### Connection Issues
 
-```typescript
-public async search(query: string): Promise<PerplexitySearchResult> {
-    const startTime = Date.now();
-    const operationId = `perplexity-${Date.now().toString(36)}`;
+If Redis connection issues are detected:
 
-    try {
-        // Ensure the client is initialized before proceeding
-        this.initialize();
+1. **Check Environment Variables** - Verify correct configuration in `.env` or Vercel dashboard
+2. **Run Redis Test** - Use `/api/debug/redis-test` endpoint to diagnose connection issues
+3. **Check Logs** - Look for `redis_init` operation logs with connection results
+4. **Verify Network Rules** - Ensure no firewall or network rules blocking Redis access
+5. **Test Redis Directly** - Use Redis CLI or dashboard to verify access to the instance
 
-        // Check cache first to avoid unnecessary API calls
-        const cachedResults = await cacheService.getDeepSearchResults<PerplexitySearchResult>(query);
-        if (cachedResults) {
-            edgeLogger.info("Using cached deep search results", {
-                category: LOG_CATEGORIES.TOOLS,
-                operation: "perplexity_cache_hit",
-                operationId,
-                queryLength: query.length,
-                responseLength: cachedResults.content.length
-            });
-            
-            return cachedResults;
-        }
+### Serialization Issues
 
-        // API call implementation...
+For serialization issues (double stringification, etc.):
 
-        // Create formatted result
-        const searchResult: PerplexitySearchResult = {
-            content,
-            model: data.model,
-            timing: { total: duration }
-        };
+1. **Inspect Value** - Use `/api/debug/cache-inspector?key=your-key` to examine the cached value
+2. **Repair Value** - Use `/api/debug/cache-repair?key=your-key` to fix serialization issues
+3. **Check Serialization** - Review code that serializes values before caching
+4. **Update Application Code** - Fix improper JSON stringification in your application
 
-        // Cache the search result
-        await cacheService.setDeepSearchResults(query, searchResult);
-        
-        edgeLogger.debug("Perplexity result cached", {
-            category: LOG_CATEGORIES.TOOLS,
-            operation: "perplexity_result_cached",
-            operationId,
-            queryLength: query.length,
-            responseLength: content.length
-        });
+### Performance Issues
 
-        return searchResult;
-    } catch (error) {
-        // Error handling
-    }
-}
-```
+For performance concerns:
 
-The implementation in `CacheService`:
-
-```typescript
-async getDeepSearchResults<T>(query: string): Promise<T | null> {
-  try {
-    // Normalize query
-    const normalizedQuery = query.toLowerCase().trim();
-    const hashedQuery = await this.hashKey(normalizedQuery);
-    const key = this.generateKey(hashedQuery, CACHE_NAMESPACES.DEEP_SEARCH);
-    const cachedData = await this.get<T>(key);
-    
-    if (cachedData) {
-      edgeLogger.info('Cache hit for deep search query', { 
-        category: LOG_CATEGORIES.SYSTEM, 
-        service: 'cache-service', 
-        query,
-        key
-      });
-      return cachedData;
-    }
-    
-    edgeLogger.info('Cache miss for deep search query', { 
-      category: LOG_CATEGORIES.SYSTEM, 
-      service: 'cache-service',
-      query,
-      key
-    });
-    return null;
-  } catch (error) {
-    edgeLogger.error('Error retrieving deep search results from cache', {
-      category: LOG_CATEGORIES.SYSTEM,
-      service: 'cache-service',
-      error: error instanceof Error ? error.message : String(error)
-    });
-    return null;
-  }
-}
-```
-
-## Diagnostic Tools
-
-The application includes several debugging endpoints for cache management:
-
-1. **Cache Inspector** (`/api/debug/cache-inspector`) - Advanced diagnostic tool
-2. **Cache Test** (`/api/debug/cache-test`) - Testing different cache operations
-3. **Cache Value Viewer** (`/api/debug/cache`) - Simple key value inspection
-4. **Cache Repair** (`/api/debug/cache-repair`) - Fixes serialization issues
-
-## Testing Strategy
-
-The caching system is thoroughly tested through:
-
-1. **Unit Tests** - Comprehensive tests for the `CacheService` class:
-   ```typescript
-   it('should set and get RAG results', async () => {
-     const query = 'example RAG query';
-     const results = { documents: [{ id: '1', content: 'test content' }] };
-     const options = { tenantId: 'test' };
-     
-     await cacheService.setRagResults(query, results, options);
-     const retrieved = await cacheService.getRagResults<typeof results>(query, options);
-     
-     expect(retrieved).toEqual(results);
-   });
-   ```
-
-2. **Mock Implementation** - Dedicated mock implementation for testing:
-   ```typescript
-   export class MockRedisClient {
-     private store = new Map<string, any>();
-     private expirations = new Map<string, number>();
-   
-     async set(key: string, value: any, options?: { ex?: number }): Promise<string> {
-       this.store.set(key, value);
-       
-       // Set expiration if provided
-       if (options?.ex) {
-         const expiry = Date.now() + (options.ex * 1000);
-         this.expirations.set(key, expiry);
-       } else {
-         this.expirations.delete(key);
-       }
-       
-       return 'OK';
-     }
-   
-     // Other methods...
-   }
-   ```
-
-3. **Integration Tests** - Testing integration with RAG, web scraper, etc.
-4. **Error Cases** - Testing behavior under error conditions
-
-## Client-side Caching
-
-The application also implements a client-side caching layer for browser environments:
-
-```typescript
-export const clientCache = {
-  sessionStorage: typeof window !== 'undefined' ? window.sessionStorage : null,
-  localStorage: typeof window !== 'undefined' ? window.localStorage : null,
-  
-  // Check if cache is available
-  isAvailable(): boolean {
-    return !!(this.sessionStorage || this.localStorage);
-  },
-  
-  // Get storage for a specific key
-  getStorageForKey(key: string): Storage | null {
-    // Use sessionStorage for transient data, localStorage for persistent
-    return key.startsWith('persist:') ? this.localStorage : this.sessionStorage;
-  },
-  
-  // Get item from cache
-  get(key: string): any {
-    const storage = this.getStorageForKey(key);
-    if (!storage) return null;
-    
-    try {
-      // Get the stored item
-      const item = storage.getItem(key);
-      if (!item) return null;
-      
-      // Check if there's a custom TTL
-      const ttlStr = storage.getItem(`${key}_ttl`);
-      if (ttlStr) {
-        const ttl = parseInt(ttlStr, 10);
-        const timestamp = parseInt(storage.getItem(`${key}_timestamp`) || '0', 10);
-        
-        // Check if expired
-        if (Date.now() > timestamp + ttl) {
-          this.remove(key);
-          return null;
-        }
-      }
-      
-      // Parse and return the item
-      return JSON.parse(item);
-    } catch (error) {
-      console.error('Cache get error:', error);
-      return null;
-    }
-  },
-  
-  // Additional methods for set, remove, clear, etc.
-}
-```
-
-This client-side implementation:
-- Provides TTL support similar to the server implementation
-- Handles storage quotas by clearing old items when needed
-- Differentiates between session and persistent storage
-- Includes proper error handling
-
-## Future Enhancements
-
-Potential areas for future improvement:
-
-1. **Enhanced Analytics** - More detailed cache performance metrics
-2. **Cache Prefetching** - Proactive caching of likely-to-be-requested data
-3. **Distributed Cache Invalidation** - Selective invalidation of related cache entries
-4. **Compression** - Compression for large cached values to save space
-5. **Tiered Caching** - Multiple cache levels with different TTLs
-6. **Advanced Client-side Integration** - Tighter integration between server and client caches
-7. **Circuit Breaker Pattern** - Smart degradation for Redis errors
-8. **Key Eviction Policies** - Custom eviction strategies beyond TTL
-
-## Migration Status
-
-The standardization effort has been completed:
-
-✅ All direct Redis client usage has been removed  
-✅ Consistent key/TTL management is implemented  
-✅ Serialization and deserialization are standardized  
-✅ Error handling with fallbacks is in place  
-✅ Edge compatibility is ensured  
-✅ The legacy `chatEngineCache` service has been removed  
-✅ Performance monitoring and logging implemented
-
-## Anonymous Session Caching
-
-The application handles caching for anonymous sessions (such as the widget chat) with the same reliability as authenticated sessions:
-
-1. **Shared Cache Implementation:** Both authenticated and anonymous sessions use the same Redis caching layer
-2. **No User-Specific Cache Keys:** For anonymous sessions, the `tenantId` defaults to 'global'
-3. **Cache Hits Are Logged:** Even for anonymous sessions, cache hits are properly logged at the RAG operation level
-4. **Widget Chat Notes:** The widget chat uses anonymous sessions and skips message persistence, but fully utilizes the cache
-5. **Monitoring Anonymous Cache Usage:** Look for RAG operation logs with `fromCache: true` and `source: 'cache'`
-
-When troubleshooting cache issues for anonymous sessions, ensure you're looking at the right log category:
-- RAG operation logs will show cache hits/misses with `operation: 'rag_search'`
-- Cache service logs show general cache stats periodically
-- Message persistence logs won't show tool usage for anonymous sessions
-
-### Example Cache Hit Log for Anonymous Session
-
-```
-🔵 Using cached RAG results (tools)
-  ragOperationId=rag-ltr95z
-  documentCount=3
-  documentIds=["doc123","doc456","doc789"]
-  topSimilarityScore=0.92
-  source=cache
-  durationMs=58
-  slow=false
-  important=false
-  status=completed_from_cache
-```
-
-The cache effectiveness for anonymous sessions can be verified by:
-1. Looking for decreasing `durationMs` values in repeated similar queries
-2. Checking for `fromCache: true` in RAG operation logs
-3. Monitoring the overall cache hit rate in periodic cache stats
-
-## Summary
-
-The Redis caching system provides a robust, efficient, and serverless-friendly solution for various caching needs in the application. It follows best practices for key generation, error handling, and TTL management while providing specialized methods for different use cases. The implementation ensures:
-
-1. **Reliability** - With in-memory fallbacks when Redis is unavailable
-2. **Performance** - Through optimized key generation and consistent serialization
-3. **Maintainability** - Via centralized configuration and specialized methods
-4. **Observability** - With comprehensive logging and diagnostic endpoints
-5. **Compatibility** - Working in both Edge and Node.js environments
+1. **Review Logs** - Check cache hit/miss rates in the logs
+2. **Analyze TTL** - Consider adjusting TTL values in `constants.ts` based on data freshness needs
+3. **Optimize Key Generation** - Review key generation patterns for high-cardinality issues
+4. **Consider ZSET** - For time-series data, consider using Redis ZSET instead of simple keys

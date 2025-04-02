@@ -1,6 +1,5 @@
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { Redis } from '@upstash/redis';
 import { cacheService } from '@/lib/cache/cache-service';
 import { successResponse, errorResponse } from '@/lib/utils/route-handler';
 

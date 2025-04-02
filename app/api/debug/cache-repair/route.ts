@@ -1,12 +1,9 @@
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { Redis } from '@upstash/redis';
 import { successResponse, errorResponse, notFoundError } from '@/lib/utils/route-handler';
+import { createFreshRedisClient } from '@/lib/utils/redis-client';
 
 export const runtime = 'edge';
-
-// Initialize Redis client directly using environment variables
-const redis = Redis.fromEnv();
 
 export async function GET(request: Request): Promise<Response> {
   try {
@@ -17,6 +14,9 @@ export async function GET(request: Request): Promise<Response> {
       category: LOG_CATEGORIES.SYSTEM,
       key
     });
+
+    // Initialize a fresh Redis client for debugging purposes
+    const redis = await createFreshRedisClient();
 
     // Step 1: Get the raw value directly from Redis
     const rawValue = await redis.get(key);

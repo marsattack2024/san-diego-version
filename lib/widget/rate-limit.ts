@@ -1,13 +1,22 @@
-import { Redis } from '@upstash/redis';
+/**
+ * Widget Rate Limiting Middleware
+ * 
+ * This middleware handles rate limiting for widget chat requests.
+ * It supports both Redis and in-memory stores for rate limiting.
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { getRedisClient } from '@/lib/utils/redis-client';
 
-// Type definitions
-interface RateLimitOptions {
-  limit?: number;  // Max requests per window
-  window?: number; // Time window in seconds
+// Interface for rate limiting options
+export interface RateLimitOptions {
+  limit?: number;
+  window?: number;
 }
 
+// Global memory store for fallbacks
 interface MemoryStore {
   [key: string]: {
     count: number;
@@ -15,54 +24,14 @@ interface MemoryStore {
   };
 }
 
-// Extend global for typesafety
+// Add lastCleanup to global scope for in-memory store management
 declare global {
+  var memoryStore: MemoryStore;
   var lastCleanup: number | undefined;
 }
 
 // Initialize store
 let memoryStore: MemoryStore = {};
-
-// Determine which store to use based on environment variables
-const getRedisClient = (): Redis | null => {
-  try {
-    // Check for KV_REST_API_URL and KV_REST_API_TOKEN (Vercel KV)
-    if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
-      edgeLogger.info('Initializing Redis client with Vercel KV credentials');
-      return Redis.fromEnv();
-    }
-
-    // Check for REDIS_URL (custom Redis setup)
-    if (process.env.REDIS_URL) {
-      edgeLogger.info('Initializing Redis client with REDIS_URL');
-      return new Redis({
-        url: process.env.REDIS_URL,
-        token: process.env.REDIS_TOKEN || '' // Adding empty token to satisfy type requirements
-      });
-    }
-
-    // Check for standard Redis connection params
-    if (process.env.REDIS_HOST) {
-      const port = process.env.REDIS_PORT ? parseInt(process.env.REDIS_PORT, 10) : 6379;
-      edgeLogger.info('Initializing Redis client with REDIS_HOST and REDIS_PORT');
-      return new Redis({
-        url: `redis://${process.env.REDIS_HOST}:${port}`,
-        token: process.env.REDIS_PASSWORD || '',
-      });
-    }
-
-    edgeLogger.warn('No Redis configuration found, will use in-memory store');
-    return null;
-  } catch (error) {
-    edgeLogger.error('Error initializing Redis client', {
-      error: error instanceof Error ? error.message : String(error)
-    });
-    return null;
-  }
-};
-
-// Create Redis client or use in-memory store
-const redis = getRedisClient();
 
 // Rate limit middleware
 export async function rateLimitMiddleware(
@@ -121,181 +90,191 @@ export async function rateLimitMiddleware(
       window
     });
 
-    // Track requests based on available store
-    if (redis) {
+    try {
       // Use Redis for distributed rate limiting
-      try {
-        // Use Lua script for atomic increment and expiry
-        const result = await redis.eval(`
-          local key = KEYS[1]
-          local limit = tonumber(ARGV[1])
-          local window = tonumber(ARGV[2])
-          local count = redis.call('INCR', key)
-          
-          if count == 1 then
-            redis.call('EXPIRE', key, window)
-          end
-          
-          return count
-        `, [key], [limit, window]) as number;
+      const redis = await getRedisClient();
 
-        // Get the TTL to know when the limit resets
-        const ttl = await redis.ttl(key);
-        const resetAt = Date.now() + (ttl * 1000);
+      // Use Lua script for atomic increment and expiry
+      const result = await redis.eval(`
+        local key = KEYS[1]
+        local limit = tonumber(ARGV[1])
+        local window = tonumber(ARGV[2])
+        local count = redis.call('INCR', key)
+        
+        if count == 1 then
+          redis.call('EXPIRE', key, window)
+        end
+        
+        return count
+      `, [key], [limit, window]) as number;
 
-        // Set headers for internal tracking
-        const headers = new Headers();
-        headers.set('X-RateLimit-Limit', String(limit));
-        headers.set('X-RateLimit-Remaining', String(Math.max(0, limit - result)));
-        headers.set('X-RateLimit-Reset', String(resetAt));
+      // Get the TTL to know when the limit resets
+      const ttl = await redis.ttl(key);
+      const resetAt = Date.now() + (ttl * 1000);
 
-        // Check if rate limit exceeded
-        if (result > limit) {
-          const retryAfter = Math.ceil(ttl);
-          headers.set('Retry-After', String(retryAfter));
+      // Set headers for internal tracking
+      const headers = new Headers();
+      headers.set('X-RateLimit-Limit', String(limit));
+      headers.set('X-RateLimit-Remaining', String(Math.max(0, limit - result)));
+      headers.set('X-RateLimit-Reset', String(resetAt));
 
-          edgeLogger.warn('Rate limit exceeded', {
-            sessionId,
-            count: result,
-            limit,
-            resetInSeconds: retryAfter,
-            processingTime: Date.now() - startTime
-          });
+      // Check if rate limit exceeded
+      if (result > limit) {
+        const retryAfter = Math.ceil(ttl);
+        headers.set('Retry-After', String(retryAfter));
 
-          return new NextResponse(
-            JSON.stringify({
-              error: 'Too many requests',
-              message: `Rate limit exceeded. Please wait ${retryAfter} seconds before trying again.`,
-              retryAfter
-            }),
-            {
-              status: 429,
-              headers
-            }
-          );
-        }
-
-        edgeLogger.info('Rate limit check passed', {
+        edgeLogger.warn('Rate limit exceeded', {
           sessionId,
           count: result,
-          remaining: Math.max(0, limit - result),
-          resetInSeconds: ttl,
+          limit,
+          resetInSeconds: retryAfter,
           processingTime: Date.now() - startTime
         });
 
-        return null; // Continue to the next middleware
-      } catch (error) {
-        // Redis error - log but don't block the request
-        edgeLogger.error('Redis rate limit error', {
-          error: error instanceof Error ? error.message : String(error),
-          sessionId
-        });
-
-        // Fall back to memory store if Redis fails
-        edgeLogger.info('Falling back to memory store for rate limiting', { sessionId });
+        return new NextResponse(
+          JSON.stringify({
+            error: 'Too many requests',
+            message: `Rate limit exceeded. Please wait ${retryAfter} seconds before trying again.`,
+            retryAfter
+          }),
+          {
+            status: 429,
+            headers
+          }
+        );
       }
-    }
 
-    // Memory store fallback (for local dev or Redis failure)
-    const now = Date.now();
-
-    // Clean up expired entries every minute
-    const cleanupDue = (!global.lastCleanup || now - global.lastCleanup > 60000);
-    if (cleanupDue) {
-      cleanMemoryStore();
-      global.lastCleanup = now;
-    }
-
-    // Check if entry exists
-    if (!memoryStore[key]) {
-      memoryStore[key] = {
-        count: 0,
-        resetAt: now + (window * 1000)
-      };
-    }
-
-    // Reset counter if window has passed
-    if (memoryStore[key].resetAt <= now) {
-      memoryStore[key] = {
-        count: 0,
-        resetAt: now + (window * 1000)
-      };
-    }
-
-    // Increment counter
-    memoryStore[key].count++;
-
-    // Calculate time until reset
-    const msUntilReset = Math.max(0, memoryStore[key].resetAt - now);
-    const secondsUntilReset = Math.ceil(msUntilReset / 1000);
-
-    // Set headers for tracking
-    const headers = new Headers();
-    headers.set('X-RateLimit-Limit', String(limit));
-    headers.set('X-RateLimit-Remaining', String(Math.max(0, limit - memoryStore[key].count)));
-    headers.set('X-RateLimit-Reset', String(memoryStore[key].resetAt));
-
-    // Check if rate limit exceeded
-    if (memoryStore[key].count > limit) {
-      headers.set('Retry-After', String(secondsUntilReset));
-
-      edgeLogger.warn('Rate limit exceeded (memory store)', {
+      edgeLogger.info('Rate limit check passed', {
         sessionId,
-        count: memoryStore[key].count,
-        limit,
-        resetInSeconds: secondsUntilReset,
+        count: result,
+        remaining: Math.max(0, limit - result),
+        resetInSeconds: ttl,
         processingTime: Date.now() - startTime
       });
 
-      return new NextResponse(
-        JSON.stringify({
-          error: 'Too many requests',
-          message: `Rate limit exceeded. Please wait ${secondsUntilReset} seconds before trying again.`,
-          retryAfter: secondsUntilReset
-        }),
-        {
-          status: 429,
-          headers
-        }
-      );
+      return null; // Continue to the next middleware
+    } catch (error) {
+      // Redis error - log but don't block the request
+      edgeLogger.error('Redis rate limit error', {
+        error: error instanceof Error ? error.message : String(error),
+        sessionId
+      });
+
+      // Fall back to memory store if Redis fails
+      edgeLogger.info('Falling back to memory store for rate limiting', { sessionId });
+
+      // Use in-memory rate limiting as fallback
+      return useMemoryRateLimiting(sessionId, key, limit, window, startTime);
     }
-
-    edgeLogger.info('Rate limit check passed (memory store)', {
-      sessionId,
-      count: memoryStore[key].count,
-      remaining: Math.max(0, limit - memoryStore[key].count),
-      resetInSeconds: secondsUntilReset,
-      processingTime: Date.now() - startTime
-    });
-
-    return null; // Continue to the next middleware
   } catch (error) {
-    // Unexpected error - log but don't block the request
-    edgeLogger.error('Unexpected error in rate limit middleware', {
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
-      processingTime: Date.now() - startTime
+    edgeLogger.error('Unexpected rate limiting error', {
+      error: error instanceof Error ? error.message : String(error)
     });
 
-    return null; // Continue to the next middleware instead of blocking completely
+    // On error, let the request through - better to allow than block incorrectly
+    return null;
   }
 }
 
-// Function to clean up expired entries in the memory store
+/**
+ * Fallback memory-based rate limiting when Redis is unavailable
+ */
+function useMemoryRateLimiting(
+  sessionId: string,
+  key: string,
+  limit: number,
+  window: number,
+  startTime: number
+): Response | null {
+  // Clean up expired entries every minute
+  const now = Date.now();
+  const cleanupDue = (!global.lastCleanup || now - global.lastCleanup > 60000);
+
+  if (cleanupDue) {
+    cleanMemoryStore();
+    global.lastCleanup = now;
+  }
+
+  // Check if entry exists
+  if (!memoryStore[key]) {
+    memoryStore[key] = {
+      count: 0,
+      resetAt: now + (window * 1000)
+    };
+  }
+
+  // Reset counter if window has passed
+  if (memoryStore[key].resetAt <= now) {
+    memoryStore[key] = {
+      count: 0,
+      resetAt: now + (window * 1000)
+    };
+  }
+
+  // Increment counter
+  memoryStore[key].count++;
+
+  // Set headers for internal tracking
+  const headers = new Headers();
+  headers.set('X-RateLimit-Limit', String(limit));
+  headers.set('X-RateLimit-Remaining', String(Math.max(0, limit - memoryStore[key].count)));
+  headers.set('X-RateLimit-Reset', String(memoryStore[key].resetAt));
+
+  // Check if rate limit exceeded
+  if (memoryStore[key].count > limit) {
+    const ttl = Math.ceil((memoryStore[key].resetAt - now) / 1000);
+    headers.set('Retry-After', String(ttl));
+
+    edgeLogger.warn('Rate limit exceeded (memory store)', {
+      sessionId,
+      count: memoryStore[key].count,
+      limit,
+      resetInSeconds: ttl,
+      processingTime: Date.now() - startTime
+    });
+
+    return new NextResponse(
+      JSON.stringify({
+        error: 'Too many requests',
+        message: `Rate limit exceeded. Please wait ${ttl} seconds before trying again.`,
+        retryAfter: ttl
+      }),
+      {
+        status: 429,
+        headers
+      }
+    );
+  }
+
+  edgeLogger.info('Rate limit check passed (memory store)', {
+    sessionId,
+    count: memoryStore[key].count,
+    remaining: Math.max(0, limit - memoryStore[key].count),
+    resetInSeconds: Math.ceil((memoryStore[key].resetAt - now) / 1000),
+    processingTime: Date.now() - startTime
+  });
+
+  return null; // Continue to the next middleware
+}
+
+/**
+ * Clean up expired entries from the memory store
+ */
 function cleanMemoryStore() {
   const now = Date.now();
-  let expiredCount = 0;
+  let cleanupCount = 0;
 
   Object.keys(memoryStore).forEach(key => {
     if (memoryStore[key].resetAt <= now) {
       delete memoryStore[key];
-      expiredCount++;
+      cleanupCount++;
     }
   });
 
-  if (expiredCount > 0) {
-    edgeLogger.info('Cleaned up expired rate limit entries', {
-      expiredCount,
+  if (cleanupCount > 0) {
+    edgeLogger.debug(`Cleaned up ${cleanupCount} expired rate limit entries`, {
+      category: LOG_CATEGORIES.SYSTEM,
+      cleanupCount,
       remainingEntries: Object.keys(memoryStore).length
     });
   }

@@ -1,7 +1,7 @@
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { Redis } from '@upstash/redis';
 import { successResponse, errorResponse, notFoundError } from '@/lib/utils/route-handler';
+import { createFreshRedisClient } from '@/lib/utils/redis-client';
 
 export const runtime = 'edge';
 
@@ -27,8 +27,9 @@ export async function GET(request: Request): Promise<Response> {
       );
     }
 
-    // Use Redis.fromEnv() for consistent initialization
-    const redis = Redis.fromEnv();
+    // Always create a fresh Redis client for debugging purposes
+    // This ensures we're not affected by any singleton issues
+    const redis = await createFreshRedisClient();
 
     // Perform a connection test first
     try {
@@ -51,7 +52,7 @@ export async function GET(request: Request): Promise<Response> {
       });
     }
 
-    const rawValue = await redis.get<string>(key);
+    const rawValue = await redis.get(key) as string;
 
     if (!rawValue) {
       return notFoundError(`Cache key not found: ${key}`);
