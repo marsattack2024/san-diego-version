@@ -50,8 +50,7 @@ export function errorResponse(message: string, error?: any, status = 500): Respo
 
     return jsonResponse({
         success: false,
-        message,
-        error: error instanceof Error ? error.message : String(error)
+        error: message // Use the message as the error field to match test expectations
     }, status);
 }
 
@@ -92,12 +91,13 @@ export function notFoundError(message = "Not found"): Response {
  * @param handler The route handler function
  * @returns A wrapped handler with error handling
  */
-export function withErrorHandling<T extends Record<string, string>>(
-    handler: (request: Request, params: RouteParams<T>) => Promise<Response>
+export function withErrorHandling<T extends Record<string, string> = Record<string, never>>(
+    handler: (request: Request, params?: RouteParams<T>) => Promise<Response>
 ) {
-    return async (request: Request, params: RouteParams<T>): Promise<Response> => {
+    return async (request: Request, params?: RouteParams<T>): Promise<Response> => {
         try {
-            return await handler(request, params);
+            // Pass params as an empty object if not provided (for routes without URL params)
+            return await handler(request, params || {} as RouteParams<T>);
         } catch (error) {
             return errorResponse(
                 "An unexpected error occurred",

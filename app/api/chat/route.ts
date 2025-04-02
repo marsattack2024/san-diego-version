@@ -280,27 +280,25 @@ export async function POST(req: Request): Promise<Response> {
       sessionId
     });
 
-    // Create the chat engine with the detected agent configuration
+    // Configure the chat engine
     const engineConfig: ChatEngineConfig = {
-      tools, // Tools object built conditionally
-      requiresAuth: !bypassAuth, // Allow bypassing auth for testing
-      corsEnabled: false,
-      model: agentConfig.model || 'gpt-4o',
-      temperature: agentConfig.temperature || 0.7,
-      maxTokens: 16000,
-      operationName: `chat_${agentType}`,
-      cacheEnabled: true,
-      messageHistoryLimit: 50,
-      // Enable DeepSearch at the engine level if supported by the agent
+      operationName: shouldUseDeepSearch ? 'chat_deep_search' : 'chat_default',
+      tools,
       useDeepSearch: shouldUseDeepSearch,
       // Use enhanced system prompt following AI SDK standards
       systemPrompt: prompts.buildSystemPrompt(agentType, shouldUseDeepSearch),
       // Configure message persistence
       messagePersistenceDisabled: disableMessagePersistence,
-      // Pass prompts system
-      prompts,
       // Set agent type
       agentType,
+      // Standard engine configuration
+      requiresAuth: !bypassAuth, // Allow bypassing auth for testing
+      corsEnabled: false,
+      model: agentConfig.model || 'gpt-4o',
+      temperature: agentConfig.temperature || 0.7,
+      maxTokens: 16000,
+      cacheEnabled: true,
+      messageHistoryLimit: 50,
       // Pass additional configuration for tools following AI SDK patterns
       body: {
         deepSearchEnabled: shouldUseDeepSearch, // Pass for safety check in execute function

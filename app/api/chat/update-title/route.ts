@@ -1,138 +1,148 @@
-import { cookies } from 'next/headers';
-import { createServerClient } from '@supabase/ssr';
-import { SupabaseClient } from '@supabase/supabase-js';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { successResponse, errorResponse, unauthorizedError, withErrorHandling } from '@/lib/utils/route-handler';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
+import { generateAndSaveChatTitle } from '@/lib/chat/title-service';
+import { NextResponse } from 'next/server';
 
 export const runtime = 'edge';
 
-export async function POST(request: Request): Promise<Response> {
+/**
+ * Update the title of a chat session
+ * This API does two things:
+ * 1. If just given sessionId and content, it uses AI to generate a title for the session
+ * 2. If given sessionId and newTitle (via content), it directly updates the title
+ */
+export const POST = withErrorHandling(async (request: Request): Promise<Response> => {
     try {
-        // Get cookies - make sure to await this
-        const cookieStore = await cookies();
+        // Parse the incoming request data
+        const body = await request.json();
 
-        const supabase = createServerClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-            {
-                cookies: {
-                    getAll() {
-                        return cookieStore.getAll();
-                    },
-                    setAll(cookiesToSet) {
-                        try {
-                            cookiesToSet.forEach(({ name, value, options }) =>
-                                cookieStore.set(name, value, options)
-                            );
-                        } catch {
-                            // The `setAll` method was called from a Server Component.
-                            // This can be ignored if you have middleware refreshing
-                            // user sessions.
-                        }
-                    },
-                },
-            }
-        );
+        // Map the received parameters to what the endpoint expects internally
+        const { sessionId, content, userId: providedUserId } = body;
+
+        // Input validation
+        if (!sessionId) {
+            return NextResponse.json({
+                success: false,
+                error: 'Session ID is required'
+            }, { status: 400 });
+        }
+
+        if (!content || typeof content !== 'string' || content.trim().length === 0) {
+            return NextResponse.json({
+                success: false,
+                error: 'Valid content is required for title generation'
+            }, { status: 400 });
+        }
+
+        // Get Supabase client
+        const supabase = await createRouteHandlerClient();
 
         // User authentication
         const { data: { user } } = await supabase.auth.getUser();
-        if (!user) {
-            return unauthorizedError('Authentication required');
+        let userId = user?.id;
+
+        // If no authenticated user but we have a provided userId (from service-to-service calls)
+        // Try to verify the session exists for fallback authentication
+        if (!userId && providedUserId) {
+            const { data: sessionData, error: sessionError } = await supabase
+                .from('sd_chat_sessions')
+                .select('id, user_id')
+                .eq('id', sessionId)
+                .single();
+
+            if (!sessionError && sessionData) {
+                userId = sessionData.user_id;
+                edgeLogger.debug('Using session lookup for authentication', {
+                    category: LOG_CATEGORIES.CHAT,
+                    sessionId,
+                    userId
+                });
+            } else {
+                edgeLogger.warn('Unauthorized title update attempt with service credentials', {
+                    category: LOG_CATEGORIES.CHAT,
+                    sessionId,
+                    providedUserId
+                });
+                return NextResponse.json({
+                    success: false,
+                    error: 'Unauthorized and could not find session'
+                }, { status: 401 });
+            }
         }
 
-        // Parse the incoming request data
-        const body = await request.json();
-        // Map the received parameters to what the endpoint expects internally
-        const { sessionId: chatId, content: newTitle } = body;
+        if (!userId) {
+            edgeLogger.warn('Authentication required for title update', {
+                category: LOG_CATEGORIES.CHAT,
+                sessionId,
+                requestHasUserId: !!providedUserId
+            });
 
-        // Input validation
-        if (!chatId) {
-            return errorResponse('Chat ID is required', null, 400);
+            return NextResponse.json({
+                success: false,
+                error: 'Authentication required'
+            }, { status: 401 });
         }
 
-        if (!newTitle || typeof newTitle !== 'string' || newTitle.trim().length === 0) {
-            return errorResponse('Valid title is required', null, 400);
-        }
-
-        // Limit title length to something reasonable
-        const trimmedTitle = newTitle.trim().substring(0, 255);
-
-        edgeLogger.info('Attempting to update chat title', {
+        edgeLogger.info('Generating title for chat', {
             category: LOG_CATEGORIES.CHAT,
-            chatId,
-            userId: user.id
+            sessionId,
+            userId
         });
 
-        // Check if the chat exists and belongs to the user
-        const { data: chatData, error: chatError } = await supabase
-            .from('sd_chat_sessions')
-            .select('id, user_id')
-            .eq('id', chatId)
-            .single();
+        try {
+            // Use the title generation service to create a title based on content
+            await generateAndSaveChatTitle(sessionId, content, userId);
 
-        if (chatError) {
-            edgeLogger.error('Error retrieving chat', {
+            // Fetch the generated title from the database
+            const { data: sessionData, error: fetchError } = await supabase
+                .from('sd_chat_sessions')
+                .select('title')
+                .eq('id', sessionId)
+                .single();
+
+            if (fetchError || !sessionData) {
+                edgeLogger.error('Failed to fetch generated title', {
+                    category: LOG_CATEGORIES.CHAT,
+                    sessionId,
+                    userId,
+                    error: fetchError?.message || 'No session data returned'
+                });
+
+                return NextResponse.json({
+                    success: false,
+                    error: 'Failed to generate title'
+                }, { status: 500 });
+            }
+
+            return NextResponse.json({
+                success: true,
+                chatId: sessionId,
+                title: sessionData.title
+            }, { status: 200 });
+        } catch (error) {
+            edgeLogger.error('Error generating title', {
                 category: LOG_CATEGORIES.CHAT,
-                chatId,
-                userId: user.id,
-                error: chatError.message
+                error: error instanceof Error ? error.message : String(error),
+                sessionId,
+                userId
             });
 
-            return errorResponse('Chat not found', chatError.message, 404);
+            return NextResponse.json({
+                success: false,
+                error: 'Failed to generate title'
+            }, { status: 500 });
         }
-
-        // Verify ownership
-        if (chatData.user_id !== user.id) {
-            edgeLogger.warn('Unauthorized chat title update attempt', {
-                category: LOG_CATEGORIES.CHAT,
-                chatId,
-                userId: user.id,
-                chatOwnerId: chatData.user_id
-            });
-
-            return errorResponse('You do not have permission to modify this chat', null, 403);
-        }
-
-        // Update the chat title
-        const { error: updateError } = await supabase
-            .from('sd_chat_sessions')
-            .update({ title: trimmedTitle, updated_at: new Date().toISOString() })
-            .eq('id', chatId);
-
-        if (updateError) {
-            edgeLogger.error('Error updating chat title', {
-                category: LOG_CATEGORIES.CHAT,
-                chatId,
-                userId: user.id,
-                error: updateError.message
-            });
-
-            return errorResponse('Failed to update chat title', updateError.message, 500);
-        }
-
-        edgeLogger.info('Chat title updated successfully', {
-            category: LOG_CATEGORIES.CHAT,
-            chatId,
-            userId: user.id
-        });
-
-        return successResponse({
-            success: true,
-            message: 'Chat title updated successfully',
-            chatId,
-            title: trimmedTitle
-        });
     } catch (error) {
-        edgeLogger.error('Exception in update-title route', {
+        edgeLogger.error('Failed to parse request body', {
             category: LOG_CATEGORIES.CHAT,
             error: error instanceof Error ? error.message : String(error)
         });
 
-        return errorResponse(
-            'Failed to update chat title',
-            error instanceof Error ? error.message : String(error),
-            500
-        );
+        return NextResponse.json({
+            success: false,
+            error: 'Invalid request body'
+        }, { status: 400 });
     }
-} 
+}); 

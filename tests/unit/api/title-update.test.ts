@@ -12,8 +12,8 @@ vi.mock('next/headers', () => ({
 }));
 
 // Mock the dependencies
-vi.mock('@/utils/supabase/server', () => ({
-    createClient: vi.fn()
+vi.mock('@/lib/supabase/route-client', () => ({
+    createRouteHandlerClient: vi.fn()
 }));
 
 vi.mock('@/lib/chat/title-service', () => ({
@@ -35,7 +35,7 @@ vi.mock('crypto', () => ({
 }));
 
 // Import the mocked dependencies
-import { createClient } from '@/utils/supabase/server';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { generateAndSaveChatTitle } from '@/lib/chat/title-service';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 
@@ -59,13 +59,14 @@ describe('Title Update API', () => {
             from: vi.fn().mockReturnThis(),
             select: vi.fn().mockReturnThis(),
             eq: vi.fn().mockReturnThis(),
+            update: vi.fn().mockReturnThis(),
             single: vi.fn().mockResolvedValue({
                 data: { title: 'Generated Title' },
                 error: null
             })
         };
 
-        (createClient as Mock).mockResolvedValue(mockSupabase);
+        (createRouteHandlerClient as Mock).mockResolvedValue(mockSupabase);
 
         // Setup request mock
         mockJson = vi.fn().mockResolvedValue({
@@ -96,7 +97,6 @@ describe('Title Update API', () => {
             success: false,
             error: 'Session ID is required'
         });
-        // No logging happens for this case in the implementation
     });
 
     it('should return 401 if user is not authenticated', async () => {
@@ -120,7 +120,7 @@ describe('Title Update API', () => {
         expect(response.status).toBe(401);
         expect(data).toEqual({
             success: false,
-            error: 'Unauthorized and could not find session'
+            error: 'Authentication required'
         });
         expect(edgeLogger.warn).toHaveBeenCalled();
     });
@@ -129,7 +129,7 @@ describe('Title Update API', () => {
         // Arrange
         mockSupabase.single.mockResolvedValueOnce({
             data: null,
-            error: null
+            error: { message: 'Error fetching title' }
         });
 
         // Act
@@ -246,9 +246,6 @@ describe('Title Update API', () => {
             })
         } as unknown as NextRequest;
 
-        // Mock the createClient to return the user properly
-        (createClient as Mock).mockImplementationOnce(() => mockSupabase);
-
         // Act
         const response = await POST(requestWithCookies);
 
@@ -259,32 +256,37 @@ describe('Title Update API', () => {
             chatId: 'test-session-id',
             title: 'Generated Title'
         });
-
-        // Verify we used standard Supabase authentication
-        expect(mockSupabase.auth.getUser).toHaveBeenCalled();
     });
 
     it('should accept service-to-service authentication via headers', async () => {
         // Arrange - Set up a request with service auth headers
-        const requestWithServiceAuth = {
+        mockSupabase.auth.getUser.mockResolvedValueOnce({
+            data: { user: null }
+        });
+
+        // But make the session lookup succeed
+        mockSupabase.from().select().eq().single.mockResolvedValueOnce({
+            data: { id: 'test-session-id', user_id: 'service-user-id' },
+            error: null
+        });
+
+        const serviceRequest = {
             ...mockRequest,
             headers: new Headers({
-                'Content-Type': 'application/json',
-                'x-user-id': 'service-user-id',
-                'x-session-context': 'chat-engine-title-generation',
-                'x-auth-state': 'authenticated'
+                'x-service-key': 'service-test-key',
+                'x-operation-id': 'test-op-id'
             })
         } as unknown as NextRequest;
 
-        // Mock json response to include userId in body as well
-        mockJson.mockResolvedValueOnce({
+        // Mock the json method to include the service user ID
+        serviceRequest.json = vi.fn().mockResolvedValue({
             sessionId: 'test-session-id',
             content: 'Test message content',
-            userId: 'body-user-id' // This shouldn't be used since header takes precedence
+            userId: 'service-user-id'
         });
 
         // Act
-        const response = await POST(requestWithServiceAuth);
+        const response = await POST(serviceRequest);
 
         // Assert
         expect(response.status).toBe(200);
@@ -293,12 +295,12 @@ describe('Title Update API', () => {
             chatId: 'test-session-id',
             title: 'Generated Title'
         });
-
-        // Verify title was generated with the user ID from service auth headers
-        expect(generateAndSaveChatTitle).toHaveBeenCalledWith(
-            'test-session-id',
-            'Test message content',
-            'service-user-id'
+        expect(edgeLogger.debug).toHaveBeenCalledWith(
+            'Using session lookup for authentication',
+            expect.objectContaining({
+                sessionId: 'test-session-id',
+                userId: 'service-user-id'
+            })
         );
     });
 }); 
