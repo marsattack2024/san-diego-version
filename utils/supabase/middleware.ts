@@ -24,38 +24,29 @@ export async function updateSession(request: NextRequest) {
       {
         cookies: {
           getAll() {
+            // Read cookies from the incoming request
             return request.cookies.getAll()
           },
           setAll(cookiesToSet) {
+            // In middleware, cookies should be set on the outgoing response.
+            // The complex logic trying to modify request.cookies might be unstable.
+            // Let's simplify based on standard Supabase SSR patterns for middleware.
             try {
-              // First apply cookies to the request object to ensure they're available
-              // for the current request
               cookiesToSet.forEach(({ name, value, options }) => {
-                setEnhancedCookie(request.cookies, name, value, options);
-              });
-
-              // Then create a fresh response with updated cookies
-              supabaseResponse = NextResponse.next({
-                request: {
-                  headers: requestHeaders,
-                },
-              });
-
-              // Finally set cookies on the response using our enhanced cookie setter
-              cookiesToSet.forEach(({ name, value, options }) => {
+                // Set cookies ONLY on the response object
+                // Use the enhanced setter for proper options
                 setEnhancedCookie(supabaseResponse.cookies, name, value, options);
               });
-
-              // Log the cookies we're setting for debugging
+              // Log the cookies being set
               if (cookiesToSet.some(cookie => cookie.name.includes('-auth-token'))) {
-                edgeLogger.debug('Setting auth cookies in middleware', {
+                edgeLogger.debug('[Simplified setAll] Setting auth cookies on middleware response', {
                   category: LOG_CATEGORIES.AUTH,
                   cookieCount: cookiesToSet.length,
                   cookieNames: cookiesToSet.map(c => c.name)
                 });
               }
             } catch (error) {
-              edgeLogger.error('Error in cookie setAll', {
+              edgeLogger.error('Error in simplified cookie setAll', {
                 category: LOG_CATEGORIES.AUTH,
                 error: error instanceof Error ? error.message : String(error),
               });
@@ -283,8 +274,8 @@ export async function updateSession(request: NextRequest) {
       !pathname.startsWith('/signup') && // Allow access to signup page
       !pathname.startsWith('/auth') &&
       !pathname.includes('/_next') &&
-      !pathname.includes('/api/history') && // Don't redirect history API calls
-      !pathname.includes('/api/public')
+      !pathname.startsWith('/api/') && // PREVENT REDIRECTING API ROUTES
+      !pathname.includes('/api/public') // Keep specific public API exclusion if necessary
     ) {
       // No user, redirect to login
       const url = request.nextUrl.clone()

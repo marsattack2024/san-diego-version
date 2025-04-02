@@ -38,72 +38,110 @@ export function ChatClient({ chatId }: ChatClientProps) {
 
   // Fetch the chat messages from the API
   useEffect(() => {
+    // **Log state at effect start**
+    log.debug('[ChatClient Fetch Effect] Running', { chatId, isHydrated, hasFetchedMessages });
+
     // Wait for store hydration before fetching
     if (!isHydrated) {
-      log.debug('Waiting for store hydration before fetching messages');
+      log.debug('[ChatClient Fetch Effect] Waiting for hydration...');
       return;
     }
 
-    // Prevent infinite loop by only fetching once per chat ID
-    if (hasFetchedMessages || !chatId) return;
+    // Prevent fetch if already done for this ID or no ID
+    if (hasFetchedMessages || !chatId) {
+      log.debug('[ChatClient Fetch Effect] Skipping fetch', { hasFetchedMessages, chatIdExists: !!chatId });
+      return;
+    }
 
     async function fetchChatMessages() {
+      // **Log right before fetch**
+      log.debug('[ChatClient Fetch Effect] Proceeding to fetch messages...', { chatId });
       try {
         setIsLoading(true);
         log.debug('Fetching chat messages from API', { id: chatId });
 
         const response = await fetch(`/api/chat/${chatId}`);
 
+        // --- BEGIN CLIENT DEBUG LOGGING ---
+        const responseText = await response.text(); // Get raw text first
+        log.debug(`[ChatClient] Received raw response text (length: ${responseText.length})`, {
+          id: chatId,
+          ok: response.ok,
+          status: response.status,
+          sample: responseText.substring(0, 500) // Log first 500 chars
+        });
+        // --- END CLIENT DEBUG LOGGING ---
+
         if (!response.ok) {
+          // Use original status code from response
           if (response.status === 404) {
             throw new Error('Chat not found. It may have been deleted.');
           } else {
-            throw new Error(`Error fetching chat: ${response.statusText}`);
+            // Try parsing error from body, otherwise use statusText
+            let errorMsg = `Error fetching chat: ${response.statusText}`;
+            try {
+              const errorJson = JSON.parse(responseText); // Try parsing the text we already have
+              errorMsg = errorJson.error || errorMsg;
+            } catch (e) { /* Ignore parsing error */ }
+            throw new Error(errorMsg);
           }
         }
 
-        const chatData = await response.json();
-        log.debug('Successfully fetched chat data', {
+        // Parse the raw text as JSON
+        let parsedResponse: any;
+        try {
+          parsedResponse = JSON.parse(responseText);
+        } catch (e) {
+          log.error('[ChatClient] Failed to parse JSON response', { id: chatId, error: e, responseTextSample: responseText.substring(0, 500) });
+          throw new Error('Failed to parse chat data from server.');
+        }
+
+        // --- Modification: Extract the nested 'data' object if it exists --- 
+        const chatData = (parsedResponse && typeof parsedResponse === 'object' && parsedResponse.success === true && parsedResponse.data)
+          ? parsedResponse.data
+          : undefined; // Use undefined if structure is wrong
+        // --- End modification ---
+
+        // Check if we successfully extracted the chat data object
+        if (!chatData) {
+          log.error("[ChatClient] Parsed response missing expected 'data' property or success was false.", { chatId, parsedResponseType: typeof parsedResponse });
+          throw new Error('Received invalid data structure from server.');
+        }
+
+        log.debug('[ChatClient] Successfully extracted chat data', {
           id: chatId,
-          messageCount: chatData.messages?.length || 0
+          messageCount: chatData?.messages?.length ?? 'undefined' // Log count from the extracted data
         });
 
-        // Mark that we've fetched messages for this chat
+        // Mark that we've fetched messages for this chat AFTER successful extraction
         setHasFetchedMessages(true);
 
-        // Convert messages to the format expected by the chat component
-        const messages = chatData.messages?.map((msg: any) => ({
-          id: msg.id,
-          role: msg.role,
-          content: msg.content,
-          createdAt: msg.createdAt
-        })) || [];
-
-        // **Refined Logic: Only update messages, don't overwrite metadata**
-        if (conversations[chatId]) {
-          // If the conversation already exists in the store (likely from history sync),
-          // just update its messages.
-          log.debug('Conversation exists in store, updating messages only', { id: chatId, messageCount: messages.length });
-          updateMessages(chatId, messages);
+        // **Refined Logic: Use the extracted chatData**
+        const currentConversations = useChatStore.getState().conversations;
+        if (currentConversations[chatId]) {
+          // Ensure messages array exists before accessing/updating
+          const messagesToUpdate = chatData.messages || []; // Access messages directly from extracted chatData
+          log.debug('Conversation exists in store, updating messages only', { id: chatId, messageCount: messagesToUpdate.length });
+          // **Log the actual messages being sent to the store**
+          log.debug('[ChatClient] Calling updateMessages with:', { chatId, messagesSample: JSON.stringify(messagesToUpdate.slice(0, 2)) });
+          updateMessages(chatId, messagesToUpdate);
         } else {
-          // If the conversation genuinely doesn't exist in the store,
-          // create it using the fetched data (this path should be less common).
           log.info('Conversation not found in store, creating based on fetched data', { id: chatId });
+          // Ensure messages array exists before using
+          const messagesToUpdate = chatData.messages || []; // Access messages directly from extracted chatData
           useChatStore.setState((state) => ({
             conversations: {
               ...state.conversations,
               [chatId]: {
                 id: chatId,
-                messages: messages, // Use fetched messages
+                messages: messagesToUpdate, // Use fetched messages (or empty array)
                 createdAt: chatData.createdAt || new Date().toISOString(),
                 updatedAt: chatData.updatedAt || new Date().toISOString(),
-                // Use fetched title, default to 'New Chat' only if API didn't provide one
                 title: chatData.title || 'New Chat',
                 agentId: chatData.agentId || state.selectedAgentId,
                 deepSearchEnabled: chatData.deepSearchEnabled || state.deepSearchEnabled,
               },
             },
-            // Ensure this new/fetched chat becomes the current one
             currentConversationId: chatId,
           }));
         }
@@ -124,7 +162,11 @@ export function ChatClient({ chatId }: ChatClientProps) {
     }
 
     fetchChatMessages();
-  }, [chatId, conversations, setCurrentConversation, updateMessages, hasFetchedMessages, isHydrated]);
+
+    // ** Refined Dependency Array **
+    // Primarily depends on chatId and hydration status.
+    // Actions like setCurrentConversation/updateMessages are stable.
+  }, [chatId, isHydrated, hasFetchedMessages, setCurrentConversation, updateMessages]);
 
   // Show loading state while store is being hydrated
   if (!isHydrated) {
@@ -153,14 +195,28 @@ export function ChatClient({ chatId }: ChatClientProps) {
   // Get the conversation from the store
   const currentConversation = conversations[chatId];
 
-  if (!currentConversation) {
-    return <div className="h-screen flex items-center justify-center">Chat not found</div>;
+  // Ensure initialMessages is always an array, even if conversation/messages are temporarily undefined
+  const messagesToPass = currentConversation?.messages || [];
+
+  // Add logging for what's being passed
+  log.debug('[ChatClient] Rendering Chat component', {
+    chatId,
+    conversationExists: !!currentConversation,
+    messagesInStoreCount: currentConversation?.messages?.length ?? 'undefined',
+    messagesPassedToChatCount: messagesToPass.length
+  });
+
+  // Check if conversation is truly missing after loading
+  if (!isLoading && !error && !currentConversation) {
+    log.warn('[ChatClient] Conversation object missing from store after loading finished', { chatId });
+    return <div className="h-screen flex items-center justify-center">Chat not found or failed to load properly.</div>;
   }
 
   return (
     <Chat
+      key={chatId}
       id={chatId}
-      initialMessages={currentConversation.messages}
+      initialMessages={messagesToPass} // Pass the guaranteed array
       isReadonly={false}
     />
   );

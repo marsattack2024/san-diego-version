@@ -34,12 +34,30 @@ export function Chat({
   // Add ref for form input container
   const inputContainerRef = useRef<HTMLDivElement>(null);
 
-  // Update conversation metadata when agent changes
+  // Update conversation metadata (agentId ONLY) when agent changes - AVOIDS timestamp update
   useEffect(() => {
     if (id) {
-      updateConversationMetadata(id, { agentId: selectedAgentId });
+      useChatStore.setState(state => {
+        if (!state.conversations[id]) return state; // Check if conversation exists
+        // Only update if the agentId is actually different
+        if (state.conversations[id].agentId !== selectedAgentId) {
+          console.log(`[Chat Component] Updating agentId for ${id} to ${selectedAgentId}`);
+          return {
+            conversations: {
+              ...state.conversations,
+              [id]: {
+                ...state.conversations[id],
+                agentId: selectedAgentId,
+                // DO NOT UPDATE updatedAt here
+              }
+            }
+          };
+        }
+        return state; // Return unchanged state if agentId is the same
+      });
     }
-  }, [id, selectedAgentId, updateConversationMetadata]);
+    // Only re-run if id or selectedAgentId changes
+  }, [id, selectedAgentId]);
 
   // Add a state to track message chat IDs
   const [messageIdMap, setMessageIdMap] = useState<Record<string, string>>({});

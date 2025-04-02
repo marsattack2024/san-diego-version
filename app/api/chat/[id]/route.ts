@@ -121,6 +121,30 @@ export async function GET(
             messageCount: messages.length
         });
 
+        // --- BEGIN DEBUG LOGGING ---
+        edgeLogger.debug('[API GET /chat/[id]] Raw messagesData from DB:', {
+            category: 'chat',
+            operationId,
+            chatId,
+            count: messagesData?.length,
+            sample: JSON.stringify(messagesData?.slice(0, 2)) // Log first 2 raw messages
+        });
+        edgeLogger.debug('[API GET /chat/[id]] Formatted messages array:', {
+            category: 'chat',
+            operationId,
+            chatId,
+            count: messages?.length,
+            sample: JSON.stringify(messages?.slice(0, 2)) // Log first 2 formatted messages
+        });
+        edgeLogger.debug('[API GET /chat/[id]] Full response object being returned:', {
+            category: 'chat',
+            operationId,
+            chatId,
+            responseKeys: Object.keys(response),
+            messageCountInResponse: response.messages?.length
+        });
+        // --- END DEBUG LOGGING ---
+
         return successResponse(response);
 
     } catch (error) {

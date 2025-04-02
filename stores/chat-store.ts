@@ -491,6 +491,11 @@ export const useChatStore = create<ChatState>()(
             }
           };
           console.log(`[ChatStore.updateMessages] Setting new state for ${conversationId}. Messages count: ${newState.conversations[conversationId].messages.length}`);
+
+          // **Log state AFTER update**
+          const finalState = get().conversations[conversationId];
+          console.log(`[ChatStore.updateMessages] State AFTER update for ${conversationId}:`, JSON.stringify(finalState?.messages?.map(m => ({ id: m.id, role: m.role, len: m.content.length })), null, 2));
+
           return newState;
         });
       },

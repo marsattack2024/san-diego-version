@@ -394,6 +394,7 @@ const PureMultimodalInput = ({
   );
 }
 
+// Restore memoization
 export const MultimodalInput = memo(
   PureMultimodalInput,
   (prevProps, nextProps) => {
