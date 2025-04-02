@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { generateText } from 'ai';
 import { openai } from '@ai-sdk/openai';
-import { webScraperTool } from '@/lib/tools/web-scraper.tool';
+import { scrapeWebContentTool } from '@/lib/tools/web-scraper.tool';
 import { ensureProtocol } from '@/lib/utils/url-utils';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
@@ -63,8 +63,8 @@ export async function generateWebsiteSummary(
       const toolCallId = `summarizer-${Date.now()}`;
 
       // Execute the web scraper tool
-      const scraperResult = await webScraperTool.execute(
-        { query: '', urls: [fullUrl] },
+      const scraperResult = await scrapeWebContentTool.execute(
+        { url: fullUrl },
         {
           messages: [{ role: 'user', content: `Scrape this URL: ${fullUrl}` }],
           toolCallId: toolCallId
@@ -73,12 +73,12 @@ export async function generateWebsiteSummary(
 
       clearTimeout(timeoutId);
 
-      if (!scraperResult || !scraperResult.content) {
+      if (!scraperResult || scraperResult === '') {
         throw new Error('Failed to retrieve content from URL');
       }
 
       // Try to extract title from the scraped content (typically in a heading)
-      const titleMatch = scraperResult.content.match(/## ([^✓✗]+)/);
+      const titleMatch = scraperResult.match(/## ([^✓✗]+)/);
       if (titleMatch && titleMatch[1]) {
         title = titleMatch[1].trim();
       }
@@ -88,14 +88,14 @@ export async function generateWebsiteSummary(
         category: LOG_CATEGORIES.TOOLS,
         operation: 'website_summarization_scraped',
         url: fullUrl,
-        contentLength: scraperResult.content.length,
+        contentLength: scraperResult.length,
         title,
         timeTaken: Math.round(performance.now() - startTime)
       });
 
       // Generate the summary
       const summary = await generateSummary(
-        scraperResult.content,
+        scraperResult,
         title,
         fullUrl,
         options.maxWords || 600,

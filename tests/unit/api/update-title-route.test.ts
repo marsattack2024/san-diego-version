@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, vi, Mock } from 'vitest';
+import { describe, expect, it, beforeEach, vi, Mock, afterEach } from 'vitest';
 import { setupLoggerMock } from '../../helpers/mock-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 

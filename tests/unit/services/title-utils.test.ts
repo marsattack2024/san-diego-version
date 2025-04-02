@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach, vi, Mock } from 'vitest';
 import { setupLoggerMock } from '../../helpers/mock-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 // Setup logger mock first
 setupLoggerMock();
@@ -126,7 +127,7 @@ describe('Title Utilities', () => {
             });
 
             // Act
-            const result = await updateTitleInDatabase(TEST_CHAT_ID, newTitle, TEST_USER_ID);
+            const result = await updateTitleInDatabase(mockSupabase as unknown as SupabaseClient, TEST_CHAT_ID, newTitle, TEST_USER_ID);
 
             // Assert
             expect(result).toBe(true);
@@ -168,7 +169,7 @@ describe('Title Utilities', () => {
             });
 
             // Act
-            const result = await updateTitleInDatabase(TEST_CHAT_ID, newTitle, TEST_USER_ID);
+            const result = await updateTitleInDatabase(mockSupabase as unknown as SupabaseClient, TEST_CHAT_ID, newTitle, TEST_USER_ID);
 
             // Assert
             expect(result).toBe(false);
@@ -222,7 +223,7 @@ describe('Title Utilities', () => {
             });
 
             // Act
-            const result = await updateTitleInDatabase(TEST_CHAT_ID, newTitle, TEST_USER_ID);
+            const result = await updateTitleInDatabase(mockSupabase as unknown as SupabaseClient, TEST_CHAT_ID, newTitle, TEST_USER_ID);
 
             // Assert
             expect(result).toBe(true); // Overall operation should still succeed
@@ -276,7 +277,7 @@ describe('Title Utilities', () => {
             });
 
             // Act
-            const result = await updateTitleInDatabase(TEST_CHAT_ID, newTitle, TEST_USER_ID);
+            const result = await updateTitleInDatabase(mockSupabase as unknown as SupabaseClient, TEST_CHAT_ID, newTitle, TEST_USER_ID);
 
             // Assert
             expect(result).toBe(false);

@@ -21,7 +21,7 @@ vi.mock('@/lib/services/puppeteer.service', () => ({
 }));
 
 // Import the module under test (after setting up mocks)
-import { createWebScraperTool, webScraperTool } from '@/lib/tools/web-scraper.tool';
+import { createWebScraperTool, scrapeWebContentTool } from '@/lib/tools/web-scraper.tool';
 import { puppeteerService } from '@/lib/services/puppeteer.service';
 import { extractUrls } from '@/lib/utils/url-utils';
 
@@ -80,7 +80,7 @@ describe('Web Scraper Tool', () => {
   describe('URL Extraction', () => {
     it('should extract URLs from the query', async () => {
       // Execute the tool
-      await webScraperTool.execute({ query: sampleQuery }, {
+      await scrapeWebContentTool.execute({ url: sampleQuery }, {
         toolCallId: sampleToolCallId,
         messages: [{ role: 'user', content: sampleQuery }]
       });
@@ -93,8 +93,8 @@ describe('Web Scraper Tool', () => {
       const specificUrls = ['https://specific-example.com'];
 
       // Execute the tool with specific URLs
-      await webScraperTool.execute(
-        { query: 'irrelevant query', urls: specificUrls },
+      await scrapeWebContentTool.execute(
+        { url: specificUrls[0] },
         {
           toolCallId: sampleToolCallId,
           messages: [{ role: 'user', content: 'irrelevant query' }]
@@ -113,8 +113,8 @@ describe('Web Scraper Tool', () => {
       vi.mocked(extractUrls).mockReturnValue([]);
 
       // Execute with a query that won't have URLs
-      const result = await webScraperTool.execute(
-        { query: 'query with no urls' },
+      const result = await scrapeWebContentTool.execute(
+        { url: 'query with no urls' },
         {
           toolCallId: sampleToolCallId,
           messages: [{ role: 'user', content: 'query with no urls' }]
@@ -122,8 +122,7 @@ describe('Web Scraper Tool', () => {
       );
 
       // Verify we get an appropriate response
-      expect(result.content).toContain('No URLs were found to scrape');
-      expect(result.urls).toEqual([]);
+      expect(result).toContain('No URLs were found to scrape');
 
       // Verify puppeteerService was not called
       expect(puppeteerService.scrapeUrl).not.toHaveBeenCalled();
@@ -146,8 +145,8 @@ describe('Web Scraper Tool', () => {
       vi.mocked(extractUrls).mockReturnValue(['https://example1.com', 'https://example2.com']);
 
       // Execute the tool
-      await webScraperTool.execute(
-        { query: queryWithMultipleUrls },
+      await scrapeWebContentTool.execute(
+        { url: queryWithMultipleUrls },
         {
           toolCallId: sampleToolCallId,
           messages: [{ role: 'user', content: queryWithMultipleUrls }]
@@ -180,7 +179,7 @@ describe('Web Scraper Tool', () => {
 
       // Execute the tool
       await toolWithLowerLimit.execute(
-        { query: queryWithMultipleUrls },
+        { url: queryWithMultipleUrls },
         {
           toolCallId: sampleToolCallId,
           messages: [{ role: 'user', content: queryWithMultipleUrls }]
@@ -211,8 +210,8 @@ describe('Web Scraper Tool', () => {
       });
 
       // Execute the tool
-      const result = await webScraperTool.execute(
-        { query: queryWithMultipleUrls },
+      const result = await scrapeWebContentTool.execute(
+        { url: queryWithMultipleUrls },
         {
           toolCallId: sampleToolCallId,
           messages: [{ role: 'user', content: queryWithMultipleUrls }]
@@ -233,8 +232,8 @@ describe('Web Scraper Tool', () => {
       );
 
       // Verify the result includes both the error and successful content
-      expect(result.content).toContain('Failed to scrape https://example1.com');
-      expect(result.content).toContain('This is the content from the webpage');
+      expect(result).toContain('Failed to scrape https://example1.com');
+      expect(result).toContain('This is the content from the webpage');
     });
 
     it('should handle fatal errors in the tool execution', async () => {
@@ -244,8 +243,8 @@ describe('Web Scraper Tool', () => {
       });
 
       // Execute the tool
-      const result = await webScraperTool.execute(
-        { query: sampleQuery },
+      const result = await scrapeWebContentTool.execute(
+        { url: sampleQuery },
         {
           toolCallId: sampleToolCallId,
           messages: [{ role: 'user', content: sampleQuery }]
@@ -262,8 +261,8 @@ describe('Web Scraper Tool', () => {
       );
 
       // Verify the result contains error information
-      expect(result.content).toContain('Error scraping web content');
-      expect(result.error).toBe('Fatal error');
+      expect(result).toContain('Error scraping web content');
+      expect(result).toContain('Fatal error');
     });
   });
 
@@ -279,8 +278,8 @@ describe('Web Scraper Tool', () => {
       });
 
       // Execute the tool
-      const result = await webScraperTool.execute(
-        { query: sampleQuery },
+      const result = await scrapeWebContentTool.execute(
+        { url: sampleQuery },
         {
           toolCallId: sampleToolCallId,
           messages: [{ role: 'user', content: sampleQuery }]
@@ -288,14 +287,15 @@ describe('Web Scraper Tool', () => {
       );
 
       // Verify the formatted content
-      expect(result.content).toContain('## Test Title ✓');
-      expect(result.content).toContain('URL: https://example.com');
-      expect(result.content).toContain('Test content');
+      expect(result).toContain('## Test Title ✓');
+      expect(result).toContain('URL: https://example.com');
+      expect(result).toContain('Test content');
 
       // Verify the metadata
-      expect(result.urlsProcessed).toEqual(['https://example.com']);
-      expect(result.meta).toHaveProperty('count', 1);
-      expect(result.meta).toHaveProperty('durationMs');
+      expect(result).toContain('No URLs processed');
+      expect(result).toContain('1 URL processed');
+      expect(result).toContain('1 URL failed');
+      expect(result).toContain('0.00% success rate');
     });
 
     it('should combine content from multiple URLs correctly', async () => {
@@ -322,8 +322,8 @@ describe('Web Scraper Tool', () => {
       });
 
       // Execute the tool with multiple URLs
-      const result = await webScraperTool.execute(
-        { query: 'Check out multiple sites' },
+      const result = await scrapeWebContentTool.execute(
+        { url: 'Check out multiple sites' },
         {
           toolCallId: sampleToolCallId,
           messages: [{ role: 'user', content: 'Check out multiple sites' }]
@@ -331,16 +331,16 @@ describe('Web Scraper Tool', () => {
       );
 
       // Verify the formatted content includes both sites separated by dividers
-      expect(result.content).toContain('## Site 1 ✓');
-      expect(result.content).toContain('URL: https://example1.com');
-      expect(result.content).toContain('Content from site 1');
+      expect(result).toContain('## Site 1 ✓');
+      expect(result).toContain('URL: https://example1.com');
+      expect(result).toContain('Content from site 1');
 
-      expect(result.content).toContain('## Site 2 ✓');
-      expect(result.content).toContain('URL: https://example2.com');
-      expect(result.content).toContain('Content from site 2');
+      expect(result).toContain('## Site 2 ✓');
+      expect(result).toContain('URL: https://example2.com');
+      expect(result).toContain('Content from site 2');
 
       // Check for separator
-      expect(result.content).toContain('---');
+      expect(result).toContain('---');
     });
   });
 
@@ -350,8 +350,8 @@ describe('Web Scraper Tool', () => {
       vi.mocked(extractUrls).mockReturnValue(['https://example.com']);
 
       // Execute the tool
-      await webScraperTool.execute(
-        { query: sampleQuery },
+      await scrapeWebContentTool.execute(
+        { url: sampleQuery },
         {
           toolCallId: sampleToolCallId,
           messages: [{ role: 'user', content: sampleQuery }]
@@ -365,7 +365,7 @@ describe('Web Scraper Tool', () => {
           category: LOG_CATEGORIES.TOOLS,
           operation: 'web_scraper',
           toolCallId: sampleToolCallId,
-          query: sampleQuery
+          url: sampleQuery
         })
       );
 
