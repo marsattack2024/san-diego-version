@@ -109,156 +109,22 @@ This pattern ensures that:
 - The main chat component remains unchanged
 - Widget-specific requirements don't affect the core engine
 
-## Troubleshooting Common Issues
-
-### CORS Problems
-
-If the widget fails with CORS errors:
-- Ensure the domain is listed in `WIDGET_ALLOWED_ORIGINS` environment variable
-- Check that your endpoint is returning proper CORS headers
-- For development, use a localhost URL that matches the allowed origins
-
-### Cold Start Issues
-
-The widget implements several techniques to handle cold starts:
-- Automatic retry mechanism for the first message
-- API warming on initial page load
-- Visual feedback during retries
-- Proper error recovery with exponential backoff
-
-### Network Connectivity
-
-When network issues occur:
-- The widget shows a clear error message
-- A retry button is provided to resend failed messages
-- The error state is automatically cleared when typing a new message
-- Network recovery is handled gracefully
-
-## Deployment Status
-
-The widget is currently live and functional on:
-
-- [The High Rollers Club](https://programs.thehighrollersclub.io/)
-- [Marlan - Photography Profits](https://marlan.photographytoprofits.com/)
-
-## Usage
-
-### Basic Implementation
-
-```tsx
-import { ChatWidgetV2 } from '@/components/chat-widget';
-
-export default function Page() {
-  return (
-    <div>
-      <h1>My Website</h1>
-      {/* Other content */}
-      
-      <ChatWidgetV2 />
-    </div>
-  );
-}
-```
-
-### Customization
-
-You can customize the widget appearance and behavior:
-
-```tsx
-<ChatWidgetV2 
-  config={{
-    position: 'bottom-right',
-    title: 'Chat with Marlan',
-    primaryColor: '#0070f3',
-    greeting: 'Hello! How can I help with your photography needs today?',
-    placeholder: 'Ask me anything about photography...',
-    width: 360,
-    height: 500,
-  }}
-/>
-```
-
-## Admin Configuration Interface
-
-The widget includes an admin configuration interface:
-
-- Located at `/admin/widget`
-- Provides real-time previewing of widget appearance
-- Generates embed code for external websites
-- Supports multiple embedding methods (standard, GTM, direct)
-- Allows customization of text content and appearance
-
-## Embedding on External Websites
-
-To embed the widget on external websites, use one of these methods:
-
-### Standard Embed
-
-```html
-<script>
-(function() {
-  window.marlinChatConfig = {
-    position: 'bottom-right',
-    title: 'Ask Marlan',
-    primaryColor: '#0070f3',
-    greeting: 'I\'m your Mastermind AI companion!',
-    placeholder: 'Type your message...',
-    apiEndpoint: 'https://marlan.photographytoprofits.com/api/widget-chat'
-  };
-  
-  var script = document.createElement('script');
-  script.src = 'https://marlan.photographytoprofits.com/widget/chat-widget.js';
-  script.async = true;
-  script.defer = true;
-  document.head.appendChild(script);
-})();
-</script>
-```
-
-### Google Tag Manager Integration
-
-For sites using Google Tag Manager, a specialized version is available through the admin interface that includes:
-- Error tracking with dataLayer events
-- Loading status notifications
-- Auto-detection of duplicate widget loading
-
-### Direct Body Embed
-
-For sites that need the widget in a specific location:
-
-```html
-<div id="marlin-chat-container"></div>
-<script>
-(function() {
-  window.marlinChatConfig = {
-    position: 'bottom-right',
-    title: 'Ask Marlan',
-    primaryColor: '#0070f3',
-    greeting: 'I\'m your Mastermind AI companion!',
-    placeholder: 'Type your message...',
-    apiEndpoint: 'https://marlan.photographytoprofits.com/api/widget-chat',
-    container: 'marlin-chat-container'
-  };
-  
-  var script = document.createElement('script');
-  script.src = 'https://marlan.photographytoprofits.com/widget/chat-widget.js';
-  script.async = true;
-  script.defer = true;
-  document.head.appendChild(script);
-})();
-</script>
-```
-
 ## API Endpoint
 
 The widget communicates with the `/api/widget-chat` endpoint, which:
 
 - Handles anonymous user sessions
 - Processes messages using the unified chat engine
+- **Uses GPT-4o-mini model**: Unlike the main chat which uses GPT-4o, the widget specifically utilizes the GPT-4o-mini model for:
+  - Faster response times (lower latency)
+  - Reduced token costs for embedded contexts
+  - Appropriate capability level for widget interactions
 - Returns streaming responses with progress indications
 - Manages rate limiting with informative feedback
 - Provides CORS support for cross-domain embedding
 - Implements Vercel AI SDK's tool system for RAG capabilities
+
+This model selection offers an optimal balance of performance and quality for widget interactions, where speed and cost efficiency are particularly important.
 
 ## Vercel AI SDK Integration
 
@@ -285,6 +151,11 @@ The widget has been fully refactored to use the Vercel AI SDK:
 
 ## Performance Considerations
 
+- The widget uses the lightweight **GPT-4o-mini model** instead of the full GPT-4o for:
+  - Lower latency responses (up to 2x faster)
+  - Reduced compute costs in embedded contexts
+  - Smaller context window appropriate for widget interactions
+  - Comparable quality for typical widget use cases
 - The widget is designed to be lightweight (~20KB gzipped)
 - It uses lazy loading to minimize impact on page load times
 - All styles are isolated with unique class names to prevent conflicts
@@ -292,149 +163,69 @@ The widget has been fully refactored to use the Vercel AI SDK:
 - Implements efficient token usage in API calls
 - Uses LRU caching for frequently accessed knowledge
 
-## Edge Runtime and Wakeup System
+## Testing the Widget Integration
 
-The widget API is implemented using Next.js Edge Runtime for global low-latency deployment and faster startup times. To mitigate cold starts when the widget is embedded on external sites, a multi-layered wakeup system is implemented:
+The widget includes comprehensive testing through several approaches:
 
-### Cold Start Mitigation Strategy
+### Widget API Route Testing
 
-Our approach follows Vercel AI SDK best practices for minimizing cold start impact:
+The route handler for `/api/widget-chat` is tested to ensure:
 
-1. **Proactive Warming**:
-   - The widget automatically pings the API when it first loads (before user interaction)
-   - The wakeup.js script maintains warm functions through periodic pings
-   - API routes explicitly set `runtime = 'edge'` for faster cold starts than serverless functions
+1. **Schema Validation**: Input validation correctly identifies invalid requests
+2. **CORS Handling**: Cross-origin requests are properly handled
+3. **Model Configuration**: Verification that `gpt-4o-mini` model is correctly configured
+4. **Authentication Bypassing**: Anonymous sessions work correctly
+5. **Error Handling**: Proper error responses are returned in a widget-friendly format
 
-2. **Graceful Recovery**:
-   - The `useAppChat` hook implements automatic retry for the first message if a cold start causes a failure
-   - Error states in the UI are clear and informative when cold starts occur
-   - Exponential backoff prevents overwhelming the API during recovery
+Example test for verifying GPT-4o-mini model usage:
 
-3. **Optimized Response Handling**:
-   - The Vercel AI SDK's streaming capabilities show partial responses while the rest is being generated
-   - Appropriate timeouts prevent hanging requests during cold starts
-   - `onFinish` and `onError` callbacks provide visibility into request completion
-
-### Wakeup Ping Implementation
-
-1. **API Ping Endpoint** (`/api/ping`):
-   - Provides a lightweight endpoint for checking service health
-   - Wakes up related services (including the widget API) on each request
-   - Returns status information about connected services
-
-2. **Component Initialization** (in ChatWidgetV2):
-   - First load triggers a warmup request
-   - Silent failure ensures the UI isn't affected if the ping fails
-
-3. **Standalone Widget Script** (chat-widget-v2.js):
-   - Pings the API during initialization
-   - Extracts the base URL from the configured API endpoint
-
-4. **Wakeup Script** (`/widget/wakeup.js`):
-   - Optional script that can be embedded on high-traffic pages
-   - Sends periodic pings to keep the widget API warm
-   - Implements exponential backoff for error handling
-   - Reduces cold starts for users interacting with the widget
-
-### Embedding the Wakeup Script
-
-```html
-<!-- Marlan Chat Widget Wakeup Script -->
-<script src="https://marlan.photographytoprofits.com/widget/wakeup.js" async defer></script>
+```typescript
+it('should use gpt-4o-mini model for the widget', async () => {
+  // Import the POST handler with proper mocking
+  const { POST } = await import('@/app/api/widget-chat/route');
+  
+  // Create a valid request
+  const req = new Request('https://example.com/api/widget-chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: 'Hello from widget',
+      sessionId: '123e4567-e89b-12d3-a456-426614174000'
+    })
+  });
+  
+  // Call the handler
+  await POST(req);
+  
+  // Verify model configuration
+  expect(createChatEngine).toHaveBeenCalledWith(
+    expect.objectContaining({
+      model: 'gpt-4o-mini',
+      maxTokens: 800,
+      temperature: 0.4
+    })
+  );
+});
 ```
 
-### Configuration Options
+### Testing Considerations
 
-The wakeup script can be configured with custom options:
+When testing the widget API endpoint:
 
-```html
-<script>
-  window.marlanWakeupConfig = {
-    pingInterval: 120000, // 2 minutes
-    debug: true           // Enable console logs
-  };
-</script>
-<script src="https://marlan.photographytoprofits.com/widget/wakeup.js" async defer></script>
-```
+1. **Proper Mocking**: Mock external dependencies like the Supabase client and logger
+2. **Test CORS Headers**: Verify OPTIONS requests return proper CORS headers
+3. **Validate Request Schema**: Test against invalid inputs to ensure robust validation
+4. **Check Model Configuration**: Ensure GPT-4o-mini is consistently used
+5. **Error Handling**: Verify error responses follow the expected format
 
-### Usage Recommendations
+### Integration Testing
 
-For optimal performance on external sites:
+For full integration testing:
 
-1. **Include both scripts** on high-traffic pages:
-   ```html
-   <!-- Widget wakeup script - keeps the API warm -->
-   <script src="https://marlan.photographytoprofits.com/widget/wakeup.js" async defer></script>
-   
-   <!-- Main widget script - loads the chat interface -->
-   <script>
-     window.marlinChatConfig = {
-       position: 'bottom-right',
-       title: 'Ask Marlan',
-       // other configuration...
-     };
-     
-     var script = document.createElement('script');
-     script.src = 'https://marlan.photographytoprofits.com/widget/chat-widget.js';
-     script.async = true;
-     script.defer = true;
-     document.head.appendChild(script);
-   </script>
-   ```
-
-2. **Place the wakeup script** on your site's most frequently visited page to keep the API warm for all users
-
-## Multiple Domain Support
-
-The widget API includes proper CORS support for the following domains:
-- https://marlan.photographytoprofits.com
-- https://programs.thehighrollersclub.io
-- http://localhost:3000 (for development)
-
-Additional domains can be added by setting the `WIDGET_ALLOWED_ORIGINS` environment variable.
-
-## UI Enhancements
-
-The widget features several UI improvements for a better user experience:
-
-### Message Display
-- Smart content overflow handling with `overflow-hidden` and `break-words`
-- Properly contained message bubbles that maintain their styling
-- Empty assistant messages are not rendered, preventing visual artifacts
-- Clear visual distinction between user and assistant messages
-
-### Interaction Feedback
-- Clean, minimal "Processing..." indicator during streaming
-- Automatic scrolling as new content is generated
-- Continuous scroll updates during streaming to keep the latest content visible
-- Smooth scroll transitions for a polished feel
-
-### Error Handling
-- Clear visual feedback when errors occur
-- Simple retry mechanism for failed messages
-- Informative rate limit warnings with reset time information
-
-## Backward Compatibility
-
-To ensure existing implementations continue to work:
-- `chat-widget.js` is maintained as a symbolic link to `chat-widget-v2.js`
-- The API endpoint maintains compatibility with previous request formats
-- Embed snippets generated from the previous version continue to function
-
-### Upgraded Components
-The widget has been fully refactored to use the Vercel AI SDK:
-- Original `chat-widget.tsx` replaced with `chat-widget-v2.tsx`
-- Widget JS script refactored to use modern patterns
-- Enhanced with continuous scroll monitoring and empty message filtering
-
-## Performance Considerations
-
-- The widget is designed to be lightweight (~20KB gzipped)
-- It uses lazy loading to minimize impact on page load times
-- All styles are isolated with unique class names to prevent conflicts
-- The widget respects user preferences (dark mode, reduced motion, etc.)
-- Implements efficient token usage in API calls
-- Uses LRU caching for frequently accessed knowledge
+1. **End-to-End Tests**: Embed the widget in a test page and verify responses
+2. **Cross-Origin Testing**: Test embedding on different domains
+3. **Browser Compatibility**: Verify functionality across supported browsers
+4. **Rate Limit Testing**: Verify handling of rate-limited responses
 
 ## Edge Runtime and Wakeup System
 

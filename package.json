@@ -14,6 +14,8 @@
     "supabase": "npx supabase",
     "setup-supabase": "node scripts/setup-supabase.js",
     "deploy": "node scripts/deploy-vercel.js",
+    "check-vercel": "node scripts/check-vercel-env.js",
+    "verify-deployment": "node scripts/verify-deployment.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",

@@ -241,23 +241,38 @@ The pgvector extension must be enabled to support vector search capabilities.
 
 1. Push your code to a GitHub, GitLab, or Bitbucket repository
 2. Create an account on [Vercel](https://vercel.com) if you don't have one
-3. Click "New Project" in the Vercel dashboard
-4. Import your repository
-5. Configure the project settings:
-   - Framework preset: Next.js
-   - Build command: `next build`
-   - Install command: `npm install --legacy-peer-deps` (important to include the flag here too)
-   - Output directory: `.next`
-6. Add all environment variables from your `.env.local` file
-7. Deploy the project
+3. Verify your environment variables are configured properly:
+   ```bash
+   npm run check-vercel
+   ```
+4. Deploy using our automated script (recommended):
+   ```bash
+   npm run deploy
+   ```
+5. Or manually via the Vercel dashboard:
+   - Click "New Project" in the Vercel dashboard
+   - Import your repository
+   - Configure the project settings:
+     - Framework preset: Next.js
+     - Build command: `next build`
+     - Install command: `npm install --legacy-peer-deps` (important to include the flag here too)
+     - Output directory: `.next`
+   - Add all environment variables from your `.env.local` file
+   - Deploy the project
+
+For a detailed deployment checklist, see our [Vercel Deployment Guide](./docs/vercel-deployment-checklist.md).
 
 ### Post-Deployment Steps
 
-1. Update Supabase Auth settings with your production URL
-2. Verify that all API routes are working correctly
-3. Test authentication flow in production
-4. Test chat functionality with various agent types
-5. Test the RAG search functionality
+1. Run automated verification to check all critical endpoints:
+   ```bash
+   npm run verify-deployment -- --url https://your-deployed-url.vercel.app
+   ```
+2. Update Supabase Auth settings with your production URL
+3. Verify that all API routes are working correctly
+4. Test authentication flow in production
+5. Test chat functionality with various agent types
+6. Test the RAG search functionality
 
 ## Chat Widget Integration
 
@@ -364,6 +379,8 @@ For more detailed information on specific features, see the documentation in the
 - [Logging System](./docs/logging.md) - Detailed documentation on the logging system
 - [DeepSearch Integration](./docs/deepsearch.perplexity.md) - How Perplexity DeepSearch is integrated
 - [Chat Widget Documentation](./docs/feature%20chat-widget.md) - How to use the embeddable chat widget
+- [Route Handler Testing](./docs/README%20route-handler-testing.md) - Best practices for testing Next.js route handlers with Vitest
+- [Vercel Deployment Checklist](./docs/vercel-deployment-checklist.md) - Comprehensive checklist for Vercel deployments
 
 ## Contributing
 

@@ -1,0 +1,89 @@
+name: Vercel Build Simulation
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    
+    env:
+      # Minimal set of environment variables for build to pass
+      # These are just placeholders and not real values
+      NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.example
+      OPENAI_API_KEY: sk-example
+      PERPLEXITY_API_KEY: pplx-example
+      NEXT_PUBLIC_APP_URL: https://example.vercel.app
+      NODE_ENV: production
+      VERCEL_REGION: iad1
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install Dependencies
+        run: npm install --legacy-peer-deps
+        
+      - name: Type Check
+        run: npm run type-check
+        
+      - name: Build Project
+        run: npm run build
+        
+      - name: Run Tests
+        run: npm test
+        
+      - name: Verify Environment Variable Detection
+        run: |
+          node -e "
+          const { validateEnvironment } = require('./lib/env-validator.js');
+          const result = validateEnvironment();
+          console.log('Environment validation result:', result);
+          process.exit(result ? 0 : 1);
+          "
+
+  functions-check:
+    name: Edge Functions Check
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+        
+      - name: Check Edge Function Configuration
+        run: |
+          if [ -f "vercel.json" ]; then
+            echo "✅ vercel.json exists"
+            
+            # Check for edge functions configuration
+            EDGE_FUNCTIONS=$(grep -c "functions" vercel.json || echo "0")
+            if [ "$EDGE_FUNCTIONS" -gt "0" ]; then
+              echo "✅ Edge functions configuration found in vercel.json"
+            else
+              echo "⚠️ No edge functions configuration found in vercel.json"
+            fi
+            
+            # Check memory allocation for functions
+            MEMORY_CONFIG=$(grep -c "memory" vercel.json || echo "0")
+            if [ "$MEMORY_CONFIG" -gt "0" ]; then
+              echo "✅ Memory allocation for functions found"
+            else
+              echo "⚠️ No memory allocation for functions found"
+            fi
+          else
+            echo "❌ vercel.json not found"
+            exit 1
+          fi 
