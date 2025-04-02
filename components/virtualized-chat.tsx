@@ -11,6 +11,7 @@ import { virtuosoConfig, BOTTOM_THRESHOLD } from '@/lib/virtualization-config'; 
 import { styles } from '@/lib/tokens'; // Import styles from token system
 import { CustomScrollArea } from './ui/custom-scroll-area'; // Import custom scroll area
 import { Loader } from 'lucide-react';
+import equal from 'fast-deep-equal';
 
 export interface VirtualizedChatProps {
   chatId: string;
@@ -53,10 +54,16 @@ export function VirtualizedChat({
   const [totalMessageCount, setTotalMessageCount] = useState<number | null>(null);
   const pageSize = 20; // Number of messages to load per batch
 
-  // Update allMessages when messages prop changes
+  // Update allMessages when messages prop changes, BUT ONLY if content differs
   useEffect(() => {
-    setAllMessages(messages);
-  }, [messages]);
+    // Use deep comparison to avoid updates just for reference changes
+    if (!equal(messages, allMessages)) {
+      console.log('[VirtualizedChat] Messages prop differs from internal state. Updating internal state.');
+      setAllMessages(messages);
+    } else {
+      console.log('[VirtualizedChat] Messages prop reference changed, but content is equal. Skipping internal state update.');
+    }
+  }, [messages]); // Keep dependency on messages prop reference
 
   // Fetch total message count on initial load
   useEffect(() => {
@@ -242,6 +249,8 @@ export function VirtualizedChat({
   return (
     <>
       <EmptyPlaceholder />
+      {/* Add static text for testing flicker */}
+      <p className="text-center text-xs text-muted-foreground p-4">Static Test Text - Should Not Flicker</p>
 
       {allMessages.length > 0 && (
         <Virtuoso

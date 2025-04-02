@@ -28,6 +28,12 @@ export function Chat({
   const selectedAgentId = useChatStore(state => state.selectedAgentId);
   const updateConversationMetadata = useChatStore(state => state.updateConversationMetadata);
 
+  // ** Ensure initialMessages is always an array before passing to useChat **
+  const ensuredInitialMessages = Array.isArray(initialMessages) ? initialMessages : [];
+  if (!Array.isArray(initialMessages)) {
+    console.warn(`[Chat Component - ${id}] Received non-array initialMessages, defaulting to empty. Type: ${typeof initialMessages}`);
+  }
+
   // Track when user sends a message to control scrolling behavior
   const [hasUserSentMessage, setHasUserSentMessage] = useState(false);
 
@@ -82,7 +88,7 @@ export function Chat({
       deepSearchEnabled: deepSearchEnabled === true,
       agentId: selectedAgentId
     },
-    initialMessages,
+    initialMessages: ensuredInitialMessages,
     experimental_throttle: 100,
     sendExtraMessageFields: true,
     generateId: generateUUID,
