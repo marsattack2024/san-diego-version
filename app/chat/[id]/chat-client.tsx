@@ -22,6 +22,11 @@ export function ChatClient({ chatId }: ChatClientProps) {
   // Keep track of whether we've already fetched messages for this chat
   const [hasFetchedMessages, setHasFetchedMessages] = useState(false);
 
+  // Reset hasFetchedMessages when chatId changes
+  useEffect(() => {
+    setHasFetchedMessages(false);
+  }, [chatId]);
+
   // Prioritize URL parameter by setting current conversation immediately
   useEffect(() => {
     if (!isHydrated || !chatId) return;
@@ -74,60 +79,41 @@ export function ChatClient({ chatId }: ChatClientProps) {
           createdAt: msg.createdAt
         })) || [];
 
-        // Update the chat store with fetched messages
-        if (messages.length > 0) {
-          // First, ensure the conversation exists in the store
-          if (!conversations[chatId]) {
-            // If the conversation doesn't exist in the store, create a new one with the same ID
-            log.info('Creating conversation in store for existing chat', { id: chatId });
-
-            useChatStore.setState((state) => ({
-              conversations: {
-                ...state.conversations,
-                [chatId]: {
-                  id: chatId,
-                  messages: [],
-                  createdAt: chatData.createdAt || new Date().toISOString(),
-                  updatedAt: chatData.updatedAt || new Date().toISOString(),
-                  title: chatData.title,
-                  agentId: chatData.agentId || state.selectedAgentId,
-                  deepSearchEnabled: chatData.deepSearchEnabled || state.deepSearchEnabled,
-                },
-              },
-              currentConversationId: chatId,
-            }));
-          }
-
-          // Update the messages in the store
+        // **Refined Logic: Only update messages, don't overwrite metadata**
+        if (conversations[chatId]) {
+          // If the conversation already exists in the store (likely from history sync),
+          // just update its messages.
+          log.debug('Conversation exists in store, updating messages only', { id: chatId, messageCount: messages.length });
           updateMessages(chatId, messages);
-        }
-
-        // If no messages were found but the chat ID exists, create an empty conversation
-        else {
-          log.info('No messages found, creating empty conversation', { id: chatId });
-
-          const timestamp = new Date().toISOString();
-          const selectedAgentId = useChatStore.getState().selectedAgentId;
-
+        } else {
+          // If the conversation genuinely doesn't exist in the store,
+          // create it using the fetched data (this path should be less common).
+          log.info('Conversation not found in store, creating based on fetched data', { id: chatId });
           useChatStore.setState((state) => ({
             conversations: {
               ...state.conversations,
               [chatId]: {
                 id: chatId,
-                messages: [],
-                createdAt: timestamp,
-                updatedAt: timestamp,
-                title: 'New Chat',
-                agentId: selectedAgentId,
-                deepSearchEnabled: state.deepSearchEnabled,
+                messages: messages, // Use fetched messages
+                createdAt: chatData.createdAt || new Date().toISOString(),
+                updatedAt: chatData.updatedAt || new Date().toISOString(),
+                // Use fetched title, default to 'New Chat' only if API didn't provide one
+                title: chatData.title || 'New Chat',
+                agentId: chatData.agentId || state.selectedAgentId,
+                deepSearchEnabled: chatData.deepSearchEnabled || state.deepSearchEnabled,
               },
             },
+            // Ensure this new/fetched chat becomes the current one
             currentConversationId: chatId,
           }));
         }
 
-        // Set as current conversation
-        setCurrentConversation(chatId);
+        // Ensure the current conversation ID is set correctly in the store
+        // (might be redundant if the above logic handles it, but safe to ensure)
+        if (useChatStore.getState().currentConversationId !== chatId) {
+          setCurrentConversation(chatId);
+        }
+
         setIsLoading(false);
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';

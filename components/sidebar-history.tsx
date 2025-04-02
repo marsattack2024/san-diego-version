@@ -364,7 +364,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
         {groupedChats.today.length > 0 && (
           <div className="mb-4">
             <h3 className="font-semibold mb-1 text-xs text-sidebar-foreground/60 px-4">Today</h3>
-            <div className="space-y-1">
+            <div className="flex flex-col gap-1">
               {groupedChats.today.map((chat) => (
                 <PureChatItem
                   key={chat.id}
@@ -384,7 +384,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
         {groupedChats.yesterday.length > 0 && (
           <div className="mb-4">
             <h3 className="font-semibold mb-1 text-xs text-sidebar-foreground/60 px-4">Yesterday</h3>
-            <div className="space-y-1">
+            <div className="flex flex-col gap-1">
               {groupedChats.yesterday.map((chat) => (
                 <PureChatItem
                   key={chat.id}
@@ -404,7 +404,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
         {groupedChats.pastWeek.length > 0 && (
           <div className="mb-4">
             <h3 className="font-semibold mb-1 text-xs text-sidebar-foreground/60 px-4">Past Week</h3>
-            <div className="space-y-1">
+            <div className="flex flex-col gap-1">
               {groupedChats.pastWeek.map((chat) => (
                 <PureChatItem
                   key={chat.id}
@@ -434,7 +434,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
                 </button>
               )}
             </h3>
-            <div className="space-y-1">
+            <div className="flex flex-col gap-1">
               {(showAllOlder ? groupedChats.older : groupedChats.older.slice(0, 5)).map((chat) => (
                 <PureChatItem
                   key={chat.id}

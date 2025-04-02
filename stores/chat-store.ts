@@ -438,9 +438,12 @@ export const useChatStore = create<ChatState>()(
 
       updateMessages: (conversationId, messages) => {
         const { conversations } = get();
-        if (!conversations[conversationId]) return;
+        if (!conversations[conversationId]) {
+          console.warn(`[ChatStore.updateMessages] Conversation ${conversationId} not found. Skipping update.`);
+          return;
+        }
 
-        const timestamp = new Date().toISOString();
+        console.log(`[ChatStore.updateMessages] Updating messages for ${conversationId}. Received ${messages.length} messages.`);
 
         // Get existing messages to preserve any enhanced properties
         const existingMessages = conversations[conversationId].messages;
@@ -466,15 +469,29 @@ export const useChatStore = create<ChatState>()(
           return messageWithId;
         });
 
-        set({
-          conversations: {
-            ...conversations,
-            [conversationId]: {
-              ...conversations[conversationId],
-              messages: mergedMessages,
-              updatedAt: timestamp
-            }
+        // **Detailed Logging Before State Update**
+        console.log(`[ChatStore.updateMessages] Merged messages for ${conversationId}:`, JSON.stringify(mergedMessages.map(m => ({ id: m.id, role: m.role, len: m.content.length })), null, 2));
+        console.log(`[ChatStore.updateMessages] Current messages in state before update for ${conversationId}:`, JSON.stringify(conversations[conversationId].messages.map(m => ({ id: m.id, role: m.role, len: m.content.length })), null, 2));
+
+        set((state) => {
+          // Ensure we have the latest state reference inside set()
+          const currentConversations = state.conversations;
+          if (!currentConversations[conversationId]) {
+            console.warn(`[ChatStore.updateMessages] Conversation ${conversationId} disappeared before state update!`);
+            return state; // Return unchanged state
           }
+
+          const newState = {
+            conversations: {
+              ...currentConversations,
+              [conversationId]: {
+                ...currentConversations[conversationId],
+                messages: mergedMessages,
+              }
+            }
+          };
+          console.log(`[ChatStore.updateMessages] Setting new state for ${conversationId}. Messages count: ${newState.conversations[conversationId].messages.length}`);
+          return newState;
         });
       },
 
