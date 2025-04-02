@@ -6,7 +6,7 @@
  * to the chat engine components.
  */
 
-import { createChatEngine, ChatEngineConfig } from '@/lib/chat-engine/core';
+import { createChatEngine } from '@/lib/chat-engine/core';
 import { detectAgentType } from '@/lib/chat-engine/agent-router';
 import { createToolSet } from '@/lib/tools/registry.tool';
 import { prompts } from '@/lib/chat-engine/prompts';
@@ -14,6 +14,9 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createClient } from '@/utils/supabase/server';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { createServerClient } from '@supabase/ssr';
+// Import config from its dedicated file
+import { ChatEngineConfig } from '@/lib/chat-engine/chat-engine.config';
 
 // Maintain existing runtime directives
 export const runtime = 'edge';
