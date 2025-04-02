@@ -1,3 +1,8 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
 # Next.js 15 Route Handler Patterns
 
 This document outlines the standardized patterns for route handlers in our Next.js 15 application.
@@ -186,12 +191,11 @@ All route handlers should:
 
 #### Recently Standardized Routes
 
-- ✅ `app/api/chat/update-title/route.ts` - Title generation for chat sessions (parameters standardized to use `sessionId` instead of `chatId`)
-- ✅ `app/api/chat/session/route.ts` - Chat session management with standardized parameters
+- ✅ `app/api/chat/update-title/route.ts` - Title generation for chat sessions
 
 #### Routes Still Being Standardized
 
-- ⬜ None - All routes currently follow the standard pattern
+- ⬜ `app/api/chat/session/route.ts` - Using NextRequest instead of Request
 
 #### Serverless Routes
 

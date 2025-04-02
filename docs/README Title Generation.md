@@ -315,49 +315,53 @@ async onFinish({ text, response, usage }) {
 }
 ```
 
-## API Endpoint
+## API Endpoint Structure
 
-The `/api/chat/update-title` endpoint:
+The title generation API endpoint is designed to be flexible, supporting both direct title setting and AI-generated titles:
 
-```typescript
-export async function POST(request: NextRequest) {
-  const operationId = generateShortId();
-  
-  try {
-    // Parse request body
-    const body = await request.json();
-    const { sessionId, content, userId: requestUserId } = body;
-    
-    // Validate and authenticate
-    if (!sessionId) return errorResponse(400, 'Session ID is required');
-    
-    // Authenticate the user (via headers, cookies, or session lookup)
-    const authenticatedUserId = await getAuthenticatedUserId();
-    
-    // Generate title
-    const title = await generateTitle(sessionId, content, authenticatedUserId);
-    
-    if (!title) {
-      return addCorsHeaders(
-        NextResponse.json({
-          success: false,
-          error: 'Failed to generate title'
-        }, { status: 500 })
-      );
-    }
-    
-    return addCorsHeaders(
-      NextResponse.json({
-        success: true,
-        chatId: sessionId,
-        title
-      })
-    );
-  } catch (error) {
-    // Handle errors
-  }
+### Endpoint: `/api/chat/update-title`
+
+**Method**: POST
+
+**Parameters**:
+- `sessionId`: (required) UUID of the chat session to update
+- `content`: (required) Content to use for generating the title, typically the first user message
+- `userId`: (optional) User ID for service-to-service calls when the request isn't authenticated
+
+**Response**:
+```json
+{
+  "success": true,
+  "chatId": "uuid-of-chat",
+  "title": "Generated Title"
 }
 ```
+
+**Error Response**:
+```json
+{
+  "success": false,
+  "error": "Error message"
+}
+```
+
+### Parameter Change (Recent Update)
+
+In a recent update, the API endpoint parameter names were standardized to match the naming convention used throughout the application:
+
+- Changed `chatId` parameter to `sessionId` to match the session-focused architecture
+- Content-based parameter naming to support both direct title setting and AI generation
+
+This change aligns with the data schema where chat sessions are identified by their session ID, and ensures naming consistency across the API surface.
+
+### Authentication Options
+
+The API supports two authentication methods:
+
+1. **Cookie-based Authentication**: Standard auth using Supabase Auth cookies, for browser clients
+2. **Service Account Authentication**: Using `userId` parameter for service-to-service calls
+
+This dual approach allows flexible integration while maintaining security.
 
 ## Logging Implementation
 
