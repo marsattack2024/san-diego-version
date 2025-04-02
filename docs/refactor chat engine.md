@@ -11,7 +11,7 @@
 - [x] Phase 3: Authentication Service
 - [x] Phase 4: Context Service
 - [x] Phase 5: AI Stream Service
-- [ ] Phase 6: Title Generation Service Integration
+- [x] Phase 6: Title Generation Service Integration
 - [ ] Phase 7: Message Persistence Refinement
 - [ ] Phase 8: Core Engine Facade Implementation
 - [ ] Phase 9: Cleanup & Final Review
@@ -77,7 +77,7 @@
 
 ## Phase 6: Title Generation Service Integration
 
--   [ ] **Session Title Generation (`lib/chat/title-service.ts`)**
+-   [x] **Session Title Generation (`lib/chat/title-service.ts`)**
     *   **Action:** Identify the title generation logic within the `onFinish` callback in `core.ts`.
     *   **Action:** Move this logic into the *existing* `lib/chat/title-service.ts`. Refactor the service if needed to accept necessary parameters (e.g., `sessionId`, `userId`, message content/context) and encapsulate the logic for checking conditions (message count) and making the API call to `/api/chat/update-title`.
     *   **Action:** Ensure the API call uses standard `fetch` and includes necessary authentication headers (this might involve coordinating with the `AuthService` or passing tokens).

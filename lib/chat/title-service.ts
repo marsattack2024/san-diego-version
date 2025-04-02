@@ -1,18 +1,17 @@
 import { titleLogger } from '../logger/title-logger';
 import { createClient } from '../../utils/supabase/server';
-import { cacheService } from '../cache/cache-service';
 import { openai } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 
 // Cache keys - used only for basic tracking, no locking or rate limiting
-const TITLE_GENERATION_ATTEMPTS_KEY = 'title_generation:attempts';
+// const TITLE_GENERATION_ATTEMPTS_KEY = 'title_generation:attempts';
 
 /**
  * Clean and validate a title from the AI response
  */
 function cleanTitle(rawTitle: string): string {
     // Remove quotes that GPT often adds
-    let cleanedTitle = rawTitle.trim().replace(/^["']|["']$/g, '');
+    let cleanedTitle = rawTitle.trim().replace(/^["\']|["\']$/g, ''); // Fixed regex
 
     // Truncate if too long (50 chars max)
     if (cleanedTitle.length > 50) {
@@ -28,6 +27,64 @@ function cleanTitle(rawTitle: string): string {
 }
 
 /**
+ * Checks if title generation should proceed based on message count and existing title.
+ * @returns true if title generation should proceed, false otherwise.
+ */
+async function shouldGenerateTitle(chatId: string, userId?: string): Promise<boolean> {
+    const startTime = performance.now();
+    try {
+        const supabase = await createClient();
+
+        // 1. Check session title
+        const { data: sessionData, error: sessionError } = await supabase
+            .from('sd_chat_sessions')
+            .select('title')
+            .eq('id', chatId)
+            .maybeSingle();
+
+        if (sessionError) {
+            titleLogger.titleGenerationFailed({ chatId, userId, error: `Error fetching session data: ${sessionError.message}`, durationMs: Date.now() - startTime });
+            return false;
+        }
+
+        const defaultTitles = ['New Chat', 'Untitled Conversation', 'New Conversation', null, undefined, ''];
+        if (sessionData && sessionData.title && !defaultTitles.includes(sessionData.title)) {
+            titleLogger.titleExists({ chatId, userId, currentTitle: sessionData.title });
+            return false;
+        }
+
+        // 2. Check message count
+        const { count, error: countError } = await supabase
+            .from('sd_chat_histories')
+            .select('id', { count: 'exact', head: true })
+            .eq('session_id', chatId);
+
+        if (countError) {
+            titleLogger.titleGenerationFailed({ chatId, userId, error: `Error counting messages: ${countError.message}`, durationMs: Date.now() - startTime });
+            return sessionData === null;
+        }
+
+        const messageCount = count === null ? 0 : count;
+        const proceed = messageCount <= 2;
+
+        if (!proceed) {
+            titleLogger.titleGenerationFailed({ chatId, userId, error: `Skipping generation: message count ${messageCount} > 2`, durationMs: 0 });
+        }
+
+        return proceed;
+
+    } catch (error) {
+        titleLogger.titleGenerationFailed({
+            chatId,
+            userId,
+            error: `Unexpected error during title check: ${error instanceof Error ? error.message : String(error)}`,
+            durationMs: Math.round(performance.now() - startTime)
+        });
+        return false;
+    }
+}
+
+/**
  * Fetch the current title from the database
  */
 async function getCurrentTitle(chatId: string, userId?: string): Promise<string | null> {
@@ -39,34 +96,22 @@ async function getCurrentTitle(chatId: string, userId?: string): Promise<string 
             .from('sd_chat_sessions')
             .select('title')
             .eq('id', chatId)
-            .single();
+            .maybeSingle();
 
         if (error) {
-            throw new Error(`Failed to fetch current title: ${error.message}`);
-        }
-
-        const durationMs = Math.round(performance.now() - startTime);
-
-        // Log if a non-default title already exists
-        const defaultTitles = ['New Chat', 'Untitled Conversation', 'New Conversation', null, undefined, ''];
-        if (data?.title && !defaultTitles.includes(data.title)) {
-            titleLogger.titleExists({
-                chatId,
-                currentTitle: data.title,
-                userId
-            });
+            if (error.code !== 'PGRST116') {
+                titleLogger.titleGenerationFailed({ chatId, userId, error: `Failed to fetch current title: ${error.message}`, durationMs: 0 });
+            }
+            return null;
         }
 
         return data?.title || null;
     } catch (error) {
-        const durationMs = Math.round(performance.now() - startTime);
-        titleLogger.titleUpdateResult({
+        titleLogger.titleGenerationFailed({
             chatId,
-            newTitle: 'Error fetching current title',
-            success: false,
-            error: error instanceof Error ? error.message : String(error),
-            durationMs,
-            userId
+            userId,
+            error: `Exception fetching current title: ${error instanceof Error ? error.message : String(error)}`,
+            durationMs: Math.round(performance.now() - startTime)
         });
         return null;
     }
@@ -94,65 +139,62 @@ async function updateTitleInDatabase(chatId: string, newTitle: string, userId?: 
 
         // Invalidate history cache to ensure the sidebar shows the new title
         try {
-            await fetch('/api/history/invalidate', { method: 'POST' });
+            // TODO: Replace fetch with a more robust inter-service communication if needed
+            // Or consider if cache invalidation is truly necessary here or handled elsewhere
+            // For now, keep the fetch but acknowledge it might not be ideal
+            fetch('/api/history/invalidate', { method: 'POST' });
         } catch (cacheError) {
-            // Ignore cache invalidation errors, non-critical
+            titleLogger.titleGenerationFailed({
+                chatId,
+                userId,
+                error: `Cache invalidation fetch failed: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`,
+                durationMs: 0 // Duration isn't relevant here
+            });
         }
 
-        const durationMs = Math.round(performance.now() - startTime);
         titleLogger.titleUpdateResult({
             chatId,
             newTitle,
             success: true,
-            durationMs,
-            userId
+            userId,
+            durationMs: Math.round(performance.now() - startTime)
         });
-
         return true;
+
     } catch (error) {
-        const durationMs = Math.round(performance.now() - startTime);
         titleLogger.titleUpdateResult({
             chatId,
             newTitle,
             success: false,
+            userId,
             error: error instanceof Error ? error.message : String(error),
-            durationMs,
-            userId
+            durationMs: Math.round(performance.now() - startTime)
         });
         return false;
     }
 }
 
 /**
- * Generate and save a title for a chat session based on first user message
+ * Generate and save a title for a chat session based on first user message.
+ * Includes logic to check if generation should proceed.
  */
 export async function generateAndSaveChatTitle(
     chatId: string,
     firstUserMessageContent: string,
     userId?: string
 ): Promise<void> {
-    // Skip if no message content
     if (!firstUserMessageContent || firstUserMessageContent.trim().length === 0) {
+        titleLogger.titleGenerationFailed({ chatId, userId, error: 'Skipping generation: No message content provided', durationMs: 0 });
         return;
     }
 
     const startTime = performance.now();
 
     try {
+        const proceed = await shouldGenerateTitle(chatId, userId);
+        if (!proceed) { return; }
+
         titleLogger.attemptGeneration({ chatId, userId });
-
-        // Check if title is still default
-        const currentTitle = await getCurrentTitle(chatId, userId);
-        const defaultTitles = ['New Chat', 'Untitled Conversation', 'New Conversation', null, undefined, ''];
-
-        if (!defaultTitles.includes(currentTitle)) {
-            titleLogger.titleExists({
-                chatId,
-                currentTitle: currentTitle || 'unknown',
-                userId
-            });
-            return;
-        }
 
         // Truncate message for API call if needed
         const truncatedMessage = firstUserMessageContent.length > 1000
@@ -160,12 +202,13 @@ export async function generateAndSaveChatTitle(
             : firstUserMessageContent;
 
         // Generate title using Vercel AI SDK with OpenAI
+        const llmStartTime = performance.now();
         const result = await generateText({
-            model: openai('gpt-3.5-turbo'),
+            model: openai('gpt-3.5-turbo'), // Consider gpt-4o-mini for cost/speed?
             messages: [
                 {
                     role: 'system',
-                    content: 'Create a title that summarizes the main topic or intent of the user message in 2-6 words. Do not use quotes in your response.'
+                    content: 'Create a title that summarizes the main topic or intent of the user message in 2-6 words. Do not use quotes in your response. Keep it concise and relevant.'
                 },
                 {
                     role: 'user',
@@ -173,39 +216,31 @@ export async function generateAndSaveChatTitle(
                 }
             ],
             maxTokens: 30,
-            temperature: 0.7
+            temperature: 0.6 // Slightly reduced temperature for consistency
         });
+        const llmDurationMs = Math.round(performance.now() - llmStartTime);
 
         // Extract and clean the title
         const cleanedTitle = cleanTitle(result.text || 'Chat Conversation');
 
+        titleLogger.titleGenerated({
+            chatId,
+            userId,
+            generatedTitle: cleanedTitle,
+            durationMs: llmDurationMs
+        });
+
         // Update the title in the database
-        const updated = await updateTitleInDatabase(chatId, cleanedTitle, userId);
-        if (updated) {
-            titleLogger.titleGenerated({
-                chatId,
-                generatedTitle: cleanedTitle,
-                durationMs: Math.round(performance.now() - startTime),
-                userId
-            });
+        await updateTitleInDatabase(chatId, cleanedTitle, userId);
+        // Logging for update result happens within updateTitleInDatabase
 
-            // Log additional success information
-            titleLogger.titleUpdateResult({
-                chatId,
-                newTitle: cleanedTitle,
-                success: true,
-                durationMs: Math.round(performance.now() - startTime),
-                userId
-            });
-        }
     } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
-
+        // Catch errors from shouldGenerateTitle, generateText, or updateTitleInDatabase
         titleLogger.titleGenerationFailed({
             chatId,
-            error: errorMessage,
-            durationMs: Math.round(performance.now() - startTime),
-            userId
+            userId,
+            error: error instanceof Error ? error.message : String(error),
+            durationMs: Math.round(performance.now() - startTime)
         });
     }
 } 
