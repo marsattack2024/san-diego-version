@@ -1,6 +1,6 @@
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { successResponse, errorResponse, unauthorizedError, validationError, withErrorHandling } from '@/lib/utils/route-handler';
+import { successResponse, errorResponse, unauthorizedError, validationError } from '@/lib/utils/route-handler';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { generateAndSaveChatTitle } from '@/lib/chat/title-service';
 
@@ -12,7 +12,7 @@ export const runtime = 'edge';
  * 1. If just given sessionId and content, it uses AI to generate a title for the session
  * 2. If given sessionId and newTitle (via content), it directly updates the title
  */
-export const POST = withErrorHandling(async (request: Request): Promise<Response> => {
+export async function POST(request: Request): Promise<Response> {
     try {
         // Parse the incoming request data
         const body = await request.json();
@@ -122,4 +122,4 @@ export const POST = withErrorHandling(async (request: Request): Promise<Response
 
         return validationError('Invalid request body', error);
     }
-}); 
+} 
