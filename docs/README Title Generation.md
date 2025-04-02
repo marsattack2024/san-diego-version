@@ -4,7 +4,7 @@ Goal: Implement backend AI title generation using Vercel AI SDK with OpenAI, tri
 
 ## Overview
 
-Chat title generation is handled server-side through the Vercel AI SDK, automatically generating contextually relevant titles when a user sends their first message in a conversation. The system uses Redis for locking and coordination, OpenAI for title generation, and comprehensive logging for monitoring performance and errors.
+Chat title generation is handled server-side through the Vercel AI SDK, automatically generating contextually relevant titles when a user sends their first message in a conversation. The system uses API calls with internal authentication for service-to-service communication, OpenAI for title generation, and comprehensive logging for monitoring performance and errors.
 
 ## System Architecture
 
@@ -326,7 +326,10 @@ The title generation API endpoint is designed to be flexible, supporting both di
 **Parameters**:
 - `sessionId`: (required) UUID of the chat session to update
 - `content`: (required) Content to use for generating the title, typically the first user message
-- `userId`: (optional) User ID for service-to-service calls when the request isn't authenticated
+- `userId`: (required) User ID for authentication purposes, especially critical for service-to-service calls
+
+**Headers**:
+- `X-Internal-Secret`: Used for internal service-to-service authentication to bypass RLS
 
 **Response**:
 ```json
@@ -345,23 +348,41 @@ The title generation API endpoint is designed to be flexible, supporting both di
 }
 ```
 
-### Parameter Change (Recent Update)
-
-In a recent update, the API endpoint parameter names were standardized to match the naming convention used throughout the application:
-
-- Changed `chatId` parameter to `sessionId` to match the session-focused architecture
-- Content-based parameter naming to support both direct title setting and AI generation
-
-This change aligns with the data schema where chat sessions are identified by their session ID, and ensures naming consistency across the API surface.
-
-### Authentication Options
+### Authentication & Database Access
 
 The API supports two authentication methods:
 
 1. **Cookie-based Authentication**: Standard auth using Supabase Auth cookies, for browser clients
-2. **Service Account Authentication**: Using `userId` parameter for service-to-service calls
+   - Uses standard Supabase client (`createRouteHandlerClient`)
+   - Subject to Row Level Security (RLS) policies
+   - User can only update their own chat sessions (`auth.uid() = user_id` RLS policy)
 
-This dual approach allows flexible integration while maintaining security.
+2. **Internal Service Authentication**: Using `X-Internal-Secret` header for service-to-service calls
+   - Uses admin Supabase client (`createRouteHandlerAdminClient`) to bypass RLS
+   - Validates against `INTERNAL_API_SECRET` environment variable
+   - Requires valid `userId` in the request body
+   - Not subject to RLS policies, can update any session
+
+This dual approach allows the title generation service to securely update session titles even without user cookies, which is essential for server-side operations. The admin client is only used when the internal secret is validated, maintaining security while enabling necessary internal functionality.
+
+### RLS Policies & Admin Client
+
+The chat session table (`sd_chat_sessions`) has strict Row Level Security (RLS) policies that only allow users to update their own sessions. The key policy for update operations is:
+
+```sql
+CREATE POLICY "Users can update their own chat sessions"
+ON "public"."sd_chat_sessions"
+FOR UPDATE USING (auth.uid() = user_id);
+```
+
+When the title generation service attempts to update a title from a server-side context (without the user's active session), these RLS policies would normally block the operation. To address this:
+
+1. The route handler uses `createRouteHandlerAdminClient()` function when the `X-Internal-Secret` is validated
+2. This admin client uses the Supabase service role key instead of the anon key
+3. Service role keys bypass RLS policies entirely, allowing necessary database operations
+4. The admin client is only used for authenticated internal service calls, maintaining security
+
+This implementation ensures titles can be properly generated and updated while maintaining proper data access controls.
 
 ## Logging Implementation
 
@@ -449,13 +470,14 @@ export const titleLogger = {
 **Symptoms**:
 - Chat remains with default "New Conversation" title
 - No title updates visible in the sidebar
+- `400 Bad Request` errors in logs for the `/api/chat/update-title` endpoint
 
 **Possible Causes**:
 - User message not properly extracted
 - OpenAI API call failing
-- Database permissions issues
-- Rate limiting triggered
-- Lock acquisition failures
+- Database permissions issues with RLS policies
+- Missing or incorrect `INTERNAL_API_SECRET` environment variable
+- Admin client not being used for internal service calls
 
 **Diagnosis Steps**:
 1. Check logs for errors in title generation API calls:
@@ -463,16 +485,21 @@ export const titleLogger = {
    grep -i "title_generation" /path/to/logs | grep -i "error\|fail"
    ```
 2. Verify the user message is properly extracted in chat engine logs
-3. Check for Redis locking errors:
+3. Check for authentication and authorization errors:
    ```bash
-   grep -i "title_lock_failed" /path/to/logs
+   grep -i "Authentication failed" /path/to/logs
    ```
-4. Check database permissions for the service account
+4. Check RLS policies on `sd_chat_sessions` table:
+   ```sql
+   SELECT * FROM pg_policies WHERE tablename = 'sd_chat_sessions';
+   ```
+5. Verify `INTERNAL_API_SECRET` environment variable is properly set
+6. Verify service role key (`SUPABASE_SERVICE_ROLE_KEY`) is properly set
 
 **Solutions**:
 - If OpenAI API failures: Check API key and quota
-- If lock failures: Ensure Redis is functioning, check for stuck locks
-- If database issues: Verify Supabase permissions and connection
+- If database permissions issues: Ensure admin client is used for internal API calls
+- If environment issues: Verify `INTERNAL_API_SECRET` and service role key are set properly
 - For message extraction issues: Debug the message context in chat engine
 
 ### 2. Slow Title Generation
@@ -574,6 +601,33 @@ export const titleLogger = {
    ```
    curl -X POST https://your-domain.com/api/health/title-generation
    ```
+
+## Recent Improvements
+
+The title generation system has recently been enhanced with the following improvements:
+
+1. **Admin Client for Internal Services**: 
+   - Implemented `createRouteHandlerAdminClient()` for internal service calls
+   - Admin client bypasses RLS policies using the service role key
+   - Authenticated via `X-Internal-Secret` header for security
+   - Resolves issues with 400 Bad Request errors from RLS policy violations
+
+2. **Improved Authentication Logic**:
+   - Added dual authentication paths (cookie-based and internal service)
+   - Enhanced validation of internal requests
+   - Better logging of authentication methods and results
+
+3. **Enhanced Error Handling**:
+   - Comprehensive client type logging for easier debugging
+   - Clear error messages for security-related failures
+   - Proper status codes for different error types
+
+4. **Security Enhancements**:
+   - Admin client only used when internal secret is validated
+   - Verification of user ID in request body
+   - Environment-variable-based secret with no hardcoding
+
+These improvements ensure the title generation system works reliably across all environments while maintaining proper security controls.
 
 ## Future Enhancements
 

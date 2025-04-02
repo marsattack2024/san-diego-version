@@ -1,7 +1,7 @@
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { successResponse, errorResponse, unauthorizedError, validationError } from '@/lib/utils/route-handler';
-import { createRouteHandlerClient } from '@/lib/supabase/route-client';
+import { createRouteHandlerClient, createRouteHandlerAdminClient } from '@/lib/supabase/route-client';
 import { cleanTitle, updateTitleInDatabase } from '@/lib/chat/title-utils';
 import { openai } from '@ai-sdk/openai';
 import { generateText } from 'ai';
@@ -40,10 +40,12 @@ export async function POST(request: Request): Promise<Response> {
         let isAuthenticated = false;
         const internalSecretFromHeader = request.headers.get('X-Internal-Secret');
         const internalSecretFromEnv = process.env.INTERNAL_API_SECRET;
+        let isInternalRequest = false;
 
         if (internalSecretFromHeader && internalSecretFromEnv && internalSecretFromHeader === internalSecretFromEnv) {
             // Authenticated via internal secret
             isAuthenticated = true;
+            isInternalRequest = true;
             authMethod = 'internal_secret';
             edgeLogger.debug('Authenticated via internal API secret', {
                 category: LOG_CATEGORIES.AUTH,
@@ -85,6 +87,20 @@ export async function POST(request: Request): Promise<Response> {
             authMethod // Log how auth was performed
         });
 
+        // Create the appropriate client instance AFTER authentication
+        // Use admin client for internal requests to bypass RLS
+        const supabase = isInternalRequest
+            ? await createRouteHandlerAdminClient()
+            : await createRouteHandlerClient();
+
+        // Log the client type being used
+        edgeLogger.debug('Using Supabase client', {
+            category: LOG_CATEGORIES.SYSTEM,
+            clientType: isInternalRequest ? 'admin_client' : 'standard_client',
+            operationId,
+            sessionId
+        });
+
         // --- Title Generation --- 
         const llmStartTime = Date.now();
         try {
@@ -108,11 +124,11 @@ export async function POST(request: Request): Promise<Response> {
             });
 
             // --- Database Update --- 
-            // Use the userId confirmed via auth (which is userIdFromRequest)
-            const dbUpdateSuccess = await updateTitleInDatabase(sessionId, generatedTitle, userIdFromRequest);
+            // Pass the supabase client instance created above
+            const dbUpdateSuccess = await updateTitleInDatabase(supabase, sessionId, generatedTitle, userIdFromRequest);
 
             if (!dbUpdateSuccess) {
-                // Error already logged within updateTitleInDatabase
+                // Error already logged within updateTitleInDatabase via titleLogger
                 return errorResponse('Failed to update title in database', null, 500);
             }
 

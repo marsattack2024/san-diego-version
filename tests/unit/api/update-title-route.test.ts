@@ -153,6 +153,7 @@ describe('Update Title API Route', () => {
 
         // Verify title was saved to database
         expect(updateTitleInDatabase).toHaveBeenCalledWith(
+            mockSupabase,
             TEST_SESSION_ID,
             TEST_GENERATED_TITLE,
             TEST_USER_ID
@@ -203,6 +204,7 @@ describe('Update Title API Route', () => {
         expect(mockSupabase.auth.getUser).toHaveBeenCalledTimes(1);
         expect(generateText).toHaveBeenCalledTimes(1);
         expect(updateTitleInDatabase).toHaveBeenCalledWith(
+            mockSupabase,
             TEST_SESSION_ID,
             TEST_GENERATED_TITLE,
             TEST_USER_ID

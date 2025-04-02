@@ -1,5 +1,6 @@
 import { createClient } from '@/utils/supabase/server';
 import { titleLogger } from '@/lib/logger/title-logger';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 /**
  * Clean and validate a title from the AI response
@@ -17,12 +18,19 @@ export function cleanTitle(rawTitle: string): string {
 
 /**
  * Update the title in the database
+ * @param supabase - An authenticated Supabase client instance
+ * @param chatId - The ID of the chat session to update
+ * @param newTitle - The new title
+ * @param userId - The user ID (for logging/context)
  */
-export async function updateTitleInDatabase(chatId: string, newTitle: string, userId?: string): Promise<boolean> {
+export async function updateTitleInDatabase(
+    supabase: SupabaseClient,
+    chatId: string,
+    newTitle: string,
+    userId?: string
+): Promise<boolean> {
     const startTime = performance.now();
     try {
-        const supabase = await createClient();
-
         const { error } = await supabase
             .from('sd_chat_sessions')
             .update({
@@ -32,7 +40,15 @@ export async function updateTitleInDatabase(chatId: string, newTitle: string, us
             .eq('id', chatId);
 
         if (error) {
-            throw new Error(`Database update failed: ${error.message}`);
+            titleLogger.titleUpdateResult({
+                chatId,
+                newTitle,
+                success: false,
+                userId,
+                error: `Supabase DB Error: ${error.message} (Code: ${error.code})`,
+                durationMs: Math.round(performance.now() - startTime)
+            });
+            return false;
         }
 
         // Invalidate history cache (optional, keep fetch for now)
