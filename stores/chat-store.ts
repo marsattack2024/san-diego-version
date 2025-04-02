@@ -225,11 +225,16 @@ export const useChatStore = create<ChatState>()(
         console.log('[ChatStore] Setting isLoadingHistory=true');
         set({ isLoadingHistory: true, historyError: null });
 
+        let timerStarted = false; // Flag to track timer state
         try {
           console.debug(`[ChatStore] Fetching history (forceRefresh=${forceRefresh})`);
           console.time('[ChatStore] historyService.fetchHistory');
+          timerStarted = true; // Mark timer as started
           const historyData = await historyService.fetchHistory(forceRefresh);
-          console.timeEnd('[ChatStore] historyService.fetchHistory');
+
+          if (timerStarted) {
+            console.timeEnd('[ChatStore] historyService.fetchHistory');
+          }
 
           console.log('[ChatStore] Received history data:', {
             dataType: typeof historyData,
@@ -256,6 +261,10 @@ export const useChatStore = create<ChatState>()(
           console.log(`[ChatStore] History fetched and store updated with ${historyData.length} conversations`);
         } catch (error) {
           console.error("Failed to fetch history:", error);
+          if (timerStarted) {
+            // Ensure timer is ended even on error if it was started
+            console.timeEnd('[ChatStore] historyService.fetchHistory');
+          }
           set({
             isLoadingHistory: false,
             historyError: error instanceof Error ? error.message : 'Failed to load history',

@@ -58,13 +58,24 @@ export default async function ChatLayout({
 
   return (
     <SidebarProvider defaultOpen={true} className="h-full">
-      <AppSidebar user={user || undefined} />
-      <ChatHeader chatId="" isReadonly={false} />
+      {/* <AppSidebar user={user || undefined} /> */}
+      {/* <ChatHeader chatId="" isReadonly={false} /> */}
       <SidebarInset className="fixed-header-offset flex-1">
         {children}
       </SidebarInset>
       <AuthStatusCheck />
     </SidebarProvider>
+
+    // ** OLD TEMPORARY: Render children directly without sidebar **
+    // <div className="flex flex-col h-full">
+    //   {/* Minimal header might be needed */} 
+    //   {/* <ChatHeader chatId="" isReadonly={false} /> */} 
+    //   <main className="flex-1 overflow-hidden">
+    //     {children}
+    //   </main>
+    //   {/* Keep AuthStatusCheck for debugging */} 
+    //   <AuthStatusCheck />
+    // </div>
   );
 }
 

@@ -209,6 +209,12 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [renameId, setRenameId] = useState<string | null>(null);
   const [renameTitle, setRenameTitle] = useState('');
+  const [isMounted, setIsMounted] = useState(false);
+
+  // Add useEffect to set isMounted on the client
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   // Compute empty state
   const isEmpty = useMemo(() => {
@@ -245,13 +251,13 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     }
   }, [detectMobile]);
 
-  // Initial fetch history when component mounts
+  // Initial fetch history when component mounts AND IS MOUNTED
   useEffect(() => {
-    if (!user?.id) return;
+    // Only run after mounted and if user exists
+    if (!isMounted || !user?.id) return;
 
-    // Force refresh the history on mount, bypassing the cache
-    console.debug('SidebarHistory: Initial history fetch');
-    fetchHistory(true);
+    console.debug('SidebarHistory: Initial history fetch (post-mount)');
+    fetchHistory(true); // Force refresh
 
     // Also regularly refresh history when tab becomes visible
     const handleVisibilityChange = () => {
@@ -272,7 +278,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
         document.removeEventListener('visibilitychange', handleVisibilityChange);
       }
     };
-  }, [user?.id, fetchHistory, isLoadingHistory, isPageVisible]);
+  }, [user?.id, fetchHistory, isLoadingHistory, isPageVisible, isMounted]);
 
   // Set error message when store has errors
   useEffect(() => {
@@ -462,7 +468,31 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     );
   }, [groupChatsByDate, handleDeleteClick, handleRenameClick, id, isDeleting, setOpenMobile, showAllOlder]);
 
-  // Main component render
+  // ** CRITICAL: Prevent rendering main content until mounted **
+  if (!isMounted) {
+    // Render a placeholder or null during SSR and initial client render
+    // This MUST match what the server renders initially
+    return (
+      <div className="sidebar-history relative h-full overflow-hidden border-r border-border">
+        {/* Optional: Render basic skeleton matching the final structure */}
+        <SidebarGroup className="flex-shrink-0 h-full overflow-hidden flex flex-col">
+          <SidebarGroupLabel>
+            {/* Simplified placeholder label */}
+          </SidebarGroupLabel>
+          <SidebarGroupContent className="overflow-y-auto pb-20">
+            <SidebarMenu>
+              {/* Skeleton items or loading indicator */}
+              <div className="flex justify-center py-8">
+                <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+              </div>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </div>
+    );
+  }
+
+  // Main component render (only happens client-side after mount)
   return (
     <div className="sidebar-history relative h-full overflow-hidden border-r border-border">
       <SidebarGroup className="flex-shrink-0 h-full overflow-hidden flex flex-col">
@@ -526,7 +556,8 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
                 <p className="text-sm mt-1">Start a new conversation to get started</p>
               </div>
             ) : (
-              renderChats(historyArray)
+              // ** TEMPORARY DEBUG: Render only first 5 items **
+              renderChats(historyArray.slice(0, 5))
             )}
           </SidebarMenu>
         </SidebarGroupContent>

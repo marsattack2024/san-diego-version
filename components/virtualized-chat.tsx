@@ -238,6 +238,7 @@ export function VirtualizedChat({
     return null;
   };
 
+  // ** Revert to using Virtuoso **
   return (
     <CustomScrollArea className="h-full w-full flex-1 flex flex-col overflow-hidden" hideScrollbar>
       <EmptyPlaceholder />
