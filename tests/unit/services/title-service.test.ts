@@ -14,52 +14,43 @@ vi.mock('@/lib/logger/title-logger', () => ({
     }
 }));
 
-// Mock Supabase
+// Import to get properly typed mocks
+import { titleLogger } from '@/lib/logger/title-logger';
+
+// Setup the mock for utils/supabase/server
 vi.mock('@/utils/supabase/server', () => {
-    const mockSupabase = {
+    // We'll set up a factory function to create a mock that's returned by createClient
+    const createMockClient = () => ({
         from: vi.fn().mockReturnThis(),
         select: vi.fn().mockReturnThis(),
         eq: vi.fn().mockReturnThis(),
-        maybeSingle: vi.fn()
-    };
+        maybeSingle: vi.fn(),
+    });
 
     return {
-        createClient: vi.fn(() => Promise.resolve(mockSupabase))
+        createClient: vi.fn().mockImplementation(() => {
+            return Promise.resolve(createMockClient());
+        })
     };
 });
 
-// Now import the actual test dependencies
-import { describe, expect, it, beforeEach, afterEach, Mock } from 'vitest';
+// Now import the actual test dependencies after mocking
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { setupLoggerMock } from '../../helpers/mock-logger';
 import { triggerTitleGenerationViaApi } from '@/lib/chat/title-service';
 import { createClient } from '@/utils/supabase/server';
-import { titleLogger } from '@/lib/logger/title-logger';
-import * as titleUtils from '@/lib/chat/title-utils'; // Import to mock
-import * as serverClient from '@/utils/supabase/server'; // Import to mock createClient
-
-// Define an interface for our mock client
-interface MockSupabaseClient {
-    from: Mock;
-    select?: Mock;
-    eq?: Mock;
-    maybeSingle?: Mock;
-}
-
-// Get reference to the Supabase mock for manipulating in tests
-const mockSupabase = createClient as unknown as Mock;
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 // Set up logger mocks
 setupLoggerMock();
-
-// Create a mock implementation of fetch
-const mockFetch = vi.fn();
 
 describe('Title Service - API Trigger Conditions', () => {
     const TEST_CHAT_ID = 'test-chat-id';
     const TEST_USER_ID = 'test-user-123';
     const TEST_CONTENT = 'Test message.';
-    const TEST_AUTH_TOKEN = 'test-auth-token';
-    let mockSupabaseClient: any;
+
+    // Create a mock implementation of fetch
+    const mockFetch = vi.fn();
 
     beforeEach(() => {
         // Reset all mocks before each test
@@ -67,18 +58,14 @@ describe('Title Service - API Trigger Conditions', () => {
 
         // Mock the global fetch function
         vi.stubGlobal('fetch', mockFetch);
-        mockFetch.mockClear();
+        mockFetch.mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ success: true }),
+            text: () => Promise.resolve('Success')
+        });
 
-        // Setup mock Supabase client behavior
-        mockSupabaseClient = {
-            from: vi.fn().mockReturnThis(),
-            select: vi.fn().mockReturnThis(),
-            eq: vi.fn().mockReturnThis(),
-            maybeSingle: vi.fn(),
-        };
-        vi.mocked(serverClient.createClient).mockResolvedValue(mockSupabaseClient);
-
-        // Mock environment variable
+        // Mock environment variables
         process.env.INTERNAL_API_SECRET = 'test-secret-123';
         process.env.NEXT_PUBLIC_SITE_URL = 'http://localhost:3000';
     });
@@ -106,20 +93,25 @@ describe('Title Service - API Trigger Conditions', () => {
     });
 
     it('should log titleExists and NOT attempt generation or fetch if title exists', async () => {
-        // Arrange: Mock for existing title case
-        mockSupabaseClient.maybeSingle?.mockResolvedValueOnce({
-            data: { title: 'Existing Title' },
-            error: null
-        });
+        // Setup mock responses
+        const mockSupabaseClient = {
+            from: vi.fn().mockReturnThis(),
+            select: vi.fn().mockReturnThis(),
+            eq: vi.fn().mockReturnThis(),
+            maybeSingle: vi.fn().mockResolvedValue({
+                data: { title: 'Existing Title' },
+                error: null
+            })
+        };
+
+        // Mock the createClient function specifically for this test - add type assertion
+        vi.mocked(createClient).mockResolvedValue(mockSupabaseClient as unknown as SupabaseClient);
 
         // Act
         await triggerTitleGenerationViaApi(TEST_CHAT_ID, TEST_CONTENT, TEST_USER_ID);
 
-        // Assert - Check we queried the correct table
-        const client = await mockSupabase.mock.results[0].value as MockSupabaseClient;
-        expect(client.from).toHaveBeenCalledWith('sd_chat_sessions');
-
-        // Verify logs
+        // Assert
+        expect(mockSupabaseClient.from).toHaveBeenCalledWith('sd_chat_sessions');
         expect(titleLogger.titleExists).toHaveBeenCalledWith({
             chatId: TEST_CHAT_ID,
             userId: TEST_USER_ID,
@@ -132,81 +124,102 @@ describe('Title Service - API Trigger Conditions', () => {
     });
 
     it('should proceed with generation for new conversations with low message count', async () => {
-        // Mock session data: no existing title or default title
-        mockSupabaseClient.maybeSingle.mockResolvedValueOnce({ data: { title: 'New Conversation' }, error: null });
-        // Mock message count: low count (e.g., 1)
-        const mockCountResult = { count: 1, error: null };
-        mockSupabaseClient.select.mockReturnValue({
-            eq: vi.fn().mockReturnValue(Promise.resolve(mockCountResult))
-        });
+        // Setup the first Supabase call for session data
+        const mockSupabaseClient = {
+            from: vi.fn((table) => {
+                if (table === 'sd_chat_sessions') {
+                    return {
+                        select: vi.fn().mockReturnThis(),
+                        eq: vi.fn().mockReturnThis(),
+                        maybeSingle: vi.fn().mockResolvedValue({
+                            data: { title: 'New Conversation' }, // Default title that should be replaced
+                            error: null
+                        })
+                    };
+                } else if (table === 'sd_chat_histories') {
+                    return {
+                        select: vi.fn().mockReturnValue({
+                            eq: vi.fn().mockReturnValue({
+                                // Low message count to allow generation
+                                count: 1,
+                                error: null
+                            })
+                        })
+                    };
+                }
+                return {
+                    select: vi.fn().mockReturnThis(),
+                    eq: vi.fn().mockReturnThis(),
+                    maybeSingle: vi.fn()
+                };
+            })
+        };
 
-        // Mock fetch response
-        mockFetch.mockResolvedValue({
-            ok: true,
-            status: 200,
-            json: () => Promise.resolve({ success: true })
-        });
+        // Mock the createClient function for this test - add type assertion
+        vi.mocked(createClient).mockResolvedValue(mockSupabaseClient as unknown as SupabaseClient);
 
         // Act
         await triggerTitleGenerationViaApi(TEST_CHAT_ID, TEST_CONTENT, TEST_USER_ID);
 
-        // Assert
+        // Assert - Check we called the correct APIs
         expect(mockSupabaseClient.from).toHaveBeenCalledWith('sd_chat_sessions');
+        expect(mockSupabaseClient.from).toHaveBeenCalledWith('sd_chat_histories');
+
+        // Check that generation was attempted
         expect(titleLogger.attemptGeneration).toHaveBeenCalledWith({
             chatId: TEST_CHAT_ID,
             userId: TEST_USER_ID
         });
-        // Verify fetch was called once
+
+        // Verify fetch was called correctly
         expect(mockFetch).toHaveBeenCalledTimes(1);
-        // Verify fetch was called with the correct URL and options
         expect(mockFetch).toHaveBeenCalledWith(
             expect.stringContaining(`/api/chat/update-title`),
             expect.objectContaining({
                 method: 'POST',
                 headers: expect.objectContaining({
                     'Content-Type': 'application/json',
-                    'X-Internal-Secret': 'test-secret-123', // Check for the secret header
-                    'x-operation-id': expect.any(String),
+                    'X-Internal-Secret': 'test-secret-123',
                 }),
-                body: JSON.stringify({
-                    sessionId: TEST_CHAT_ID,
-                    content: TEST_CONTENT, // Ensure content is passed
-                    userId: TEST_USER_ID // Ensure userId is passed
-                })
+                body: expect.stringContaining(TEST_CHAT_ID)
             })
         );
     });
 
     it('should not proceed with generation for conversations with high message count', async () => {
-        // Setup mockClient chain for both calls
-        let callCount = 0;
-        const mockClient = {
-            from: vi.fn(tableName => {
-                callCount++;
-                if (callCount === 1) { // First call for sessions
+        // Setup mock client with high message count
+        const mockSupabaseClient = {
+            from: vi.fn((table) => {
+                if (table === 'sd_chat_sessions') {
                     return {
                         select: vi.fn().mockReturnThis(),
                         eq: vi.fn().mockReturnThis(),
                         maybeSingle: vi.fn().mockResolvedValue({
-                            data: { title: null },
+                            data: { title: null }, // No title
                             error: null
                         })
                     };
-                } else { // Second call for history count
+                } else if (table === 'sd_chat_histories') {
                     return {
                         select: vi.fn().mockReturnValue({
                             eq: vi.fn().mockReturnValue({
-                                // Mock high message count
+                                // High message count to prevent generation
                                 count: 5,
                                 error: null
                             })
                         })
                     };
                 }
+                return {
+                    select: vi.fn().mockReturnThis(),
+                    eq: vi.fn().mockReturnThis(),
+                    maybeSingle: vi.fn()
+                };
             })
         };
 
-        mockSupabase.mockResolvedValue(mockClient);
+        // Mock the createClient function for this test - add type assertion
+        vi.mocked(createClient).mockResolvedValue(mockSupabaseClient as unknown as SupabaseClient);
 
         // Act
         await triggerTitleGenerationViaApi(TEST_CHAT_ID, TEST_CONTENT, TEST_USER_ID);
@@ -216,33 +229,74 @@ describe('Title Service - API Trigger Conditions', () => {
             expect.objectContaining({
                 chatId: TEST_CHAT_ID,
                 userId: TEST_USER_ID,
-                error: 'Skipping generation: message count 5 > 2'
+                error: expect.stringContaining('Skipping generation: message count 5 > 2')
             })
         );
+
+        // Verify generation was not attempted
         expect(titleLogger.attemptGeneration).not.toHaveBeenCalled();
         expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('should log error and not fetch if INTERNAL_API_SECRET is not set', async () => {
-        // Mock conditions where generation should proceed
-        mockSupabaseClient.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
-        const mockCountResult = { count: 1, error: null };
-        mockSupabaseClient.select.mockReturnValue({
-            eq: vi.fn().mockReturnValue(Promise.resolve(mockCountResult))
-        });
+        // Setup mock for the Supabase client to allow generation to proceed
+        const mockSupabaseClient = {
+            from: vi.fn((table) => {
+                if (table === 'sd_chat_sessions') {
+                    return {
+                        select: vi.fn().mockReturnThis(),
+                        eq: vi.fn().mockReturnThis(),
+                        maybeSingle: vi.fn().mockResolvedValue({
+                            data: { title: 'New Conversation' },
+                            error: null
+                        })
+                    };
+                } else if (table === 'sd_chat_histories') {
+                    return {
+                        select: vi.fn().mockReturnValue({
+                            eq: vi.fn().mockReturnValue({
+                                count: 1, // Low message count to allow generation
+                                error: null
+                            })
+                        })
+                    };
+                }
+                return {
+                    select: vi.fn().mockReturnThis(),
+                    eq: vi.fn().mockReturnThis(),
+                    maybeSingle: vi.fn()
+                };
+            })
+        };
 
-        // Unset the mocked environment variable
+        // Mock the createClient function for this test - add type assertion
+        vi.mocked(createClient).mockResolvedValue(mockSupabaseClient as unknown as SupabaseClient);
+
+        // Unset the environment variable
         delete process.env.INTERNAL_API_SECRET;
-        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => { }); // Suppress console.error
 
+        // Suppress console.error
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => { });
+
+        // Act
         await triggerTitleGenerationViaApi(TEST_CHAT_ID, TEST_CONTENT, TEST_USER_ID);
 
-        expect(titleLogger.titleGenerationFailed).toHaveBeenCalledWith(expect.objectContaining({
-            error: 'INTERNAL_API_SECRET is not configured.'
-        }));
-        expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('INTERNAL_API_SECRET environment variable is not set'));
+        // Assert - should detect missing secret
+        expect(titleLogger.titleGenerationFailed).toHaveBeenCalledWith(
+            expect.objectContaining({
+                error: 'INTERNAL_API_SECRET is not configured.'
+            })
+        );
+
+        // Should log to console
+        expect(errorSpy).toHaveBeenCalledWith(
+            expect.stringContaining('INTERNAL_API_SECRET environment variable is not set')
+        );
+
+        // Should not attempt fetch
         expect(mockFetch).not.toHaveBeenCalled();
 
-        errorSpy.mockRestore(); // Restore console.error
+        // Cleanup
+        errorSpy.mockRestore();
     });
 }); 

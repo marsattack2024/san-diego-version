@@ -7,6 +7,16 @@
 import { vi } from 'vitest';
 import { LOG_CATEGORIES, LOG_LEVELS } from '@/lib/logger/constants';
 
+// Type definition for log entry
+interface LogEntry {
+  level: string;
+  message: string;
+  metadata: any;
+}
+
+// Type for the matcher function
+type LogMatcher = (log: LogEntry) => boolean;
+
 // Create a mock logger that can be used in tests
 export const mockLogger = {
   debug: vi.fn(),
@@ -66,8 +76,20 @@ export const mockLogger = {
     });
   },
 
+  // Check if a log entry matches a custom matcher function
+  hasLogsMatching(level: string, matcher: LogMatcher): boolean {
+    const logFn = this[level as keyof typeof mockLogger] as any;
+    if (!logFn || typeof logFn !== 'function') return false;
+
+    return logFn.mock.calls.some((call: any[]) => {
+      const message = call[0];
+      const metadata = call[1] || {};
+      return matcher({ level, message, metadata });
+    });
+  },
+
   // Get all logs marked as important
-  getImportantLogs(): Array<{ level: string, message: string, metadata: any }> {
+  getImportantLogs(): Array<LogEntry> {
     const importantLogs = [];
 
     for (const level of ['debug', 'info', 'warn', 'error']) {
@@ -88,7 +110,7 @@ export const mockLogger = {
   },
 
   // Get logs containing a specific string
-  getLogsContaining(text: string): Array<{ level: string, message: string, metadata: any }> {
+  getLogsContaining(text: string): Array<LogEntry> {
     const matchingLogs = [];
 
     for (const level of ['debug', 'info', 'warn', 'error']) {
