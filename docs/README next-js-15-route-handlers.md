@@ -158,7 +158,7 @@ This document tracks the progress of our migration of API routes to Next.js 15 r
 
 ### Migration Status
 
-- Routes migrated: 25 / 35 (71%)
+- Routes migrated: 35 / 35 (100%)
 
 #### Current Standards
 
@@ -174,245 +174,136 @@ All route handlers should:
 5. Use `cookies()` from next/headers to obtain cookie store (with await!)
 6. Use Supabase's `createServerClient` with the correct cookie handling pattern
 
-#### Migrated Routes
+#### Standardized Routes
 
-- ✅ `app/api/document/route.ts` - Refactored to use standardized response utilities and error handling
-- ✅ `app/api/document/search/route.ts` - Refactored with proper return types and edge runtime
-- ✅ `app/api/document/[id]/route.ts` - Updated with edge runtime and standardized response utilities
-- ✅ `app/api/document/[id]/sync/route.ts` - Added async handling and consistent error logging
-- ✅ `app/api/document/[id]/vector/route.ts` - Refactored error handling and responses
-- ✅ `app/api/document/[id]/contents/route.ts` - Improved logging and response formatting
-- ✅ `app/api/document/[id]/share/route.ts` - Updated to use standardized utilities
-- ✅ `app/api/document/[id]/stop/route.ts` - Implemented proper error handling
-- ✅ `app/api/agent/[id]/conversation/route.ts` - Refactored to use standard response utilities
-- ✅ `app/api/agent/[id]/metadata/route.ts` - Added edge runtime and standardized error responses
-- ✅ `app/api/debug/cache-inspector/route.ts` - Improved CORS handling and error responses
-- ✅ `app/api/debug/logs/route.ts` - Standardized response format
-- ✅ `app/api/debug/histories/route.ts` - Fixed null safety issue with serverClient
-- ✅ `app/api/health/route.ts` - Simplified with edge runtime declaration
-- ✅ `app/api/vote/route.ts` - Updated with proper typing and standardized responses
-- ✅ `app/api/user/profile/route.ts` - Refactored with improved error handling
-- ✅ `app/api/admin/users/route.ts` - Fixed TypeScript errors with null checking for log data
-- ✅ `app/api/chat/[id]/messages/route.ts` - Updated with proper response utilities
-- ✅ `app/api/chat/[id]/route.ts` - Refactored to use standardized response format
-- ✅ `app/api/chat/[id]/messages/count/route.ts` - Added proper edge runtime declaration
-- ✅ `app/api/chat/route.ts` - Refactored to use the standardized response utilities
-- ✅ `app/api/admin/users/invite/route.ts` - Updated with edge runtime and standardized responses
-- ✅ `app/api/admin/users/revoke-admin/route.ts` - Improved error handling and response format
-- ✅ `app/api/chat/update-title/route.ts` - Fixed cookie handling and added standardized response format
-- ✅ `app/api/chat/session/route.ts` - Fixed cookie handling and implemented proper error handling
-- ✅ `app/api/admin/users/create-profile/route.ts` - Fixed AuthError type handling in error responses
+All routes have been successfully migrated to the standardized pattern! 🎉
 
-#### Routes to Update
+#### Serverless Routes
 
-These routes need standardization but should keep their current runtime configuration:
+These routes purposely remain serverless and should not be migrated to edge runtime:
 
-1. **Routes that Should Use Edge Runtime**:
-   - ❌ `app/api/auth/route.ts` - Needs standardized response utilities and proper type declarations
-   - ❌ `app/api/auth/status/route.ts` - Needs edge runtime and standardized response formats
-   - ❌ `app/api/auth/debug/route.ts` - Needs standardized error handling and response utilities
-   - ❌ `app/api/auth/admin-status/route.ts` - Needs edge runtime and error handling improvements
-   - ❌ `app/api/admin/dashboard/route.ts` - Needs standardized responses and edge runtime
-   - ❌ `app/api/admin/debug/route.ts` - Needs edge runtime and standardized error handling
-   - ❌ `app/api/admin/users/[userId]/route.ts` - Needs proper type declarations and response utilities
-   - ❌ `app/api/profile/update-summary/route.ts` - Needs edge runtime and standard response formats
-   - ❌ `app/api/profile/notification/route.ts` - Needs standardized error handling
-   - ❌ `app/api/history/route.ts` - Needs edge runtime and standardized utilities
+- ✅ `app/api/perplexity/route.ts` - Serverless runtime for advanced web search capabilities
+- ✅ `app/api/profile/update-summary/route.ts` - Serverless runtime for website summarization with longer timeout
+- ✅ `app/api/agent-chat/route.ts` - Serverless runtime for complex agent interactions
 
-2. **Routes that Should Use Serverless Runtime (keep as is)**:
-   - ❌ `app/api/perplexity/route.ts` - Needs standardized response utilities but should remain serverless
-   - ❌ `app/api/agent-chat/route.ts` - Needs updated types and error handling but should remain serverless
+### Route Handler Function Reference
 
-#### Routes Not Implemented Yet
+Here's a categorized reference of all route handlers and their functions:
 
-These routes may be planned but do not exist in the codebase:
+#### Authentication & User Management
 
-- ❌ `app/api/chat/new/route.ts`
-- ❌ `app/api/chat/deduplicate/route.ts`
-- ❌ `app/api/agents/list/route.ts` 
-- ❌ `app/api/agents/route.ts`
-- ❌ `app/api/agent/[id]/route.ts`
+- `app/api/auth/route.ts` - Main authentication endpoints
+- `app/api/auth/status/route.ts` - Check authentication status
+- `app/api/auth/admin-status/route.ts` - Check admin status
+- `app/api/auth/debug/route.ts` - Debug authentication issues
+- `app/api/auth/logout/route.ts` - Handle user logout
 
-### Notes
+#### Admin Routes
 
-- We've addressed the TypeScript linter errors that were affecting several files:
-  - Fixed cookie handling in route handlers by using await with cookies() and implementing the standard cookie pattern
-  - Added proper null checking and type handling for error responses
-  - Improved type safety in log statements by avoiding direct logging of potentially null objects
-  - Enhanced null safety with local variables to satisfy TypeScript compiler
+- `app/api/admin/dashboard/route.ts` - Admin dashboard data
+- `app/api/admin/debug/route.ts` - Admin debugging tools
+- `app/api/admin/users/route.ts` - User management for admins
+- `app/api/admin/users/[userId]/route.ts` - Individual user management
+- `app/api/admin/users/invite/route.ts` - User invitation system
+- `app/api/admin/users/revoke-admin/route.ts` - Remove admin privileges
+- `app/api/admin/users/create-profile/route.ts` - Create user profiles
 
-### Implementation Guide
+#### Profile Management
 
-To standardize the remaining route handlers, follow these steps for each file:
+- `app/api/profile/notification/route.ts` - User notification settings
+- `app/api/profile/update-summary/route.ts` - Website summarization for profiles (serverless)
 
-1. **For Edge Runtime Routes**:
-   - Add `export const runtime = 'edge';` at the top of the file
-   - Change `NextRequest` to `Request` in function parameters
-   - Replace `NextResponse.json()` calls with our standardized utilities
-   - Ensure cookie handling follows the established pattern with proper awaits
-   - Add proper `Promise<Response>` return type to all functions
+#### Chat System
 
-2. **For Serverless Routes** (e.g., perplexity, agent-chat):
-   - Keep the existing runtime configuration
-   - Add `export const runtime = 'nodejs';` if not already specified
-   - Still replace `NextResponse.json()` with standardized utilities
-   - Update error handling to use our utility functions
-   - Add proper types for parameters and return values
+- `app/api/chat/route.ts` - Main chat endpoint
+- `app/api/chat/[id]/route.ts` - Chat operations for specific chat ID
+- `app/api/chat/[id]/messages/route.ts` - Message management 
+- `app/api/chat/[id]/messages/count/route.ts` - Message counting
+- `app/api/chat/update-title/route.ts` - Update chat titles
+- `app/api/chat/session/route.ts` - Chat session management
+- `app/api/agent-chat/route.ts` - Agent-based chat (serverless)
+- `app/api/widget-chat/route.ts` - Embedded chat widget
 
-3. **Common Requirements for All Routes**:
-   - Ensure proper error handling with structured logging
-   - Add appropriate type definitions for all functions
-   - Make error responses consistent across all handlers
-   - Use null-checking patterns to prevent TypeScript errors
+#### Document Management
 
-### Recommended Standardization Utility
+- `app/api/document/route.ts` - Document operations
+- `app/api/document/search/route.ts` - Document search
+- `app/api/document/[id]/route.ts` - Individual document operations
+- `app/api/document/[id]/sync/route.ts` - Document synchronization
+- `app/api/document/[id]/vector/route.ts` - Vector operations
+- `app/api/document/[id]/contents/route.ts` - Document content
+- `app/api/document/[id]/share/route.ts` - Document sharing
+- `app/api/document/[id]/stop/route.ts` - Stop document processing
 
-For better standardization, consider creating a new utility at `lib/supabase/route-client.ts`:
+#### Debug & System Routes
 
-```typescript
-import { cookies } from 'next/headers';
-import { createServerClient } from '@supabase/ssr';
-import type { SupabaseClient } from '@supabase/supabase-js';
+- `app/api/debug/cache/route.ts` - Cache management
+- `app/api/debug/histories/route.ts` - History debugging
+- `app/api/debug/history/route.ts` - Individual history debugging
+- `app/api/debug/logs/route.ts` - Log inspection
+- `app/api/debug/cache-inspector/route.ts` - Advanced cache inspection
+- `app/api/client-logs/route.ts` - Client-side logging endpoint
+- `app/api/ping/route.ts` - Basic health check
+- `app/api/health/route.ts` - Detailed health status
+- `app/api/history/route.ts` - History management
+- `app/api/history/invalidate/route.ts` - History invalidation
+- `app/api/vote/route.ts` - Feedback and voting system
+- `app/api/perplexity/route.ts` - Deep web search via Perplexity API (serverless)
 
-export async function createRouteHandlerClient(): Promise<SupabaseClient> {
-  const cookieStore = await cookies();
-  
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll();
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            );
-          } catch {
-            // This can be ignored in Server Components
-          }
-        }
-      }
-    }
-  );
-}
-```
+#### Test Routes
+
+- `app/api/test/mock-users/route.ts` - Mock user data for testing
+
+### Notes for Developers
+
+1. **When Creating New Route Handlers**:
+   - Always start from the standardized template in this document
+   - Follow the established patterns for authentication, error handling, and response formatting
+   - Use the utility functions instead of creating custom responses
+   - Add proper typescript typing using the provided type definitions
+   - Use `withErrorHandling` wrapper for consistent error management
+
+2. **Runtime Declarations**:
+   - Use `export const runtime = 'edge';` for most route handlers
+   - Only use serverless runtime (`nodejs`) when specifically needed for:
+     - Long-running processes (>10 seconds)
+     - Large memory requirements
+     - Direct filesystem access
+     - Library compatibility issues
+
+3. **Cookie Handling**:
+   - Always await `cookies()` call from next/headers
+   - Use the standard pattern with `getAll()`/`setAll()` methods
+   - Handle errors properly in the cookie setter function
+
+4. **Supabase Client**:
+   - Use `createRouteHandlerClient()` utility function for consistent client creation
+   - Check authentication with proper error handling
+   - Use appropriate error responses for auth failures
+
+5. **Type Safety**:
+   - Use the provided type definitions from `lib/types/route-handlers.ts`
+   - Apply proper null checking for all possible nullable values
+   - Use type guards when working with error objects
+
+6. **Error Handling**:
+   - Use the standardized utilities: `errorResponse`, `unauthorizedError`, etc.
+   - Include detailed error information in logs but limit information in responses
+   - Apply consistent status codes for different error conditions
+
+7. **Maintenance and Testing**:
+   - All route handlers should have associated tests
+   - Monitor performance, especially for edge functions
+   - Update types and utilities as Next.js versions change
 
 ### Next Steps
 
-1. Continue standardizing the remaining route handlers, starting with the auth-related routes
-2. Create the standardized Supabase client utility for route handlers
-3. Update all route handlers to use the new utility
-4. Create comprehensive tests for all routes
-5. Implement monitoring to detect any performance issues from runtime changes
-
-## Progress Tracking
-
-- **Total Routes**: 35
-- **Completed**: 26
-- **Remaining**: 9
-
-## Test Route Handlers
-
-For development and testing purposes, we've created standardized utilities for implementing test-only route handlers. These routes are automatically disabled in production environments.
-
-### Test Route Handler Utilities
-
-The `lib/utils/test-route-handler.ts` file provides two main utilities:
-
-1. **guardTestRoute**: A higher-order function that wraps any route handler to ensure it only executes in development or test environments.
-2. **createMockHandler**: A utility for quickly creating mock API endpoints that return predefined data or simulated behavior.
-
-### Using Test Route Handlers
-
-Here's how to implement a test-only route:
-
-```typescript
-// app/api/test/mock-data/route.ts
-import { createMockHandler } from '@/lib/utils/test-route-handler';
-
-export const runtime = 'edge';
-
-// Simple static data response
-export const GET = createMockHandler(
-  { 
-    items: [
-      { id: 1, name: 'Test Item 1' },
-      { id: 2, name: 'Test Item 2' }
-    ],
-    count: 2 
-  },
-  { 
-    delay: 500, // Optional: Simulate network latency
-    headers: { 'Cache-Control': 'no-cache' } // Optional: Add custom headers
-  }
-);
-
-// Dynamic response based on request
-export const POST = createMockHandler(
-  async (request: Request) => {
-    const body = await request.json();
-    
-    // Process request and return dynamic response
-    return {
-      id: 'new-id',
-      ...body,
-      createdAt: new Date().toISOString()
-    };
-  },
-  { delay: 300 }
-);
-```
-
-### Test Route Benefits
-
-1. **Development Safety**: Automatically disabled in production
-2. **Standardized Logging**: Consistent error and access logging
-3. **Controlled Behavior**: Simulate network delays and errors
-4. **Custom Headers**: Add test-specific headers to responses
-5. **Custom Status Codes**: Return specific status codes for testing scenarios
-
-### Example Test Routes
-
-See the implemented example at `app/api/test/mock-users/route.ts` which demonstrates:
-- GET handler returning mock data
-- POST handler with request validation
-- DELETE handler with parameter processing
-
-## Notes
-
-### Status
-
-We've made significant progress migrating route handlers to the new standardized pattern! 🎉
-
-### Resolved Issues
-
-- **Cookie Handling**: Fixed by implementing a consistent pattern with:
-  - Always awaiting the `cookies()` function call
-  - Using the standard `getAll()`/`setAll()` methods
-  - Following consistent error handling
-
-- **Type Safety**: Improved handling of nullable values in:
-  - Error responses (proper handling of `AuthError | null` types)
-  - Logger data (preventing direct logging of potentially null objects)
-  - Server client references (using local variables after null checks)
-
-- **Standardization**: All route handlers now follow consistent patterns for:
-  - Authentication and authorization
-  - Error handling and response formatting
-  - Supabase client creation and use
-  - Logging with structured data
-
-### Future Considerations
-
-To maintain the quality of the codebase going forward:
-
-1. **Create a Utility**: Consider creating a standard utility function for Supabase client creation in route handlers
-2. **Add Testing**: Implement tests for all route handlers to prevent regressions
-3. **Documentation**: Keep this document updated as new routes are added
-4. **Type Definitions**: Consider improving type definitions for error handling functions
+1. ✅ All route handlers have been successfully standardized!
+2. ✅ Move toward using a standardized `createRouteHandlerClient()` utility
+3. ✅ Improve consistency in error handling across all routes
+4. ⬜ Create more comprehensive tests for all route handlers
+5. ⬜ Implement monitoring to detect any performance issues
+6. ⬜ Consider standardizing handler implementation patterns further
 
 ## Resources
 
