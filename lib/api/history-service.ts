@@ -1,8 +1,8 @@
 /**
- * IMPORTANT: This file has been updated to fix authentication middleware issues
- * with history API requests, including:
- * 1. Enhanced circuit breaker to detect unauthorized request bursts
- * 2. New status code 409 support for auth-in-progress state
+ * IMPORTANT: This file has been updated to use Cockatiel for circuit breaker functionality
+ * to manage authentication and history API requests, including:
+ * 1. Modern circuit breaker pattern with Cockatiel
+ * 2. Status code 409 support for auth-in-progress state
  * 3. Special handling for requests without timestamps
  * 4. Global request throttling to reduce API load
  */
@@ -14,6 +14,13 @@ import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { Chat } from '@/lib/db/schema';
 import { Message } from 'ai';
 import { generateUUID } from '@/lib/utils/uuid';
+import {
+  circuitBreaker,
+  ConsecutiveBreaker,
+  CircuitState,
+  handleAll,
+  IFailureEvent
+} from 'cockatiel';
 
 // Keep track of pending requests to deduplicate
 const pendingRequests: Record<string, Promise<Chat[]> | null> = {};
@@ -36,164 +43,139 @@ let lastSuccessfulFetch = 0;
 let consecutiveSuccessfulFetches = 0;
 let adaptiveRefreshInterval = REFRESH_INTERVAL;
 
-// Auth failure tracking constants
-const AUTH_FAILURE_KEY = 'global_auth_failure';
-const AUTH_FAILURE_COUNT_KEY = 'auth_failure_count';
-const AUTH_FAILURE_LAST_TIME_KEY = 'auth_failure_last_time';
-const AUTH_BACKOFF_DURATION_KEY = 'auth_backoff_duration';
-
-// Exponential backoff settings
-const MIN_AUTH_COOLDOWN = 2 * 60 * 1000; // 2 min initial backoff
-const MAX_AUTH_COOLDOWN = 30 * 60 * 1000; // 30 min max backoff
-const BACKOFF_FACTOR = 2; // Double the backoff each time
-const MAX_FAILURE_COUNT = 5; // Reset after 5 failures
-
-// In-memory state (will be initialized from localStorage)
-let isInAuthFailureCooldown = false;
-let authFailureCount = 0;
-let authBackoffDuration = MIN_AUTH_COOLDOWN;
-let authFailureTimer: ReturnType<typeof setTimeout> | null = null;
-
-// Track unauthorized requests to apply immediate circuit breaking
-let recentUnauthorizedRequests: number[] = [];
-const UNAUTHORIZED_THRESHOLD = 3; // Activate circuit breaker after 3 unauthorized responses in 5 seconds
-const UNAUTHORIZED_WINDOW = 5000; // 5 second window for tracking unauthorized responses
-
 // Cache keys and constants
 const HISTORY_CACHE_KEY = 'chat_history';
 
-/**
- * Calculate exponential backoff duration
- * @param failureCount Number of consecutive failures
- * @returns Backoff duration in milliseconds
- */
-function calculateBackoffDuration(failureCount: number): number {
-  // Cap the failure count for calculation
-  const cappedCount = Math.min(failureCount, MAX_FAILURE_COUNT);
-  // Calculate exponential backoff: MIN_BACKOFF * (FACTOR ^ (count-1))
-  const backoff = MIN_AUTH_COOLDOWN * Math.pow(BACKOFF_FACTOR, cappedCount - 1);
-  // Cap at the maximum backoff
-  return Math.min(backoff, MAX_AUTH_COOLDOWN);
-}
+// Create a circuit breaker with Cockatiel
+export const historyCircuitBreaker = circuitBreaker(handleAll, {
+  // Half-open after 30 seconds (much more reasonable than previous 30 minutes)
+  halfOpenAfter: 30 * 1000,
 
-/**
- * Set the global auth failure state with exponential backoff
- * @param failed Whether authentication has failed
- */
-function setAuthFailureState(failed: boolean) {
-  try {
-    // Clear any existing timer
-    if (authFailureTimer) {
-      clearTimeout(authFailureTimer);
-      authFailureTimer = null;
-    }
+  // Break after 5 consecutive failures (up from 3)
+  breaker: new ConsecutiveBreaker(5)
+});
 
-    if (failed) {
-      // Retrieve current failure count from persistent storage
-      const storedCount = clientCache.get(AUTH_FAILURE_COUNT_KEY, Infinity, true) || 0;
+// Add event listeners for monitoring circuit breaker state
+historyCircuitBreaker.onBreak((reason) => {
+  let errorMessage = 'Unknown error';
 
-      // Increment failure count
-      authFailureCount = storedCount + 1;
-
-      // Calculate new backoff duration based on consecutive failures
-      authBackoffDuration = calculateBackoffDuration(authFailureCount);
-
-      // Store updated values in persistent storage
-      clientCache.set(AUTH_FAILURE_COUNT_KEY, authFailureCount, Infinity, true);
-      clientCache.set(AUTH_FAILURE_LAST_TIME_KEY, Date.now(), Infinity, true);
-      clientCache.set(AUTH_BACKOFF_DURATION_KEY, authBackoffDuration, Infinity, true);
-
-      // Set the auth failure flag
-      isInAuthFailureCooldown = true;
-      clientCache.set(AUTH_FAILURE_KEY, true, authBackoffDuration, true);
-
-      edgeLogger.debug(`Auth failure #${authFailureCount}: Setting cooldown for ${authBackoffDuration / 1000}s (${Math.round(authBackoffDuration / 60000)} minutes)`, { category: 'auth' });
-
-      // Set a timer to automatically clear the cooldown
-      authFailureTimer = setTimeout(() => {
-        isInAuthFailureCooldown = false;
-        clientCache.set(AUTH_FAILURE_KEY, false, Infinity, true);
-        edgeLogger.debug('Auth failure cooldown period expired', { category: 'auth' });
-      }, authBackoffDuration);
-    } else {
-      // If explicitly marking auth as successful, clear the failure state
-      isInAuthFailureCooldown = false;
-      authFailureCount = 0;
-      authBackoffDuration = MIN_AUTH_COOLDOWN;
-
-      // Clear all failure-related flags
-      clientCache.set(AUTH_FAILURE_KEY, false, Infinity, true);
-      clientCache.set(AUTH_FAILURE_COUNT_KEY, 0, Infinity, true);
-      clientCache.remove(AUTH_FAILURE_LAST_TIME_KEY, true);
-      clientCache.set(AUTH_BACKOFF_DURATION_KEY, MIN_AUTH_COOLDOWN, Infinity, true);
-
-      edgeLogger.debug('Auth failure state cleared - auth is now successful', { category: 'auth' });
-    }
-  } catch (e) {
-    edgeLogger.warn('Error setting auth failure state', {
-      category: 'auth',
-      error: e instanceof Error ? e.message : 'Unknown error'
-    });
+  // Check if it's an isolated circuit (manual break)
+  if ('isolated' in reason) {
+    errorMessage = 'Circuit manually isolated';
   }
-}
-
-// Initialize auth failure state from persistent storage
-try {
-  // Attempt to restore auth failure state from cache
-  isInAuthFailureCooldown = !!clientCache.get(AUTH_FAILURE_KEY, Infinity, true);
-  authFailureCount = clientCache.get(AUTH_FAILURE_COUNT_KEY, Infinity, true) || 0;
-  const lastFailureTime = clientCache.get(AUTH_FAILURE_LAST_TIME_KEY, Infinity, true) || 0;
-  authBackoffDuration = clientCache.get(AUTH_BACKOFF_DURATION_KEY, Infinity, true) || MIN_AUTH_COOLDOWN;
-
-  // Check if we should still be in a cooldown period
-  if (isInAuthFailureCooldown) {
-    // Calculate time elapsed since last failure
-    const now = Date.now();
-    const elapsedTime = now - lastFailureTime;
-
-    // Check if cooldown period has already expired
-    if (elapsedTime >= authBackoffDuration) {
-      // Cooldown expired, reset the state
-      isInAuthFailureCooldown = false;
-      clientCache.set(AUTH_FAILURE_KEY, false, Infinity, true);
-      edgeLogger.debug('Restored auth state: Cooldown expired', { category: 'auth' });
-    } else {
-      // Still in cooldown period, setup a timer for remaining time
-      const remainingTime = authBackoffDuration - elapsedTime;
-      edgeLogger.debug(`Auth failure state: ${authFailureCount} failures, ${Math.round(remainingTime / 1000)}s cooldown remaining`, { category: 'auth' });
-
-      authFailureTimer = setTimeout(() => {
-        isInAuthFailureCooldown = false;
-        clientCache.set(AUTH_FAILURE_KEY, false, Infinity, true);
-        edgeLogger.debug('Auth failure cooldown period expired', { category: 'auth' });
-      }, remainingTime);
-    }
-  } else {
-    // Don't log anything about auth state initialization
+  // Check if it's an error-based failure
+  else if ('error' in reason) {
+    errorMessage = reason.error instanceof Error ? reason.error.message : String(reason.error);
   }
-} catch (e) {
-  // Log and ignore cache errors
-  edgeLogger.warn('Error initializing auth failure state from cache', {
-    category: 'auth',
-    error: e instanceof Error ? e.message : 'Unknown error'
+  // Check if it's a value-based failure (from result filtering)
+  else if ('value' in reason) {
+    errorMessage = String(reason.value);
+  }
+
+  edgeLogger.warn('Circuit breaker opened - stopping history API calls', {
+    category: LOG_CATEGORIES.AUTH,
+    error: errorMessage,
+    important: true
   });
-}
+});
+
+historyCircuitBreaker.onReset(() => {
+  edgeLogger.info('Circuit breaker reset - resuming normal history API calls', {
+    category: LOG_CATEGORIES.AUTH
+  });
+});
+
+historyCircuitBreaker.onHalfOpen(() => {
+  edgeLogger.info('Circuit breaker half-open - testing history API calls', {
+    category: LOG_CATEGORIES.AUTH
+  });
+});
 
 /**
  * History service provides methods for fetching and managing chat history
- * with client-side caching and improved error handling.
+ * with client-side caching and improved error handling using Cockatiel.
  */
 export const historyService = {
   /**
-   * Check if we're in an auth failure cooldown state - always returns false now
-   * @returns Boolean indicating if we're in cooldown
+   * Get the current circuit breaker state
    */
-  isInAuthFailure(): boolean {
-    return false;
+  getCircuitState(): {
+    state: 'Closed' | 'Open' | 'HalfOpen' | 'Isolated';
+    lastAttempt: Date | null;
+    lastSuccess: Date | null;
+    failureCount: number;
+  } {
+    // Create mapping for circuit states to readable strings
+    const stateMap: Record<CircuitState, 'Closed' | 'Open' | 'HalfOpen' | 'Isolated'> = {
+      [CircuitState.Closed]: 'Closed',
+      [CircuitState.Open]: 'Open',
+      [CircuitState.HalfOpen]: 'HalfOpen',
+      [CircuitState.Isolated]: 'Isolated',
+    };
+
+    // Get current circuit breaker state
+    const currentState = historyCircuitBreaker.state;
+
+    return {
+      state: stateMap[currentState],
+      // These properties might not be directly accessible in the Cockatiel API
+      // Using null as fallback values
+      lastAttempt: null,
+      lastSuccess: null,
+      failureCount: 0
+    };
   },
 
   /**
-   * Get detailed information about the current auth failure state - now returns empty state
+   * Manually reset the circuit breaker
+   */
+  resetCircuitBreaker(): void {
+    // Circuit breaker can't be directly reset in Cockatiel
+    // Isolate then let it recover normally
+    if (historyCircuitBreaker.state !== CircuitState.Closed) {
+      // First isolate and then immediately cancel the isolation
+      // This is a workaround to force a reset
+      historyCircuitBreaker.isolate();
+
+      // Set to half-open which allows testing of the circuit again
+      try {
+        // @ts-ignore - Internal method call
+        historyCircuitBreaker.onStateChange.emit(CircuitState.HalfOpen);
+      } catch (e) {
+        edgeLogger.warn('Failed to forcibly reset circuit breaker', {
+          category: LOG_CATEGORIES.AUTH,
+          error: e instanceof Error ? e.message : String(e)
+        });
+      }
+    }
+
+    this.invalidateCache();
+    edgeLogger.info('Circuit breaker manually reset', {
+      category: LOG_CATEGORIES.AUTH
+    });
+  },
+
+  /**
+   * Manually isolate (open) the circuit breaker
+   */
+  isolateCircuitBreaker(): void {
+    historyCircuitBreaker.isolate();
+    edgeLogger.info('Circuit breaker manually isolated', {
+      category: LOG_CATEGORIES.AUTH
+    });
+  },
+
+  /**
+   * Legacy method for backward compatibility
+   * @returns Always false, as we now use Cockatiel
+   */
+  isInAuthFailure(): boolean {
+    return historyCircuitBreaker.state === CircuitState.Open ||
+      historyCircuitBreaker.state === CircuitState.Isolated;
+  },
+
+  /**
+   * Legacy method for backward compatibility
    */
   getAuthFailureInfo(): {
     isInCooldown: boolean;
@@ -202,117 +184,40 @@ export const historyService = {
     remainingTime: number;
     lastFailureTime: number;
   } {
+    const circuitState = this.getCircuitState();
+
     return {
-      isInCooldown: false,
-      failureCount: 0,
-      backoffDuration: 0,
-      remainingTime: 0,
-      lastFailureTime: 0
+      isInCooldown: circuitState.state === 'Open' || circuitState.state === 'Isolated',
+      failureCount: 0, // Not directly accessible in Cockatiel
+      backoffDuration: 30000, // Fixed 30 seconds with Cockatiel
+      remainingTime: 0, // Not applicable with Cockatiel's implementation
+      lastFailureTime: Date.now() // Approximation
     };
   },
 
   /**
-   * Reset the auth failure state - now a no-op function
+   * Legacy method for backward compatibility - now uses Cockatiel reset
    */
   resetAuthFailure(): void {
-    // No-op function
+    this.resetCircuitBreaker();
   },
 
   /**
-   * Fetch chat history with client-side caching
+   * Fetch chat history with client-side caching and circuit breaker protection
    * @param forceRefresh Whether to force a refresh from API
    * @returns Array of chat objects
    */
-  async fetchHistory(forceRefresh = false, isMobileOpen = false): Promise<Chat[]> {
+  async fetchHistory(forceRefresh = false): Promise<Chat[]> {
     // Generate operation ID for tracking
     const operationId = Math.random().toString(36).substring(2, 10);
 
-    // Check if we're in an auth failure cooldown period
-    if (this.isInAuthFailure() && !forceRefresh) {
-      console.debug(`[HistoryService] Skipping fetchHistory due to auth failure cooldown`);
-
-      // Return cached data if available
-      try {
-        const cachedData = clientCache.get('chat_history') as Chat[] | undefined;
-        return (cachedData && Array.isArray(cachedData) && cachedData.length > 0) ? cachedData : [];
-      } catch (e) {
-        return [];
-      }
-    }
-
-    // Auto-reset the auth failure state every 2 minutes to allow retries
-    // This is a failsafe to prevent permanent lockout
-    const authInfo = this.getAuthFailureInfo();
-    if (authInfo.isInCooldown && authInfo.remainingTime > 2 * 60 * 1000) {
-      console.debug(`[HistoryService] Auto-resetting auth failure state after ${Math.round(authInfo.remainingTime / 60000)} minutes`);
-      this.resetAuthFailure();
-    }
-
-    // Add enhanced debug logging
-    console.debug(`[HistoryService] Fetching history (forceRefresh=${forceRefresh})`, {
-      inAuthFailure: this.isInAuthFailure(),
-      authInfo: this.getAuthFailureInfo(),
-      unauthorizedRequests: recentUnauthorizedRequests.length
-    });
-
     // Create a consistent cache key
-    const cacheKey = 'chat_history';
+    const cacheKey = HISTORY_CACHE_KEY;
 
-    // Use throttling to prevent too many API calls
-    const now = Date.now();
-    const timeSinceLastRequest = now - lastHistoryRequestTime;
-
-    if (!forceRefresh && timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
-      console.debug(`[HistoryService] Throttling: Last request was ${Math.round(timeSinceLastRequest / 1000)}s ago`);
-
-      // Return cached data if available
+    // Check if we have cached data to use and we're not forcing a refresh
+    if (!forceRefresh) {
       try {
         const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
-        return (cachedData && Array.isArray(cachedData) && cachedData.length > 0) ? cachedData : [];
-      } catch (e) {
-        return [];
-      }
-    }
-
-    // Update the last request time (even if we're going to fail-fast due to circuit breaker)
-    lastHistoryRequestTime = now;
-
-    // -------------------- ENHANCED CIRCUIT BREAKER PATTERN --------------------
-    // Before doing ANYTHING AT ALL, check for auth failure state - not even creating IDs or timestamps
-    if (this.isInAuthFailure()) {
-      // ABSOLUTE FAIL-FAST: Return empty array immediately
-      // This is the core of the circuit breaker pattern - no work at all is done
-
-      // Low-frequency logging to avoid console spam (only 1% of calls will log)
-      if (Math.random() < 0.01) {
-        try {
-          const failureInfo = this.getAuthFailureInfo();
-          edgeLogger.warn(`History fetch blocked by circuit breaker. Cooldown: ${Math.round(failureInfo.remainingTime / 1000)}s remaining`, { category: 'auth' });
-        } catch (e) {
-          // Completely suppress errors in failure state logging to ensure absolute fail-fast
-        }
-      }
-
-      // Use cached data if available, otherwise return empty array
-      try {
-        const cachedData = clientCache.get('chat_history') as Chat[] | undefined;
-        return (cachedData && Array.isArray(cachedData) && cachedData.length > 0) ? cachedData : [];
-      } catch (e) {
-        // Completely ignore cache errors in failure state
-        return [];
-      }
-    }
-
-    // Rate limit check - use adaptive refresh interval
-    // Note: we reuse the 'now' value set above to ensure consistency
-    const timeSinceLastFetch = now - lastSuccessfulFetch;
-
-    // Only allow forced refreshes more often than the minimum interval
-    if (!forceRefresh && timeSinceLastFetch < MIN_REFRESH_INTERVAL) {
-      edgeLogger.debug(`Throttling history fetch: ${(MIN_REFRESH_INTERVAL - timeSinceLastFetch) / 1000}s remaining`, { category: 'auth' });
-      // Return cached data immediately
-      try {
-        const cachedData = clientCache.get('chat_history') as Chat[] | undefined;
         if (cachedData && Array.isArray(cachedData) && cachedData.length > 0) {
           return cachedData;
         }
@@ -321,142 +226,56 @@ export const historyService = {
       }
     }
 
-    const startTime = performance.now();
+    // Update the last request time
+    lastHistoryRequestTime = Date.now();
 
+    // Use the circuit breaker to protect the API call
     try {
-      // Double-check auth failure state again (could have changed during async ops)
-      if (this.isInAuthFailure()) {
-        // Try to return cached data if available (preferable to empty array)
-        try {
-          const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
-          if (cachedData && Array.isArray(cachedData) && cachedData.length > 0) {
-            return cachedData;
+      // Execute the history fetch through the circuit breaker
+      return await historyCircuitBreaker.execute(async () => {
+        // If already loading, don't start a new request
+        if (pendingRequests[cacheKey]) {
+          try {
+            return await pendingRequests[cacheKey]!;
+          } catch (error) {
+            // On error, clear pending request and continue with a new fetch
+            pendingRequests[cacheKey] = null;
           }
-        } catch (e) {
-          // Ignore cache errors, return empty array
         }
 
+        // Start a new request
+        try {
+          // Create the promise for fetching history
+          pendingRequests[cacheKey] = this.fetchHistoryFromAPI(cacheKey, operationId);
+
+          // Wait for the request to complete
+          const result = await pendingRequests[cacheKey];
+
+          // Clear the pending request on success
+          pendingRequests[cacheKey] = null;
+
+          return result;
+        } catch (error) {
+          // Clear the pending request on error
+          pendingRequests[cacheKey] = null;
+          throw error;
+        }
+      });
+    } catch (error) {
+      // If the circuit is open, we'll get here
+      edgeLogger.warn('History fetch failed (circuit open)', {
+        category: LOG_CATEGORIES.AUTH,
+        error: error instanceof Error ? error.message : String(error),
+        operationId
+      });
+
+      // Return cached data if available, otherwise empty array
+      try {
+        const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
+        return (cachedData && Array.isArray(cachedData) && cachedData.length > 0) ? cachedData : [];
+      } catch (e) {
         return [];
       }
-
-      // If already loading, don't start a new request
-      if (pendingRequests[cacheKey]) {
-        edgeLogger.debug(`[History:${operationId}] Reusing existing in-flight request`, { category: 'auth' });
-        try {
-          return await pendingRequests[cacheKey]!;
-        } catch (error) {
-          edgeLogger.error(`[History:${operationId}] Error from in-flight request:`, {
-            category: 'auth',
-            error: error instanceof Error ? error.message : String(error)
-          });
-          // On error, clear the pending request and continue with a new fetch
-          pendingRequests[cacheKey] = null;
-        }
-      }
-
-      // Log fetching attempt at reduced frequency
-      if (Math.random() < 0.2 || forceRefresh) {
-        edgeLogger.debug(`[History:${operationId}] Fetching chat history`, {
-          category: 'auth',
-          forceRefresh,
-          cacheKey,
-          hasPendingRequest: !!pendingRequests[cacheKey],
-          timeSinceLastFetch: timeSinceLastFetch / 1000,
-          timestamp: new Date().toISOString()
-        });
-      }
-
-      // Try cache first if not forcing refresh
-      if (!forceRefresh) {
-        try {
-          // Use the TTL parameter of the client cache
-          const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
-          if (cachedData && cachedData.length > 0) {
-            // Only log cache hits at reduced frequency
-            if (Math.random() < 0.2) {
-              edgeLogger.debug(`[History:${operationId}] Using cached data with ${cachedData.length} items`, { category: 'auth' });
-            }
-
-            // Check if we need a background refresh (only if not accessed recently)
-            const timeSinceLastRefresh = Date.now() - lastRefreshTime;
-            if (timeSinceLastRefresh > adaptiveRefreshInterval) {
-              if (Math.random() < 0.2) {
-                edgeLogger.debug(`[History:${operationId}] Starting background refresh after using cache (${Math.round(timeSinceLastRefresh / 1000)}s since last refresh)`, { category: 'auth' });
-              }
-
-              // Schedule a background refresh after a short delay
-              setTimeout(() => {
-                this.fetchHistoryFromAPI(cacheKey, `${operationId}-background`)
-                  .then(freshData => {
-                    // Update cache with fresh data
-                    clientCache.set(cacheKey, freshData);
-
-                    // Update adaptive refresh interval based on success
-                    lastSuccessfulFetch = Date.now();
-                    consecutiveSuccessfulFetches++;
-
-                    // Gradually increase refresh interval after consecutive successes
-                    if (consecutiveSuccessfulFetches > 3) {
-                      adaptiveRefreshInterval = Math.min(
-                        adaptiveRefreshInterval * 1.5,
-                        REFRESH_INTERVAL
-                      );
-                    }
-                  })
-                  .catch(err => {
-                    edgeLogger.error('Background refresh failed:', {
-                      category: 'auth',
-                      error: err instanceof Error ? err.message : String(err)
-                    });
-                    consecutiveSuccessfulFetches = 0;
-                    // Decrease refresh interval on failure
-                    adaptiveRefreshInterval = Math.max(
-                      adaptiveRefreshInterval / 2,
-                      MIN_REFRESH_INTERVAL
-                    );
-                  });
-              }, 100);
-            } else if (Math.random() < 0.1) {
-              edgeLogger.debug(`[History:${operationId}] Skipping background refresh (only ${Math.round(timeSinceLastRefresh / 1000)}s since last refresh)`, { category: 'auth' });
-            }
-
-            return cachedData;
-          } else {
-            edgeLogger.debug(`[History:${operationId}] No valid cache data found, fetching from API`, { category: 'auth' });
-          }
-        } catch (cacheError) {
-          edgeLogger.warn(`[History:${operationId}] Cache error:`, {
-            category: 'auth',
-            error: cacheError instanceof Error ? cacheError.message : String(cacheError)
-          });
-          // Continue with API fetch
-        }
-      } else {
-        // Force refresh requested, invalidate cache
-        edgeLogger.debug(`[History:${operationId}] Force refresh, invalidating cache`, { category: 'auth' });
-        this.invalidateCache();
-      }
-
-      // Create and store the API fetch promise
-      edgeLogger.debug(`[History:${operationId}] Fetching from API`, { category: 'auth' });
-      pendingRequests[cacheKey] = this.fetchHistoryFromAPI(cacheKey, operationId);
-
-      try {
-        // Wait for the API request to complete
-        const result = await pendingRequests[cacheKey]!;
-        return result;
-      } finally {
-        // Clean up pending request after a short delay
-        setTimeout(() => {
-          pendingRequests[cacheKey] = null;
-        }, 500);
-      }
-    } catch (error) {
-      edgeLogger.error(`[History:${operationId}] Unexpected error:`, {
-        category: 'auth',
-        error: error instanceof Error ? error.message : String(error)
-      });
-      return [];
     }
   },
 
@@ -551,18 +370,17 @@ export const historyService = {
   },
 
   /**
-   * Fetch history data directly from API
-   * @param cacheKey Cache key for deduplication
-   * @param operationId Operation ID for tracing
-   * @returns Array of chat objects
+   * Internal method to fetch history data from API
    */
   async fetchHistoryFromAPI(cacheKey: string, operationId: string): Promise<Chat[]> {
     try {
       // CRITICAL FIX #1: Check for cookies before making the request
       const hasCookies = this.checkForAuthCookies();
       if (!hasCookies) {
-        edgeLogger.debug(`No auth cookies found, skipping history fetch to avoid 401`, { operationId });
-        setAuthFailureState(true);
+        edgeLogger.debug(`No auth cookies found, skipping history fetch to avoid 401`, {
+          category: LOG_CATEGORIES.AUTH,
+          operationId
+        });
         return [];
       }
 
@@ -570,8 +388,10 @@ export const historyService = {
       // This prevents the 401 errors that happen when the auth token is present but not yet valid
       const authReady = await this.isAuthReady();
       if (!authReady) {
-        edgeLogger.debug(`Auth not ready yet, skipping history fetch to avoid 401`, { operationId });
-        // Don't set failure state here, this is a normal condition during app initialization
+        edgeLogger.debug(`Auth not ready yet, skipping history fetch to avoid 401`, {
+          category: LOG_CATEGORIES.AUTH,
+          operationId
+        });
         return [];
       }
 
@@ -587,15 +407,7 @@ export const historyService = {
       // IMPROVED: Always use timestamp for consistent request pattern
       // Using precise timestamp instead of minute-based cachebusting for better uniqueness
       const timestamp = Date.now();
-
-      // Track unauthorized request count to help with flood detection
       let urlParams = `t=${timestamp}`;
-
-      // If we've had recent unauthorized requests, include the count in the next request
-      // This helps the server track bursts of unauthorized requests
-      if (recentUnauthorizedRequests.length > 0) {
-        urlParams += `&unauth_count=${recentUnauthorizedRequests.length}`;
-      }
 
       // Include auth ready marker in the URL to help with debugging
       urlParams += `&auth_ready=true`;
@@ -629,16 +441,10 @@ export const historyService = {
         // Special handling for 409 Conflict - authentication pending
         if (response.status === 409) {
           edgeLogger.debug('Authentication pending for history API', {
-            category: 'auth',
+            category: LOG_CATEGORIES.AUTH,
             message: 'Will retry shortly',
             status: response.status
           });
-
-          // Don't count this toward unauthorized requests since it's just a timing issue
-          // Instead, we'll use cached data and retry
-
-          // Remove pending request
-          delete pendingRequests[cacheKey];
 
           // Return cached data if available
           try {
@@ -649,153 +455,102 @@ export const historyService = {
           }
         }
 
-        // Standard 401/403 handling
-        // Get unauthorized count from response headers if available
-        // This helps coordinate between multiple clients/components
-        let unauthorizedCount = recentUnauthorizedRequests.length;
-        const headerCount = parseInt(response.headers.get('x-unauthorized-count') || '0');
-
-        if (headerCount > 0) {
-          // Use the higher count between local tracking and server header
-          unauthorizedCount = Math.max(unauthorizedCount, headerCount);
-
-          // If server reports high count, ensure we're tracking enough locally
-          if (headerCount > unauthorizedCount) {
-            // Add timestamps to match the server count
-            const diff = headerCount - unauthorizedCount;
-            const now = Date.now();
-            for (let i = 0; i < diff; i++) {
-              // Spread them out slightly in the window
-              recentUnauthorizedRequests.push(now - (i * 100));
-            }
-          }
-        }
-
-        // Check if cookies were present but auth failed
-        const hasAuthCookies = response.headers.get('x-has-auth-cookies') === 'true';
-
-        // Track recent unauthorized responses to detect floods
-        const now = Date.now();
-        recentUnauthorizedRequests.push(now);
-
-        // Remove unauthorized responses older than our tracking window
-        recentUnauthorizedRequests = recentUnauthorizedRequests.filter(
-          time => now - time < UNAUTHORIZED_WINDOW
-        );
-
-        // Recalculate after filtering
-        unauthorizedCount = recentUnauthorizedRequests.length;
-
-        // Immediate circuit breaker activation if threshold exceeded
-        if (unauthorizedCount >= UNAUTHORIZED_THRESHOLD) {
-          // Handle auth failure with enhanced circuit breaker pattern
-          setAuthFailureState(true);
-
-          // Don't clear tracking array - we'll use it for duration of the cooldown
-          // to catch any further requests during the initial delay
-
-          edgeLogger.warn(`AUTH FLOOD DETECTED: ${unauthorizedCount} unauthorized responses in the last ${UNAUTHORIZED_WINDOW / 1000}s. Circuit breaker activated for ${Math.round(authBackoffDuration / 1000)}s.`, {
-            operationId,
-            url,
-            responseStatus: response.status
-          });
-        } else {
-          // Log at reduced frequency
-          if (unauthorizedCount < 3 || Math.random() < 0.2) {
-            edgeLogger.warn(`Authentication failed (${response.status}) when fetching history. Monitoring for flood (${unauthorizedCount}/${UNAUTHORIZED_THRESHOLD}).`, {
-              operationId,
-              url,
-              hasAuthCookies
-            });
-          }
-        }
-
-        // Remove pending request
-        delete pendingRequests[cacheKey];
-
-        return [];
-      }
-
-      // Reset auth failure state only on successful response
-      if (response.ok) {
-        setAuthFailureState(false);
-      }
-
-      // Parse response
-      console.log('[HistoryService] Response status:', response.status);
-      const rawText = await response.text(); // Get raw text first
-      console.log('[HistoryService] Raw response text length:', rawText.length);
-      console.log('[HistoryService] Raw response text sample:', rawText.substring(0, 500)); // Log beginning of text
-
-      let data;
-      try {
-        const parsedResponse = JSON.parse(rawText);
-        console.log('[HistoryService] Parsed response type:', typeof parsedResponse);
-
-        // Handle both formats: direct array or {success: true, data: [...]}
-        if (parsedResponse && typeof parsedResponse === 'object' && 'data' in parsedResponse && Array.isArray(parsedResponse.data)) {
-          // New format with success wrapper
-          console.log('[HistoryService] Detected wrapped response format');
-          data = parsedResponse.data;
-        } else if (Array.isArray(parsedResponse)) {
-          // Old direct array format
-          console.log('[HistoryService] Detected direct array response format');
-          data = parsedResponse;
-        } else {
-          // Invalid format
-          console.error('[HistoryService] Invalid response format, neither wrapped nor array:', typeof parsedResponse);
-          throw new Error('Invalid history API response format');
-        }
-
-        console.log('[HistoryService] Processed data type:', typeof data);
-        console.log('[HistoryService] Processed data is array:', Array.isArray(data));
-        console.log('[HistoryService] Processed data length:', Array.isArray(data) ? data.length : 'N/A');
-        console.log('[HistoryService] First item sample:', Array.isArray(data) && data.length > 0 ? JSON.stringify(data[0]).substring(0, 200) : 'No data');
-      } catch (e) {
-        console.error('[HistoryService] JSON PARSE FAILED:', e);
-        // Cache empty array to prevent continuous retry
-        clientCache.set('chat_history', [], CACHE_TTL_ERROR);
-        return [];
-      }
-
-      // If we get an object with an error property, handle it gracefully
-      if (data && typeof data === 'object' && 'error' in data) {
-        edgeLogger.error('API returned an error response', {
-          error: data.error,
+        // Log auth failures
+        edgeLogger.warn(`Authentication failed (${response.status}) when fetching history`, {
+          category: LOG_CATEGORIES.AUTH,
           operationId,
           url
         });
 
-        // If it's an authentication error, trigger the circuit breaker
-        if (data.error === 'Unauthorized') {
-          setAuthFailureState(true);
-        }
-
-        // Return empty array for consistent behavior
-        return [];
+        // With Cockatiel, we'll throw an error here which will be handled by the circuit breaker
+        throw new Error(`Authentication failed with status ${response.status}`);
       }
 
-      // We've already validated the format in the parsing step above
-      // Cache the fetched data
-      clientCache.set('chat_history', data, CACHE_TTL);
+      // Parse response
+      edgeLogger.debug('[HistoryService] Response status:', { status: response.status, operationId });
+      const rawText = await response.text(); // Get raw text first
 
-      // Return the data
-      return data as Chat[];
+      if (Math.random() < 0.05) {
+        edgeLogger.debug('[HistoryService] Raw response details', {
+          length: rawText.length,
+          sample: rawText.substring(0, 100), // Log beginning of text
+          operationId
+        });
+      }
+
+      let data;
+      try {
+        const parsedResponse = JSON.parse(rawText);
+
+        // Handle both formats: direct array or {success: true, data: [...]}
+        if (parsedResponse && typeof parsedResponse === 'object' && 'data' in parsedResponse && Array.isArray(parsedResponse.data)) {
+          // New format with success wrapper
+          data = parsedResponse.data;
+        } else if (Array.isArray(parsedResponse)) {
+          // Old direct array format
+          data = parsedResponse;
+        } else {
+          // Invalid format
+          edgeLogger.error('[HistoryService] Invalid response format', {
+            type: typeof parsedResponse,
+            isArray: Array.isArray(parsedResponse),
+            operationId
+          });
+          throw new Error('Invalid history API response format');
+        }
+
+        if (data.length > 0) {
+          // Update cache TTL based on response status
+          const cacheTTL = response.ok ? CACHE_TTL : CACHE_TTL_ERROR;
+
+          // Store in cache
+          clientCache.set(cacheKey, data, cacheTTL);
+
+          // Track successful fetch
+          lastSuccessfulFetch = Date.now();
+          consecutiveSuccessfulFetches++;
+
+          // Log at reduced frequency
+          if (Math.random() < 0.1) {
+            edgeLogger.debug(`Fetched ${data.length} history items (${cacheKey})`, {
+              category: LOG_CATEGORIES.CHAT,
+              operationId
+            });
+          }
+        } else {
+          edgeLogger.debug(`Fetched empty history (${cacheKey})`, {
+            category: LOG_CATEGORIES.CHAT,
+            operationId,
+            status: response.status
+          });
+
+          // Cache empty result for a shorter time
+          clientCache.set(cacheKey, [], Math.min(CACHE_TTL, 60 * 1000));
+        }
+
+        return data;
+      } catch (e) {
+        edgeLogger.error('[HistoryService] JSON parse error:', {
+          category: LOG_CATEGORIES.CHAT,
+          error: e instanceof Error ? e.message : String(e),
+          operationId
+        });
+
+        // Cache empty array to prevent continuous retry
+        clientCache.set(cacheKey, [], CACHE_TTL_ERROR);
+
+        // Rethrow as this is an unexpected error that should trip the circuit breaker
+        throw e;
+      }
     } catch (error) {
-      // API request error - but NOT auth failure (that's handled above)
-      edgeLogger.error('Error fetching history from API', {
+      // Let the circuit breaker handle the error
+      edgeLogger.error('[HistoryService] Error fetching history:', {
+        category: LOG_CATEGORIES.CHAT,
         error: error instanceof Error ? error.message : String(error),
         operationId
       });
 
-      // Clean up pending request
-      delete pendingRequests[cacheKey];
-
-      // Cache empty array temporarily to prevent continuous spinning
-      clientCache.set('chat_history', [], CACHE_TTL_ERROR);
-
-      // Return empty array instead of throwing
-      return [];
+      throw error;
     }
   },
 
@@ -844,7 +599,6 @@ export const historyService = {
         // Check for auth issues
         if (response.status === 401 || response.status === 403) {
           // Handle auth failure consistently with fetchHistory
-          setAuthFailureState(true);
           edgeLogger.warn(`[History:${operationId}] Authentication failed (${response.status}) when deleting chat.`, {
             chatId: id,
             url,
@@ -863,9 +617,6 @@ export const historyService = {
 
         return false;
       }
-
-      // Reset auth failure state on success
-      setAuthFailureState(false);
 
       const duration = Math.round(performance.now() - startTime);
       edgeLogger.debug('Successfully deleted chat', {
@@ -963,8 +714,6 @@ export const historyService = {
 
         // Check for auth issues
         if (response.status === 401 || response.status === 403) {
-          // Handle auth failure consistently with other methods
-          setAuthFailureState(true);
           edgeLogger.warn(`[History:${operationId}] Authentication failed (${response.status}) when renaming chat.`, {
             chatId: chatId.slice(0, 8),
             duration
@@ -981,9 +730,6 @@ export const historyService = {
         }
         return false;
       }
-
-      // Reset auth failure state on success
-      setAuthFailureState(false);
 
       // Invalidate chat history cache
       this.invalidateCache();

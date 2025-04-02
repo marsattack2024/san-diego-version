@@ -61,7 +61,7 @@ Added explicit session health indicators via cookies and headers to help debug a
 - Clear indication when sessions become unauthenticated
 - Consistent logging of session status
 
-### ⚠️ Phase 4: Enhanced Diagnostics and Circuit Breaker Management (PARTIALLY COMPLETED)
+### ⚠️ Phase 4: Enhanced Diagnostics and Circuit Breaker Management (UPDATING)
 
 #### ✅ Improved History Service
 - Enhanced the `invalidateCache` method in `historyService` to reset auth state
@@ -74,86 +74,82 @@ Added explicit session health indicators via cookies and headers to help debug a
 - The diagnostic UI described in the README is no longer present
 
 #### ⚠️ Enhanced Error Recovery
-- Circuit breaker logic is implemented but may be too aggressive
+- Current circuit breaker logic is too aggressive
 - Some UI controls for manual reset are no longer available
 - Error recovery is primarily handled through middleware and API route handlers
 
-### ⬜ Phase 5: Ongoing Monitoring and Optimization (NOT STARTED)
+## Circuit Breaker Modernization with Cockatiel
 
-Future improvements to consider:
-- ⬜ Refine Circuit Breaker Parameters based on production data
-- ⬜ Implement Automated Recovery for common authentication edge cases
-- ⬜ Add Admin Monitoring dashboard for system-wide authentication health
-- ⬜ Consider pre-fetching mechanisms to improve perceived performance during auth challenges
+After reviewing the existing circuit breaker implementation, we've decided to replace it with Cockatiel, a modern resilience library. Cockatiel is a lightweight ESM-compatible library for resilience patterns like circuit breakers, retries, and timeouts.
 
-## Simplified Approach to Circuit Breaker Logic
+### Why Cockatiel?
 
-Based on our review, here's a simplified approach to the circuit breaker logic that would maintain its benefits while reducing potential issues:
+1. **Standards Compliance**:
+   - Uses modern ESM syntax compatible with Next.js 15
+   - No dependencies (lightweight at ~10KB minified & gzipped)
+   - Written in TypeScript with full type definitions
 
-### Recommended Simplifications:
+2. **Better Features**:
+   - Multiple circuit breaker strategies (consecutive failures, failure percentage)
+   - Built-in event system for monitoring state changes
+   - Automatic half-open state testing
+   - Composable with other resilience patterns
 
-1. **Increase Failure Thresholds**: 
-   - Increase `UNAUTHORIZED_THRESHOLD` from 3 to 5 failed requests
-   - Increase `UNAUTHORIZED_WINDOW` from 5 seconds to 10 seconds
-   - This reduces the chance of triggering the circuit breaker during normal transient failures
+3. **Integration Benefits**:
+   - Works with our ESM-based codebase
+   - Simpler implementation with less custom code
+   - Better monitoring capabilities
+   - More flexible configuration
 
-2. **Reduce Backoff Duration**:
-   - Decrease `MIN_AUTH_COOLDOWN` from 2 minutes to 30 seconds
-   - Decrease `MAX_AUTH_COOLDOWN` from 30 minutes to 5 minutes
-   - This ensures users aren't locked out for extended periods
+### Implementation Plan for Cockatiel
 
-3. **Add Manual Reset Capability**:
-   - Add a simple function to reset the circuit breaker state directly
-   - Example implementation:
-   ```javascript
-   // Add to historyService
-   resetCircuitBreaker(): void {
-     isInAuthFailureCooldown = false;
-     authFailureCount = 0;
-     authBackoffDuration = MIN_AUTH_COOLDOWN;
-     
-     // Clear all failure-related flags in persistent storage
-     clientCache.set(AUTH_FAILURE_KEY, false, Infinity, true);
-     clientCache.set(AUTH_FAILURE_COUNT_KEY, 0, Infinity, true);
-     clientCache.remove(AUTH_FAILURE_LAST_TIME_KEY, true);
-     clientCache.set(AUTH_BACKOFF_DURATION_KEY, MIN_AUTH_COOLDOWN, Infinity, true);
-     
-     // Clear any timers
-     if (authFailureTimer) {
-       clearTimeout(authFailureTimer);
-       authFailureTimer = null;
-     }
-     
-     // Also reset unauthorized request tracking
-     recentUnauthorizedRequests = [];
-     
-     // Force cache invalidation to trigger a fresh fetch
-     this.invalidateCache();
-   }
+1. **Install Cockatiel**:
+   ```bash
+   npm install --save cockatiel
    ```
 
-4. **Feature Flag Option**:
-   - Add the ability to disable the circuit breaker entirely through a feature flag
-   - Example implementation: 
-   ```javascript
-   const CIRCUIT_BREAKER_ENABLED = localStorage.getItem('circuit_breaker_enabled') !== 'false';
-   
-   // Then in isInAuthFailure():
-   isInAuthFailure(): boolean {
-     if (!CIRCUIT_BREAKER_ENABLED) return false;
-     // Rest of existing logic...
-   }
-   ```
+2. **Update History Service**:
+   - Replace custom circuit breaker with Cockatiel implementation
+   - Implement proper event listeners for monitoring
+   - Set reasonable thresholds and timeouts
+   - Expose methods for manual control
+
+3. **Create Debug UI for Development**:
+   - Implement a minimal debug component that shows circuit state
+   - Add controls for manual circuit breaker management
+   - Only display in development environment
+
+4. **Update Documentation**:
+   - Document new circuit breaker behavior
+   - Explain troubleshooting steps
+   - Provide monitoring guidance
+
+### Specific Improvements with Cockatiel
+
+1. **More Reasonable Thresholds**:
+   - Half-open timeout of 30 seconds (vs. previous 30 minutes max backoff)
+   - 5 consecutive failures threshold (vs. previous 3)
+   - Event-based monitoring instead of polling
+
+2. **Better Control**:
+   - Manual reset capability through exposed API
+   - Manual isolation for testing
+   - Comprehensive state information
+
+3. **Simplified Development**:
+   - Less custom code to maintain
+   - Standard library with community support
+   - Better diagnostics through events
 
 ## Next Steps
 
-1. **Reimplement Auth Status Check UI**: Consider reimplementing a simplified version of the AuthStatusCheck component for debugging in development
+1. **Implement Cockatiel Circuit Breaker**: Replace custom implementation with Cockatiel in the history service
    
-2. **Expose Circuit Breaker Controls**: Add a way for users to manually reset the circuit breaker when history loading fails
+2. **Add Development Debug UI**: Create a minimal debug component for development environment
 
-3. **Review Circuit Breaker Parameters**: Adjust the circuit breaker parameters based on the recommendations above
+3. **Test Circuit Breaker Behavior**: Verify proper functioning with realistic failure scenarios
    
-4. **Add Admin Monitoring**: Implement the admin monitoring dashboard from Phase 5 to track auth issues across users
+4. **Documentation**: Update documentation with new circuit breaker implementation details
 
 ## Additional Considerations
 
@@ -164,11 +160,11 @@ Based on our review, here's a simplified approach to the circuit breaker logic t
 
 2. **Type Safety**: We're using `any` for the cookieStore parameter in `setEnhancedCookie` for pragmatic reasons, as the underlying cookie store implementations differ slightly between contexts.
 
-3. **Circuit Breaker Logic**: The circuit breaker in `lib/api/history-service.ts` has been enhanced to include:
-   - Complete cache invalidation
-   - Reset of failure counters
-   - Exponential backoff with reasonable limits
-   - But may benefit from the simplifications suggested above
+3. **Circuit Breaker Logic**: Will be replaced with Cockatiel which provides:
+   - Event-based monitoring
+   - Multiple circuit breaker strategies
+   - Composable policies for complex resilience patterns
+   - Better controls for manual intervention
 
 ## Troubleshooting Authentication Issues
 
@@ -177,13 +173,4 @@ If you encounter authentication issues:
 1. Clear browser cookies and local storage
 2. Refresh the page completely
 3. If history still doesn't load, check the browser console for circuit breaker messages
-4. To force reset the circuit breaker, run this in console:
-   ```
-   localStorage.removeItem('auth_failure_key');
-   localStorage.removeItem('auth_failure_count');
-   localStorage.removeItem('auth_failure_last_time');
-   localStorage.removeItem('auth_backoff_duration');
-   location.reload();
-   ```
-
-Currently there's no UI for manual reset as the AuthStatusCheck component has been removed. Consider reimplementing a simplified version if debugging continues to be challenging.
+4. After implementing Cockatiel, the debug UI in development will provide a way to manually reset the circuit breaker
