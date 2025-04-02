@@ -43,7 +43,8 @@ export async function POST(request: Request): Promise<Response> {
 
         // Parse the incoming request data
         const body = await request.json();
-        const { chatId, newTitle } = body;
+        // Map the received parameters to what the endpoint expects internally
+        const { sessionId: chatId, content: newTitle } = body;
 
         // Input validation
         if (!chatId) {
@@ -65,7 +66,7 @@ export async function POST(request: Request): Promise<Response> {
 
         // Check if the chat exists and belongs to the user
         const { data: chatData, error: chatError } = await supabase
-            .from('sd_chats')
+            .from('sd_chat_sessions')
             .select('id, user_id')
             .eq('id', chatId)
             .single();
@@ -95,7 +96,7 @@ export async function POST(request: Request): Promise<Response> {
 
         // Update the chat title
         const { error: updateError } = await supabase
-            .from('sd_chats')
+            .from('sd_chat_sessions')
             .update({ title: trimmedTitle, updated_at: new Date().toISOString() })
             .eq('id', chatId);
 

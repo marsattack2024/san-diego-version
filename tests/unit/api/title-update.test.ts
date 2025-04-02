@@ -2,6 +2,15 @@ import { describe, expect, it, vi, beforeEach, Mock } from 'vitest';
 import { POST } from '@/app/api/chat/update-title/route';
 import { NextRequest, NextResponse } from 'next/server';
 
+// Mock next/headers cookies function
+vi.mock('next/headers', () => ({
+    cookies: vi.fn().mockReturnValue({
+        getAll: vi.fn().mockReturnValue([{ name: 'test-cookie', value: 'test-value' }]),
+        get: vi.fn().mockReturnValue({ name: 'test-cookie', value: 'test-value' }),
+        set: vi.fn()
+    })
+}));
+
 // Mock the dependencies
 vi.mock('@/utils/supabase/server', () => ({
     createClient: vi.fn()
@@ -95,7 +104,7 @@ describe('Title Update API', () => {
         mockSupabase.auth.getUser.mockResolvedValueOnce({
             data: { user: null }
         });
-        
+
         // Mock the session lookup to fail as well
         mockSupabase.from().select().eq().single.mockResolvedValueOnce({
             data: null,
@@ -254,7 +263,7 @@ describe('Title Update API', () => {
         // Verify we used standard Supabase authentication
         expect(mockSupabase.auth.getUser).toHaveBeenCalled();
     });
-    
+
     it('should accept service-to-service authentication via headers', async () => {
         // Arrange - Set up a request with service auth headers
         const requestWithServiceAuth = {
