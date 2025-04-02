@@ -20,13 +20,13 @@ import { SupabaseClient } from '@supabase/supabase-js';
 // and return a fully authenticated client.
 
 export interface MessagePersistenceConfig {
-    disabled?: boolean;
-    bypassAuth?: boolean;
-    defaultUserId?: string;
     operationName?: string;
     throwErrors?: boolean;
     messageHistoryLimit?: number;
     isWidgetChat?: boolean;
+    disabled?: boolean;
+    bypassAuth?: boolean;
+    defaultUserId?: string;
 }
 
 export interface HistoryMessageInput {
@@ -142,28 +142,23 @@ async function withRetry<T>(
  * Uses direct Supabase operations with appropriate error handling
  */
 export class MessagePersistenceService {
-    private readonly supabasePromise: Promise<SupabaseClient>;
     private readonly operationName: string;
     private readonly throwErrors: boolean;
     private readonly messageHistoryLimit: number;
     private readonly isWidgetChat: boolean;
     private readonly disabled: boolean;
+    private readonly bypassAuth: boolean;
+    private readonly defaultUserId?: string;
 
     constructor(config: MessagePersistenceConfig = {}) {
-        this.config = {
-            operationName: 'message_persistence',
-            throwErrors: false,
-            messageHistoryLimit: 50,
-            isWidgetChat: false,
-            disabled: false,
-            ...config
-        };
-
-        this.operationName = this.config.operationName || 'message_persistence';
-        this.throwErrors = this.config.throwErrors === true;
-        this.messageHistoryLimit = this.config.messageHistoryLimit || 50;
-        this.isWidgetChat = this.config.isWidgetChat || false;
-        this.disabled = this.config.disabled || false;
+        // Store config values directly in class properties
+        this.operationName = config.operationName || 'message_persistence';
+        this.throwErrors = config.throwErrors === true;
+        this.messageHistoryLimit = config.messageHistoryLimit || 50;
+        this.isWidgetChat = config.isWidgetChat || false;
+        this.disabled = config.disabled || false;
+        this.bypassAuth = config.bypassAuth || false;
+        this.defaultUserId = config.defaultUserId;
 
         if (this.disabled) {
             edgeLogger.info('Message persistence disabled', {
@@ -182,17 +177,13 @@ export class MessagePersistenceService {
             isWidgetChat: this.isWidgetChat,
             disabled: this.disabled
         });
-
-        // Initialize Supabase client
-        this.supabasePromise = initializeSupabase();
     }
 
     /**
      * Creates a Supabase client based on configuration
-     * Uses admin client if bypassAuth is true, with fallback to standard client
      */
-    private async createSupabaseClient(context: Record<string, any> = {}) {
-        const useAdminClient = this.config.bypassAuth === true;
+    private async createSupabaseClient(context: Record<string, any> = {}): Promise<SupabaseClient> {
+        const useAdminClient = this.bypassAuth === true;
         try {
             if (useAdminClient) {
                 edgeLogger.info('Using admin client to bypass RLS', {
@@ -204,19 +195,11 @@ export class MessagePersistenceService {
                 return await createClient();
             }
         } catch (error) {
-            logError(edgeLogger, this.operationName, error, {
-                useAdminClient,
-                ...context,
-                action: 'creating_client'
+            edgeLogger.error('Failed to create Supabase client', {
+                operation: this.operationName,
+                error: error instanceof Error ? error.message : String(error),
+                ...context
             });
-
-            // Fall back to the standard client if admin client fails
-            if (useAdminClient) {
-                edgeLogger.info('Falling back to standard client', {
-                    operation: this.operationName
-                });
-                return await createClient();
-            }
             throw error;
         }
     }
@@ -464,7 +447,9 @@ export class MessagePersistenceService {
             // Create Supabase client
             const supabase = await this.createSupabaseClient({
                 sessionId,
-                action: 'load_messages'
+                userId,
+                limit,
+                method: 'loadPreviousMessages'
             });
 
             // Direct query approach (removing RPC attempt since it doesn't exist)
@@ -869,7 +854,14 @@ export class MessagePersistenceService {
         }
     }
 
-    // Update the loadMessages method to handle widget chats
+    /**
+     * Load messages from a chat session
+     * 
+     * @param sessionId - The chat session ID
+     * @param userId - Optional user ID (for authentication)
+     * @param limit - Maximum number of messages to load
+     * @returns Array of messages or empty array if disabled or none found
+     */
     async loadMessages(
         sessionId: string,
         userId?: string,
@@ -883,22 +875,20 @@ export class MessagePersistenceService {
                     operation: this.operationName,
                     sessionId
                 });
+            } else {
+                edgeLogger.info('Loading previous messages skipped (disabled)', {
+                    operation: this.operationName,
+                    sessionId: sessionId || 'unknown'
+                });
             }
             return [];
         }
 
-        const actualLimit = limit || this.messageHistoryLimit;
-
-        try {
-            // Continue with the existing implementation...
-        } catch (error) {
-            // Handle any errors that occur during the loadMessages method
-            edgeLogger.error('Error loading messages', {
-                operation: this.operationName,
-                sessionId,
-                error: error instanceof Error ? error.message : String(error)
-            });
-            return [];
-        }
+        // For non-disabled case, delegate to actual implementation
+        return this.loadPreviousMessages(
+            sessionId,
+            userId || this.defaultUserId,
+            limit || this.messageHistoryLimit
+        );
     }
 } 

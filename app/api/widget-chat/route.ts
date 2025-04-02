@@ -71,6 +71,24 @@ export async function POST(req: Request): Promise<Response> {
   const operationId = `widget_${Math.random().toString(36).substring(2, 8)}`;
 
   try {
+    // Clone the request for potential debugging
+    const reqClone = req.clone();
+
+    // Log all headers in development for debugging
+    if (process.env.NODE_ENV === 'development') {
+      const headers: Record<string, string> = {};
+      reqClone.headers.forEach((value, key) => {
+        headers[key] = value;
+      });
+
+      edgeLogger.debug('Widget chat: Request headers', {
+        category: LOG_CATEGORIES.SYSTEM,
+        operation: 'widget_chat',
+        operationId,
+        headers
+      });
+    }
+
     // Parse and validate the request body
     let body;
     try {
@@ -120,7 +138,7 @@ export async function POST(req: Request): Promise<Response> {
     // Create a configured chat engine instance for the widget chat
     const engine = createChatEngine({
       tools: widgetTools,
-      requiresAuth: false,
+      requiresAuth: false,  // Explicitly disable auth requirement
       corsEnabled: true,
       systemPrompt: prompts.widget,
       maxTokens: 800,
@@ -135,6 +153,7 @@ export async function POST(req: Request): Promise<Response> {
       body: {
         sessionId: body.sessionId,
         isWidgetChat: true, // Flag to identify widget chats
+        bypassAuth: true    // Skip authentication checks for widget
       }
     });
 

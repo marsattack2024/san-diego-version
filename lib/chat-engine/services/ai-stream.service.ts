@@ -60,30 +60,143 @@ export class AIStreamService {
                 maxTokens: config.maxTokens
             });
 
-            // --- Prepare Messages and System Prompt --- 
-            // (Logic moved from original processRequest) 
-
-            // Use combined messages from context (current + history)
-            const modelMessages = [
+            // Get combined messages from context
+            const allMessages = [
                 ...(context.previousMessages || []),
                 ...context.messages
             ];
+
+            // Additional validation to ensure every message meets AI SDK requirements
+            const validatedMessages = allMessages.filter(msg => {
+                // Check if message is a valid object
+                if (!msg || typeof msg !== 'object') {
+                    edgeLogger.error('Removing invalid message object', {
+                        category: LOG_CATEGORIES.LLM,
+                        operation: operationName,
+                        requestId,
+                        msgType: typeof msg
+                    });
+                    return false;
+                }
+
+                // Check for valid role property
+                if (!msg.role || !['user', 'assistant', 'system', 'tool', 'function'].includes(msg.role)) {
+                    edgeLogger.error('Removing message with invalid role', {
+                        category: LOG_CATEGORIES.LLM,
+                        operation: operationName,
+                        requestId,
+                        role: msg.role
+                    });
+                    return false;
+                }
+
+                // Check for content property
+                if (msg.content === undefined || msg.content === null) {
+                    // Check if there are parts with text
+                    if (msg.parts && Array.isArray(msg.parts) && msg.parts.length > 0) {
+                        const textPart = msg.parts.find((part: any) =>
+                            part && part.type === 'text' && 'text' in part && typeof part.text === 'string');
+
+                        if (textPart && 'text' in textPart && textPart.text) {
+                            // Create a new message object with content from parts
+                            const fixedMsg = {
+                                ...msg,
+                                content: textPart.text
+                            };
+
+                            edgeLogger.debug('AI Stream: Extracted content from parts array', {
+                                category: LOG_CATEGORIES.LLM,
+                                operation: operationName,
+                                requestId,
+                                role: msg.role,
+                                contentLength: fixedMsg.content.length
+                            });
+
+                            // Return the fixed message instead of filtering out
+                            return fixedMsg;
+                        }
+                    }
+
+                    edgeLogger.error('Removing message with missing content', {
+                        category: LOG_CATEGORIES.LLM,
+                        operation: operationName,
+                        requestId,
+                        role: msg.role
+                    });
+                    return false;
+                }
+
+                // For user/assistant/system messages, content must be a string
+                if (['user', 'assistant', 'system'].includes(msg.role) && typeof msg.content !== 'string') {
+                    edgeLogger.error('Removing message with non-string content', {
+                        category: LOG_CATEGORIES.LLM,
+                        operation: operationName,
+                        requestId,
+                        role: msg.role,
+                        contentType: typeof msg.content
+                    });
+                    return false;
+                }
+
+                return true;
+            });
+
+            // Log validation results
+            if (validatedMessages.length < allMessages.length) {
+                edgeLogger.warn('Some messages were filtered during validation', {
+                    category: LOG_CATEGORIES.LLM,
+                    operation: operationName,
+                    requestId,
+                    originalCount: allMessages.length,
+                    validatedCount: validatedMessages.length,
+                    removed: allMessages.length - validatedMessages.length
+                });
+            }
+
+            // Safety check - if all messages were filtered out, add a default user message
+            if (validatedMessages.length === 0) {
+                edgeLogger.error('All messages were invalid, adding default message', {
+                    category: LOG_CATEGORIES.LLM,
+                    operation: operationName,
+                    requestId,
+                    important: true
+                });
+
+                validatedMessages.push({
+                    id: crypto.randomUUID(),
+                    role: 'user',
+                    content: 'Hello'
+                });
+            }
+
+            // Detailed log of the messages about to be processed
+            edgeLogger.debug('Processing validated messages for AI stream', {
+                category: LOG_CATEGORIES.LLM,
+                operation: operationName,
+                requestId,
+                messageCount: validatedMessages.length,
+                roles: validatedMessages.map(m => m.role),
+                firstMessage: validatedMessages.length > 0 ?
+                    JSON.stringify({
+                        id: validatedMessages[0].id,
+                        role: validatedMessages[0].role,
+                        content: typeof validatedMessages[0].content === 'string' ?
+                            validatedMessages[0].content.substring(0, 50) :
+                            '[Object content]'
+                    }) : 'none'
+            });
 
             const systemPromptBase = config.systemPrompt || 'You are a helpful AI assistant.';
             // Include feature flags in system prompt
             const dsEnabled = config.body?.deepSearchEnabled ? 'deepSearchEnabled' : 'deepSearchDisabled';
             const systemContent = `${systemPromptBase}\n\n### FEATURE FLAGS:\n${dsEnabled}\n\n### REMINDER: USE MARKDOWN FORMATTING\nUse proper markdown syntax for all responses including lists, headings, code blocks, bold text, and tables as specified in the Formatting Instructions.`;
 
-            // Vercel SDK now prefers system prompt in the `system` parameter, not messages array
-            // const systemMessage: CoreMessage = { role: 'system', content: systemContent };
-            // const messagesWithSystem = [ systemMessage, ...modelMessages ];
-
             // --- Invoke streamText --- 
             const allToolCalls: ToolCall<string, any>[] = []; // Use generic ToolCall
 
             const result = await streamText({
                 model: openai(config.model || 'gpt-4o'),
-                messages: modelMessages, // Pass messages without explicit system message
+                messages: validatedMessages as any, // Cast to any to bypass type check
                 system: systemContent, // Pass system prompt here
                 tools: config.tools,
                 temperature: config.temperature,

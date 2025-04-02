@@ -7,6 +7,7 @@ export interface UseAppChatOptions extends UseChatOptions {
     initialSessionId?: string;
     apiPath?: string;
     debugMode?: boolean;
+    onError?: (error: Error) => void;
 }
 
 /**
@@ -30,6 +31,10 @@ export function useAppChat({
         retryAfter?: number;
         resetAt?: number;
     }>({ limited: false });
+
+    // Track retry attempts
+    const [retryCount, setRetryCount] = useState(0);
+    const [lastError, setLastError] = useState<string | null>(null);
 
     // Initial API warmup
     useEffect(() => {
@@ -94,6 +99,12 @@ export function useAppChat({
                 });
             }
 
+            // Track successful responses to reset retry count
+            if (response.status >= 200 && response.status < 300) {
+                setRetryCount(0);
+                setLastError(null);
+            }
+
             // Log response status in debug mode
             if (debugMode) {
                 console.log(`API Response: ${response.status} ${response.statusText}`);
@@ -140,31 +151,60 @@ export function useAppChat({
         },
         onError: (error) => {
             console.error("Error in chat conversation:", error);
+            setLastError(error instanceof Error ? error.message : String(error));
 
             // Analyze error to provide better diagnostics and recovery options
             const errorMessage = error instanceof Error ? error.message : String(error);
 
-            // Check for connectivity issues
+            // Track specific error types
+            let errorType = 'unknown';
+
+            // Check for authentication errors (common with widget chat)
             if (
+                errorMessage.includes('auth') ||
+                errorMessage.includes('unauthorized') ||
+                errorMessage.includes('Authentication') ||
+                errorMessage.includes('401') ||
+                errorMessage.includes('403')
+            ) {
+                errorType = 'auth';
+                if (debugMode) {
+                    console.warn('Authentication issue detected in widget chat');
+                }
+            }
+            // Check for connectivity issues
+            else if (
                 errorMessage.includes('fetch failed') ||
                 errorMessage.includes('network') ||
                 errorMessage.includes('NetworkError') ||
                 errorMessage.includes('Failed to fetch') ||
                 errorMessage.includes('timeout')
             ) {
+                errorType = 'network';
                 if (debugMode) {
                     console.warn('Network connectivity issue detected in widget chat');
                 }
-
-                // Attempt connection recovery on next message automatically
-                // handled by the retry mechanism already present in handleSubmit
             }
-
             // Parse errors from JSON responses
-            if (errorMessage.includes('SyntaxError') && errorMessage.includes('JSON')) {
+            else if (errorMessage.includes('SyntaxError') && errorMessage.includes('JSON')) {
+                errorType = 'parsing';
                 if (debugMode) {
                     console.warn('JSON parsing error in API response - possible malformed response');
                 }
+            }
+            // Cold start errors
+            else if (errorMessage.includes('cold start') || errorMessage.includes('initialization')) {
+                errorType = 'coldStart';
+                if (debugMode) {
+                    console.warn('Possible cold start issue detected');
+                }
+            }
+
+            if (debugMode) {
+                console.error(`Chat error type: ${errorType}`, {
+                    message: errorMessage,
+                    retryCount
+                });
             }
 
             // Call the original onError handler if provided
@@ -192,15 +232,25 @@ export function useAppChat({
     const retrySubmission = useCallback(async (currentInput: string, options?: any) => {
         if (debugMode) console.log('Attempting to retry submission after API warmup');
 
-        try {
-            // Try to ping the API to warm it up - using different endpoint for better results
-            await fetch('/api/ping?source=error_recovery', {
-                method: 'GET',
-                headers: { 'Cache-Control': 'no-cache' }
-            });
+        // Increment retry count
+        setRetryCount(prev => prev + 1);
 
-            // Wait a moment for the API to initialize
-            await new Promise(resolve => setTimeout(resolve, 1000));
+        try {
+            // For cold start issues, try warming up both the widget-chat endpoint and ping endpoint
+            await Promise.allSettled([
+                fetch('/api/ping?source=error_recovery', {
+                    method: 'GET',
+                    headers: { 'Cache-Control': 'no-cache' }
+                }),
+                fetch('/api/widget-chat?ping=true', {
+                    method: 'GET',
+                    headers: { 'Cache-Control': 'no-cache' }
+                })
+            ]);
+
+            // Wait a moment for the API to initialize, longer for subsequent retries
+            const delayMs = Math.min(1000 * (retryCount + 1), 5000);
+            await new Promise(resolve => setTimeout(resolve, delayMs));
 
             // Try submitting again with the same input
             if (currentInput.trim()) {
@@ -214,10 +264,10 @@ export function useAppChat({
                 return true;
             }
         } catch (retryError) {
-            console.error("Failed to recover from cold start", retryError);
+            console.error("Failed to recover from error", retryError);
         }
         return false;
-    }, [chatHelpers, debugMode]);
+    }, [chatHelpers, debugMode, retryCount]);
 
     // Custom submit handler to check rate limiting before submission
     const handleSubmit = async (e: React.FormEvent<HTMLFormElement>, options?: any) => {
@@ -225,6 +275,7 @@ export function useAppChat({
 
         // Check for rate limiting
         if (rateLimitInfo.limited) {
+            console.warn("Rate limited - please try again later");
             return;
         }
 
@@ -247,87 +298,80 @@ export function useAppChat({
             // Update the session with the new message
             if (sessionId && currentInput.trim()) {
                 const session = getSession();
+                // Find the most recent user message that matches our input
+                const latestMessage = chatHelpers.messages
+                    .filter(m => m.role === 'user')
+                    .reverse()
+                    .find(m => typeof m.content === 'string' && m.content.includes(currentInput));
 
-                // Find the message we just added (should be the last user message)
-                const userMessage = [...chatHelpers.messages].reverse()
-                    .find(msg => msg.role === 'user' && msg.content === currentInput);
-
-                if (userMessage) {
-                    const updatedSession = addMessageToSession(session, userMessage);
-                    saveSession(updatedSession);
-
-                    if (debugMode) {
-                        console.log('Added user message to session', {
-                            messageId: userMessage.id,
-                            sessionId
-                        });
-                    }
+                if (latestMessage) {
+                    session.messages = chatHelpers.messages;
+                    session.lastActiveAt = Date.now();
+                    saveSession(session);
                 }
             }
         } catch (error) {
-            console.error("Error in chat submission:", error);
+            console.error("Error submitting message:", error);
 
-            // If this is the first message and there's an error, it might be a cold start issue
-            if (isFirstMessage) {
-                console.warn("Error sending first message, attempting to warm up the API...");
+            const errorMessage = error instanceof Error ? error.message : String(error);
 
-                // Attempt to recover from cold start
-                const success = await retrySubmission(currentInput, options);
+            // Detect if this might be a cold start issue
+            const isColdStartIssue =
+                errorMessage.includes('timeout') ||
+                errorMessage.includes('failed') ||
+                errorMessage.includes('fetch') ||
+                chatHelpers.messages.length <= 1; // First few messages are more likely to be cold start issues
 
-                if (!success && debugMode) {
-                    console.error("Recovery failed after API warmup");
-                }
+            // Show warning for cold start issues in debug mode
+            if (isColdStartIssue && debugMode) {
+                console.warn('Possible API cold start issue detected, will attempt recovery...');
+            }
+
+            // Attempt recovery for cold start issues or network errors with a maximum of 2 retries
+            if ((isColdStartIssue || retryCount < 2) && currentInput) {
+                console.log(`Attempting recovery (retry ${retryCount + 1}/3)...`);
+                await retrySubmission(currentInput, options);
             }
         }
     };
 
-    // Function to clear the chat history
-    const resetChat = () => {
+    // Function to reset the chat (clear all messages)
+    const resetChat = useCallback(() => {
+        clearSession();
+        const newSession = getSession();
+        setSessionId(newSession.id);
         chatHelpers.setMessages([]);
-        if (sessionId) {
-            clearSession();
-            const newSession = getSession(); // This creates a new session
-            setSessionId(newSession.id);
+        chatHelpers.setInput('');
 
-            if (debugMode) {
-                console.log('Chat session reset', {
-                    oldSessionId: sessionId,
-                    newSessionId: newSession.id
-                });
-            }
+        if (debugMode) {
+            console.log('Chat session reset, new sessionId:', newSession.id);
         }
-    };
+    }, [chatHelpers, debugMode]);
 
-    // Check if rate limit has expired
+    // Check for rate limit expiration
     useEffect(() => {
-        let timerId: NodeJS.Timeout;
-
         if (rateLimitInfo.limited && rateLimitInfo.resetAt) {
             const checkRateLimit = () => {
                 const now = Date.now();
-                if (now >= (rateLimitInfo.resetAt || 0)) {
+                if (now >= rateLimitInfo.resetAt!) {
                     setRateLimitInfo({ limited: false });
                     if (debugMode) {
-                        console.log('Rate limit expired, requests now allowed');
+                        console.log('Rate limit expired, resuming normal operation');
                     }
-                } else {
-                    timerId = setTimeout(checkRateLimit, 1000);
                 }
             };
 
-            timerId = setTimeout(checkRateLimit, 1000);
+            const interval = setInterval(checkRateLimit, 1000);
+            return () => clearInterval(interval);
         }
-
-        return () => {
-            if (timerId) clearTimeout(timerId);
-        };
     }, [rateLimitInfo, debugMode]);
 
     return {
         ...chatHelpers,
         handleSubmit,
         resetChat,
-        sessionId,
-        rateLimitInfo
+        rateLimitInfo,
+        lastError,
+        retryCount
     };
 } 

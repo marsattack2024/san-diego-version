@@ -255,13 +255,88 @@ export class ChatEngineFacade {
                     }];
                 } else if (messages && Array.isArray(messages)) {
                     // Array of messages format - ensure proper type conversion
-                    chatMessages = messages.map(msg => ({
-                        ...msg,
-                        content: msg.content === null ? '' : String(msg.content)
-                    })) as Message[];
+                    chatMessages = messages.map(msg => {
+                        // Validate message is an object
+                        if (!msg || typeof msg !== 'object') {
+                            edgeLogger.warn('Invalid message in array', {
+                                category: LOG_CATEGORIES.SYSTEM,
+                                operation: this.config.operationName,
+                                operationId,
+                                messageType: typeof msg
+                            });
+                            return null;
+                        }
+
+                        // Check for content in parts array if content is missing
+                        let messageContent = '';
+                        if (msg.content === undefined || msg.content === null) {
+                            // Try to extract content from parts if available
+                            if ('parts' in msg && Array.isArray((msg as any).parts) && (msg as any).parts.length > 0) {
+                                const textPart = (msg as any).parts.find((part: any) =>
+                                    part && part.type === 'text' && typeof part.text === 'string');
+
+                                if (textPart && textPart.text) {
+                                    messageContent = textPart.text;
+                                    edgeLogger.debug('Facade: Extracted content from parts array', {
+                                        category: LOG_CATEGORIES.SYSTEM,
+                                        operation: this.config.operationName,
+                                        operationId,
+                                        contentLength: messageContent.length
+                                    });
+                                }
+                            }
+                        } else {
+                            // Use existing content
+                            messageContent = msg.content === null ? '' :
+                                typeof msg.content === 'string' ? msg.content :
+                                    JSON.stringify(msg.content);
+                        }
+
+                        // Create new object with required fields
+                        return {
+                            id: msg.id || crypto.randomUUID(),
+                            role: msg.role && ['user', 'assistant', 'system', 'tool', 'function'].includes(msg.role)
+                                ? msg.role
+                                : 'user',
+                            content: messageContent
+                        } as Message;
+                    }).filter(Boolean) as Message[]; // Filter out null values
                 } else if (message && typeof message === 'object') {
                     // Single message object format (from Vercel AI SDK)
-                    chatMessages = [message as Message];
+                    const msg = message as any;
+
+                    // Check for content in parts array if content is missing
+                    let messageContent = '';
+                    if (msg.content === undefined || msg.content === null) {
+                        // Try to extract content from parts if available
+                        if ('parts' in msg && Array.isArray((msg as any).parts) && (msg as any).parts.length > 0) {
+                            const textPart = (msg as any).parts.find((part: any) =>
+                                part && part.type === 'text' && typeof part.text === 'string');
+
+                            if (textPart && textPart.text) {
+                                messageContent = textPart.text;
+                                edgeLogger.debug('Facade: Extracted content from parts array (single message)', {
+                                    category: LOG_CATEGORIES.SYSTEM,
+                                    operation: this.config.operationName,
+                                    operationId,
+                                    contentLength: messageContent.length
+                                });
+                            }
+                        }
+                    } else {
+                        // Use existing content
+                        messageContent = msg.content === null ? '' :
+                            typeof msg.content === 'string' ? msg.content :
+                                JSON.stringify(msg.content);
+                    }
+
+                    chatMessages = [{
+                        id: msg.id || messageId,
+                        role: msg.role && ['user', 'assistant', 'system', 'tool', 'function'].includes(msg.role)
+                            ? msg.role
+                            : 'user',
+                        content: messageContent
+                    }];
                 } else {
                     chatLogger.error('Invalid message format', 'Format validation failed', {
                         messageType: typeof message
@@ -277,6 +352,23 @@ export class ChatEngineFacade {
                     );
                 }
 
+                // Safety check - make sure we have at least one valid message
+                if (chatMessages.length === 0) {
+                    edgeLogger.error('No valid messages after processing', {
+                        category: LOG_CATEGORIES.SYSTEM,
+                        operation: this.config.operationName,
+                        operationId,
+                        important: true
+                    });
+
+                    // Add a default message to prevent failures
+                    chatMessages = [{
+                        id: crypto.randomUUID(),
+                        role: 'user',
+                        content: 'Hello'
+                    }];
+                }
+
                 // Build the context using the context service
                 const chatId = id || sessionId;
                 const context = await this.chatContextService.buildContext(
@@ -284,6 +376,44 @@ export class ChatEngineFacade {
                     chatId,
                     contextUserId
                 );
+
+                // Enhanced validation - log any message format issues
+                if (context.messages && context.messages.length > 0) {
+                    // Check each message for proper structure
+                    context.messages.forEach((msg, index) => {
+                        // Check for missing role or invalid role type
+                        if (!msg.role || !['user', 'assistant', 'system', 'tool', 'function'].includes(msg.role)) {
+                            edgeLogger.warn('Message with invalid role detected', {
+                                category: LOG_CATEGORIES.SYSTEM,
+                                operation: this.config.operationName,
+                                operationId,
+                                messageIndex: index,
+                                providedRole: msg.role || 'undefined'
+                            });
+                        }
+
+                        // Check for missing or invalid content
+                        if (msg.content === undefined || msg.content === null) {
+                            edgeLogger.warn('Message with missing content detected', {
+                                category: LOG_CATEGORIES.SYSTEM,
+                                operation: this.config.operationName,
+                                operationId,
+                                messageIndex: index,
+                                messageRole: msg.role
+                            });
+                        }
+                    });
+
+                    // Log overall message structure for debugging
+                    edgeLogger.debug('Messages before processing', {
+                        category: LOG_CATEGORIES.SYSTEM,
+                        operation: this.config.operationName,
+                        operationId,
+                        messageCount: context.messages.length,
+                        messageRoles: context.messages.map(m => m.role).join(','),
+                        firstMessageSample: JSON.stringify(context.messages[0]).substring(0, 150)
+                    });
+                }
 
                 // Save the user message asynchronously (non-blocking)
                 if (!this.config.messagePersistenceDisabled && contextUserId) {
@@ -451,7 +581,8 @@ export function createChatEngine(config: ChatEngineConfig): ChatEngineFacade {
         operationName: config.operationName,
         throwErrors: false,
         messageHistoryLimit: config.messageHistoryLimit,
-        disabled: config.messagePersistenceDisabled
+        disabled: config.messagePersistenceDisabled,
+        isWidgetChat: config.body?.isWidgetChat === true
     });
 
     const chatContextService = new ChatContextService(
