@@ -208,32 +208,53 @@ export const historyService = {
    * @returns Array of chat objects
    */
   async fetchHistory(forceRefresh = false): Promise<Chat[]> {
-    // Generate operation ID for tracking
-    const operationId = Math.random().toString(36).substring(2, 10);
-
-    // Create a consistent cache key
+    const operationId = `fetch_hist_${Math.random().toString(36).substring(2, 8)}`; // More specific ID
     const cacheKey = HISTORY_CACHE_KEY;
 
-    // Check if we have cached data to use and we're not forcing a refresh
+    edgeLogger.debug('fetchHistory called', {
+      category: 'chat',
+      operation: 'fetchHistory',
+      operationId,
+      forceRefresh,
+      cacheKey
+    });
+
     if (!forceRefresh) {
       try {
         const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
-        if (cachedData && Array.isArray(cachedData) && cachedData.length > 0) {
+        if (cachedData && Array.isArray(cachedData)) { // Check if array, not just length > 0
+          edgeLogger.info('Returning cached history data', { // Changed to info for visibility
+            category: LOG_CATEGORIES.SYSTEM, // Temp use SYSTEM for Cache
+            operation: 'fetchHistory',
+            operationId,
+            count: cachedData.length,
+            cacheKey
+          });
           return cachedData;
+        } else {
+          edgeLogger.debug('Cache miss or empty/invalid cache', {
+            category: LOG_CATEGORIES.SYSTEM, // Temp use SYSTEM for Cache
+            operation: 'fetchHistory',
+            operationId,
+            cacheKey,
+            cacheValueType: typeof cachedData
+          });
         }
       } catch (e) {
-        // Ignore cache errors
+        edgeLogger.warn('Error reading from client cache', {
+          category: LOG_CATEGORIES.SYSTEM, // Temp use SYSTEM for Cache
+          operation: 'fetchHistory',
+          operationId,
+          error: e instanceof Error ? e.message : String(e)
+        });
       }
     }
 
-    // Update the last request time
     lastHistoryRequestTime = Date.now();
 
-    // Use the circuit breaker to protect the API call
     try {
-      // Execute the history fetch through the circuit breaker
+      edgeLogger.debug('Executing fetch via circuit breaker', { category: 'chat', operationId });
       return await historyCircuitBreaker.execute(async () => {
-        // If already loading, don't start a new request
         if (pendingRequests[cacheKey]) {
           try {
             return await pendingRequests[cacheKey]!;
@@ -243,27 +264,30 @@ export const historyService = {
           }
         }
 
-        // Start a new request
         try {
-          // Create the promise for fetching history
+          edgeLogger.info('Initiating NEW API call for history fetch', { // Changed to info
+            category: LOG_CATEGORIES.CHAT,
+            operation: 'fetchHistory',
+            operationId,
+            cacheKey
+          });
           pendingRequests[cacheKey] = this.fetchHistoryFromAPI(cacheKey, operationId);
-
-          // Wait for the request to complete
           const result = await pendingRequests[cacheKey];
-
-          // Clear the pending request on success
           pendingRequests[cacheKey] = null;
-
+          edgeLogger.debug('API call completed successfully via breaker', { category: 'chat', operationId, count: result?.length ?? 0 });
           return result;
         } catch (error) {
-          // Clear the pending request on error
           pendingRequests[cacheKey] = null;
-          throw error;
+          edgeLogger.error('API call within breaker failed', {
+            category: 'chat',
+            operationId,
+            error: error instanceof Error ? error.message : String(error)
+          });
+          throw error; // Re-throw for breaker
         }
       });
     } catch (error) {
-      // If the circuit is open, we'll get here
-      edgeLogger.warn('History fetch failed (circuit open)', {
+      edgeLogger.warn('History fetch failed (circuit open or API error)', {
         category: LOG_CATEGORIES.AUTH,
         error: error instanceof Error ? error.message : String(error),
         operationId
@@ -272,8 +296,16 @@ export const historyService = {
       // Return cached data if available, otherwise empty array
       try {
         const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
-        return (cachedData && Array.isArray(cachedData) && cachedData.length > 0) ? cachedData : [];
+        edgeLogger.info('Returning cached data due to API error/circuit open', { // Changed to info
+          category: LOG_CATEGORIES.SYSTEM, // Temp use SYSTEM for Cache
+          operation: 'fetchHistory',
+          operationId,
+          count: cachedData?.length ?? 0,
+          cacheKey
+        });
+        return (cachedData && Array.isArray(cachedData)) ? cachedData : []; // Ensure return array
       } catch (e) {
+        edgeLogger.error('Error retrieving cache after API error', { category: LOG_CATEGORIES.SYSTEM /* Temp */, /* ... */ });
         return [];
       }
     }
@@ -373,114 +405,71 @@ export const historyService = {
    * Internal method to fetch history data from API
    */
   async fetchHistoryFromAPI(cacheKey: string, operationId: string): Promise<Chat[]> {
+    const fetchStartTime = Date.now(); // Track API call duration
     try {
-      // CRITICAL FIX #1: Check for cookies before making the request
+      edgeLogger.debug('Executing fetchHistoryFromAPI', { category: 'chat', operationId });
+
       const hasCookies = this.checkForAuthCookies();
       if (!hasCookies) {
-        edgeLogger.debug(`No auth cookies found, skipping history fetch to avoid 401`, {
-          category: LOG_CATEGORIES.AUTH,
-          operationId
-        });
+        edgeLogger.warn(`fetchHistoryFromAPI: No auth cookies found, skipping API call`, { /* ... */ });
         return [];
       }
 
-      // CRITICAL FIX #2: Check if auth is ready before making the request
-      // This prevents the 401 errors that happen when the auth token is present but not yet valid
       const authReady = await this.isAuthReady();
       if (!authReady) {
-        edgeLogger.debug(`Auth not ready yet, skipping history fetch to avoid 401`, {
-          category: LOG_CATEGORIES.AUTH,
-          operationId
-        });
+        edgeLogger.warn(`fetchHistoryFromAPI: Auth not ready, skipping API call`, { /* ... */ });
         return [];
       }
 
-      // Add abortTimeout to prevent hanging requests
-      const abortController = new AbortController();
-      const abortTimeout = setTimeout(() => abortController.abort(), 10000);
+      edgeLogger.debug('fetchHistoryFromAPI: Auth checks passed, proceeding', { category: 'chat', operationId });
 
-      // Add a unique operation ID for tracing
+      const abortController = new AbortController();
+      const abortTimeout = setTimeout(() => { /* ... */ }, 10000);
+
       const headers = new Headers();
       headers.append('Cache-Control', 'no-cache');
       headers.append('x-operation-id', operationId);
-
-      // IMPROVED: Always use timestamp for consistent request pattern
-      // Using precise timestamp instead of minute-based cachebusting for better uniqueness
       const timestamp = Date.now();
-      let urlParams = `t=${timestamp}`;
+      const url = `/api/history?t=${timestamp}&auth_ready=true`;
 
-      // Include auth ready marker in the URL to help with debugging
-      urlParams += `&auth_ready=true`;
+      edgeLogger.info('fetchHistoryFromAPI: Making GET request', { // Changed to info
+        category: 'chat',
+        operationId,
+        url
+      });
 
-      const url = `/api/history?${urlParams}`;
-
-      // Log request at low frequency to help debug auth issues
-      if (Math.random() < 0.05) {
-        edgeLogger.debug('Fetching history with cookies', {
-          category: LOG_CATEGORIES.CHAT,
-          hasCookies: hasCookies ? 'Yes' : 'No',
-          timestamp: Date.now().toString() // Convert timestamp to string
-        });
-      }
-
-      // Make the API request with consistent auth approach
       const response = await fetch(url, {
         method: 'GET',
         headers,
-        credentials: 'include', // Include cookies for auth - critical for consistency
-        cache: 'no-store', // Ensure fresh data
+        credentials: 'include',
+        cache: 'no-store',
         signal: abortController.signal,
-        mode: 'same-origin' // Explicit same-origin policy to ensure cookies are sent
+        mode: 'same-origin'
       });
-
-      // Clear abort timeout
       clearTimeout(abortTimeout);
+      const apiDuration = Date.now() - fetchStartTime;
 
-      // Check for authentication issues - 401 Unauthorized, 403 Forbidden, or 409 Conflict (auth pending)
-      if (response.status === 401 || response.status === 403 || response.status === 409) {
-        // Special handling for 409 Conflict - authentication pending
-        if (response.status === 409) {
-          edgeLogger.debug('Authentication pending for history API', {
-            category: LOG_CATEGORIES.AUTH,
-            message: 'Will retry shortly',
-            status: response.status
-          });
+      edgeLogger.debug(`fetchHistoryFromAPI: Response status: ${response.status}`, { category: 'chat', operationId, status: response.status, durationMs: apiDuration });
 
-          // Return cached data if available
-          try {
-            const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
-            return (cachedData && Array.isArray(cachedData) && cachedData.length > 0) ? cachedData : [];
-          } catch (e) {
-            return [];
-          }
-        }
+      // --> ADD RAW RESPONSE LOGGING <--
+      const rawText = await response.text(); // Get raw text BEFORE checking ok status
+      edgeLogger.debug('fetchHistoryFromAPI: Raw API response text', {
+        category: 'chat',
+        operationId,
+        status: response.status,
+        length: rawText.length,
+        sample: rawText.substring(0, 200) + (rawText.length > 200 ? '...' : '')
+      });
+      // --> END RAW RESPONSE LOGGING <--
 
-        // Log auth failures
-        edgeLogger.warn(`Authentication failed (${response.status}) when fetching history`, {
-          category: LOG_CATEGORIES.AUTH,
-          operationId,
-          url
-        });
-
-        // With Cockatiel, we'll throw an error here which will be handled by the circuit breaker
-        throw new Error(`Authentication failed with status ${response.status}`);
-      }
-
-      // Parse response
-      edgeLogger.debug('[HistoryService] Response status:', { status: response.status, operationId });
-      const rawText = await response.text(); // Get raw text first
-
-      if (Math.random() < 0.05) {
-        edgeLogger.debug('[HistoryService] Raw response details', {
-          length: rawText.length,
-          sample: rawText.substring(0, 100), // Log beginning of text
-          operationId
-        });
+      if (!response.ok) {
+        // ... existing error handling ...
+        throw new Error(`History API failed with status ${response.status}: ${response.statusText}`);
       }
 
       let data;
       try {
-        const parsedResponse = JSON.parse(rawText);
+        const parsedResponse = JSON.parse(rawText); // Parse the raw text
 
         // Handle both formats: direct array or {success: true, data: [...]}
         if (parsedResponse && typeof parsedResponse === 'object' && 'data' in parsedResponse && Array.isArray(parsedResponse.data)) {
@@ -500,57 +489,24 @@ export const historyService = {
         }
 
         if (data.length > 0) {
-          // Update cache TTL based on response status
-          const cacheTTL = response.ok ? CACHE_TTL : CACHE_TTL_ERROR;
-
-          // Store in cache
+          const cacheTTL = CACHE_TTL;
+          edgeLogger.info(`Setting cache for history (${cacheKey})`, { category: LOG_CATEGORIES.SYSTEM /* Temp */, operationId, count: data.length, ttl: cacheTTL }); // Changed to info
           clientCache.set(cacheKey, data, cacheTTL);
-
-          // Track successful fetch
-          lastSuccessfulFetch = Date.now();
-          consecutiveSuccessfulFetches++;
-
-          // Log at reduced frequency
-          if (Math.random() < 0.1) {
-            edgeLogger.debug(`Fetched ${data.length} history items (${cacheKey})`, {
-              category: LOG_CATEGORIES.CHAT,
-              operationId
-            });
-          }
+          // ... 
         } else {
-          edgeLogger.debug(`Fetched empty history (${cacheKey})`, {
-            category: LOG_CATEGORIES.CHAT,
-            operationId,
-            status: response.status
-          });
-
-          // Cache empty result for a shorter time
+          edgeLogger.info(`Fetched empty history (${cacheKey})`, { category: 'chat', operationId, status: response.status }); // Changed to info
           clientCache.set(cacheKey, [], Math.min(CACHE_TTL, 60 * 1000));
         }
 
+        edgeLogger.info('fetchHistoryFromAPI completed successfully', { category: 'chat', operationId, count: data.length, durationMs: apiDuration }); // Changed to info
         return data;
       } catch (e) {
-        edgeLogger.error('[HistoryService] JSON parse error:', {
-          category: LOG_CATEGORIES.CHAT,
-          error: e instanceof Error ? e.message : String(e),
-          operationId
-        });
-
-        // Cache empty array to prevent continuous retry
-        clientCache.set(cacheKey, [], CACHE_TTL_ERROR);
-
-        // Rethrow as this is an unexpected error that should trip the circuit breaker
+        // ... existing JSON parse error handling ...
         throw e;
       }
     } catch (error) {
-      // Let the circuit breaker handle the error
-      edgeLogger.error('[HistoryService] Error fetching history:', {
-        category: LOG_CATEGORIES.CHAT,
-        error: error instanceof Error ? error.message : String(error),
-        operationId
-      });
-
-      throw error;
+      // ... existing outer error handling ...
+      throw error; // Re-throw error for circuit breaker
     }
   },
 

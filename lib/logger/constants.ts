@@ -48,4 +48,4 @@ export interface LogMetadata {
   important?: boolean;
   error?: string | Error;
   [key: string]: any;
-} 
+}
