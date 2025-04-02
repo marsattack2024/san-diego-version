@@ -11,50 +11,78 @@ export const runtime = 'edge';
 
 /**
  * Update the title of a chat session using AI generation based on content.
+ * Authenticates via INTERNAL_API_SECRET header for internal calls,
+ * or standard user session for direct calls (though direct calls are not intended).
  */
 export async function POST(request: Request): Promise<Response> {
     const operationStartTime = Date.now();
     const operationId = request.headers.get('x-operation-id') || `update_title_${crypto.randomUUID().substring(0, 8)}`;
-    let chatId = ''; // Initialize chatId for logging scope
-    let userId = ''; // Initialize userId for logging scope
+    let chatId = '';
+    let userIdFromRequest = '';
+    let authMethod = 'unknown'; // Track how auth was performed
 
     try {
         const body = await request.json();
-        const { sessionId, content, userId: providedUserId } = body;
-        chatId = sessionId; // Assign chatId for logging
+        const { sessionId, content, userId } = body;
+        chatId = sessionId;
+        userIdFromRequest = userId;
 
         if (!sessionId) return validationError('Session ID is required');
         if (!content || typeof content !== 'string' || content.trim().length === 0) {
             return validationError('Valid content is required for title generation');
         }
+        // Note: userId from body is now required for the internal call logic
+        if (!userId) {
+            return validationError('User ID is required in the request body');
+        }
 
-        // --- Authentication --- 
-        const supabase = await createRouteHandlerClient();
-        const { data: { user } } = await supabase.auth.getUser();
-        userId = user?.id || '';
+        // --- Authentication Check --- 
+        let isAuthenticated = false;
+        const internalSecretFromHeader = request.headers.get('X-Internal-Secret');
+        const internalSecretFromEnv = process.env.INTERNAL_API_SECRET;
 
-        // Fallback/Verification using providedUserId (consider security implications)
-        if (!userId && providedUserId) {
-            const { data: sessionData } = await supabase.from('sd_chat_sessions').select('user_id').eq('id', sessionId).maybeSingle();
-            if (sessionData && sessionData.user_id === providedUserId) {
-                userId = providedUserId;
-                edgeLogger.debug('Service call authenticated via provided user ID match', { category: LOG_CATEGORIES.AUTH, sessionId, userId, operationId });
-            } else {
-                edgeLogger.warn('Unauthorized service call for title update', { category: LOG_CATEGORIES.AUTH, sessionId, providedUserId, operationId });
-                return unauthorizedError('Unauthorized service call');
+        if (internalSecretFromHeader && internalSecretFromEnv && internalSecretFromHeader === internalSecretFromEnv) {
+            // Authenticated via internal secret
+            isAuthenticated = true;
+            authMethod = 'internal_secret';
+            edgeLogger.debug('Authenticated via internal API secret', {
+                category: LOG_CATEGORIES.AUTH,
+                operationId,
+                sessionId,
+                userId: userIdFromRequest
+            });
+            // We trust the userId passed in the body for internal calls
+        } else {
+            // Fallback: Try standard user session authentication (cookie-based)
+            authMethod = 'cookie_session';
+            edgeLogger.debug('Attempting standard cookie authentication (fallback)', { category: LOG_CATEGORIES.AUTH, operationId, sessionId });
+            try {
+                const supabase = await createRouteHandlerClient();
+                const { data: { user } } = await supabase.auth.getUser();
+                if (user && user.id === userIdFromRequest) { // Verify user matches body
+                    isAuthenticated = true;
+                    edgeLogger.info('Authenticated via cookie session', { category: LOG_CATEGORIES.AUTH, operationId, sessionId, userId: user.id });
+                } else if (user) {
+                    edgeLogger.warn('Cookie user mismatch with body userId', { category: LOG_CATEGORIES.AUTH, operationId, sessionId, cookieUserId: user.id, bodyUserId: userIdFromRequest });
+                }
+            } catch (authError) {
+                edgeLogger.warn('Cookie authentication failed', { category: LOG_CATEGORIES.AUTH, operationId, sessionId, error: authError instanceof Error ? authError.message : String(authError) });
             }
-        } else if (!userId) {
-            edgeLogger.warn('User authentication required for title update', { category: LOG_CATEGORIES.AUTH, sessionId, operationId });
+        }
+
+        if (!isAuthenticated) {
+            edgeLogger.warn('Authentication failed for title update', { category: LOG_CATEGORIES.AUTH, operationId, sessionId, userId: userIdFromRequest, authMethod });
             return unauthorizedError('Authentication required');
         }
-        // At this point, userId should be set if authentication passed
+        // --- End Authentication --- 
 
-        edgeLogger.info('Processing title generation request', {
+        edgeLogger.info('Processing authenticated title generation request', {
             category: LOG_CATEGORIES.CHAT,
             operation: 'title_generation_api',
             sessionId,
-            userId,
-            operationId
+            userId: userIdFromRequest,
+            operationId,
+            authMethod // Log how auth was performed
         });
 
         // --- Title Generation --- 
@@ -74,13 +102,14 @@ export async function POST(request: Request): Promise<Response> {
             const generatedTitle = cleanTitle(result.text || 'Chat Summary');
 
             titleLogger.titleGenerated({
-                chatId: sessionId, userId,
+                chatId: sessionId, userId: userIdFromRequest,
                 generatedTitle,
                 durationMs: llmDurationMs
             });
 
             // --- Database Update --- 
-            const dbUpdateSuccess = await updateTitleInDatabase(sessionId, generatedTitle, userId);
+            // Use the userId confirmed via auth (which is userIdFromRequest)
+            const dbUpdateSuccess = await updateTitleInDatabase(sessionId, generatedTitle, userIdFromRequest);
 
             if (!dbUpdateSuccess) {
                 // Error already logged within updateTitleInDatabase
@@ -90,7 +119,7 @@ export async function POST(request: Request): Promise<Response> {
             edgeLogger.info('Title update successful', {
                 category: LOG_CATEGORIES.CHAT,
                 operation: 'title_generation_api_success',
-                sessionId, userId, operationId,
+                sessionId, userId: userIdFromRequest, operationId,
                 generatedTitle,
                 totalDurationMs: Date.now() - operationStartTime
             });
@@ -99,7 +128,7 @@ export async function POST(request: Request): Promise<Response> {
 
         } catch (genError) {
             titleLogger.titleGenerationFailed({
-                chatId: sessionId, userId,
+                chatId: sessionId, userId: userIdFromRequest,
                 error: `AI title generation failed: ${genError instanceof Error ? genError.message : String(genError)}`,
                 durationMs: Date.now() - llmStartTime
             });
@@ -107,24 +136,24 @@ export async function POST(request: Request): Promise<Response> {
         }
 
     } catch (error) {
-        // Catch errors from body parsing or auth
+        // Catch errors from body parsing
         edgeLogger.error('Error in update-title handler', {
             category: LOG_CATEGORIES.CHAT,
             operation: 'title_generation_api_error',
-            sessionId: chatId || 'unknown', // Use chatId if available
-            userId: userId || 'unknown', // Use userId if available
+            sessionId: chatId || 'unknown',
+            userId: userIdFromRequest || 'unknown', // Log userId from request if available
             error: error instanceof Error ? error.message : String(error),
             operationId,
             important: true,
-            durationMs: Date.now() - operationStartTime
+            durationMs: Date.now() - operationStartTime,
+            authMethod // Include auth method in error logs
         });
 
         // Determine if it was a validation error or other server error
         if (error instanceof SyntaxError || error instanceof TypeError) {
             return validationError('Invalid request', error);
-        } else if (error instanceof Response) { // Handle standardized errors from auth
-            return error;
         }
+        // Removed Response check as we don't expect it from internal calls
         return errorResponse('Internal server error processing title update', error, 500);
     }
 } 

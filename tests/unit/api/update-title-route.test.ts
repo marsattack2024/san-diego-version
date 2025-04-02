@@ -76,6 +76,7 @@ describe('Update Title API Route', () => {
     const TEST_USER_ID = 'test-user-id';
     const TEST_CONTENT = 'This is test content for title generation';
     const TEST_GENERATED_TITLE = 'Generated Test Title';
+    const MOCKED_SECRET = 'test-secret-for-route-test';
 
     beforeEach(() => {
         // Reset all mocks
@@ -102,27 +103,37 @@ describe('Update Title API Route', () => {
         // Setup default title utility mocks
         (cleanTitle as Mock).mockReturnValue(TEST_GENERATED_TITLE);
         (updateTitleInDatabase as Mock).mockResolvedValue(true);
+
+        // Mock environment variable
+        process.env.INTERNAL_API_SECRET = MOCKED_SECRET;
     });
 
-    it('should successfully generate and save a title', async () => {
+    afterEach(() => {
+        delete process.env.INTERNAL_API_SECRET;
+        vi.restoreAllMocks();
+    });
+
+    it('should successfully generate and save a title with internal secret', async () => {
         // Arrange
         const request = new Request('https://example.com/api/chat/update-title', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'x-operation-id': 'test-operation'
+                'X-Internal-Secret': MOCKED_SECRET
             },
             body: JSON.stringify({
                 sessionId: TEST_SESSION_ID,
-                content: TEST_CONTENT
+                content: TEST_CONTENT,
+                userId: TEST_USER_ID
             })
         });
 
         // Act
         const response = await POST(request);
+        const body = await response.json();
 
         // Assert
-        expect(mockSupabase.auth.getUser).toHaveBeenCalled();
+        expect(mockSupabase.auth.getUser).not.toHaveBeenCalled();
 
         // Verify AI generation was called with correct parameters
         expect(generateText).toHaveBeenCalledWith(
@@ -165,6 +176,45 @@ describe('Update Title API Route', () => {
         );
 
         expect(edgeLogger.info).toHaveBeenCalled();
+
+        expect(body.title).toBe(TEST_GENERATED_TITLE);
+    });
+
+    it('should successfully generate and save title with cookie auth (fallback)', async () => {
+        // Arrange
+        mockSupabase.auth.getUser.mockResolvedValue({ data: { user: { id: TEST_USER_ID } }, error: null });
+        const request = new Request('https://example.com/api/chat/update-title', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                sessionId: TEST_SESSION_ID,
+                content: TEST_CONTENT,
+                userId: TEST_USER_ID
+            })
+        });
+
+        // Act
+        const response = await POST(request);
+        const body = await response.json();
+
+        // Assert
+        expect(mockSupabase.auth.getUser).toHaveBeenCalledTimes(1);
+        expect(generateText).toHaveBeenCalledTimes(1);
+        expect(updateTitleInDatabase).toHaveBeenCalledWith(
+            TEST_SESSION_ID,
+            TEST_GENERATED_TITLE,
+            TEST_USER_ID
+        );
+        expect(successResponse).toHaveBeenCalledWith(
+            expect.objectContaining({
+                chatId: TEST_SESSION_ID,
+                title: TEST_GENERATED_TITLE
+            })
+        );
+
+        expect(body.title).toBe(TEST_GENERATED_TITLE);
     });
 
     it('should return validation error when sessionId is missing', async () => {
@@ -174,7 +224,8 @@ describe('Update Title API Route', () => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 // Missing sessionId
-                content: TEST_CONTENT
+                content: TEST_CONTENT,
+                userId: TEST_USER_ID
             })
         });
 
@@ -193,7 +244,8 @@ describe('Update Title API Route', () => {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                sessionId: TEST_SESSION_ID
+                sessionId: TEST_SESSION_ID,
+                userId: TEST_USER_ID
                 // Missing content
             })
         });
@@ -207,13 +259,8 @@ describe('Update Title API Route', () => {
         expect(updateTitleInDatabase).not.toHaveBeenCalled();
     });
 
-    it('should return unauthorized error when user is not authenticated', async () => {
+    it('should return validation error when userId is missing in body', async () => {
         // Arrange
-        mockSupabase.auth.getUser.mockResolvedValue({
-            data: { user: null },
-            error: null
-        });
-
         const request = new Request('https://example.com/api/chat/update-title', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -227,28 +274,14 @@ describe('Update Title API Route', () => {
         const response = await POST(request);
 
         // Assert
-        expect(unauthorizedError).toHaveBeenCalled();
+        expect(validationError).toHaveBeenCalledWith('User ID is required in the request body');
         expect(generateText).not.toHaveBeenCalled();
         expect(updateTitleInDatabase).not.toHaveBeenCalled();
     });
 
-    it('should use provided userId if user auth fails but session user matches', async () => {
+    it('should return unauthorized error when secret is missing/wrong AND cookie auth fails', async () => {
         // Arrange
-        // Auth returns no user
-        mockSupabase.auth.getUser.mockResolvedValue({
-            data: { user: null },
-            error: null
-        });
-
-        // But session has matching user
-        mockSupabase.from.mockReturnValue(mockSupabase);
-        mockSupabase.select.mockReturnValue(mockSupabase);
-        mockSupabase.eq.mockReturnValue(mockSupabase);
-        mockSupabase.maybeSingle.mockResolvedValue({
-            data: { user_id: TEST_USER_ID },
-            error: null
-        });
-
+        mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null });
         const request = new Request('https://example.com/api/chat/update-title', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -263,40 +296,15 @@ describe('Update Title API Route', () => {
         const response = await POST(request);
 
         // Assert
-        // Should verify session user_id matches provided userId
-        expect(mockSupabase.from).toHaveBeenCalledWith('sd_chat_sessions');
-        expect(mockSupabase.select).toHaveBeenCalledWith('user_id');
-        expect(mockSupabase.eq).toHaveBeenCalledWith('id', TEST_SESSION_ID);
-
-        // Should proceed with AI generation
-        expect(generateText).toHaveBeenCalled();
-        expect(updateTitleInDatabase).toHaveBeenCalled();
-        expect(successResponse).toHaveBeenCalled();
-
-        // Should log the authentication method
-        expect(edgeLogger.debug).toHaveBeenCalledWith(
-            'Service call authenticated via provided user ID match',
-            expect.any(Object)
-        );
+        expect(response.status).toBe(401);
+        expect(unauthorizedError).toHaveBeenCalledWith('Authentication required');
+        expect(generateText).not.toHaveBeenCalled();
+        expect(updateTitleInDatabase).not.toHaveBeenCalled();
     });
 
-    it('should reject service call with mismatched userId', async () => {
+    it('should return unauthorized error when cookie auth user doesnt match body userId', async () => {
         // Arrange
-        // Auth returns no user
-        mockSupabase.auth.getUser.mockResolvedValue({
-            data: { user: null },
-            error: null
-        });
-
-        // Session has different user ID
-        mockSupabase.from.mockReturnValue(mockSupabase);
-        mockSupabase.select.mockReturnValue(mockSupabase);
-        mockSupabase.eq.mockReturnValue(mockSupabase);
-        mockSupabase.maybeSingle.mockResolvedValue({
-            data: { user_id: 'different-user-id' },
-            error: null
-        });
-
+        mockSupabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'different-user-id' } }, error: null });
         const request = new Request('https://example.com/api/chat/update-title', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -311,19 +319,15 @@ describe('Update Title API Route', () => {
         const response = await POST(request);
 
         // Assert
-        expect(unauthorizedError).toHaveBeenCalledWith('Unauthorized service call');
+        expect(response.status).toBe(401);
+        expect(unauthorizedError).toHaveBeenCalledWith('Authentication required');
         expect(generateText).not.toHaveBeenCalled();
         expect(updateTitleInDatabase).not.toHaveBeenCalled();
-
-        expect(edgeLogger.warn).toHaveBeenCalledWith(
-            'Unauthorized service call for title update',
-            expect.any(Object)
-        );
     });
 
     it('should handle AI generation failures gracefully', async () => {
         // Arrange
-        const aiError = new Error('AI generation failed');
+        const aiError = new Error('AI model unavailable');
         (generateText as Mock).mockRejectedValue(aiError);
 
         const request = new Request('https://example.com/api/chat/update-title', {
@@ -331,7 +335,8 @@ describe('Update Title API Route', () => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 sessionId: TEST_SESSION_ID,
-                content: TEST_CONTENT
+                content: TEST_CONTENT,
+                userId: TEST_USER_ID
             })
         });
 
@@ -339,6 +344,7 @@ describe('Update Title API Route', () => {
         const response = await POST(request);
 
         // Assert
+        expect(response.status).toBe(500);
         expect(errorResponse).toHaveBeenCalledWith(
             'Failed during AI title generation',
             aiError,
@@ -365,7 +371,8 @@ describe('Update Title API Route', () => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 sessionId: TEST_SESSION_ID,
-                content: TEST_CONTENT
+                content: TEST_CONTENT,
+                userId: TEST_USER_ID
             })
         });
 
@@ -373,6 +380,7 @@ describe('Update Title API Route', () => {
         const response = await POST(request);
 
         // Assert
+        expect(response.status).toBe(500);
         expect(errorResponse).toHaveBeenCalledWith(
             'Failed to update title in database',
             null,
@@ -399,7 +407,8 @@ describe('Update Title API Route', () => {
         const response = await POST(request);
 
         // Assert
-        expect(validationError).toHaveBeenCalledWith('Invalid request', expect.any(Object));
+        expect(response.status).toBe(400);
+        expect(validationError).toHaveBeenCalledWith('Invalid request', expect.any(SyntaxError));
 
         expect(edgeLogger.error).toHaveBeenCalledWith(
             'Error in update-title handler',

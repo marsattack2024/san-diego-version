@@ -58,6 +58,7 @@ These improvements have resulted in a more maintainable, testable, and robust ch
 - [x] Phase 8: Core Engine Facade Implementation
 - [x] Phase 9: Cleanup & Final Review
 - [x] Phase 10: Widget Chat Compatibility
+- [x] Phase 10.6: Post-Fix History & Persistence Issues (Complete)
 - [ ] Phase 11: Comprehensive Testing
 
 ---
@@ -307,19 +308,24 @@ The chat engine refactoring is now complete! The monolithic implementation has b
     *   **Why:** Ensures that developers can properly integrate and troubleshoot the widget in various environments.
     *   **Rules:** Provides clear documentation following project standards.
 
-## Phase 10.5: Post-Fix History & Persistence Issues (In Progress)
+## Phase 10.6: Post-Fix History & Persistence Issues (Complete)
 
-Following the resolution of the message content loss, new issues related to chat history persistence and display have been observed:
+Following the resolution of the message content loss, new issues related to chat history persistence, display, and related functionality were observed and subsequently fixed:
 
 1.  **User Message Persistence Failure:**
-    *   **Symptom:** When a new message is sent, the assistant's response is saved correctly and persists after a page refresh. However, the user's own message is *not* saved and disappears upon refresh.
-    *   **Hypothesis:** Potential issue in the `ChatEngineFacade` logic that calls `saveUserMessage`, or within the `MessagePersistenceService.saveUserMessage` method itself (e.g., error during DB insert, incorrect parameters, silent failure due to non-blocking call).
+    *   **Resolution:** Resolved as part of fixing the message content loss. The root cause was the faulty Zod schema in `ChatEngineFacade` stripping message content before it reached the persistence service.
 
 2.  **Sidebar History Display Issue:**
-    *   **Symptom:** The chat history list component in the UI sidebar only displays a single message, even when more messages exist in the history.
-    *   **Hypothesis:** Likely a frontend issue related to data fetching, state management, or rendering logic for the history list component. To be addressed after the persistence issue is resolved.
+    *   **Resolution:** Fixed a timing issue where the initial history fetch occurred before client-side authentication was complete. Modified `useEffect` hooks in `components/sidebar-history.tsx` to depend on `auth.isAuthenticated` from the `useAuth` context, ensuring the fetch runs only after auth is confirmed.
 
-These fixes successfully resolved the message content loss issue.
+3.  **Automatic Title Generation Failure:**
+    *   **Symptom:** The internal API call from the chat engine (via `title-service.ts`) to `/api/chat/update-title` was failing with a 401 Unauthorized error.
+    *   **Investigation:** The `fetch` call from the server-side/edge context lacked the necessary authentication (cookies or tokens) expected by the API route's default user authentication.
+    *   **Fix:** Implemented a secure internal authentication pattern using a shared secret:
+        *   Added `INTERNAL_API_SECRET` environment variable.
+        *   Modified `lib/chat/title-service.ts` to read the secret and send it in an `X-Internal-Secret` header.
+        *   Modified `app/api/chat/update-title/route.ts` to prioritize checking for the `X-Internal-Secret` header. If valid, it trusts the internal call and uses the `userId` from the request body. If the secret is missing/invalid, it falls back to standard cookie authentication.
+    *   **Status:** Resolved.
 
 ## Phase 11: Comprehensive Testing
 

@@ -69,13 +69,11 @@ async function shouldGenerateTitle(chatId: string, userId?: string): Promise<boo
  * @param chatId - The ID of the chat session.
  * @param firstUserMessageContent - The content of the user's message to base the title on.
  * @param userId - The ID of the user (for checking conditions and potentially for auth header).
- * @param authToken - Authentication token (e.g., JWT) to be passed in the Authorization header.
  */
 export async function triggerTitleGenerationViaApi(
     chatId: string,
     firstUserMessageContent: string,
-    userId?: string,
-    authToken?: string
+    userId?: string
 ): Promise<void> {
     if (!firstUserMessageContent || firstUserMessageContent.trim().length === 0) {
         titleLogger.titleGenerationFailed({ chatId, userId, error: 'Skipping trigger: No message content provided', durationMs: 0 });
@@ -94,43 +92,38 @@ export async function triggerTitleGenerationViaApi(
 
         titleLogger.attemptGeneration({ chatId, userId }); // Log the attempt to trigger
 
-        // Truncate message content if needed before sending
-        const truncatedContent = firstUserMessageContent.length > 1000
-            ? firstUserMessageContent.substring(0, 1000) + '...'
-            : firstUserMessageContent;
+        const truncatedContent = firstUserMessageContent.substring(0, 1000); // Simplified truncation
 
-        // --- Construct and Execute Fetch Call --- 
         const baseUrl = process.env.VERCEL_URL
             ? `https://${process.env.VERCEL_URL}`
             : process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
         const apiUrl = `${baseUrl}/api/chat/update-title`;
 
+        // Get the internal secret from environment variables
+        const internalSecret = process.env.INTERNAL_API_SECRET;
+        if (!internalSecret) {
+            titleLogger.titleGenerationFailed({ chatId, userId, error: 'INTERNAL_API_SECRET is not configured.', durationMs: 0 });
+            console.error('[triggerTitleGenerationViaApi] INTERNAL_API_SECRET environment variable is not set.');
+            return; // Cannot proceed without the secret
+        }
+
         const headers: Record<string, string> = {
             'Content-Type': 'application/json',
             'Cache-Control': 'no-cache',
             'x-operation-id': operationId,
-            // Pass userId if available, helps the endpoint potentially
-            ...(userId && { 'x-user-id': userId })
+            'X-Internal-Secret': internalSecret, // Add the secret header
+            ...(userId && { 'x-user-id-hint': userId }) // Pass userId as a hint (optional)
         };
-
-        // Add Authorization header if token is provided
-        if (authToken) {
-            headers['Authorization'] = `Bearer ${authToken}`;
-        } else {
-            titleLogger.titleGenerationFailed({ chatId, userId, error: 'No auth token provided for title generation API call', durationMs: 0 });
-        }
 
         const body = JSON.stringify({
             sessionId: chatId,
             content: truncatedContent,
-            // Pass userId in body as well, might be used by endpoint logic
-            ...(userId && { userId })
+            userId // MUST pass userId in the body for the endpoint
         });
 
         fetch(apiUrl, {
             method: 'POST',
             headers: headers,
-            // credentials: 'include', // May not be needed/work reliably in service-to-service edge calls without cookies
             cache: 'no-store',
             body: body
         })
