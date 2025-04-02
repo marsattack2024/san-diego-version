@@ -21,6 +21,7 @@ import { ChatEngineContext } from './types';
 import { withContext } from '@/lib/logger/context';
 import { handleCors } from '@/lib/utils/http-utils';
 import { extractToolsUsed } from './utils/tool-utils';
+import { standardizeMessages, extractMessageContent } from './utils/message-utils';
 
 // Zod schema for validating the request body
 const chatRequestSchema = z.object({
@@ -242,101 +243,34 @@ export class ChatEngineFacade {
         // Process the request with logging context
         return withContext(logContext, async () => {
             try {
-                // Prepare chat messages
-                let chatMessages: Message[];
+                // Validate message parameters and create chat message(s)
+                let chatMessages: Message[] = [];
 
-                // Handle different message formats
-                if (message && typeof message === 'string') {
-                    // Single message format
-                    chatMessages = [{
+                if (messages && Array.isArray(messages)) {
+                    // Use standardizeMessages to handle array of messages
+                    chatMessages = standardizeMessages(messages, {
+                        operationId,
+                        validateRole: true,
+                        preserveId: true
+                    });
+                } else if (message && typeof message === 'string') {
+                    // Simple string message format
+                    chatMessages = standardizeMessages({
                         id: messageId,
                         role: 'user',
                         content: message
-                    }];
-                } else if (messages && Array.isArray(messages)) {
-                    // Array of messages format - ensure proper type conversion
-                    chatMessages = messages.map(msg => {
-                        // Validate message is an object
-                        if (!msg || typeof msg !== 'object') {
-                            edgeLogger.warn('Invalid message in array', {
-                                category: LOG_CATEGORIES.SYSTEM,
-                                operation: this.config.operationName,
-                                operationId,
-                                messageType: typeof msg
-                            });
-                            return null;
-                        }
-
-                        // Check for content in parts array if content is missing
-                        let messageContent = '';
-                        if (msg.content === undefined || msg.content === null) {
-                            // Try to extract content from parts if available
-                            if ('parts' in msg && Array.isArray((msg as any).parts) && (msg as any).parts.length > 0) {
-                                const textPart = (msg as any).parts.find((part: any) =>
-                                    part && part.type === 'text' && typeof part.text === 'string');
-
-                                if (textPart && textPart.text) {
-                                    messageContent = textPart.text;
-                                    edgeLogger.debug('Facade: Extracted content from parts array', {
-                                        category: LOG_CATEGORIES.SYSTEM,
-                                        operation: this.config.operationName,
-                                        operationId,
-                                        contentLength: messageContent.length
-                                    });
-                                }
-                            }
-                        } else {
-                            // Use existing content
-                            messageContent = msg.content === null ? '' :
-                                typeof msg.content === 'string' ? msg.content :
-                                    JSON.stringify(msg.content);
-                        }
-
-                        // Create new object with required fields
-                        return {
-                            id: msg.id || crypto.randomUUID(),
-                            role: msg.role && ['user', 'assistant', 'system', 'tool', 'function'].includes(msg.role)
-                                ? msg.role
-                                : 'user',
-                            content: messageContent
-                        } as Message;
-                    }).filter(Boolean) as Message[]; // Filter out null values
+                    }, {
+                        operationId,
+                        validateRole: false
+                    });
                 } else if (message && typeof message === 'object') {
                     // Single message object format (from Vercel AI SDK)
-                    const msg = message as any;
-
-                    // Check for content in parts array if content is missing
-                    let messageContent = '';
-                    if (msg.content === undefined || msg.content === null) {
-                        // Try to extract content from parts if available
-                        if ('parts' in msg && Array.isArray((msg as any).parts) && (msg as any).parts.length > 0) {
-                            const textPart = (msg as any).parts.find((part: any) =>
-                                part && part.type === 'text' && typeof part.text === 'string');
-
-                            if (textPart && textPart.text) {
-                                messageContent = textPart.text;
-                                edgeLogger.debug('Facade: Extracted content from parts array (single message)', {
-                                    category: LOG_CATEGORIES.SYSTEM,
-                                    operation: this.config.operationName,
-                                    operationId,
-                                    contentLength: messageContent.length
-                                });
-                            }
-                        }
-                    } else {
-                        // Use existing content
-                        messageContent = msg.content === null ? '' :
-                            typeof msg.content === 'string' ? msg.content :
-                                JSON.stringify(msg.content);
-                    }
-
-                    chatMessages = [{
-                        id: msg.id || messageId,
-                        role: msg.role && ['user', 'assistant', 'system', 'tool', 'function'].includes(msg.role)
-                            ? msg.role
-                            : 'user',
-                        content: messageContent
-                    }];
+                    chatMessages = standardizeMessages(message, {
+                        operationId,
+                        validateRole: true,
+                        defaultRole: 'user',
+                        preserveId: true
+                    });
                 } else {
                     chatLogger.error('Invalid message format', 'Format validation failed', {
                         messageType: typeof message
@@ -354,7 +288,7 @@ export class ChatEngineFacade {
 
                 // Safety check - make sure we have at least one valid message
                 if (chatMessages.length === 0) {
-                    edgeLogger.error('No valid messages after processing', {
+                    edgeLogger.error('No valid messages after standardization', {
                         category: LOG_CATEGORIES.SYSTEM,
                         operation: this.config.operationName,
                         operationId,
@@ -365,7 +299,8 @@ export class ChatEngineFacade {
                     chatMessages = [{
                         id: crypto.randomUUID(),
                         role: 'user',
-                        content: 'Hello'
+                        content: 'Hello',
+                        createdAt: new Date()
                     }];
                 }
 
@@ -379,31 +314,6 @@ export class ChatEngineFacade {
 
                 // Enhanced validation - log any message format issues
                 if (context.messages && context.messages.length > 0) {
-                    // Check each message for proper structure
-                    context.messages.forEach((msg, index) => {
-                        // Check for missing role or invalid role type
-                        if (!msg.role || !['user', 'assistant', 'system', 'tool', 'function'].includes(msg.role)) {
-                            edgeLogger.warn('Message with invalid role detected', {
-                                category: LOG_CATEGORIES.SYSTEM,
-                                operation: this.config.operationName,
-                                operationId,
-                                messageIndex: index,
-                                providedRole: msg.role || 'undefined'
-                            });
-                        }
-
-                        // Check for missing or invalid content
-                        if (msg.content === undefined || msg.content === null) {
-                            edgeLogger.warn('Message with missing content detected', {
-                                category: LOG_CATEGORIES.SYSTEM,
-                                operation: this.config.operationName,
-                                operationId,
-                                messageIndex: index,
-                                messageRole: msg.role
-                            });
-                        }
-                    });
-
                     // Log overall message structure for debugging
                     edgeLogger.debug('Messages before processing', {
                         category: LOG_CATEGORIES.SYSTEM,
@@ -420,14 +330,15 @@ export class ChatEngineFacade {
                     // Get the content from the last user message
                     const userMessages = chatMessages.filter(m => m.role === 'user');
                     if (userMessages.length > 0) {
-                        const userContent = userMessages[userMessages.length - 1].content;
+                        const lastUserMessage = userMessages[userMessages.length - 1];
+                        const userContent = extractMessageContent(lastUserMessage);
 
                         // Fire and forget - don't await
                         this.persistenceService.saveUserMessage(
                             chatId,
                             userContent,
                             contextUserId,
-                            userMessages[userMessages.length - 1].id
+                            lastUserMessage.id
                         ).catch(error => {
                             edgeLogger.error('Failed to save user message', {
                                 category: LOG_CATEGORIES.SYSTEM,

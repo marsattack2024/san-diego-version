@@ -4,6 +4,7 @@ import { ChatEngineContext } from '@/lib/chat-engine/types';
 import { ChatEngineConfig } from '../chat-engine.config';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { standardizeMessages } from '../utils/message-utils';
 import { createClient } from '@/utils/supabase/server'; // Needed for title generation check temporarily
 import { chatLogger } from '@/lib/logger/chat-logger'; // Needed for requestCompleted logging
 
@@ -66,95 +67,26 @@ export class AIStreamService {
                 ...context.messages
             ];
 
-            // Additional validation to ensure every message meets AI SDK requirements
-            const validatedMessages = allMessages.filter(msg => {
-                // Check if message is a valid object
-                if (!msg || typeof msg !== 'object') {
-                    edgeLogger.error('Removing invalid message object', {
-                        category: LOG_CATEGORIES.LLM,
-                        operation: operationName,
-                        requestId,
-                        msgType: typeof msg
-                    });
-                    return false;
-                }
-
-                // Check for valid role property
-                if (!msg.role || !['user', 'assistant', 'system', 'tool', 'function'].includes(msg.role)) {
-                    edgeLogger.error('Removing message with invalid role', {
-                        category: LOG_CATEGORIES.LLM,
-                        operation: operationName,
-                        requestId,
-                        role: msg.role
-                    });
-                    return false;
-                }
-
-                // Check for content property
-                if (msg.content === undefined || msg.content === null) {
-                    // Check if there are parts with text
-                    if (msg.parts && Array.isArray(msg.parts) && msg.parts.length > 0) {
-                        const textPart = msg.parts.find((part: any) =>
-                            part && part.type === 'text' && 'text' in part && typeof part.text === 'string');
-
-                        if (textPart && 'text' in textPart && textPart.text) {
-                            // Create a new message object with content from parts
-                            const fixedMsg = {
-                                ...msg,
-                                content: textPart.text
-                            };
-
-                            edgeLogger.debug('AI Stream: Extracted content from parts array', {
-                                category: LOG_CATEGORIES.LLM,
-                                operation: operationName,
-                                requestId,
-                                role: msg.role,
-                                contentLength: fixedMsg.content.length
-                            });
-
-                            // Return the fixed message instead of filtering out
-                            return fixedMsg;
-                        }
-                    }
-
-                    edgeLogger.error('Removing message with missing content', {
-                        category: LOG_CATEGORIES.LLM,
-                        operation: operationName,
-                        requestId,
-                        role: msg.role
-                    });
-                    return false;
-                }
-
-                // For user/assistant/system messages, content must be a string
-                if (['user', 'assistant', 'system'].includes(msg.role) && typeof msg.content !== 'string') {
-                    edgeLogger.error('Removing message with non-string content', {
-                        category: LOG_CATEGORIES.LLM,
-                        operation: operationName,
-                        requestId,
-                        role: msg.role,
-                        contentType: typeof msg.content
-                    });
-                    return false;
-                }
-
-                return true;
+            // Use standardizeMessages utility to ensure all messages meet AI SDK requirements
+            const standardizedMessages = standardizeMessages(allMessages, {
+                operationId: requestId,
+                validateRole: true
             });
 
             // Log validation results
-            if (validatedMessages.length < allMessages.length) {
-                edgeLogger.warn('Some messages were filtered during validation', {
+            if (standardizedMessages.length < allMessages.length) {
+                edgeLogger.warn('Some messages were filtered during standardization', {
                     category: LOG_CATEGORIES.LLM,
                     operation: operationName,
                     requestId,
                     originalCount: allMessages.length,
-                    validatedCount: validatedMessages.length,
-                    removed: allMessages.length - validatedMessages.length
+                    standardizedCount: standardizedMessages.length,
+                    removed: allMessages.length - standardizedMessages.length
                 });
             }
 
             // Safety check - if all messages were filtered out, add a default user message
-            if (validatedMessages.length === 0) {
+            if (standardizedMessages.length === 0) {
                 edgeLogger.error('All messages were invalid, adding default message', {
                     category: LOG_CATEGORIES.LLM,
                     operation: operationName,
@@ -162,26 +94,27 @@ export class AIStreamService {
                     important: true
                 });
 
-                validatedMessages.push({
+                standardizedMessages.push({
                     id: crypto.randomUUID(),
                     role: 'user',
-                    content: 'Hello'
+                    content: 'Hello',
+                    createdAt: new Date()
                 });
             }
 
             // Detailed log of the messages about to be processed
-            edgeLogger.debug('Processing validated messages for AI stream', {
+            edgeLogger.debug('Processing standardized messages for AI stream', {
                 category: LOG_CATEGORIES.LLM,
                 operation: operationName,
                 requestId,
-                messageCount: validatedMessages.length,
-                roles: validatedMessages.map(m => m.role),
-                firstMessage: validatedMessages.length > 0 ?
+                messageCount: standardizedMessages.length,
+                roles: standardizedMessages.map(m => m.role),
+                firstMessage: standardizedMessages.length > 0 ?
                     JSON.stringify({
-                        id: validatedMessages[0].id,
-                        role: validatedMessages[0].role,
-                        content: typeof validatedMessages[0].content === 'string' ?
-                            validatedMessages[0].content.substring(0, 50) :
+                        id: standardizedMessages[0].id,
+                        role: standardizedMessages[0].role,
+                        content: typeof standardizedMessages[0].content === 'string' ?
+                            standardizedMessages[0].content.substring(0, 50) :
                             '[Object content]'
                     }) : 'none'
             });
@@ -196,7 +129,7 @@ export class AIStreamService {
 
             const result = await streamText({
                 model: openai(config.model || 'gpt-4o'),
-                messages: validatedMessages as any, // Cast to any to bypass type check
+                messages: standardizedMessages, // Now using standardized messages
                 system: systemContent, // Pass system prompt here
                 tools: config.tools,
                 temperature: config.temperature,
