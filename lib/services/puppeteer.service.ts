@@ -179,13 +179,10 @@ class PuppeteerService {
     private async callPuppeteerScraper(url: string): Promise<PuppeteerResponseData> {
         try {
             // Format the request body based on the API's expected format
-            const requestBody = [
-                {
-                    "What is this url?": url,
-                    "format": "json",
-                    "error": ""
-                }
-            ];
+            const requestBody = {
+                "url": url,
+                "format": "json"
+            };
 
             // Prepare request with proper headers
             const response = await fetch(SCRAPER_ENDPOINT, {
