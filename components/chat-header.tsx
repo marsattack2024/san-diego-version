@@ -11,6 +11,7 @@ import { useChatStore } from '@/stores/chat-store';
 import { AuthButton } from './auth/auth-button';
 import { useState } from 'react';
 import { historyService } from '@/lib/api/history-service';
+import { CircuitBreakerDebug } from './debug/circuit-breaker-debug';
 
 export function PureChatHeader({
   chatId,
@@ -66,28 +67,27 @@ export function PureChatHeader({
   return (
     <header className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between border-b bg-background px-4 shadow-lg" style={{ height: 'var(--header-height)' }}>
       <div className="flex items-center">
-        <div className="flex items-center gap-2">
-          <SidebarToggle />
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="outline"
-                onClick={handleNewChat}
-                className="md:px-2 h-10"
-                disabled={isCreatingChat}
-              >
-                <PlusIcon />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>New Chat</TooltipContent>
-          </Tooltip>
-        </div>
-        <Link href="/chat" className="ml-4 font-semibold text-xl hover:text-primary transition-colors">
+        <Link href="/chat" className="font-semibold text-xl hover:text-primary transition-colors mr-4">
           Marlan
         </Link>
+        <SidebarToggle />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              onClick={handleNewChat}
+              className="md:px-2 h-10 ml-2"
+              disabled={isCreatingChat}
+            >
+              <PlusIcon />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>New Chat</TooltipContent>
+        </Tooltip>
       </div>
       <div className="flex items-center gap-2">
         <AuthButton />
+        <CircuitBreakerDebug inline={true} />
       </div>
     </header>
   );

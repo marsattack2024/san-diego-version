@@ -10,7 +10,6 @@ import { AuthProvider } from '@/utils/supabase/auth-provider';
 import { AuthHeadersSetup } from '@/components/auth-headers-setup';
 import { logApplicationStartup } from '@/lib/logger/edge-logger';
 import { DeepSearchTracker } from '@/components/deep-search-tracker';
-import { CircuitBreakerDebug } from '@/components/debug/circuit-breaker-debug';
 
 import './globals.css';
 
@@ -74,7 +73,6 @@ export default function RootLayout({
           <AuthProvider>
             <AuthHeadersSetup />
             <DeepSearchTracker />
-            <CircuitBreakerDebug />
             {children}
           </AuthProvider>
         </ThemeProvider>
