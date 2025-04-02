@@ -39,6 +39,7 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
 
     // Widget UI state
     const [isOpen, setIsOpen] = useState(false);
+    const [hasError, setHasError] = useState(false);
 
     // Chat functionality using Vercel AI SDK through our custom hook
     const {
@@ -56,6 +57,10 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
     } = useAppChat({
         chatType: 'widget',
         api: '/api/widget-chat',
+        debugMode: process.env.NODE_ENV === 'development',
+        onError: (err) => {
+            setHasError(true);
+        }
     });
 
     // Track when user sends a message (for scroll behavior)
@@ -108,6 +113,13 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
         }
     }, [hasUserSentMessage, messages.length, resetOnUserMessage]);
 
+    // Reset error state when user tries to send a new message
+    useEffect(() => {
+        if (input.trim().length > 0) {
+            setHasError(false);
+        }
+    }, [input]);
+
     // Handle text area input including Enter key submission
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -155,6 +167,24 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
 
         warmupAPI();
     }, []);
+
+    // Function to retry the last failed message
+    const handleRetry = () => {
+        if (messages.length > 0) {
+            setHasError(false);
+
+            // Find the last user message
+            const lastUserMessage = [...messages].reverse().find(msg => msg.role === 'user');
+
+            if (lastUserMessage) {
+                setInput(typeof lastUserMessage.content === 'string' ? lastUserMessage.content : '');
+                setTimeout(() => {
+                    const form = document.querySelector('form');
+                    if (form) form.dispatchEvent(new Event('submit', { bubbles: true }));
+                }, 100);
+            }
+        }
+    };
 
     // Scroll handling is now managed by Virtuoso
 
@@ -253,6 +283,42 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
                                     </div>
                                 </div>
                             )}
+                            components={{
+                                Footer: () => (
+                                    <>
+                                        {/* Error display */}
+                                        {hasError && (
+                                            <div className="px-4 py-3 flex flex-col items-center">
+                                                <div className="flex items-center text-red-600 bg-red-50 rounded-lg px-3 py-2 mb-2">
+                                                    <AlertCircle className="h-4 w-4 mr-2" />
+                                                    <span className="text-sm">
+                                                        Connection error. Please check your internet and try again.
+                                                    </span>
+                                                </div>
+                                                <Button
+                                                    onClick={handleRetry}
+                                                    variant="outline"
+                                                    size="sm"
+                                                    className="flex items-center"
+                                                >
+                                                    <RefreshCw className="h-3 w-3 mr-2" />
+                                                    Retry
+                                                </Button>
+                                            </div>
+                                        )}
+
+                                        {/* Streaming indicator */}
+                                        {status === 'streaming' && (
+                                            <div className="p-3 flex items-center justify-center">
+                                                <div className="flex items-center bg-blue-50 rounded-lg px-3 py-1">
+                                                    <Loader className="h-3 w-3 mr-2 animate-spin" />
+                                                    <span className="text-xs text-blue-600">Thinking...</span>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </>
+                                )
+                            }}
                         />
                     </CardContent>
 

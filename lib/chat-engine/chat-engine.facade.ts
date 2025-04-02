@@ -364,10 +364,12 @@ export class ChatEngineFacade {
 
                             // 2. Trigger title generation for new conversations
                             // This should only happen for the first message exchange
-                            if (context.previousMessages?.length === 0 || !context.previousMessages) {
+                            // and only for non-widget chats (widgets handle their own sessions)
+                            if ((context.previousMessages?.length === 0 || !context.previousMessages)
+                                && !this.config.body?.isWidgetChat) {
                                 triggerTitleGenerationViaApi(
                                     chatId,
-                                    extractedContent, // Use the extracted content from earlier
+                                    chatMessages[chatMessages.length - 1].content,
                                     contextUserId
                                 ).catch(error => {
                                     edgeLogger.error('Failed to trigger title generation', {
@@ -377,6 +379,13 @@ export class ChatEngineFacade {
                                         sessionId: chatId,
                                         error: error instanceof Error ? error.message : String(error)
                                     });
+                                });
+                            } else if (this.config.body?.isWidgetChat) {
+                                edgeLogger.debug('Skipped title generation for widget chat', {
+                                    category: LOG_CATEGORIES.SYSTEM,
+                                    operation: this.config.operationName,
+                                    operationId,
+                                    sessionId: chatId
                                 });
                             }
 

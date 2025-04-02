@@ -5,14 +5,29 @@ A lightweight, embeddable chat widget that can be added to any website. This wid
 ## Features
 
 - Real-time message streaming via Vercel AI SDK
-- Session persistence across page reloads
+- Client-side session persistence across page reloads
 - Responsive design for all devices
 - Rate limiting support with user feedback
 - Customizable appearance and behavior
-- Comprehensive error handling
+- Comprehensive error handling with visual feedback
 - Accessibility support
 - Automatic RAG (Retrieval Augmented Generation) for relevant answers
 - Optimized UI with smooth scrolling and clean visual feedback
+
+## Data Storage & Persistence
+
+The widget uses a client-side only persistence strategy:
+
+1. **Local Storage**: All chat messages and session information are stored in the browser's localStorage.
+2. **No Server-Side Persistence**: Unlike the main chat application, the widget does not store messages in the database.
+3. **Session Management**: Session IDs are generated client-side and maintained across page reloads.
+4. **No Title Generation**: The widget does not generate or store chat titles since they aren't needed for the widget experience.
+
+This approach has several benefits:
+- Better privacy as user data stays in their browser
+- Reduced database load on the server
+- Simplified data management for embedded contexts
+- Works even when users aren't authenticated
 
 ## Implementation Details
 
@@ -22,8 +37,10 @@ The widget is implemented using a modern approach with the Vercel AI SDK:
    - Session management with local storage
    - Rate limit handling and detection
    - Custom error messages with retry capability
-   - Message history persistence
+   - Client-side message history persistence
    - API configuration for different environments
+   - Automatic recovery from cold starts
+   - Network error detection and handling
 
 2. **`ChatWidgetV2` component** - The UI component that:
    - Provides a floating chat button
@@ -31,9 +48,66 @@ The widget is implemented using a modern approach with the Vercel AI SDK:
    - Handles responsive layout and accessibility
    - Displays streaming messages in real-time
    - Supports rich message formatting
-   - Includes loading and error states
+   - Includes loading and error states with visual indicators
+   - Provides retry buttons for failed messages
    - Auto-scrolls to show new content as it appears
-   - Prevents empty message bubbles from displaying prematurely
+
+## Error Handling & Recovery
+
+The widget implements comprehensive error handling:
+
+1. **Network Issues**: Automatically detects connectivity problems and provides appropriate messaging
+2. **Cold Starts**: Implements automatic retry for the first message when cold starts occur
+3. **Visual Feedback**: Shows clear error states with retry options
+4. **Rate Limiting**: Displays user-friendly messages when rate limits are reached
+5. **Graceful Degradation**: Continues functioning even when some features are unavailable
+
+## API Communication
+
+The widget communicates with the `/api/widget-chat` endpoint, which:
+
+- Uses the same chat engine as the main application but with widget-specific configuration
+- Handles anonymous sessions without requiring authentication
+- Disables server-side message persistence
+- Returns standardized error responses in a format the widget can display
+- Provides proper CORS support for cross-domain embedding
+- Uses a lower token limit for faster responses in embedded contexts
+
+## Technical Architecture
+
+The widget is built with a modular architecture:
+
+- `ChatWidgetV2`: Main component providing the UI with error state handling
+- `useAppChat`: Custom hook integrating with Vercel AI SDK and handling client-side persistence
+- `types.ts`: TypeScript interfaces for widget configuration
+- `chat-widget-v2.js`: Standalone script for embedding
+- `/api/widget-chat/route.ts`: API endpoint handling requests using the unified ChatEngine (with widget-specific config)
+- `/app/widget.js/route.ts`: Route handler serving the widget script
+
+## Troubleshooting Common Issues
+
+### CORS Problems
+
+If the widget fails with CORS errors:
+- Ensure the domain is listed in `WIDGET_ALLOWED_ORIGINS` environment variable
+- Check that your endpoint is returning proper CORS headers
+- For development, use a localhost URL that matches the allowed origins
+
+### Cold Start Issues
+
+The widget implements several techniques to handle cold starts:
+- Automatic retry mechanism for the first message
+- API warming on initial page load
+- Visual feedback during retries
+- Proper error recovery with exponential backoff
+
+### Network Connectivity
+
+When network issues occur:
+- The widget shows a clear error message
+- A retry button is provided to resend failed messages
+- The error state is automatically cleared when typing a new message
+- Network recovery is handled gracefully
 
 ## Deployment Status
 
@@ -170,17 +244,6 @@ The widget uses Vercel AI SDK to provide:
 - Consistent UI states (ready, streaming, error)
 - Efficient message submission and processing
 - Enhanced error handling with retry capability
-
-## Technical Architecture
-
-The widget is built with a modular architecture:
-
-- `ChatWidgetV2`: Main component providing the UI
-- `useAppChat`: Custom hook integrating with Vercel AI SDK
-- `types.ts`: TypeScript interfaces for widget configuration
-- `chat-widget-v2.js`: Standalone script for embedding
-- `/api/widget-chat/route.ts`: API endpoint handling requests using the unified ChatEngine
-- `/app/widget.js/route.ts`: Route handler serving the widget script
 
 ## Backwards Compatibility
 

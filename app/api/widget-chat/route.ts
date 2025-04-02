@@ -10,64 +10,45 @@ import { createChatEngine } from '@/lib/chat-engine/chat-engine.facade';
 import { widgetTools } from '@/lib/tools/registry.tool';
 import { prompts } from '@/lib/chat-engine/prompts';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { successResponse, errorResponse } from '@/lib/utils/route-handler';
+import { successResponse, errorResponse, validationError } from '@/lib/utils/route-handler';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { handleCors } from '@/lib/utils/http-utils';
+import { z } from 'zod';
 
 export const runtime = 'edge';
 export const maxDuration = 30; // 30 seconds max duration for widget requests
 
-// Constants
-const defaultHeaders = { 'Content-Type': 'application/json' };
-
-/**
- * Helper function to get allowed origins from environment variables
- */
-function getAllowedOrigins(): string[] {
-  return process.env.WIDGET_ALLOWED_ORIGINS
-    ? process.env.WIDGET_ALLOWED_ORIGINS.split(',')
-    : ['http://localhost:3000', 'https://marlan.photographytoprofits.com', 'https://programs.thehighrollersclub.io'];
-}
-
-/**
- * Function to add CORS headers to a response
- */
-function addCorsHeaders(response: Response, req: Request): Response {
-  const origin = req.headers.get('origin') || '';
-  const allowedOrigins = getAllowedOrigins();
-  const isAllowedOrigin = allowedOrigins.includes(origin) || allowedOrigins.includes('*');
-
-  const corsHeaders = new Headers(response.headers);
-
-  if (isAllowedOrigin) {
-    corsHeaders.set('Access-Control-Allow-Origin', origin);
-  } else {
-    corsHeaders.set('Access-Control-Allow-Origin', allowedOrigins[0]);
-  }
-
-  corsHeaders.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  corsHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  corsHeaders.set('Access-Control-Max-Age', '86400');
-
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: corsHeaders
-  });
-}
+// Define request schema for validation
+const widgetRequestSchema = z.object({
+  message: z.string().optional(),
+  messages: z.array(z.object({
+    role: z.enum(['user', 'assistant', 'system', 'tool', 'function']),
+    content: z.string().or(z.record(z.any())).or(z.null()),
+    id: z.string().optional()
+  })).optional(),
+  sessionId: z.string().uuid()
+}).refine(data =>
+  (!!data.message || (Array.isArray(data.messages) && data.messages.length > 0)),
+  { message: "Either message or messages must be provided" }
+);
 
 // Handle OPTIONS requests for CORS preflight
 export async function OPTIONS(req: Request): Promise<Response> {
   const response = new Response(null, { status: 204 });
-  return addCorsHeaders(response, req);
+  return handleCors(response, req, true);
 }
 
-// Add GET method for wakeup ping
+// Add GET method for wakeup ping and health check
 export async function GET(req: Request): Promise<Response> {
-  // Check if this is a wakeup ping
-  const isWakeupPing = req.headers.get('x-wakeup-ping') === 'true';
+  const operationId = `widget_${Math.random().toString(36).substring(2, 8)}`;
+  const url = new URL(req.url);
+  const isWakeupPing = req.headers.get('x-wakeup-ping') === 'true' || url.searchParams.get('ping') === 'true';
 
   if (isWakeupPing) {
-    edgeLogger.info('Received wakeup ping', {
-      timestamp: new Date().toISOString()
+    edgeLogger.info('Widget chat: Received wakeup ping', {
+      category: LOG_CATEGORIES.SYSTEM,
+      operation: 'widget_ping',
+      operationId
     });
 
     const response = successResponse({
@@ -75,18 +56,67 @@ export async function GET(req: Request): Promise<Response> {
       timestamp: new Date().toISOString()
     });
 
-    return addCorsHeaders(response, req);
+    return handleCors(response, req, true);
   }
 
   // Return a generic response for other GET requests
-  return addCorsHeaders(
+  return handleCors(
     errorResponse('Method not allowed', 'Use POST to interact with the widget', 405),
-    req
+    req,
+    true
   );
 }
 
 export async function POST(req: Request): Promise<Response> {
+  const operationId = `widget_${Math.random().toString(36).substring(2, 8)}`;
+
   try {
+    // Parse and validate the request body
+    let body;
+    try {
+      body = await req.json();
+
+      edgeLogger.debug('Widget chat: Request received', {
+        category: LOG_CATEGORIES.SYSTEM,
+        operation: 'widget_chat',
+        operationId,
+        body: {
+          hasMessage: !!body.message,
+          hasMessages: Array.isArray(body.messages),
+          sessionId: body.sessionId || 'not_provided',
+          messageCount: Array.isArray(body.messages) ? body.messages.length : 0
+        }
+      });
+
+      // Validate with Zod schema
+      const result = widgetRequestSchema.safeParse(body);
+      if (!result.success) {
+        edgeLogger.warn('Widget chat: Invalid request body', {
+          category: LOG_CATEGORIES.SYSTEM,
+          operation: 'widget_chat',
+          operationId,
+          errors: result.error.format()
+        });
+        return handleCors(
+          validationError('Invalid request body', result.error.format()),
+          req,
+          true
+        );
+      }
+    } catch (parseError) {
+      edgeLogger.error('Widget chat: Failed to parse request body', {
+        category: LOG_CATEGORIES.SYSTEM,
+        operation: 'widget_chat',
+        operationId,
+        error: parseError instanceof Error ? parseError.message : String(parseError)
+      });
+      return handleCors(
+        errorResponse('Invalid JSON', 'Failed to parse request body', 400),
+        req,
+        true
+      );
+    }
+
     // Create a configured chat engine instance for the widget chat
     const engine = createChatEngine({
       tools: widgetTools,
@@ -97,33 +127,59 @@ export async function POST(req: Request): Promise<Response> {
       temperature: 0.4,
       useWebScraper: false,
       useDeepSearch: false,
-      operationName: 'widget_chat',
+      operationName: `widget_chat_${operationId}`,
       cacheEnabled: true,
-      messageHistoryLimit: 20
+      messageHistoryLimit: 20,
+      // Widget uses client-side storage for messages, disable server-side persistence
+      messagePersistenceDisabled: true,
+      body: {
+        sessionId: body.sessionId,
+        isWidgetChat: true, // Flag to identify widget chats
+      }
     });
 
     // Let the engine handle the request
     const response = await engine.handleRequest(req);
 
-    // Add CORS headers to the response
-    return addCorsHeaders(response, req);
-  } catch (error) {
-    edgeLogger.error('Unhandled error in widget chat route', {
-      error: error instanceof Error ? error.message : String(error)
+    edgeLogger.debug('Widget chat: Response sent', {
+      category: LOG_CATEGORIES.SYSTEM,
+      operation: 'widget_chat',
+      operationId,
+      sessionId: body.sessionId,
+      status: response.status
     });
 
-    // Return a friendly error message using a plain text response
-    // Note: Using 200 here to allow the error to display properly in the widget
-    const response = new Response(
-      "I apologize, but I encountered an error processing your request. Please try again with a different question.",
+    // Note: We don't need to add CORS headers here since the engine's handleRequest
+    // already applies CORS via handleCors when corsEnabled is true in the config
+    return response;
+  } catch (error) {
+    edgeLogger.error('Unhandled error in widget chat route', {
+      category: LOG_CATEGORIES.SYSTEM,
+      operation: 'widget_chat',
+      operationId,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined
+    });
+
+    // Return a friendly error message that can be displayed to the user
+    const errorResponse = new Response(
+      JSON.stringify({
+        error: true,
+        message: "I apologize, but I encountered an error processing your request. Please try again.",
+        success: false,
+        id: crypto.randomUUID(), // Include message ID for consistency with AI SDK
+        role: "assistant", // Match format expected by the widget
+        content: "I apologize, but I encountered an error processing your request. Please try again.",
+        createdAt: new Date().toISOString()
+      }),
       {
-        status: 200,
+        status: 200, // Use 200 here to allow the widget to display the error properly
         headers: {
-          'Content-Type': 'text/plain'
+          'Content-Type': 'application/json'
         }
       }
     );
 
-    return addCorsHeaders(response, req);
+    return handleCors(errorResponse, req, true);
   }
 } 

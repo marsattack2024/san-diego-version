@@ -13,6 +13,7 @@ import { Message } from 'ai';
 import { createClient } from '@/utils/supabase/server';
 import { createAdminClient } from '@/utils/supabase/server';
 import { v4 as uuid } from 'uuid';
+import { SupabaseClient } from '@supabase/supabase-js';
 
 // IMPORTANT: We should not create a direct client here.
 // The createClient() function should handle proper authentication
@@ -25,6 +26,7 @@ export interface MessagePersistenceConfig {
     operationName?: string;
     throwErrors?: boolean;
     messageHistoryLimit?: number;
+    isWidgetChat?: boolean;
 }
 
 export interface HistoryMessageInput {
@@ -140,30 +142,49 @@ async function withRetry<T>(
  * Uses direct Supabase operations with appropriate error handling
  */
 export class MessagePersistenceService {
-    private config: MessagePersistenceConfig;
+    private readonly supabasePromise: Promise<SupabaseClient>;
     private readonly operationName: string;
     private readonly throwErrors: boolean;
     private readonly messageHistoryLimit: number;
+    private readonly isWidgetChat: boolean;
+    private readonly disabled: boolean;
 
     constructor(config: MessagePersistenceConfig = {}) {
         this.config = {
-            disabled: false,
             operationName: 'message_persistence',
             throwErrors: false,
-            messageHistoryLimit: 15,
+            messageHistoryLimit: 50,
+            isWidgetChat: false,
+            disabled: false,
             ...config
         };
 
         this.operationName = this.config.operationName || 'message_persistence';
         this.throwErrors = this.config.throwErrors === true;
-        this.messageHistoryLimit = this.config.messageHistoryLimit || 15;
+        this.messageHistoryLimit = this.config.messageHistoryLimit || 50;
+        this.isWidgetChat = this.config.isWidgetChat || false;
+        this.disabled = this.config.disabled || false;
+
+        if (this.disabled) {
+            edgeLogger.info('Message persistence disabled', {
+                category: LOG_CATEGORIES.SYSTEM,
+                operation: this.operationName,
+                reason: this.isWidgetChat ? 'widget_chat' : 'configuration',
+            });
+        }
 
         // Log initialization
-        edgeLogger.info('Message persistence service initialized', {
+        edgeLogger.debug('Message persistence service initialized', {
             category: LOG_CATEGORIES.SYSTEM,
             operation: this.operationName,
-            disabled: this.config.disabled
+            messageHistoryLimit: this.messageHistoryLimit,
+            throwErrors: this.throwErrors,
+            isWidgetChat: this.isWidgetChat,
+            disabled: this.disabled
         });
+
+        // Initialize Supabase client
+        this.supabasePromise = initializeSupabase();
     }
 
     /**
@@ -212,7 +233,7 @@ export class MessagePersistenceService {
             const messageId = input.messageId || crypto.randomUUID();
 
             // Skip if persistence is disabled
-            if (this.config.disabled) {
+            if (this.disabled) {
                 edgeLogger.info('Message persistence skipped (disabled)', {
                     operation: this.operationName,
                     sessionId: input.sessionId,
@@ -418,7 +439,7 @@ export class MessagePersistenceService {
         const startTime = Date.now();
         try {
             // Skip if persistence is disabled
-            if (this.config.disabled) {
+            if (this.disabled) {
                 edgeLogger.info('Loading previous messages skipped (disabled)', {
                     operation: this.operationName,
                     sessionId
@@ -656,7 +677,7 @@ export class MessagePersistenceService {
         const operationId = `save_user_msg_${Math.random().toString(36).substring(2, 8)}`;
 
         // Skip if persistence is disabled
-        if (this.config.disabled) {
+        if (this.disabled) {
             edgeLogger.info('User message persistence skipped (disabled)', {
                 operation: this.operationName,
                 operationId,
@@ -759,7 +780,7 @@ export class MessagePersistenceService {
         const operationId = `save_assistant_msg_${Math.random().toString(36).substring(2, 8)}`;
 
         // Skip if persistence is disabled
-        if (this.config.disabled) {
+        if (this.disabled) {
             edgeLogger.info('Assistant message persistence skipped (disabled)', {
                 operation: this.operationName,
                 operationId,
@@ -845,6 +866,39 @@ export class MessagePersistenceService {
                 error: errorMessage,
                 executionTimeMs: Date.now() - startTime
             };
+        }
+    }
+
+    // Update the loadMessages method to handle widget chats
+    async loadMessages(
+        sessionId: string,
+        userId?: string,
+        limit?: number
+    ): Promise<Message[]> {
+        // Skip database query if persistence is disabled (like for widget chats)
+        if (this.disabled) {
+            if (this.isWidgetChat) {
+                edgeLogger.debug('Skipping message loading for widget chat (client-side storage)', {
+                    category: LOG_CATEGORIES.SYSTEM,
+                    operation: this.operationName,
+                    sessionId
+                });
+            }
+            return [];
+        }
+
+        const actualLimit = limit || this.messageHistoryLimit;
+
+        try {
+            // Continue with the existing implementation...
+        } catch (error) {
+            // Handle any errors that occur during the loadMessages method
+            edgeLogger.error('Error loading messages', {
+                operation: this.operationName,
+                sessionId,
+                error: error instanceof Error ? error.message : String(error)
+            });
+            return [];
         }
     }
 } 

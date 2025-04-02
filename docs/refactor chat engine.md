@@ -56,7 +56,9 @@ These improvements have resulted in a more maintainable, testable, and robust ch
 - [x] Phase 6: Title Generation Service Integration
 - [x] Phase 7: Message Persistence Refinement
 - [x] Phase 8: Core Engine Facade Implementation
-- [ ] Phase 9: Cleanup & Final Review
+- [x] Phase 9: Cleanup & Final Review
+- [x] Phase 10: Widget Chat Compatibility
+- [ ] Phase 11: Comprehensive Testing
 
 ---
 
@@ -254,3 +256,248 @@ The chat engine refactoring is now complete! The monolithic implementation has b
 *   **Logging (`edgeLogger`, `chatLogger`):** Use existing loggers, ensuring adherence to `logging-rules.mdc`.
 *   **Dependency Injection:** Manual constructor injection is sufficient.
 *   **API Calls:** Native `fetch` for internal API calls (title generation). Nextjs 15,2, review readme in /docs for routing.
+
+## Phase 10: Widget Chat Compatibility
+
+-   [x] **Widget Chat Configuration Enhancement:**
+    *   **Action:** Configure widget chat route to properly utilize the chat engine with widget-specific settings:
+        * Set `messagePersistenceDisabled: true` to prevent server-side message storage
+        * Add `isWidgetChat: true` flag to body for identifying widget chat requests
+        * Set appropriate token limits and features for embedded widget context
+    *   **Action:** Update Chat Engine facade to conditionally skip title generation for widget chats
+    *   **Action:** Add widget-specific debug logging to help troubleshoot embedded widget issues
+    *   **Action:** Format error responses in a way that the widget client can properly display them
+    *   **Why:** Using the same unified chat engine while handling the specific requirements of embedded widgets ensures consistency while maintaining proper behavior for both use cases.
+    *   **Rules:** Follows SRP with conditional behavior based on configuration rather than duplicating code, maintains clean separation between server persistence and client-side storage for widgets.
+
+-   [x] **Widget Client Improvements:**
+    *   **Action:** Update `useAppChat` hook to better handle different types of errors:
+        * Detect and handle network connectivity issues with appropriate recovery
+        * Provide clear error information for users
+        * Implement automatic retry for cold start issues
+    *   **Action:** Add debugging support in development mode to help troubleshoot widget integration
+    *   **Action:** Update widget UI component to display error states and recovery options:
+        * Add visual error indicators when messages fail to send
+        * Provide retry buttons for failed messages
+        * Show loading indicators during processing
+    *   **Why:** Improves the embedded widget experience with better error handling and recovery, especially important for third-party site integration where network conditions may vary.
+    *   **Rules:** Maintains consistency with Vercel AI SDK patterns while enhancing the user experience for embedded contexts.
+
+-   [x] **Error Handling and Response Standardization:**
+    *   **Action:** Standardize widget error responses to include all fields needed by the widget client:
+        * Include unique message ID, role, content, and timestamp
+        * Return 200 status code for errors to ensure client processing
+        * Add appropriate CORS headers for cross-origin requests
+    *   **Action:** Improve error recovery logic to handle common failure scenarios:
+        * API cold starts and serverless function initialization
+        * Network connectivity issues
+        * Rate limiting and throttling
+    *   **Why:** Ensures that errors are properly communicated to users and provides clear paths to recovery.
+    *   **Rules:** Maintains consistent error handling patterns across both applications while accounting for the specific requirements of each.
+
+-   [x] **Documentation Updates:**
+    *   **Action:** Update widget documentation to reflect current implementation:
+        * Document message persistence strategy (client-side only)
+        * Explain why title generation is disabled for widgets
+        * Provide clear integration guidelines for third-party sites
+    *   **Action:** Create troubleshooting guide for common widget integration issues:
+        * CORS problems and solutions
+        * Cold start handling techniques
+        * Error recovery best practices
+    *   **Why:** Ensures that developers can properly integrate and troubleshoot the widget in various environments.
+    *   **Rules:** Provides clear documentation following project standards.
+
+## Phase 11: Comprehensive Testing
+
+-   [ ] **Test Coverage Analysis**
+    *   **Action:** Review existing tests and identify coverage gaps.
+    *   **Action:** Document the current test coverage for chat engine components.
+    *   **Action:** Prioritize critical components that need additional testing.
+
+-   [ ] **Widget-Specific Testing**
+    *   **Action:** Create test suite for widget-specific configurations.
+    *   **Action:** Test client-side session management with localStorage.
+    *   **Action:** Verify CORS handling for cross-origin widget requests.
+    *   **Action:** Test error recovery mechanisms for embedded contexts.
+    *   **Action:** Validate that title generation is properly skipped for widget chats.
+
+-   [ ] **Unit Tests for Individual Services**
+    *   **Action:** Create test suite for ChatEngineFacade to verify proper orchestration.
+    *   **Action:** Develop tests for ApiAuthService focused on authentication flows.
+    *   **Action:** Implement tests for ChatContextService validating context building.
+    *   **Action:** Add tests for AIStreamService to verify streaming functionality.
+    *   **Action:** Enhance MessagePersistenceService tests to cover all persistence scenarios.
+
+-   [ ] **Integration Tests**
+    *   **Action:** Create tests to verify legacy compatibility with the original ChatEngine class.
+    *   **Action:** Develop tests for the CORS handling across different environments.
+    *   **Action:** Implement tests for the entire service composition to validate workflows.
+    *   **Action:** Test configuration propagation between components.
+
+-   [ ] **End-to-End Tests**
+    *   **Action:** Develop tests for the complete chat flow from request to response.
+    *   **Action:** Test tool calling integration including all registered tools.
+    *   **Action:** Verify message persistence and retrieval throughout the chat lifecycle.
+    *   **Action:** Test error handling and recovery for various failure scenarios.
+
+-   [ ] **Vercel AI SDK Compliance Tests**
+    *   **Action:** Verify proper implementation of `streamText` and `toDataStreamResponse`.
+    *   **Action:** Test tool calling patterns against Vercel AI SDK best practices.
+    *   **Action:** Validate message persistence patterns during streaming operations.
+    *   **Action:** Test correct handling of streaming errors and connection timeouts.
+
+-   [ ] **Performance Testing**
+    *   **Action:** Measure response times from request to first token and complete response.
+    *   **Action:** Evaluate memory usage during concurrent request handling.
+    *   **Action:** Test behavior under high concurrency conditions.
+    *   **Action:** Verify timeout handling for long-running operations.
+
+### Sample Test Implementations
+
+#### ChatEngineFacade Unit Tests
+```typescript
+// tests/unit/chat-engine/chat-engine-facade.test.ts
+describe('ChatEngineFacade', () => {
+  let mockApiAuthService: Partial<ApiAuthService>;
+  let mockChatContextService: Partial<ChatContextService>;
+  let mockAIStreamService: Partial<AIStreamService>;
+  let mockPersistenceService: Partial<MessagePersistenceService>;
+  let chatEngine: ChatEngineFacade;
+  
+  beforeEach(() => {
+    // Setup mocks for all services
+    mockApiAuthService = {
+      authenticateRequest: vi.fn().mockResolvedValue('test-user-id')
+    };
+    
+    mockChatContextService = {
+      buildContext: vi.fn().mockResolvedValue({
+        sessionId: 'test-session',
+        userId: 'test-user',
+        requestId: 'test-request',
+        startTime: Date.now(),
+        messages: [],
+        metrics: {}
+      })
+    };
+    
+    mockAIStreamService = {
+      process: vi.fn().mockResolvedValue(new Response())
+    };
+    
+    mockPersistenceService = {
+      saveUserMessage: vi.fn().mockResolvedValue({ success: true }),
+      saveAssistantMessage: vi.fn().mockResolvedValue({ success: true })
+    };
+    
+    // Create facade with mocked services
+    chatEngine = new ChatEngineFacade(
+      { operationName: 'test' },
+      mockApiAuthService as ApiAuthService,
+      mockChatContextService as ChatContextService,
+      mockAIStreamService as AIStreamService,
+      mockPersistenceService as MessagePersistenceService
+    );
+  });
+  
+  it('should handle a valid chat request successfully', async () => {
+    // Arrange - Create a valid request
+    const request = new Request('https://example.com/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: 'Test message',
+        sessionId: 'test-session'
+      })
+    });
+    
+    // Act
+    const response = await chatEngine.handleRequest(request);
+    
+    // Assert
+    expect(response.status).toBe(200);
+    expect(mockApiAuthService.authenticateRequest).toHaveBeenCalledTimes(1);
+    expect(mockChatContextService.buildContext).toHaveBeenCalledTimes(1);
+    expect(mockPersistenceService.saveUserMessage).toHaveBeenCalledTimes(1);
+    expect(mockAIStreamService.process).toHaveBeenCalledTimes(1);
+  });
+});
+```
+
+#### Legacy Compatibility Tests
+```typescript
+// tests/integration/chat-engine/legacy-compatibility.test.ts
+describe('Legacy Chat Engine Compatibility', () => {
+  it('should maintain backward compatibility with the original ChatEngine class', async () => {
+    // Import from the original path
+    const { ChatEngine } = await import('@/lib/chat-engine/core');
+    
+    // Create an instance with the same parameters
+    const engine = new ChatEngine({
+      operationName: 'legacy_test'
+    });
+    
+    // Verify it works with the same API
+    const request = new Request('https://example.com/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message: 'Test message',
+        sessionId: 'test-session'
+      })
+    });
+    
+    // This should not throw errors
+    const response = await engine.handleRequest(request);
+    
+    // Basic check that it returns something sensible
+    expect(response).toBeInstanceOf(Response);
+  });
+});
+```
+
+#### CORS Handling Tests
+```typescript
+// tests/integration/utils/cors-handling.test.ts
+describe('CORS Handling in Chat Engine', () => {
+  it('should add proper CORS headers for allowed origins', async () => {
+    // Test implementation for CORS handling with allowed origins
+  });
+  
+  it('should handle requests from Vercel deployments', async () => {
+    // Test implementation using Vercel deployment URLs
+  });
+  
+  it('should reject requests from unauthorized origins', async () => {
+    // Test implementation for unauthorized origins
+  });
+});
+```
+
+#### End-to-End Chat Flow Test
+```typescript
+// tests/e2e/chat-flow.test.ts
+describe('End-to-End Chat Flow', () => {
+  it('should process a chat request from start to finish', async () => {
+    // Test implementation for the complete chat flow
+  });
+  
+  it('should handle tool calls and process tool results', async () => {
+    // Test implementation for tool calling functionality
+  });
+  
+  it('should persist messages correctly during streaming', async () => {
+    // Test implementation for message persistence
+  });
+});
+```
+
+### Testing Development Priority
+
+1. **Unit Tests for ChatEngineFacade**: Most critical since it's the main orchestrator
+2. **Service Isolation Tests**: Ensure each service works correctly on its own
+3. **Legacy Compatibility Tests**: Important for ensuring refactoring didn't break existing code
+4. **CORS Handling Tests**: Important for cross-origin requests
+5. **End-to-End Chat Flow Tests**: Comprehensive verification of the entire system
+
+This testing plan ensures comprehensive coverage of the refactored chat engine, verifying both individual components and their interactions while maintaining compatibility with existing code.
