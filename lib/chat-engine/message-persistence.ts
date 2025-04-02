@@ -566,4 +566,285 @@ export class MessagePersistenceService {
 
         return currentMessages;
     }
+
+    /**
+     * Process tool usage data from different sources into a standard format
+     * @param toolsUsed Initial tools data (if available)
+     * @param content Content that might contain embedded tool calls
+     * @returns Standardized tools metadata
+     */
+    private setupToolsMetadata(
+        toolsUsed?: Record<string, any>,
+        content?: string | any
+    ): ToolsUsedData | undefined {
+        // If no toolsUsed provided and no content with potential tool data, return undefined
+        if (!toolsUsed && (!content || typeof content !== 'object')) {
+            return undefined;
+        }
+
+        // Start with existing toolsUsed data
+        let result: ToolsUsedData = { ...(toolsUsed || {}) };
+
+        try {
+            // Extract tool calls from AI SDK response object if present
+            if (content && typeof content === 'object' && content.choices?.[0]?.message?.tool_calls) {
+                const aiToolCalls = content.choices[0].message.tool_calls;
+
+                if (aiToolCalls && aiToolCalls.length > 0) {
+                    result = {
+                        ...result,
+                        api_tool_calls: [
+                            ...(result.api_tool_calls || []),
+                            ...aiToolCalls.map((tool: any) => ({
+                                name: tool.function?.name,
+                                id: tool.id,
+                                type: tool.type
+                            }))
+                        ]
+                    };
+                }
+            }
+        } catch (error) {
+            // Log but don't fail the entire operation for tool extraction issues
+            edgeLogger.warn('Error extracting tool calls from content', {
+                operation: this.operationName,
+                error: error instanceof Error ? error.message : String(error)
+            });
+        }
+
+        return Object.keys(result).length > 0 ? result : undefined;
+    }
+
+    /**
+     * Format content for storage, handling both string and object content
+     * @param content Content to format
+     * @returns Formatted content string
+     */
+    private formatContent(content: string | any): string {
+        if (typeof content === 'string') {
+            return content;
+        }
+
+        try {
+            return JSON.stringify(content);
+        } catch (error) {
+            edgeLogger.warn('Error stringifying content, using toString fallback', {
+                operation: this.operationName,
+                error: error instanceof Error ? error.message : String(error)
+            });
+            return String(content);
+        }
+    }
+
+    /**
+     * Save a user message to the database
+     * Adapts the original saveUserMessage method from the ChatEngine
+     * 
+     * @param sessionId Chat session ID
+     * @param content Message content (string or object)
+     * @param userId User ID (required for database RLS)
+     * @param messageId Optional message ID (will generate UUID if not provided)
+     * @returns Promise with save operation result
+     */
+    async saveUserMessage(
+        sessionId: string,
+        content: string | any,
+        userId?: string,
+        messageId?: string
+    ): Promise<MessageSaveResult> {
+        const startTime = Date.now();
+        const operationId = `save_user_msg_${Math.random().toString(36).substring(2, 8)}`;
+
+        // Skip if persistence is disabled
+        if (this.config.disabled) {
+            edgeLogger.info('User message persistence skipped (disabled)', {
+                operation: this.operationName,
+                operationId,
+                sessionId
+            });
+            return {
+                success: true,
+                messageId: messageId || crypto.randomUUID(),
+                message: 'Message persistence skipped (disabled)',
+                executionTimeMs: Date.now() - startTime
+            };
+        }
+
+        // Check for userId - required for RLS policies
+        if (!userId) {
+            edgeLogger.warn('No userId provided for message persistence', {
+                operation: this.operationName,
+                operationId,
+                sessionId
+            });
+            return {
+                success: false,
+                messageId: messageId || crypto.randomUUID(),
+                error: 'No userId provided for message persistence',
+                executionTimeMs: Date.now() - startTime
+            };
+        }
+
+        // Format content properly
+        const formattedContent = this.formatContent(content);
+        const finalMessageId = messageId || crypto.randomUUID();
+
+        // Log the operation
+        edgeLogger.info('Saving user message', {
+            operation: this.operationName,
+            operationId,
+            sessionId,
+            userId,
+            messageId: finalMessageId,
+            contentPreview: formattedContent.substring(0, 50) + (formattedContent.length > 50 ? '...' : '')
+        });
+
+        try {
+            // Use the existing saveMessage method with retry
+            return await withRetry(async () => {
+                const result = await this.saveMessage({
+                    sessionId,
+                    userId,
+                    role: 'user',
+                    content: formattedContent,
+                    messageId: finalMessageId
+                });
+
+                return {
+                    ...result,
+                    executionTimeMs: Date.now() - startTime
+                };
+            });
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+
+            edgeLogger.error('Failed to save user message', {
+                operation: this.operationName,
+                operationId,
+                sessionId,
+                userId,
+                messageId: finalMessageId,
+                error: errorMessage,
+                executionTimeMs: Date.now() - startTime
+            });
+
+            return {
+                success: false,
+                messageId: finalMessageId,
+                error: errorMessage,
+                executionTimeMs: Date.now() - startTime
+            };
+        }
+    }
+
+    /**
+     * Save an assistant message to the database with potential tool usage data
+     * Adapts the original saveAssistantMessage method from the ChatEngine
+     * 
+     * @param sessionId Chat session ID
+     * @param content Message content (string or object that might contain tool calls)
+     * @param userId User ID (required for database RLS)
+     * @param toolsUsed Optional tool usage data to be stored
+     * @param messageId Optional message ID (will generate UUID if not provided)
+     * @returns Promise with save operation result
+     */
+    async saveAssistantMessage(
+        sessionId: string,
+        content: string | any,
+        userId?: string,
+        toolsUsed?: Record<string, any>,
+        messageId?: string
+    ): Promise<MessageSaveResult> {
+        const startTime = Date.now();
+        const operationId = `save_assistant_msg_${Math.random().toString(36).substring(2, 8)}`;
+
+        // Skip if persistence is disabled
+        if (this.config.disabled) {
+            edgeLogger.info('Assistant message persistence skipped (disabled)', {
+                operation: this.operationName,
+                operationId,
+                sessionId
+            });
+            return {
+                success: true,
+                messageId: messageId || crypto.randomUUID(),
+                message: 'Message persistence skipped (disabled)',
+                executionTimeMs: Date.now() - startTime
+            };
+        }
+
+        // Check for userId - required for RLS policies
+        if (!userId) {
+            edgeLogger.warn('No userId provided for message persistence', {
+                operation: this.operationName,
+                operationId,
+                sessionId
+            });
+            return {
+                success: false,
+                messageId: messageId || crypto.randomUUID(),
+                error: 'No userId provided for message persistence',
+                executionTimeMs: Date.now() - startTime
+            };
+        }
+
+        // Format content properly
+        const formattedContent = this.formatContent(content);
+        const finalMessageId = messageId || crypto.randomUUID();
+
+        // Process tool usage data
+        const processedTools = this.setupToolsMetadata(toolsUsed, content);
+
+        // Enhanced logging with detailed tool usage information
+        edgeLogger.info('Saving assistant message', {
+            operation: this.operationName,
+            operationId,
+            sessionId,
+            userId,
+            messageId: finalMessageId,
+            contentPreview: formattedContent.substring(0, 50) + (formattedContent.length > 50 ? '...' : ''),
+            hasToolsUsed: !!processedTools,
+            toolsCount: processedTools?.api_tool_calls?.length || 0,
+            toolNames: processedTools?.api_tool_calls?.map((t: { name?: string }) => t.name).filter(Boolean) || []
+        });
+
+        try {
+            // Use the existing saveMessage method with retry
+            return await withRetry(async () => {
+                const result = await this.saveMessage({
+                    sessionId,
+                    userId,
+                    role: 'assistant',
+                    content: formattedContent,
+                    messageId: finalMessageId,
+                    tools: processedTools
+                });
+
+                return {
+                    ...result,
+                    executionTimeMs: Date.now() - startTime
+                };
+            });
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+
+            edgeLogger.error('Failed to save assistant message', {
+                operation: this.operationName,
+                operationId,
+                sessionId,
+                userId,
+                messageId: finalMessageId,
+                error: errorMessage,
+                hasToolsUsed: !!processedTools,
+                executionTimeMs: Date.now() - startTime
+            });
+
+            return {
+                success: false,
+                messageId: finalMessageId,
+                error: errorMessage,
+                executionTimeMs: Date.now() - startTime
+            };
+        }
+    }
 } 

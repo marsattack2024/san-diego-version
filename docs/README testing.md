@@ -162,7 +162,10 @@ Our testing framework uses Vitest's mocking capabilities extensively:
 For mocking entire modules, use `vi.mock()` before importing the module:
 
 ```typescript
-// Mock the entire module
+// Import vi from Vitest first
+import { vi } from 'vitest';
+
+// Setup mock implementations BEFORE importing the module under test
 vi.mock('@/lib/logger/edge-logger', () => ({
   edgeLogger: mockLogger
 }));
@@ -170,6 +173,60 @@ vi.mock('@/lib/logger/edge-logger', () => ({
 // Now you can import the module that uses edgeLogger
 import { MyService } from '@/lib/services/my-service';
 ```
+
+### Important: Understanding vi.mock Hoisting
+
+Vitest automatically hoists `vi.mock()` calls to the top of the file. This means:
+
+1. **Don't use variables defined in the same module scope inside vi.mock**:
+   ```typescript
+   // ❌ INCORRECT: This will fail because mockValue is hoisted above its declaration
+   const mockValue = { data: 'test' };
+   vi.mock('@/some-module', () => ({
+     someFunction: () => mockValue // Error: Cannot access 'mockValue' before initialization
+   }));
+   
+   // ✅ CORRECT: Define mock values inside the factory function
+   vi.mock('@/some-module', () => {
+     const localMockValue = { data: 'test' };
+     return {
+       someFunction: () => localMockValue
+     };
+   });
+   ```
+
+2. **Module mocks must be defined before their imports**:
+   ```typescript
+   // ✅ CORRECT ORDER:
+   import { vi } from 'vitest';
+   vi.mock('@/utils/supabase/server');
+   
+   // Import module under test after mocks are defined
+   import { DatabaseService } from '@/services/database';
+   ```
+
+3. **Initialization of mock implementation**:
+   ```typescript
+   // Define mock implementation
+   vi.mock('@/utils/supabase/server', () => {
+     const mockClient = {
+       from: vi.fn().mockReturnThis(),
+       select: vi.fn().mockReturnThis()
+     };
+     
+     return {
+       createClient: vi.fn().mockResolvedValue(mockClient)
+     };
+   });
+   
+   // Import the mocked module to access the mock functions
+   import { createClient } from '@/utils/supabase/server';
+   
+   // Now you can modify the implementation in your test setup
+   beforeEach(() => {
+     (createClient as unknown as Mock).mockImplementation(() => /* new implementation */);
+   });
+   ```
 
 ### Function Mocking
 

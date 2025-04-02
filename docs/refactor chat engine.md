@@ -88,13 +88,54 @@
 
 ## Phase 7: Message Persistence Refinement
 
--   [ ] **Message Persistence (`lib/chat-engine/message-persistence.ts`)**
+-   [x] **Message Persistence (`lib/chat-engine/message-persistence.ts`)**
+    *   The MessagePersistenceService class has already been extracted to its own file with a robust implementation including:
+        *   Comprehensive configuration options
+        *   Error handling with retries
+        *   Structured logging
+        *   Functions for saving and retrieving messages
+
+-   [ ] **Action Items:**
     *   **Action:** Move the `saveUserMessage` and `saveAssistantMessage` method implementations *from* `core.ts` *into* the `MessagePersistenceService` class.
-    *   **Action:** Refactor these methods to accept necessary parameters (e.g., `sessionId`, `userId`, `message`, `toolsUsed`).
+    *   **Action:** Extract shared logic from both methods into helper functions to reduce code duplication.
+    *   **Action:** Enhance error handling in the methods by implementing the `withRetry` function already available in the service.
+    *   **Action:** Standardize the format of content across both methods (handle string/object content consistently).
+    *   **Action:** Implement a non-blocking save pattern to ensure UI responsiveness is not affected by database operations.
+    *   **Action:** Utilize the existing `setupToolsMetadata` helper or create a new one to consistently process tool usage data.
+    *   **Action:** Update the function signatures to accept necessary parameters (e.g., `sessionId`, `userId`, `message`, `toolsUsed`).
     *   **Action:** Ensure all direct database interaction logic for loading/saving messages resides *only* within this service.
-    *   **Action:** The `onFinish` callback in the `AIStreamService` (and the initial user message saving logic) will now simply call these methods on the injected `MessagePersistenceService` instance.
-    *   **Why:** Reinforces the separation of concerns. The persistence service owns all DB interaction details.
-    *   **Rules:** Follows SRP, ESM, TypeScript. Logging should use `SYSTEM` or `CHAT` category (`logging-rules`). Ensure database interactions are secure and efficient.
+
+-   [ ] **Implementation Details:**
+    *   `saveUserMessage` should:
+        *   Validate the required parameters (sessionId, userId)
+        *   Properly format the content to ensure consistency
+        *   Handle both normal and non-blocking save patterns
+        *   Implement structured logging using `edgeLogger`
+        *   Return a standardized response that includes success/failure status and messageId
+    
+    *   `saveAssistantMessage` should:
+        *   Include all functionality from `saveUserMessage`
+        *   Additionally process and format tool usage data
+        *   Extract details from AI SDK responses correctly
+        *   Handle AI content that might contain embedded tool calls
+        *   Provide additional metadata in logs about the tools used
+
+-   [ ] **Testing Strategy:**
+    *   Create unit tests for both new methods that verify:
+        *   Successful saves with proper parameters
+        *   Error handling for missing parameters
+        *   Correct handling of different content formats (string vs object)
+        *   Tool usage data extraction and formatting
+        *   Proper logging of operations
+
+-   [ ] **Integration:**
+    *   Modify `ChatEngine` class to use the new methods instead of its internal implementations
+    *   Update `onFinish` callback in `AIStreamService` to use new methods
+    *   Ensure the methods are called correctly with required parameters
+
+-   **Why:** Reinforces the separation of concerns. The persistence service should own all DB interaction details including the details of message formatting and storage. This simplifies the core engine and makes the code more maintainable and testable.
+    
+-   **Rules:** Follows SRP, ESM, TypeScript. Logging should use `SYSTEM` or `CHAT` category (`logging-rules`). Ensure database interactions are secure and efficient.
 
 ## Phase 8: Core Engine Facade Implementation
 
@@ -132,4 +173,4 @@
 *   **Zod:** Recommended for input validation (request body, config).
 *   **Logging (`edgeLogger`, `chatLogger`):** Use existing loggers, ensuring adherence to `logging-rules.mdc`.
 *   **Dependency Injection:** Manual constructor injection is sufficient.
-*   **API Calls:** Native `fetch` for internal API calls (title generation).
+*   **API Calls:** Native `fetch` for internal API calls (title generation). Nextjs 15,2, review readme in /docs for routing.
