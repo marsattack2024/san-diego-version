@@ -240,21 +240,23 @@ export function VirtualizedChat({
 
   // ** Revert to using Virtuoso **
   return (
-    <CustomScrollArea className="h-full w-full flex-1 flex flex-col overflow-hidden" hideScrollbar>
+    <>
       <EmptyPlaceholder />
 
       {allMessages.length > 0 && (
         <Virtuoso
           ref={virtuosoRef}
           style={{
-            ...virtuosoConfig.style,
-            flex: 1,
-            height: '100%',
-            minHeight: 'calc(100vh - 14rem)', // Add minimum height to ensure messages area is visible
-            paddingBottom: '0px' // No additional padding needed since we use Footer
+            // Remove potentially problematic inline styles
+            // ...virtuosoConfig.style,
+            // flex: 1, 
+            // height: '100%', 
+            // minHeight: 'calc(100vh - 14rem)', 
+            // paddingBottom: '0px'
+            // Rely on parent container for height/flex
           } as React.CSSProperties}
           data={allMessages}
-          className={styles.virtualizedChat}
+          className={styles.virtualizedChat} // Ensure this class handles height/flex correctly
           initialTopMostItemIndex={allMessages.length - 1}
           alignToBottom={true}
           defaultItemHeight={virtuosoConfig.defaultItemHeight}
@@ -284,6 +286,6 @@ export function VirtualizedChat({
           }}
         />
       )}
-    </CustomScrollArea>
+    </>
   );
 }

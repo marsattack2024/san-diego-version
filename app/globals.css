@@ -367,7 +367,9 @@ strong, b {
   }
 }
 
-/* TEMPORARY EMERGENCY FIX: Ensure body can scroll and prevent UI freezing */
+/* --- REMOVE TEMPORARY EMERGENCY FIXES --- */
+/*
+// TEMPORARY EMERGENCY FIX: Ensure body can scroll and prevent UI freezing
 html, body {
   overflow: auto !important;
   overscroll-behavior: auto !important;
@@ -379,19 +381,20 @@ html, body {
   -webkit-overflow-scrolling: touch !important;
 }
 
-/* Ensure critical UI elements don't get stuck */
+// Ensure critical UI elements don't get stuck
 #__next, main, div {
-  max-height: 100vh !important; /* Prevent elements from causing overflow */
-  overflow: auto !important; /* Allow scrolling where needed */
+  max-height: 100vh !important; // Prevent elements from causing overflow
+  overflow: auto !important; // Allow scrolling where needed
 }
 
-/* Emergency fix for dialog/modal freezing */
+// Emergency fix for dialog/modal freezing
 [role="dialog"] {
   z-index: 100000 !important;
   position: fixed !important;
 }
 
-/* Prevent layout shifts from causing freezes */
+// Prevent layout shifts from causing freezes
 * {
   contain: paint !important;
 }
+*/

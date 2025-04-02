@@ -274,7 +274,8 @@ export function Chat({
   return (
     <TooltipProvider delayDuration={0}>
       <div className="flex flex-col bg-white h-full relative fixed-header-offset">
-        <div className="flex-1 h-full">
+        {/* Ensure this container properly constrains the Virtuoso height */}
+        <div className="flex-1 h-full overflow-hidden">
           <VirtualizedChat
             chatId={id}
             isLoading={isLoading}
