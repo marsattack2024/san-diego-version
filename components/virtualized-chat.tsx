@@ -182,11 +182,6 @@ export function VirtualizedChat({
   const shouldShowThinking = (localThinking || isLoading || isDeepSearchInProgress) &&
     (allMessages.length === 0 || allMessages[allMessages.length - 1]?.role === 'user');
 
-  // Create empty state if no messages
-  const EmptyPlaceholder = () => {
-    return allMessages.length === 0 ? <Overview /> : null;
-  };
-
   // Add thinking message to the end when needed
   const ThinkingItem = () => {
     if (!shouldShowThinking) return null;
@@ -248,10 +243,12 @@ export function VirtualizedChat({
   // ** Revert to using Virtuoso **
   return (
     <>
-      <EmptyPlaceholder />
-      {/* Add static text for testing flicker */}
-      <p className="text-center text-xs text-muted-foreground p-4">Static Test Text - Should Not Flicker</p>
+      {/* <EmptyPlaceholder /> REMOVED */}
 
+      {/* Static text removed as test is complete */}
+      {/* <p className="text-center text-xs text-muted-foreground p-4">Static Test Text - Should Not Flicker</p> */}
+
+      {/* Keep the condition for Virtuoso itself */}
       {allMessages.length > 0 && (
         <Virtuoso
           ref={virtuosoRef}

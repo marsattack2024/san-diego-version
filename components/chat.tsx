@@ -13,6 +13,7 @@ import { useChatStore } from '@/stores/chat-store';
 import { TooltipProvider } from './ui/tooltip';
 import { historyService } from '@/lib/api/history-service';
 import { ScrollArea } from './ui/scroll-area';
+import { Overview } from './overview';
 
 export function Chat({
   id,
@@ -282,17 +283,22 @@ export function Chat({
       <div className="flex flex-col bg-white h-full relative fixed-header-offset">
         {/* Ensure this container properly constrains the Virtuoso height */}
         <div className="flex-1 h-full overflow-hidden">
-          <VirtualizedChat
-            chatId={id}
-            isLoading={isLoading}
-            messages={messages}
-            setMessages={setMessages}
-            reload={reload}
-            isReadonly={isReadonly}
-            votes={processedVotes}
-            isArtifactVisible={!!attachments.length}
-            hasUserSentMessage={hasUserSentMessage}
-          />
+          {/* Conditionally render Overview or VirtualizedChat */}
+          {messages.length === 0 ? (
+            <Overview />
+          ) : (
+            <VirtualizedChat
+              chatId={id}
+              isLoading={isLoading}
+              messages={messages}
+              setMessages={setMessages}
+              reload={reload}
+              isReadonly={isReadonly}
+              votes={processedVotes}
+              isArtifactVisible={!!attachments.length}
+              hasUserSentMessage={hasUserSentMessage}
+            />
+          )}
         </div>
         <div
           ref={inputContainerRef}
