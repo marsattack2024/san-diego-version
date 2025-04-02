@@ -31,6 +31,7 @@ export interface PuppeteerResponseData {
     links?: string[];
     metadata?: Record<string, string>;
     error?: string;
+    description?: string;
 }
 
 export interface ScraperStats {
@@ -89,10 +90,10 @@ class PuppeteerService {
                 let cachedResult: PuppeteerResponseData;
                 try {
                     // If it's a string, parse it; if it's already an object, use it directly
-                    cachedResult = typeof cachedContent === 'string' 
-                        ? JSON.parse(cachedContent) as PuppeteerResponseData 
+                    cachedResult = typeof cachedContent === 'string'
+                        ? JSON.parse(cachedContent) as PuppeteerResponseData
                         : cachedContent as PuppeteerResponseData;
-                        
+
                     edgeLogger.info('Web scraping cache hit', {
                         category: LOG_CATEGORIES.TOOLS,
                         operation: 'web_scraping_cache_hit',
@@ -177,6 +178,15 @@ class PuppeteerService {
      */
     private async callPuppeteerScraper(url: string): Promise<PuppeteerResponseData> {
         try {
+            // Format the request body based on the API's expected format
+            const requestBody = [
+                {
+                    "What is this url?": url,
+                    "format": "json",
+                    "error": ""
+                }
+            ];
+
             // Prepare request with proper headers
             const response = await fetch(SCRAPER_ENDPOINT, {
                 method: 'POST',
@@ -185,10 +195,7 @@ class PuppeteerService {
                     'User-Agent': 'Mozilla/5.0 SanDiego/1.0',
                     'Accept': 'application/json, text/html'
                 },
-                body: JSON.stringify({ 
-                    url,
-                    format: 'json' // Explicitly request JSON format
-                })
+                body: JSON.stringify(requestBody)
             });
 
             if (!response.ok) {
@@ -203,7 +210,29 @@ class PuppeteerService {
             try {
                 // Check if response is already JSON
                 if (contentType.includes('application/json')) {
-                    jsonData = JSON.parse(responseText);
+                    const parsedData = JSON.parse(responseText);
+
+                    // Handle the API's response format where data is in [0].data
+                    if (Array.isArray(parsedData) && parsedData.length > 0 && parsedData[0].data) {
+                        jsonData = parsedData[0].data;
+                        edgeLogger.debug('Successfully parsed API response with expected format', {
+                            category: LOG_CATEGORIES.TOOLS,
+                            operation: 'json_parse_success',
+                            url,
+                            hasTitle: !!jsonData.title,
+                            hasContent: !!jsonData.content,
+                            contentLength: jsonData.content ? jsonData.content.length : 0
+                        });
+                    } else {
+                        // Fallback for unexpected JSON structure
+                        jsonData = parsedData;
+                        edgeLogger.warn('Unexpected JSON structure in API response', {
+                            category: LOG_CATEGORIES.TOOLS,
+                            operation: 'unexpected_json_structure',
+                            url,
+                            responseStructure: Array.isArray(parsedData) ? 'array' : typeof parsedData
+                        });
+                    }
                 } else {
                     // Handle HTML/text responses by wrapping in a JSON structure
                     edgeLogger.info('Received non-JSON response, converting to JSON format', {
@@ -212,11 +241,11 @@ class PuppeteerService {
                         contentType,
                         responseTextLength: responseText.length
                     });
-                    
+
                     // Extract title if possible
                     const titleMatch = responseText.match(/<title[^>]*>([^<]+)<\/title>/i);
                     const title = titleMatch ? titleMatch[1].trim() : 'Untitled Page';
-                    
+
                     // Create a JSON structure with the HTML content
                     jsonData = {
                         content: responseText,
@@ -274,149 +303,62 @@ class PuppeteerService {
     }
 
     /**
-     * Format scraped content for consumption
-     * @param data Raw Puppeteer response data
+     * Format scraped content for AI consumption
+     * @param data PuppeteerResponseData to format
      * @returns Formatted content string
      */
     private formatContent(data: PuppeteerResponseData): string {
-        // If content is already formatted, return as is
-        if (data.content) {
-            // Check if content is HTML and needs processing
-            if (data.content.includes('<!DOCTYPE html>') || data.content.includes('<html')) {
-                // This appears to be raw HTML content - extract readable text
-                try {
-                    edgeLogger.info('Processing HTML content for better readability', {
-                        category: LOG_CATEGORIES.TOOLS,
-                        operation: 'html_content_processing',
-                        contentLength: data.content.length
-                    });
-                    
-                    // Extract meaningful content from HTML
-                    // 1. Extract title
-                    let title = data.title || '';
-                    if (!title) {
-                        const titleMatch = data.content.match(/<title[^>]*>([^<]+)<\/title>/i);
-                        title = titleMatch ? titleMatch[1].trim() : 'Untitled Page';
+        try {
+            // Log the data structure to help with debugging
+            edgeLogger.debug('Formatting scraped content', {
+                category: LOG_CATEGORIES.TOOLS,
+                operation: 'format_content',
+                hasTitleField: !!data.title,
+                hasContentField: !!data.content,
+                hasTextField: !!data.text,
+                hasDescriptionField: !!data.description,
+                contentLength: data.content ? data.content.length : 0
+            });
+
+            // Use content or text field depending on what's available
+            const textContent = data.content || data.text || '';
+
+            if (!textContent) {
+                return 'No content was found on this page.';
+            }
+
+            // Build formatted content with proper structure
+            let formattedContent = '';
+
+            // Add description if available
+            if (data.description) {
+                formattedContent += `### Description\n${data.description}\n\n`;
+            }
+
+            // Add main content
+            formattedContent += `### Content\n${textContent}`;
+
+            // Add metadata if available
+            if (data.metadata && Object.keys(data.metadata).length > 0) {
+                formattedContent += '\n\n### Metadata\n';
+                for (const [key, value] of Object.entries(data.metadata)) {
+                    if (value) {
+                        formattedContent += `**${key}**: ${value}\n`;
                     }
-                    
-                    // 2. Extract meta description
-                    let description = '';
-                    const descriptionMatch = data.content.match(/<meta\s+name="description"\s+content="([^"]+)"/i);
-                    if (descriptionMatch) {
-                        description = descriptionMatch[1].trim();
-                    }
-                    
-                    // 3. Extract main content - focus on common content containers
-                    let mainContent = '';
-                    
-                    // Try to find main content elements
-                    const contentElements = [
-                        /<article[^>]*>([\s\S]*?)<\/article>/gi,
-                        /<main[^>]*>([\s\S]*?)<\/main>/gi,
-                        /<div[^>]*(?:class|id)="(?:content|main|post)[^"]*"[^>]*>([\s\S]*?)<\/div>/gi,
-                        /<div[^>]*(?:class|id)="(?:blog-post|article|entry)[^"]*"[^>]*>([\s\S]*?)<\/div>/gi
-                    ];
-                    
-                    // Try each pattern until we find content
-                    for (const pattern of contentElements) {
-                        const matches = [...data.content.matchAll(pattern)];
-                        if (matches.length > 0) {
-                            // Use the longest match as it's likely the main content
-                            const sortedMatches = matches.sort((a, b) => 
-                                (b[1]?.length || 0) - (a[1]?.length || 0));
-                            mainContent = sortedMatches[0][1];
-                            break;
-                        }
-                    }
-                    
-                    // If we couldn't find main content elements, use the body content
-                    if (!mainContent) {
-                        const bodyMatch = data.content.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
-                        if (bodyMatch) {
-                            mainContent = bodyMatch[1];
-                        } else {
-                            // Fallback to the whole HTML
-                            mainContent = data.content;
-                        }
-                    }
-                    
-                    // Remove scripts, styles, and other non-content elements
-                    mainContent = mainContent
-                        .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-                        .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, '')
-                        .replace(/<nav\b[^<]*(?:(?!<\/nav>)<[^<]*)*<\/nav>/gi, '')
-                        .replace(/<footer\b[^<]*(?:(?!<\/footer>)<[^<]*)*<\/footer>/gi, '')
-                        .replace(/<header\b[^<]*(?:(?!<\/header>)<[^<]*)*<\/header>/gi, '');
-                    
-                    // Convert HTML to plain text (simple version)
-                    const plainText = mainContent
-                        .replace(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/gi, '\n## $1\n')
-                        .replace(/<p[^>]*>(.*?)<\/p>/gi, '$1\n')
-                        .replace(/<br\s*\/?>/gi, '\n')
-                        .replace(/<li[^>]*>(.*?)<\/li>/gi, '• $1\n')
-                        .replace(/<a[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gi, '$2 [$1]')
-                        .replace(/<[^>]*>/g, '') // Remove remaining HTML tags
-                        .replace(/&nbsp;/g, ' ')
-                        .replace(/&amp;/g, '&')
-                        .replace(/&lt;/g, '<')
-                        .replace(/&gt;/g, '>')
-                        .replace(/&quot;/g, '"')
-                        .replace(/\n\s*\n\s*\n/g, '\n\n') // Remove excessive newlines
-                        .trim();
-                    
-                    // Build formatted content
-                    let formattedContent = '';
-                    
-                    // Add title
-                    formattedContent += `# ${title}\n\n`;
-                    
-                    // Add URL and description
-                    formattedContent += `URL: ${data.url || 'Unknown URL'}\n\n`;
-                    if (description) {
-                        formattedContent += `**Description**: ${description}\n\n`;
-                    }
-                    
-                    // Add main content
-                    formattedContent += plainText;
-                    
-                    return formattedContent;
-                } catch (error) {
-                    // Log error but continue with default processing
-                    edgeLogger.error('Error processing HTML content', {
-                        category: LOG_CATEGORIES.TOOLS,
-                        operation: 'html_processing_error',
-                        error: error instanceof Error ? error.message : String(error)
-                    });
-                    
-                    // Fall back to default formatting
-                    return `# ${data.title || 'Untitled Page'}\n\nURL: ${data.url || 'Unknown URL'}\n\n${data.content}`;
                 }
             }
-            
-            return data.content;
+
+            return formattedContent;
+        } catch (error) {
+            edgeLogger.warn('Error formatting scraped content', {
+                category: LOG_CATEGORIES.TOOLS,
+                operation: 'format_content_error',
+                error: error instanceof Error ? error.message : String(error)
+            });
+
+            // Return whatever content we have as a fallback
+            return data.content || data.text || 'Error formatting page content.';
         }
-
-        // Start building formatted content
-        let formattedContent = '';
-
-        // Add title if available
-        if (data.title) {
-            formattedContent += `# ${data.title}\n\n`;
-        }
-
-        // Add URL if available
-        if (data.url) {
-            formattedContent += `URL: ${data.url}\n\n`;
-        }
-
-        // Use text as main content if available, otherwise use empty string
-        const content = data.text || '';
-
-        // Calculate statistics for logging
-        const stats = this.calculateStats(content);
-
-        // Return the formatted content
-        return formattedContent + content;
     }
 
     /**

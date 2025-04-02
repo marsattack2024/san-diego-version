@@ -13,10 +13,10 @@ import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { extractUrls } from '@/lib/utils/url-utils';
 import { puppeteerService } from '@/lib/services/puppeteer.service';
 
-// Define tool parameters schema using Zod
+// Simplified schema - just one parameter like DeepSearch uses
+// This matches the pattern of the working DeepSearch tool
 const webScraperSchema = z.object({
-    query: z.string().describe('The user message or query that may contain URLs to scrape'),
-    urls: z.array(z.string()).optional().describe('Optional list of specific URLs to scrape instead of extracting from query')
+    url: z.string().describe('The URL to scrape or a text containing URLs. The tool will automatically extract and process URLs from the text.')
 });
 
 // Type for tool options
@@ -40,35 +40,41 @@ export function createWebScraperTool(options: WebScraperToolOptions = {}) {
     } = options;
 
     return tool({
-        description: 'CRITICAL: Use this tool IMMEDIATELY for ANY URL in the user message (including http://, https://, or just domain.com formats). This tool extracts text content from web pages, allowing you to summarize, analyze, or quote from the web page. This tool MUST be preferred over general search when the user provides a specific URL or asks to summarize a webpage. Example triggers: "summarize this website", "tell me about example.com", "extract info from https://site.com". The tool can process up to 3 URLs at once and will automatically cache results for faster future access.',
+        description: 'Extracts and analyzes content from web pages. Use this tool whenever you encounter a URL in the user message or when asked to summarize a webpage. Simply provide the URL or text containing URLs, and the tool will extract the content for analysis.',
         parameters: webScraperSchema,
-        execute: async ({ query, urls: specificUrls }, { toolCallId }) => {
+        execute: async ({ url }, { toolCallId }) => {
             try {
+                // Enhanced debug logging at tool execution start
+                edgeLogger.debug('Web scraper tool execute called', {
+                    category: LOG_CATEGORIES.TOOLS,
+                    operation: operationName,
+                    toolCallId,
+                    url: url ? url.substring(0, 200) : 'none'
+                });
+
                 // Log the start of web scraping
                 edgeLogger.info('Web scraper started', {
                     category: LOG_CATEGORIES.TOOLS,
                     operation: operationName,
                     toolCallId,
-                    query
+                    url
                 });
 
                 const startTime = Date.now();
 
-                // Extract URLs from the query or use specified URLs
-                const urls = specificUrls || extractUrls(query);
+                // Extract URLs from the text or use directly if it's a valid URL
+                const extractedUrls = extractUrls(url);
+                const urls = extractedUrls.length > 0 ? extractedUrls : [url];
 
                 if (!urls || urls.length === 0) {
                     edgeLogger.info('No URLs found to scrape', {
                         category: LOG_CATEGORIES.TOOLS,
                         operation: operationName,
                         toolCallId,
-                        query
+                        url
                     });
 
-                    return {
-                        content: "No URLs were found to scrape in the provided message.",
-                        urls: []
-                    };
+                    return "No valid URLs were found to scrape in the provided text. Please provide a direct URL (e.g., https://example.com) or text containing recognizable URLs.";
                 }
 
                 // Limit the number of URLs to process
@@ -135,18 +141,12 @@ export function createWebScraperTool(options: WebScraperToolOptions = {}) {
                     successCount: scrapedResults.filter(r => r.success).length,
                     failureCount: scrapedResults.filter(r => !r.success).length,
                     durationMs,
-                    query
+                    url
                 });
 
-                // Return formatted results
-                return {
-                    content: formattedContent,
-                    urlsProcessed: urlsToProcess,
-                    meta: {
-                        count: urlsToProcess.length,
-                        durationMs
-                    }
-                };
+                // Return formatted content directly as a string to simplify the return type
+                // This matches the pattern of the working DeepSearch tool which returns a string
+                return formattedContent;
             } catch (error) {
                 // Handle any errors during scraping
                 const errorMessage = error instanceof Error ? error.message : String(error);
@@ -155,16 +155,12 @@ export function createWebScraperTool(options: WebScraperToolOptions = {}) {
                     category: LOG_CATEGORIES.TOOLS,
                     operation: operationName,
                     toolCallId,
-                    query,
+                    url,
                     error: errorMessage
                 });
 
-                // Return error information
-                return {
-                    content: `Error scraping web content: ${errorMessage}`,
-                    error: errorMessage,
-                    urls: []
-                };
+                // Return error message as a string
+                return `Error scraping web content: ${errorMessage}`;
             }
         }
     });
@@ -174,4 +170,4 @@ export function createWebScraperTool(options: WebScraperToolOptions = {}) {
  * Default web scraper tool instance with standard configuration
  * Ready to use in both chat implementations
  */
-export const webScraperTool = createWebScraperTool(); 
+export const scrapeWebContentTool = createWebScraperTool(); 

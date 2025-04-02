@@ -7,7 +7,7 @@
  */
 
 import { knowledgeBaseTool } from './knowledge-base.tool';
-import { webScraperTool } from './web-scraper.tool';
+import { scrapeWebContentTool } from './web-scraper.tool';
 import { deepSearchTool } from './deep-search.tool';
 import { Tool } from 'ai';
 import { edgeLogger } from '@/lib/logger/edge-logger';
@@ -19,7 +19,7 @@ import { LOG_CATEGORIES } from '@/lib/logger/constants';
  */
 export const standardTools: Record<string, Tool<any, any>> = {
     getInformation: knowledgeBaseTool,
-    scrapeWebContent: webScraperTool
+    scrapeWebContent: scrapeWebContentTool
 };
 
 /**
@@ -73,7 +73,7 @@ export function createToolSet(options: {
 
     // Add web scraper tool if enabled
     if (useWebScraper) {
-        toolSet.scrapeWebContent = webScraperTool;
+        toolSet.scrapeWebContent = scrapeWebContentTool;
     }
 
     // Add Deep Search tool ONLY if explicitly enabled

@@ -61,6 +61,30 @@ export class AIStreamService {
                 maxTokens: config.maxTokens
             });
 
+            // Add detailed logging for tools configuration
+            if (config.tools) {
+                const toolNames = Object.keys(config.tools);
+                edgeLogger.debug('Tools configuration passed to streamText', {
+                    category: LOG_CATEGORIES.TOOLS,
+                    operation: operationName,
+                    requestId,
+                    toolCount: toolNames.length,
+                    toolNames,
+                    toolDetails: JSON.stringify(Object.entries(config.tools).map(([name, tool]) => ({
+                        name,
+                        hasDescription: !!tool.description,
+                        hasExecute: !!tool.execute,
+                        parametersType: tool.parameters ? typeof tool.parameters : 'none',
+                    })))
+                });
+            } else {
+                edgeLogger.warn('No tools passed to streamText', {
+                    category: LOG_CATEGORIES.TOOLS,
+                    operation: operationName,
+                    requestId
+                });
+            }
+
             // Get combined messages from context
             const allMessages = [
                 ...(context.previousMessages || []),
@@ -158,13 +182,52 @@ export class AIStreamService {
                         usage
                     });
 
+                    // Enhanced logging for tool calls
                     if (currentStepToolCalls && currentStepToolCalls.length > 0) {
+                        // Log each tool call with detailed information
+                        currentStepToolCalls.forEach(call => {
+                            edgeLogger.debug('Tool call details', {
+                                category: LOG_CATEGORIES.TOOLS,
+                                operation: operationName,
+                                requestId,
+                                toolName: call.toolName,
+                                toolCallId: call.toolCallId,
+                                argsPreview: JSON.stringify(call.args).substring(0, 200),
+                                fullArgs: JSON.stringify(call.args)
+                            });
+                        });
+
                         allToolCalls.push(...currentStepToolCalls);
                         edgeLogger.info('AI Stream: Tool calls executed in step', {
                             category: LOG_CATEGORIES.TOOLS,
                             operation: operationName,
                             requestId,
                             toolNames: currentStepToolCalls.map(call => call.toolName)
+                        });
+                    } else if (finishReason === 'tool-calls') {
+                        // Log when finish reason indicates tool calls but none were found
+                        edgeLogger.warn('AI Stream: Tool-calls finish reason but no tool calls present', {
+                            category: LOG_CATEGORIES.TOOLS,
+                            operation: operationName,
+                            requestId,
+                            finishReason,
+                            text: text ? text.substring(0, 100) : 'none'
+                        });
+                    }
+
+                    // Enhanced logging for tool results
+                    if (toolResults && toolResults.length > 0) {
+                        edgeLogger.debug('Tool results received', {
+                            category: LOG_CATEGORIES.TOOLS,
+                            operation: operationName,
+                            requestId,
+                            toolResultCount: toolResults.length,
+                            // Cast toolResults to any to avoid TypeScript errors with unknown structure
+                            toolResultsPreview: JSON.stringify((toolResults as any[]).map(result => ({
+                                toolCallId: result.toolCallId || 'unknown',
+                                contentLength: typeof result.content === 'string' ? result.content.length : 0,
+                                contentPreview: typeof result.content === 'string' ? result.content.substring(0, 100) : 'none'
+                            })))
                         });
                     }
                     // Optional: Call callbacks.onStreamStepFinish if provided
