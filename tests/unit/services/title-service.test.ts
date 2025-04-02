@@ -51,8 +51,8 @@ const mockSupabase = createClient as unknown as Mock;
 // Set up logger mocks
 setupLoggerMock();
 
-// Mock fetch globally for tests in this file
-vi.stubGlobal('fetch', vi.fn()); // Use stubGlobal to properly mock fetch
+// Create a mock implementation of fetch
+const mockFetch = vi.fn();
 
 describe('Title Service - API Trigger Conditions', () => {
     const TEST_CHAT_ID = 'test-chat-id';
@@ -62,10 +62,12 @@ describe('Title Service - API Trigger Conditions', () => {
     let mockSupabaseClient: any;
 
     beforeEach(() => {
-        // Reset mocks before each test
+        // Reset all mocks before each test
         vi.resetAllMocks();
-        // Cast to mock function type before calling mockClear
-        (fetch as ReturnType<typeof vi.fn>).mockClear();
+
+        // Mock the global fetch function
+        vi.stubGlobal('fetch', mockFetch);
+        mockFetch.mockClear();
 
         // Setup mock Supabase client behavior
         mockSupabaseClient = {
@@ -82,10 +84,8 @@ describe('Title Service - API Trigger Conditions', () => {
     });
 
     afterEach(() => {
+        vi.unstubAllEnvs();
         vi.unstubAllGlobals(); // Clean up stubbed fetch
-        // Clean up environment variable mock
-        delete process.env.INTERNAL_API_SECRET;
-        delete process.env.NEXT_PUBLIC_SITE_URL;
     });
 
     it('should skip generation when given empty content', async () => {
@@ -102,7 +102,7 @@ describe('Title Service - API Trigger Conditions', () => {
             })
         );
         expect(titleLogger.attemptGeneration).not.toHaveBeenCalled();
-        expect(fetch).not.toHaveBeenCalled();
+        expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('should log titleExists and NOT attempt generation or fetch if title exists', async () => {
@@ -128,7 +128,7 @@ describe('Title Service - API Trigger Conditions', () => {
 
         // Verify generation was stopped
         expect(titleLogger.attemptGeneration).not.toHaveBeenCalled();
-        expect(fetch).not.toHaveBeenCalled();
+        expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('should proceed with generation for new conversations with low message count', async () => {
@@ -140,8 +140,12 @@ describe('Title Service - API Trigger Conditions', () => {
             eq: vi.fn().mockReturnValue(Promise.resolve(mockCountResult))
         });
 
-        // Mock fetch response - Cast to mock function type
-        (fetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: true, status: 200 } as Response);
+        // Mock fetch response
+        mockFetch.mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ success: true })
+        });
 
         // Act
         await triggerTitleGenerationViaApi(TEST_CHAT_ID, TEST_CONTENT, TEST_USER_ID);
@@ -153,9 +157,9 @@ describe('Title Service - API Trigger Conditions', () => {
             userId: TEST_USER_ID
         });
         // Verify fetch was called once
-        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(mockFetch).toHaveBeenCalledTimes(1);
         // Verify fetch was called with the correct URL and options
-        expect(fetch).toHaveBeenCalledWith(
+        expect(mockFetch).toHaveBeenCalledWith(
             expect.stringContaining(`/api/chat/update-title`),
             expect.objectContaining({
                 method: 'POST',
@@ -216,7 +220,7 @@ describe('Title Service - API Trigger Conditions', () => {
             })
         );
         expect(titleLogger.attemptGeneration).not.toHaveBeenCalled();
-        expect(fetch).not.toHaveBeenCalled();
+        expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('should log error and not fetch if INTERNAL_API_SECRET is not set', async () => {
@@ -237,7 +241,7 @@ describe('Title Service - API Trigger Conditions', () => {
             error: 'INTERNAL_API_SECRET is not configured.'
         }));
         expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('INTERNAL_API_SECRET environment variable is not set'));
-        expect(fetch).not.toHaveBeenCalled();
+        expect(mockFetch).not.toHaveBeenCalled();
 
         errorSpy.mockRestore(); // Restore console.error
     });

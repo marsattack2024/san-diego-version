@@ -1,6 +1,8 @@
 import { describe, expect, it, beforeEach, vi, Mock, afterEach } from 'vitest';
-import { setupLoggerMock } from '../../helpers/mock-logger';
+import { setupLoggerMock, mockLogger } from '@/tests/helpers/mock-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { createMocks } from 'node-mocks-http';
+import { z } from 'zod';
 
 // Setup logger mock first
 setupLoggerMock();
@@ -18,7 +20,8 @@ const mockSupabase = {
 };
 
 vi.mock('@/lib/supabase/route-client', () => ({
-    createRouteHandlerClient: vi.fn(() => mockSupabase)
+    createRouteHandlerClient: vi.fn(() => mockSupabase),
+    createRouteHandlerAdminClient: vi.fn(() => mockSupabase)
 }));
 
 // Mock the AI SDK generateText function
@@ -36,7 +39,8 @@ vi.mock('@/lib/chat/title-utils', () => ({
 vi.mock('@/lib/logger/title-logger', () => ({
     titleLogger: {
         titleGenerated: vi.fn(),
-        titleGenerationFailed: vi.fn()
+        titleGenerationFailed: vi.fn(),
+        titleUpdateResult: vi.fn()
     }
 }));
 
@@ -50,26 +54,47 @@ vi.mock('@/lib/logger/edge-logger', () => ({
     }
 }));
 
+// Mock dependencies
+vi.mock('@/lib/logger/constants', () => ({
+    LOG_CATEGORIES: {
+        SYSTEM: 'system',
+        CHAT: 'chat',
+        AUTH: 'auth'
+    }
+}));
+
+vi.mock('@/lib/utils/route-handler', () => ({
+    successResponse: vi.fn((data) => new Response(JSON.stringify(data), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+    })),
+    errorResponse: vi.fn((message, error, status = 500) => new Response(JSON.stringify({ error: message }), {
+        status,
+        headers: { 'Content-Type': 'application/json' }
+    })),
+    unauthorizedError: vi.fn(() => new Response(JSON.stringify({ error: 'Authentication required' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+    })),
+    validationError: vi.fn((message, error) => new Response(JSON.stringify({ error: message }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' }
+    }))
+}));
+
+// Mock next/cache
+vi.mock('next/cache', () => ({
+    cache: (fn: (...args: any[]) => any) => fn
+}));
+
 // Import after mocks are set up
 import { POST } from '@/app/api/chat/update-title/route';
 import { generateText } from 'ai';
-import { createRouteHandlerClient } from '@/lib/supabase/route-client';
+import { createRouteHandlerClient, createRouteHandlerAdminClient } from '@/lib/supabase/route-client';
 import { cleanTitle, updateTitleInDatabase } from '@/lib/chat/title-utils';
 import { titleLogger } from '@/lib/logger/title-logger';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { successResponse, errorResponse, unauthorizedError, validationError } from '@/lib/utils/route-handler';
-
-// Mock route-handler utilities
-vi.mock('@/lib/utils/route-handler', () => {
-    const actual = vi.importActual('@/lib/utils/route-handler');
-    return {
-        ...actual,
-        successResponse: vi.fn().mockImplementation((data) => ({ status: 200, body: data })),
-        errorResponse: vi.fn().mockImplementation((message, error, status = 500) => ({ status, body: { message, error } })),
-        unauthorizedError: vi.fn().mockImplementation(() => ({ status: 401, body: { message: 'Unauthorized' } })),
-        validationError: vi.fn().mockImplementation((message) => ({ status: 400, body: { message } }))
-    };
-});
 
 describe('Update Title API Route', () => {
     const TEST_SESSION_ID = 'test-session-id';
@@ -81,6 +106,7 @@ describe('Update Title API Route', () => {
     beforeEach(() => {
         // Reset all mocks
         vi.clearAllMocks();
+        mockLogger.reset();
 
         // Setup default Supabase auth mock
         mockSupabase.auth.getUser.mockResolvedValue({
@@ -130,7 +156,6 @@ describe('Update Title API Route', () => {
 
         // Act
         const response = await POST(request);
-        const body = await response.json();
 
         // Assert
         expect(mockSupabase.auth.getUser).not.toHaveBeenCalled();
@@ -178,6 +203,11 @@ describe('Update Title API Route', () => {
 
         expect(edgeLogger.info).toHaveBeenCalled();
 
+        // Verify the response status
+        expect(response.status).toBe(200);
+
+        // Get and verify the response body
+        const body = await response.json();
         expect(body.title).toBe(TEST_GENERATED_TITLE);
     });
 

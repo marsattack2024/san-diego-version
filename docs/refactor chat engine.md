@@ -329,10 +329,17 @@ Following the resolution of the message content loss, new issues related to chat
 
 ## Phase 11: Comprehensive Testing
 
--   [ ] **Test Coverage Analysis**
-    *   **Action:** Review existing tests and identify coverage gaps.
-    *   **Action:** Document the current test coverage for chat engine components.
-    *   **Action:** Prioritize critical components that need additional testing.
+-   [x] **Test Coverage Analysis**
+    *   **Action:** Reviewed existing tests and identified coverage gaps.
+    *   **Action:** Documented the current test coverage for chat engine components.
+    *   **Action:** Prioritized critical components that need additional testing.
+
+-   [x] **Test Environment Fixes** 
+    *   **Action:** Fixed mocking patterns for the AI package to handle ESM imports properly.
+    *   **Action:** Updated Response object mocks to include proper status codes and json methods.
+    *   **Action:** Enhanced logger mocks to include all required constants and methods.
+    *   **Action:** Standardized Redis client mocking with in-memory implementation.
+    *   **Action:** Fixed hoisting issues by using proper vi.mock factory functions.
 
 -   [ ] **Widget-Specific Testing**
     *   **Action:** Create test suite for widget-specific configurations.
@@ -372,152 +379,138 @@ Following the resolution of the message content loss, new issues related to chat
     *   **Action:** Test behavior under high concurrency conditions.
     *   **Action:** Verify timeout handling for long-running operations.
 
-### Sample Test Implementations
+### Key Testing Patterns
 
-#### ChatEngineFacade Unit Tests
+Below are established patterns for properly mocking dependencies in tests:
+
+#### Mocking Vercel AI SDK
+
 ```typescript
-// tests/unit/chat-engine/chat-engine-facade.test.ts
-describe('ChatEngineFacade', () => {
-  let mockApiAuthService: Partial<ApiAuthService>;
-  let mockChatContextService: Partial<ChatContextService>;
-  let mockAIStreamService: Partial<AIStreamService>;
-  let mockPersistenceService: Partial<MessagePersistenceService>;
-  let chatEngine: ChatEngineFacade;
-  
-  beforeEach(() => {
-    // Setup mocks for all services
-    mockApiAuthService = {
-      authenticateRequest: vi.fn().mockResolvedValue('test-user-id')
+// Mock the AI module and streamText function
+vi.mock('ai', () => {
+  // Create a response structure similar to what streamText would return
+  const mockResponse = {
+    text: 'Mock response text',
+    toolCalls: [],
+    toDataStreamResponse: vi.fn().mockImplementation(() => new Response('{}')),
+    consumeStream: vi.fn()
+  };
+
+  // Mock the streamText function
+  const streamTextMock = vi.fn().mockResolvedValue(mockResponse);
+
+  // Mock the tool function
+  const toolMock = vi.fn().mockImplementation((config) => {
+    return {
+      type: 'function',
+      name: config.name || 'mock_tool',
+      description: config.description || 'Mock tool description',
+      parameters: config.parameters || {},
+      execute: config.execute || (() => Promise.resolve('Mock tool response'))
     };
-    
-    mockChatContextService = {
-      buildContext: vi.fn().mockResolvedValue({
-        sessionId: 'test-session',
-        userId: 'test-user',
-        requestId: 'test-request',
-        startTime: Date.now(),
-        messages: [],
-        metrics: {}
+  });
+
+  return {
+    streamText: streamTextMock,
+    StringOutputParser: vi.fn().mockImplementation(() => ({
+      toDataStreamResponse: vi.fn().mockReturnValue(new Response('{}'))
+    })),
+    tool: toolMock
+  };
+});
+```
+
+#### Proper Response Object Mocking
+
+```typescript
+// Mock route handler responses with proper Response objects
+vi.mock('@/lib/utils/route-handler', () => ({
+  successResponse: vi.fn((data) => new Response(JSON.stringify(data), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' }
+  })),
+  errorResponse: vi.fn((message, error, status = 500) => new Response(JSON.stringify({ error: message }), {
+    status,
+    headers: { 'Content-Type': 'application/json' }
+  })),
+  unauthorizedError: vi.fn(() => new Response(JSON.stringify({ error: 'Authentication required' }), {
+    status: 401,
+    headers: { 'Content-Type': 'application/json' }
+  }))
+}));
+```
+
+#### In-Memory Redis Mock
+
+```typescript
+vi.mock('@upstash/redis', () => {
+  // In-memory storage for mocking Redis
+  const mockStore = new Map<string, any>();
+  const mockExpirations = new Map<string, number>();
+
+  return {
+    Redis: {
+      fromEnv: vi.fn().mockReturnValue({
+        set: vi.fn().mockImplementation((key: string, value: any, options?: { ex?: number }) => {
+          mockStore.set(key, value);
+          if (options?.ex) {
+            mockExpirations.set(key, Date.now() + (options.ex * 1000));
+          }
+          return Promise.resolve('OK');
+        }),
+        get: vi.fn().mockImplementation((key: string) => {
+          const expiry = mockExpirations.get(key);
+          if (expiry && expiry < Date.now()) {
+            mockStore.delete(key);
+            mockExpirations.delete(key);
+            return Promise.resolve(null);
+          }
+          return Promise.resolve(mockStore.get(key) || null);
+        }),
+        del: vi.fn().mockImplementation((key: string) => {
+          const existed = mockStore.has(key);
+          mockStore.delete(key);
+          mockExpirations.delete(key);
+          return Promise.resolve(existed ? 1 : 0);
+        }),
+        flushall: vi.fn().mockImplementation(() => {
+          mockStore.clear();
+          mockExpirations.clear();
+          return Promise.resolve('OK');
+        })
       })
-    };
-    
-    mockAIStreamService = {
-      process: vi.fn().mockResolvedValue(new Response())
-    };
-    
-    mockPersistenceService = {
-      saveUserMessage: vi.fn().mockResolvedValue({ success: true }),
-      saveAssistantMessage: vi.fn().mockResolvedValue({ success: true })
-    };
-    
-    // Create facade with mocked services
-    chatEngine = new ChatEngineFacade(
-      { operationName: 'test' },
-      mockApiAuthService as ApiAuthService,
-      mockChatContextService as ChatContextService,
-      mockAIStreamService as AIStreamService,
-      mockPersistenceService as MessagePersistenceService
-    );
-  });
-  
-  it('should handle a valid chat request successfully', async () => {
-    // Arrange - Create a valid request
-    const request = new Request('https://example.com/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: 'Test message',
-        sessionId: 'test-session'
-      })
-    });
-    
-    // Act
-    const response = await chatEngine.handleRequest(request);
-    
-    // Assert
-    expect(response.status).toBe(200);
-    expect(mockApiAuthService.authenticateRequest).toHaveBeenCalledTimes(1);
-    expect(mockChatContextService.buildContext).toHaveBeenCalledTimes(1);
-    expect(mockPersistenceService.saveUserMessage).toHaveBeenCalledTimes(1);
-    expect(mockAIStreamService.process).toHaveBeenCalledTimes(1);
-  });
+    }
+  };
 });
 ```
 
-#### Legacy Compatibility Tests
+#### Proper Global Stub for Fetch API
+
 ```typescript
-// tests/integration/chat-engine/legacy-compatibility.test.ts
-describe('Legacy Chat Engine Compatibility', () => {
-  it('should maintain backward compatibility with the original ChatEngine class', async () => {
-    // Import from the original path
-    const { ChatEngine } = await import('@/lib/chat-engine/core');
-    
-    // Create an instance with the same parameters
-    const engine = new ChatEngine({
-      operationName: 'legacy_test'
-    });
-    
-    // Verify it works with the same API
-    const request = new Request('https://example.com/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        message: 'Test message',
-        sessionId: 'test-session'
-      })
-    });
-    
-    // This should not throw errors
-    const response = await engine.handleRequest(request);
-    
-    // Basic check that it returns something sensible
-    expect(response).toBeInstanceOf(Response);
+// Properly mock fetch with vi.stubGlobal
+beforeEach(() => {
+  const mockFetch = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: () => Promise.resolve({ success: true }),
+    text: () => Promise.resolve('success')
   });
+  vi.stubGlobal('fetch', mockFetch);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals(); // Clean up stubbed fetch
 });
 ```
 
-#### CORS Handling Tests
-```typescript
-// tests/integration/utils/cors-handling.test.ts
-describe('CORS Handling in Chat Engine', () => {
-  it('should add proper CORS headers for allowed origins', async () => {
-    // Test implementation for CORS handling with allowed origins
-  });
-  
-  it('should handle requests from Vercel deployments', async () => {
-    // Test implementation using Vercel deployment URLs
-  });
-  
-  it('should reject requests from unauthorized origins', async () => {
-    // Test implementation for unauthorized origins
-  });
-});
-```
+### Testing Approach
 
-#### End-to-End Chat Flow Test
-```typescript
-// tests/e2e/chat-flow.test.ts
-describe('End-to-End Chat Flow', () => {
-  it('should process a chat request from start to finish', async () => {
-    // Test implementation for the complete chat flow
-  });
-  
-  it('should handle tool calls and process tool results', async () => {
-    // Test implementation for tool calling functionality
-  });
-  
-  it('should persist messages correctly during streaming', async () => {
-    // Test implementation for message persistence
-  });
-});
-```
+The testing approach for the Chat Engine components follows these principles:
 
-### Testing Development Priority
+1. **Isolation**: Test each service independently with mocked dependencies.
+2. **Completeness**: Ensure all edge cases and error handling are covered.
+3. **Compatibility**: Maintain compatibility with both old and new code paths.
+4. **Performance**: Include tests for timing and resource usage.
+5. **Reality-Based**: Use realistic examples of requests and responses that match production.
 
-1. **Unit Tests for ChatEngineFacade**: Most critical since it's the main orchestrator
-2. **Service Isolation Tests**: Ensure each service works correctly on its own
-3. **Legacy Compatibility Tests**: Important for ensuring refactoring didn't break existing code
-4. **CORS Handling Tests**: Important for cross-origin requests
-5. **End-to-End Chat Flow Tests**: Comprehensive verification of the entire system
-
-This testing plan ensures comprehensive coverage of the refactored chat engine, verifying both individual components and their interactions while maintaining compatibility with existing code.
+By following these patterns, we ensure that tests are robust, maintainable, and correctly validate the behavior of the Chat Engine components.
