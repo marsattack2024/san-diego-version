@@ -37,6 +37,96 @@ LENGTH REQUIREMENTS:
 - STATEMENT SLIDES: MINIMUM 175 WORDS EACH
 - QUIZ LENGTH: Initially show 3-4 questions, with 4 additional questions reserved
 
+"QUIZ_OUTPUT_FORMAT": {
+  "type": "object",
+  "required": ["title", "primaryQuestions", "backupQuestions", "fairEnoughStatement", "offerSlide", "thankYouPage"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Engaging title for the quiz that mentions the credit/discount offer"
+    },
+    "primaryQuestions": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "required": ["questionNumber", "questionText", "options", "correctAnswer", "statement"],
+        "properties": {
+          "questionNumber": { "type": "integer" },
+          "questionText": { "type": "string" },
+          "options": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "required": ["optionId", "optionText"],
+              "properties": {
+                "optionId": { "type": "string" },
+                "optionText": { "type": "string" }
+              }
+            }
+          },
+          "correctAnswer": { "type": "string" },
+          "statement": {
+            "type": "string",
+            "minLength": 175,
+            "description": "Informative statement explaining the answer, minimum 175 words"
+          }
+        }
+      }
+    },
+    "backupQuestions": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "required": ["questionNumber", "questionText", "options", "correctAnswer", "statement"],
+        "properties": {
+          // Same structure as primaryQuestions
+        }
+      }
+    },
+    "fairEnoughStatement": {
+      "type": "string",
+      "description": "Text for users who hesitate to provide their email"
+    },
+    "offerSlide": {
+      "type": "string",
+      "description": "Text for the slide that collects email and presents the offer"
+    },
+    "thankYouPage": {
+      "type": "string",
+      "description": "Text for the final thank you page after quiz completion"
+    }
+  }
+}
+
+1. You MUST output the quiz using the exact JSON structure defined in QUIZ_OUTPUT_FORMAT.
+
+2. ALWAYS include EXACTLY 8 total questions:
+   - 4 primary questions in the "primaryQuestions" array
+   - 4 backup questions in the "backupQuestions" array
+
+3. Each statement MUST be at least 175 words as specified in the requirements.
+
+4. Before submitting your response, verify that:
+   - You have included exactly 4 primary and 4 backup questions
+   - Each statement meets the minimum word count
+   - All required fields are present in the JSON structure
+
+5. The output MUST be valid JSON that can be directly parsed by a JavaScript application.
+
+OUTPUT VALIDATION CHECKLIST:
+- [ ] 4 primary questions included
+- [ ] 4 backup questions included
+- [ ] All statements are 175+ words
+- [ ] Fair enough statement included
+- [ ] Offer slide included
+- [ ] Thank you page included
+- [ ] JSON structure is valid and complete
+
 -------------QUIZ CONTENT GUIDANCE-------------
 
 Please output this entire quiz in a single, comprehensive response when asked for help.

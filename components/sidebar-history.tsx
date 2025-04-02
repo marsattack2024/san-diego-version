@@ -191,7 +191,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
       id: conv.id,
       title: conv.title || '',
       createdAt: conv.createdAt,
-      updatedAt: conv.updatedAt,
+      updatedAt: conv.updatedAt || conv.createdAt, // Ensure updatedAt has a fallback
       userId: conv.userId || '',
       messages: [] // We don't need the messages for display
     } as Chat));
@@ -350,7 +350,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     return groupChatsByDate(historyArray);
   }, [historyArray]);
 
-  // Render chat sections - ** Restore Original Logic **
+  // Render chat sections - simple divs, no overflow control here
   const renderChats = useCallback((chats: Array<Chat>) => {
     if (chats.length === 0) {
       return null;
@@ -459,75 +459,71 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
     return historyArray.length === 0 && !isLoadingHistory;
   }, [historyArray.length, isLoadingHistory]);
 
-  // Main component render (original structure)
+  // Simplified render - return a Fragment containing the header and the menu
   return (
-    <div className="sidebar-history relative h-full overflow-hidden border-r border-border">
-      <SidebarGroup className="flex-shrink-0 h-full overflow-hidden flex flex-col">
-        <SidebarGroupLabel>
-          <div className="flex items-center justify-between">
-            <div className="flex-1"></div>
-            <div className="flex items-center gap-1">
-              {historyError ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <div className="p-1">
-                      <AlertCircle className="h-4 w-4 text-amber-500" />
-                    </div>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className="max-w-60 text-sm">
-                      {historyError}
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
-              ) : null}
-              <SidebarMenuAction
-                onClick={refreshHistory}
-                className="ml-auto"
-                disabled={isLoadingHistory}
-                title="Refresh chat history"
-              >
-                {isLoadingHistory ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-4 w-4" />
-                )}
-              </SidebarMenuAction>
-            </div>
-          </div>
-        </SidebarGroupLabel>
-        <SidebarGroupContent className="overflow-y-auto pb-20">
-          <SidebarMenu>
+    <>
+      {/* Header section with refresh button */}
+      <div className="flex items-center justify-end h-8 px-2 pt-2">
+        <div className="flex items-center gap-1">
+          {historyError ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="p-1">
+                  <AlertCircle className="h-4 w-4 text-amber-500" />
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p className="max-w-60 text-sm">
+                  {historyError}
+                </p>
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
+          <SidebarMenuAction
+            onClick={refreshHistory}
+            className="ml-auto" // Position to the right
+            disabled={isLoadingHistory}
+            title="Refresh chat history"
+          >
             {isLoadingHistory ? (
-              <div className="flex justify-center py-8">
-                <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-              </div>
-            ) : isEmpty ? (
-              <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground px-4">
-                <p className="text-base">No chat history found</p>
-                <p className="text-sm mt-1">Start a new conversation to get started</p>
-              </div>
-            ) : errorMessage ? (
-              <div className="flex flex-col items-center justify-center py-8 text-center text-destructive px-4">
-                <p className="text-base">{errorMessage}</p>
-                <button
-                  className="text-sm mt-2 px-4 py-2 bg-muted rounded-md hover:bg-muted/80 transition-colors"
-                  onClick={() => fetchHistory(true)}
-                >
-                  Try Again
-                </button>
-              </div>
-            ) : historyArray.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground px-4">
-                <p className="text-base">No chat history found</p>
-                <p className="text-sm mt-1">Start a new conversation to get started</p>
-              </div>
+              <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              renderChats(historyArray)
+              <RefreshCw className="h-4 w-4" />
             )}
-          </SidebarMenu>
-        </SidebarGroupContent>
-      </SidebarGroup>
+          </SidebarMenuAction>
+        </div>
+      </div>
+
+      {/* Chat history list rendered directly */}
+      <SidebarMenu className="px-2 pb-20"> {/* Add padding here */}
+        {isLoadingHistory ? (
+          <div className="flex justify-center py-8">
+            <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+          </div>
+        ) : isEmpty ? (
+          <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground px-4">
+            <p className="text-base">No chat history found</p>
+            <p className="text-sm mt-1">Start a new conversation to get started</p>
+          </div>
+        ) : errorMessage ? (
+          <div className="flex flex-col items-center justify-center py-8 text-center text-destructive px-4">
+            <p className="text-base">{errorMessage}</p>
+            <button
+              className="text-sm mt-2 px-4 py-2 bg-muted rounded-md hover:bg-muted/80 transition-colors"
+              onClick={() => fetchHistory(true)}
+            >
+              Try Again
+            </button>
+          </div>
+        ) : historyArray.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground px-4">
+            <p className="text-base">No chat history found</p>
+            <p className="text-sm mt-1">Start a new conversation to get started</p>
+          </div>
+        ) : (
+          renderChats(historyArray)
+        )}
+      </SidebarMenu>
 
       {/* Delete confirmation dialog */}
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
@@ -588,7 +584,7 @@ const PureSidebarHistory = ({ user }: { user: User | undefined }) => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 };
 

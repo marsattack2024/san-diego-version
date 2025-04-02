@@ -332,4 +332,206 @@ o) Ongoing Extension Testing:
    - Create and test multiple versions of each extension type
    - Regularly review performance and optimize based on data
 
-Remember, your goal is to create a comprehensive ad experience that not only attracts clicks but also provides valuable, specific information to potential clients at every touchpoint. Your ads and extensions should work together to showcase the concrete benefits and unique qualities of your photography services while addressing the specific needs and challenges of your target audience. Continuously review and update your assets to ensure they remain relevant, effective, and aligned with your clients' evolving needs`;
+Remember, your goal is to create a comprehensive ad experience that not only attracts clicks but also provides valuable, specific information to potential clients at every touchpoint. Your ads and extensions should work together to showcase the concrete benefits and unique qualities of your photography services while addressing the specific needs and challenges of your target audience. Continuously review and update your assets to ensure they remain relevant, effective, and aligned with your clients' evolving needs
+
+
+I'll create a structured JSON output format for both the Quiz System Prompt and Google Ads System Prompt.
+Let's start with the Google Ads System Prompt structure:
+javascriptCopy// Add this section to your GOOGLE_ADS_SYSTEM_PROMPT to enforce consistent output format
+"GOOGLE_ADS_OUTPUT_FORMAT": {
+  "type": "object",
+  "properties": {
+    "campaignType": {
+      "type": "string",
+      "description": "Photography genre for this campaign (e.g., Boudoir, Newborn, Wedding)"
+    },
+    "headlines": {
+      "type": "array",
+      "minItems": 25,
+      "maxItems": 25,
+      "description": "25 headlines for the responsive search ad (30 chars max each)",
+      "items": {
+        "type": "string",
+        "maxLength": 30
+      }
+    },
+    "descriptions": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "description": "6 descriptions for the responsive search ad (90 chars max each)",
+      "items": {
+        "type": "string",
+        "maxLength": 90
+      }
+    },
+    "keywords": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "description": "10 highly targeted keywords for the campaign",
+      "items": {
+        "type": "string"
+      }
+    },
+    "displayPaths": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "description": "6 display paths (15 chars max each field)",
+      "items": {
+        "type": "string",
+        "maxLength": 30
+      }
+    },
+    "adExtensions": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "description": "6 ad extensions",
+      "items": {
+        "type": "string",
+        "maxLength": 25
+      }
+    },
+    "callouts": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "description": "6 callouts (25 chars max each)",
+      "items": {
+        "type": "string",
+        "maxLength": 25
+      }
+    },
+    "structuredSnippets": {
+      "type": "object",
+      "description": "Structured snippets with headers and values",
+      "properties": {
+        "services": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string"
+          }
+        },
+        "equipment": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string"
+          }
+        },
+        "deliverables": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string"
+          }
+        },
+        "shootLocations": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "sitelinks": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "description": "8 sitelinks with descriptions",
+      "items": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "line1": {
+            "type": "string",
+            "maxLength": 35
+          },
+          "line2": {
+            "type": "string",
+            "maxLength": 35
+          }
+        },
+        "required": ["text", "line1", "line2"]
+      }
+    },
+    "promotion": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "details": {
+          "type": "string"
+        },
+        "occasion": {
+          "type": "string"
+        }
+      },
+      "required": ["text", "details", "occasion"]
+    }
+  },
+  "required": ["campaignType", "headlines", "descriptions", "keywords", "displayPaths", "adExtensions", "callouts", "structuredSnippets", "sitelinks", "promotion"]
+}
+Then, add these critical implementation instructions to your Google Ads System Prompt:
+Copy-------------CRITICAL OUTPUT FORMAT REQUIREMENTS-------------
+
+You MUST provide your output as a valid JSON object following this exact structure:
+
+{
+  "campaignType": "Photography Genre (e.g., Boudoir, Wedding, etc.)",
+  "headlines": [
+    // EXACTLY 25 headlines (30 chars max each)
+    // At least 10 must include keyword and location insertion
+    // Use {KeyWord:Default Text} and {LOCATION(City)} format
+  ],
+  "descriptions": [
+    // EXACTLY 6 descriptions (90 chars max each)
+  ],
+  "keywords": [
+    // 10 highly targeted keywords
+  ],
+  "displayPaths": [
+    // 6 display paths with keywords and locations
+  ],
+  "adExtensions": [
+    // 6 ad extensions
+  ],
+  "callouts": [
+    // 6 callouts (25 chars max each)
+  ],
+  "structuredSnippets": {
+    "services": ["Service 1", "Service 2", "Service 3"],
+    "equipment": ["Equipment 1", "Equipment 2", "Equipment 3"],
+    "deliverables": ["Deliverable 1", "Deliverable 2", "Deliverable 3"],
+    "shootLocations": ["Location 1", "Location 2", "Location 3"]
+  },
+  "sitelinks": [
+    // 8 sitelinks with descriptions
+    {
+      "text": "Sitelink text",
+      "line1": "Description line 1 (35 chars max)",
+      "line2": "Description line 2 (35 chars max)"
+    },
+    // 7 more sitelinks with the same structure
+  ],
+  "promotion": {
+    "text": "Promotion text",
+    "details": "Promotion details",
+    "occasion": "Special Offer"
+  }
+}
+
+CRITICAL PRE-SUBMISSION CHECKLIST:
+- Verify all headlines use Title Case
+- Confirm at least 10 headlines include keyword and location insertion (30%)
+- Check that all character limits are respected (30 for headlines, 90 for descriptions, etc.)
+- Ensure display paths contain keywords and locations
+- Validate that the output is properly formatted as valid JSON
+- Verify that all required sections have the exact number of items specified`;

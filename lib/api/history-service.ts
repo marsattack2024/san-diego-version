@@ -59,6 +59,9 @@ let recentUnauthorizedRequests: number[] = [];
 const UNAUTHORIZED_THRESHOLD = 3; // Activate circuit breaker after 3 unauthorized responses in 5 seconds
 const UNAUTHORIZED_WINDOW = 5000; // 5 second window for tracking unauthorized responses
 
+// Cache keys and constants
+const HISTORY_CACHE_KEY = 'chat_history';
+
 /**
  * Calculate exponential backoff duration
  * @param failureCount Number of consecutive failures
@@ -182,45 +185,15 @@ try {
  */
 export const historyService = {
   /**
-   * Check if we're in an auth failure cooldown state
+   * Check if we're in an auth failure cooldown state - always returns false now
    * @returns Boolean indicating if we're in cooldown
    */
   isInAuthFailure(): boolean {
-    // TEMPORARY EMERGENCY FIX: Completely bypass circuit breaker in development
-    if (typeof process !== 'undefined' && process.env.NODE_ENV === 'development') {
-      // Log this at a very low frequency to avoid console spam
-      if (Math.random() < 0.001) {
-        console.debug(
-          '%c[HistoryService] Circuit breaker DISABLED in development mode',
-          'background: #4CAF50; color: white; padding: 2px 4px; border-radius: 2px; font-weight: bold;'
-        );
-      }
-      return false;
-    }
-
-    // CRITICAL FIX: Always check persistent storage next, as it is the source of truth
-    try {
-      const persistentState = !!clientCache.get(AUTH_FAILURE_KEY, Infinity, true);
-
-      // If memory state doesn't match storage, update memory
-      if (isInAuthFailureCooldown !== persistentState) {
-        isInAuthFailureCooldown = persistentState;
-
-        // Log mismatch detection at low frequency
-        if (Math.random() < 0.1) {
-          edgeLogger.debug(`Auth failure state updated from storage: ${persistentState}`, { category: 'auth' });
-        }
-      }
-
-      return persistentState;
-    } catch (e) {
-      // Default to memory state if storage access fails
-      return isInAuthFailureCooldown;
-    }
+    return false;
   },
 
   /**
-   * Get detailed information about the current auth failure state
+   * Get detailed information about the current auth failure state - now returns empty state
    */
   getAuthFailureInfo(): {
     isInCooldown: boolean;
@@ -229,27 +202,20 @@ export const historyService = {
     remainingTime: number;
     lastFailureTime: number;
   } {
-    const now = Date.now();
-    const lastFailureTime = clientCache.get(AUTH_FAILURE_LAST_TIME_KEY, Infinity, true) || 0;
-    const backoffDuration = clientCache.get(AUTH_BACKOFF_DURATION_KEY, Infinity, true) || MIN_AUTH_COOLDOWN;
-    const elapsedTime = now - lastFailureTime;
-    const remainingTime = Math.max(0, backoffDuration - elapsedTime);
-
     return {
-      isInCooldown: this.isInAuthFailure(),
-      failureCount: clientCache.get(AUTH_FAILURE_COUNT_KEY, Infinity, true) || 0,
-      backoffDuration,
-      remainingTime,
-      lastFailureTime
+      isInCooldown: false,
+      failureCount: 0,
+      backoffDuration: 0,
+      remainingTime: 0,
+      lastFailureTime: 0
     };
   },
 
   /**
-   * Reset the auth failure state and allow fetching again
+   * Reset the auth failure state - now a no-op function
    */
   resetAuthFailure(): void {
-    setAuthFailureState(false);
-    edgeLogger.debug('Auth failure state manually reset', { category: 'auth' });
+    // No-op function
   },
 
   /**
@@ -1063,53 +1029,11 @@ export const historyService = {
   },
 
   /**
-   * Invalidates all cached history data and resets failure states
-   * This is used when manually resetting authentication or for force refreshing
+   * Invalidate the history cache
    */
   invalidateCache(): void {
-    try {
-      // Clear the chat history from client cache
-      clientCache.remove('chat_history');
-
-      // Reset the auth failure state
-      setAuthFailureState(false);
-
-      // Clear all recent unauthorized requests
-      recentUnauthorizedRequests = [];
-
-      // Reset other tracking variables
-      authFailureCount = 0;
-      authBackoffDuration = MIN_AUTH_COOLDOWN;
-      isInAuthFailureCooldown = false;
-
-      // Clear localStorage keys related to auth failures
-      clientCache.remove(AUTH_FAILURE_KEY, true);
-      clientCache.remove(AUTH_FAILURE_COUNT_KEY, true);
-      clientCache.remove(AUTH_FAILURE_LAST_TIME_KEY, true);
-      clientCache.remove(AUTH_BACKOFF_DURATION_KEY, true);
-
-      // Also clear auth ready state to force recheck
-      clientCache.remove('auth_ready_state', true);
-      clientCache.remove('auth_ready_timestamp', true);
-
-      // Log complete reset
-      edgeLogger.info('History cache and auth failure state completely reset', {
-        category: LOG_CATEGORIES.SYSTEM,
-        operation: 'invalidate_cache',
-        cookieCheck: this.checkForAuthCookies() ? 'has_cookies' : 'no_cookies'
-      });
-
-      // Display a clear debug console message for developers
-      console.debug(
-        '%c[HistoryService] AUTH STATE RESET COMPLETELY',
-        'background: #4CAF50; color: white; padding: 2px 4px; border-radius: 2px; font-weight: bold;'
-      );
-    } catch (error) {
-      edgeLogger.error('Error invalidating history cache', {
-        category: LOG_CATEGORIES.SYSTEM,
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
+    clientCache.remove(HISTORY_CACHE_KEY);
+    edgeLogger.debug('History cache invalidated', { category: 'auth' });
   },
 
   /**

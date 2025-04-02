@@ -72,11 +72,6 @@ export default function RootLayout({
           <Toaster position="top-center" />
           <AuthProvider>
             <AuthHeadersSetup />
-            <div className="fixed top-2 right-2 z-50">
-              <a href="/emergency-reset" className="bg-destructive text-destructive-foreground px-2 py-1 rounded text-xs font-medium hover:bg-destructive/90">
-                Emergency Reset
-              </a>
-            </div>
             <DeepSearchTracker />
             {children}
           </AuthProvider>

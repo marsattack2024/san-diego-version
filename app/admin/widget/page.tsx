@@ -16,24 +16,26 @@ export default function AdminWidgetPage() {
   };
 
   return (
-    <div className="space-y-6 p-6 border rounded-md w-full max-w-full overflow-hidden">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Admin Widget Page</h1>
-        <p className="text-sm text-muted-foreground mt-2">
-          Configure and manage your chat widget
-        </p>
+    <>
+      <div className="space-y-6 p-6 border rounded-md w-full max-w-full overflow-hidden">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Admin Widget Page</h1>
+          <p className="text-sm text-muted-foreground mt-2">
+            Configure and manage your chat widget
+          </p>
+        </div>
+
+        <div>
+          <h2 className="text-xl font-semibold mb-4">Widget Configuration</h2>
+          <AdminWidgetConfigurator
+            config={config}
+            onConfigChange={handleConfigUpdate}
+          />
+        </div>
       </div>
 
-      <div>
-        <h2 className="text-xl font-semibold mb-4">Widget Configuration</h2>
-        <AdminWidgetConfigurator
-          config={config}
-          onConfigChange={handleConfigUpdate}
-        />
-      </div>
-
-      {/* The widget will appear at its natural position based on config */}
+      {/* The widget is now positioned outside the main container */}
       <ChatWidgetV2 config={config} />
-    </div>
+    </>
   );
 }
