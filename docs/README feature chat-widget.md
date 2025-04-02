@@ -67,6 +67,10 @@ The widget implements comprehensive error handling:
 The widget communicates with the `/api/widget-chat` endpoint, which:
 
 - Uses the same chat engine as the main application but with widget-specific configuration
+- Uses an enhanced request handling pattern for reliable processing:
+  - Route handler parses and validates the request body first
+  - Pre-parsed body is passed to the chat engine via options parameter
+  - Prevents "body already consumed" errors when validating in multiple places
 - Handles anonymous sessions without requiring authentication
 - Disables server-side message persistence
 - Returns standardized error responses in a format the widget can display
@@ -83,6 +87,27 @@ The widget is built with a modular architecture:
 - `chat-widget-v2.js`: Standalone script for embedding
 - `/api/widget-chat/route.ts`: API endpoint handling requests using the unified ChatEngine (with widget-specific config)
 - `/app/widget.js/route.ts`: Route handler serving the widget script
+
+## Advanced Implementation Notes
+
+The widget uses a separation of concerns pattern to ensure reliable request handling:
+
+1. **Route Handler Responsibility**:
+   - Parses and validates the raw request body
+   - Applies widget-specific schema validation
+   - Creates a properly configured chat engine instance
+
+2. **Chat Engine Responsibility**:
+   - Processes the pre-validated request body
+   - Handles streaming response generation
+   - Applies consistent error handling
+   - Manages content formatting and processing
+
+This pattern ensures that:
+- No request body streams are consumed multiple times
+- Validation can happen at the appropriate level
+- The main chat component remains unchanged
+- Widget-specific requirements don't affect the core engine
 
 ## Troubleshooting Common Issues
 

@@ -133,70 +133,98 @@ export class ChatEngineFacade {
 
     /**
      * Main method to handle incoming chat requests
+     * Enhanced to support both direct requests and pre-parsed payloads
+     * 
+     * @param req - The original request object
+     * @param options - Optional configuration for request handling
+     * @returns Response object with proper CORS headers if enabled
      */
-    public async handleRequest(req: Request): Promise<Response> {
+    public async handleRequest(
+        req: Request,
+        options?: {
+            /** Pre-parsed and validated request body */
+            parsedBody?: ChatRequestBody;
+            /** Additional context information for specialized handlers */
+            additionalContext?: Record<string, any>;
+        }
+    ): Promise<Response> {
         const operationId = `chat_${crypto.randomUUID().substring(0, 8)}`;
         const startTime = Date.now();
 
-        // Parse and validate the request body
+        // Parse and validate the request body (if not pre-parsed)
         let body: ChatRequestBody;
         let rawBodyForLogging: any;
-        try {
-            rawBodyForLogging = await req.json();
-            // Add detailed logging BEFORE parsing
-            edgeLogger.debug('Raw request body received', {
+
+        if (options?.parsedBody) {
+            // Use pre-parsed body from the route handler
+            body = options.parsedBody;
+
+            edgeLogger.debug('Using pre-validated request body from route handler', {
                 category: LOG_CATEGORIES.SYSTEM,
                 operation: this.config.operationName,
                 operationId,
-                body: JSON.stringify(rawBodyForLogging) // Stringify to log cleanly
+                bodySource: 'pre-parsed',
+                isWidgetRequest: options?.additionalContext?.isWidgetRequest || false
             });
-
-            const result = chatRequestSchema.safeParse(rawBodyForLogging);
-
-            if (!result.success) {
-                // Log parsing error details
-                edgeLogger.error('Zod schema validation failed', {
+        } else {
+            // Standard flow: parse body from request
+            try {
+                rawBodyForLogging = await req.json();
+                // Add detailed logging BEFORE parsing
+                edgeLogger.debug('Raw request body received', {
                     category: LOG_CATEGORIES.SYSTEM,
                     operation: this.config.operationName,
                     operationId,
-                    error: JSON.stringify(result.error.format()), // Stringify the Zod error object
+                    body: JSON.stringify(rawBodyForLogging) // Stringify to log cleanly
+                });
+
+                const result = chatRequestSchema.safeParse(rawBodyForLogging);
+
+                if (!result.success) {
+                    // Log parsing error details
+                    edgeLogger.error('Zod schema validation failed', {
+                        category: LOG_CATEGORIES.SYSTEM,
+                        operation: this.config.operationName,
+                        operationId,
+                        error: JSON.stringify(result.error.format()), // Stringify the Zod error object
+                        important: true
+                    });
+                    const errorResponse = new Response(
+                        JSON.stringify({
+                            error: 'Invalid request body',
+                            details: result.error.format()
+                        }),
+                        {
+                            status: 400,
+                            headers: { 'Content-Type': 'application/json' }
+                        }
+                    );
+                    return handleCors(errorResponse, req, !!this.config.corsEnabled);
+                }
+
+                body = result.data;
+                // Add detailed logging AFTER parsing
+                edgeLogger.debug('Parsed request body (Zod)', {
+                    category: LOG_CATEGORIES.SYSTEM,
+                    operation: this.config.operationName,
+                    operationId,
+                    parsedBody: JSON.stringify(body) // Log the successfully parsed body
+                });
+            } catch (error) {
+                edgeLogger.error('Failed to parse JSON body', {
+                    category: LOG_CATEGORIES.SYSTEM,
+                    operation: this.config.operationName,
+                    operationId,
+                    error: error instanceof Error ? error.message : String(error),
+                    rawBodyAttempted: JSON.stringify(rawBodyForLogging), // Log what we tried to parse
                     important: true
                 });
                 const errorResponse = new Response(
-                    JSON.stringify({
-                        error: 'Invalid request body',
-                        details: result.error.format()
-                    }),
-                    {
-                        status: 400,
-                        headers: { 'Content-Type': 'application/json' }
-                    }
+                    JSON.stringify({ error: 'Invalid JSON body' }),
+                    { status: 400, headers: { 'Content-Type': 'application/json' } }
                 );
                 return handleCors(errorResponse, req, !!this.config.corsEnabled);
             }
-
-            body = result.data;
-            // Add detailed logging AFTER parsing
-            edgeLogger.debug('Parsed request body (Zod)', {
-                category: LOG_CATEGORIES.SYSTEM,
-                operation: this.config.operationName,
-                operationId,
-                parsedBody: JSON.stringify(body) // Log the successfully parsed body
-            });
-        } catch (error) {
-            edgeLogger.error('Failed to parse JSON body', {
-                category: LOG_CATEGORIES.SYSTEM,
-                operation: this.config.operationName,
-                operationId,
-                error: error instanceof Error ? error.message : String(error),
-                rawBodyAttempted: JSON.stringify(rawBodyForLogging), // Log what we tried to parse
-                important: true
-            });
-            const errorResponse = new Response(
-                JSON.stringify({ error: 'Invalid JSON body' }),
-                { status: 400, headers: { 'Content-Type': 'application/json' } }
-            );
-            return handleCors(errorResponse, req, !!this.config.corsEnabled);
         }
 
         // Extract key parameters

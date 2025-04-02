@@ -71,7 +71,7 @@ export async function POST(req: Request): Promise<Response> {
   const operationId = `widget_${Math.random().toString(36).substring(2, 8)}`;
 
   try {
-    // Clone the request for potential debugging
+    // Clone the request for potential debugging and for passing to the engine
     const reqClone = req.clone();
 
     // Log all headers in development for debugging
@@ -90,7 +90,7 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     // Parse and validate the request body
-    let body;
+    let body: any;
     try {
       body = await req.json();
 
@@ -121,6 +121,9 @@ export async function POST(req: Request): Promise<Response> {
           true
         );
       }
+
+      // Update body with validated data
+      body = result.data;
     } catch (parseError) {
       edgeLogger.error('Widget chat: Failed to parse request body', {
         category: LOG_CATEGORIES.SYSTEM,
@@ -157,8 +160,14 @@ export async function POST(req: Request): Promise<Response> {
       }
     });
 
-    // Let the engine handle the request
-    const response = await engine.handleRequest(req);
+    // Pass the cloned request with pre-parsed body to the engine
+    const response = await engine.handleRequest(reqClone, {
+      parsedBody: body,
+      additionalContext: {
+        isWidgetRequest: true,
+        operationId
+      }
+    });
 
     edgeLogger.debug('Widget chat: Response sent', {
       category: LOG_CATEGORIES.SYSTEM,
@@ -168,8 +177,7 @@ export async function POST(req: Request): Promise<Response> {
       status: response.status
     });
 
-    // Note: We don't need to add CORS headers here since the engine's handleRequest
-    // already applies CORS via handleCors when corsEnabled is true in the config
+    // The engine's handleRequest already applies CORS via handleCors when corsEnabled is true
     return response;
   } catch (error) {
     edgeLogger.error('Unhandled error in widget chat route', {
