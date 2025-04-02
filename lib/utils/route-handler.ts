@@ -5,7 +5,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { ApiResponse, RouteParams } from '../types/route-handlers';
+import { ApiResponse, RouteParams, RouteContext } from '../types/route-handlers';
 import { edgeLogger } from '../logger/edge-logger';
 
 /**
@@ -87,17 +87,17 @@ export function notFoundError(message = "Not found"): Response {
 
 /**
  * Route handler wrapper with standardized error handling
+ * Compatible with Next.js 15 route handlers
  * 
  * @param handler The route handler function
  * @returns A wrapped handler with error handling
  */
 export function withErrorHandling<T extends Record<string, string> = Record<string, never>>(
-    handler: (request: Request, params?: RouteParams<T>) => Promise<Response>
+    handler: (request: Request, context?: RouteContext<T>) => Promise<Response>
 ) {
-    return async (request: Request, params?: RouteParams<T>): Promise<Response> => {
+    return async (request: Request, context?: RouteContext<T>): Promise<Response> => {
         try {
-            // Pass params as an empty object if not provided (for routes without URL params)
-            return await handler(request, params || {} as RouteParams<T>);
+            return await handler(request, context);
         } catch (error) {
             return errorResponse(
                 "An unexpected error occurred",
@@ -117,17 +117,17 @@ export const createRouteTemplate = `
 import { NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { successResponse, errorResponse, withErrorHandling } from '@/lib/utils/route-handler';
-import type { IdParam } from '@/lib/types/route-handlers';
+import type { RouteContext } from '@/lib/types/route-handlers';
 
 export const runtime = 'edge';
 
 export const GET = withErrorHandling(async (
   request: Request,
-  { params }: IdParam
+  context: RouteContext<{ id: string }>
 ): Promise<Response> => {
   try {
     // Extract path params by awaiting the Promise
-    const { id } = await params;
+    const { id } = await context.params;
     
     // Logic goes here...
     

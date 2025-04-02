@@ -3,6 +3,7 @@ import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { z } from 'zod';
 import { successResponse, errorResponse, unauthorizedError, validationError, withErrorHandling } from '@/lib/utils/route-handler';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
+import type { RouteContext } from '@/lib/types/route-handlers';
 
 // Declare edge runtime
 export const runtime = 'edge';
@@ -18,7 +19,8 @@ const sessionSchema = z.object({
  * POST handler to create a new chat session
  */
 export const POST = withErrorHandling(async (
-    request: Request
+    request: Request,
+    context?: RouteContext<Record<string, never>>
 ): Promise<Response> => {
     const operationId = `create_session_${Math.random().toString(36).substring(2, 10)}`;
 
@@ -131,7 +133,8 @@ export const POST = withErrorHandling(async (
  * GET handler to retrieve all sessions for the authenticated user
  */
 export const GET = withErrorHandling(async (
-    request: Request
+    request: Request,
+    context?: RouteContext<Record<string, never>>
 ): Promise<Response> => {
     const operationId = `get_sessions_${Math.random().toString(36).substring(2, 10)}`;
 

@@ -1,9 +1,8 @@
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { successResponse, errorResponse, unauthorizedError, withErrorHandling } from '@/lib/utils/route-handler';
+import { successResponse, errorResponse, unauthorizedError, validationError, withErrorHandling } from '@/lib/utils/route-handler';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { generateAndSaveChatTitle } from '@/lib/chat/title-service';
-import { NextResponse } from 'next/server';
 
 export const runtime = 'edge';
 
@@ -23,17 +22,11 @@ export const POST = withErrorHandling(async (request: Request): Promise<Response
 
         // Input validation
         if (!sessionId) {
-            return NextResponse.json({
-                success: false,
-                error: 'Session ID is required'
-            }, { status: 400 });
+            return validationError('Session ID is required');
         }
 
         if (!content || typeof content !== 'string' || content.trim().length === 0) {
-            return NextResponse.json({
-                success: false,
-                error: 'Valid content is required for title generation'
-            }, { status: 400 });
+            return validationError('Valid content is required for title generation');
         }
 
         // Get Supabase client
@@ -65,10 +58,7 @@ export const POST = withErrorHandling(async (request: Request): Promise<Response
                     sessionId,
                     providedUserId
                 });
-                return NextResponse.json({
-                    success: false,
-                    error: 'Unauthorized and could not find session'
-                }, { status: 401 });
+                return unauthorizedError('Unauthorized and could not find session');
             }
         }
 
@@ -79,10 +69,7 @@ export const POST = withErrorHandling(async (request: Request): Promise<Response
                 requestHasUserId: !!providedUserId
             });
 
-            return NextResponse.json({
-                success: false,
-                error: 'Authentication required'
-            }, { status: 401 });
+            return unauthorizedError('Authentication required');
         }
 
         edgeLogger.info('Generating title for chat', {
@@ -110,17 +97,13 @@ export const POST = withErrorHandling(async (request: Request): Promise<Response
                     error: fetchError?.message || 'No session data returned'
                 });
 
-                return NextResponse.json({
-                    success: false,
-                    error: 'Failed to generate title'
-                }, { status: 500 });
+                return errorResponse('Failed to generate title', fetchError);
             }
 
-            return NextResponse.json({
-                success: true,
+            return successResponse({
                 chatId: sessionId,
                 title: sessionData.title
-            }, { status: 200 });
+            });
         } catch (error) {
             edgeLogger.error('Error generating title', {
                 category: LOG_CATEGORIES.CHAT,
@@ -129,10 +112,7 @@ export const POST = withErrorHandling(async (request: Request): Promise<Response
                 userId
             });
 
-            return NextResponse.json({
-                success: false,
-                error: 'Failed to generate title'
-            }, { status: 500 });
+            return errorResponse('Failed to generate title', error);
         }
     } catch (error) {
         edgeLogger.error('Failed to parse request body', {
@@ -140,9 +120,6 @@ export const POST = withErrorHandling(async (request: Request): Promise<Response
             error: error instanceof Error ? error.message : String(error)
         });
 
-        return NextResponse.json({
-            success: false,
-            error: 'Invalid request body'
-        }, { status: 400 });
+        return validationError('Invalid request body', error);
     }
 }); 
