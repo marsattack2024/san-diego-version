@@ -140,25 +140,55 @@ export async function GET(request: Request): Promise<Response> {
     try {
         // Get Supabase client with the standardized utility
         const supabase = await createRouteHandlerClient();
+        edgeLogger.debug('Created Supabase client for session fetch', {
+            category: LOG_CATEGORIES.CHAT,
+            operation: 'sessions_get',
+            operationId
+        });
 
         // Verify the user is authenticated
-        const { data: { user } } = await supabase.auth.getUser();
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+        edgeLogger.debug('Auth check for sessions', {
+            category: LOG_CATEGORIES.CHAT,
+            operation: 'sessions_get',
+            operationId,
+            hasUser: !!user,
+            hasError: !!authError,
+            errorMessage: authError?.message
+        });
+
         if (!user) {
+            edgeLogger.warn('User not authenticated for sessions', {
+                category: LOG_CATEGORIES.CHAT,
+                operation: 'sessions_get',
+                operationId
+            });
             return unauthorizedError('Authentication required');
         }
 
         // Get the user's chat sessions
+        edgeLogger.debug('Fetching sessions from database', {
+            category: LOG_CATEGORIES.CHAT,
+            operation: 'sessions_get',
+            operationId,
+            userId: user.id
+        });
+
         const { data: sessions, error } = await supabase
             .from('sd_chat_sessions')
-            .select('id, title, created_at, updated_at')
+            .select('id, title, created_at, updated_at, agent_id, user_id, deep_search_enabled')
             .eq('user_id', user.id)
             .order('updated_at', { ascending: false });
 
         if (error) {
             edgeLogger.error('Error fetching chat sessions', {
                 category: LOG_CATEGORIES.CHAT,
+                operation: 'sessions_get',
+                operationId,
                 userId: user.id,
-                error: error.message
+                error: error.message,
+                important: true
             });
 
             return errorResponse('Failed to fetch chat sessions', error.message, 500);
@@ -166,15 +196,30 @@ export async function GET(request: Request): Promise<Response> {
 
         edgeLogger.info('Chat sessions retrieved successfully', {
             category: LOG_CATEGORIES.CHAT,
+            operation: 'sessions_get',
+            operationId,
             userId: user.id,
-            count: sessions?.length || 0
+            count: sessions?.length || 0,
+            sessionIds: sessions?.slice(0, 3).map(s => s.id.substring(0, 8)) || []
         });
 
-        return successResponse({ sessions: sessions || [] });
+        // Return sessions with proper metadata
+        return successResponse({
+            sessions: sessions || [],
+            meta: {
+                count: sessions?.length || 0,
+                userId: user.id.substring(0, 8), // Only return partial ID for privacy
+                timestamp: new Date().toISOString()
+            }
+        });
     } catch (error) {
         edgeLogger.error('Exception in chat sessions API', {
             category: LOG_CATEGORIES.CHAT,
-            error: error instanceof Error ? error.message : String(error)
+            operation: 'sessions_get',
+            operationId,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+            important: true
         });
 
         return errorResponse(

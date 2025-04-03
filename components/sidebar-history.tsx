@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import Link from 'next/link';
 import { useParams, usePathname, useRouter } from 'next/navigation';
 import { Chat } from '@/lib/db/schema';
@@ -114,6 +114,19 @@ const PureChatItem = ({
   setOpenMobile: (open: boolean) => void;
   isDeleting?: boolean;
 }) => {
+  // Add debug logging when clicked
+  const handleClick = () => {
+    edgeLogger.debug('[SidebarHistory] Chat item clicked', {
+      id: chat.id,
+      title: chat.title
+    });
+
+    // Force the router.push to use a hard navigation with replace
+    const href = `/chat/${chat.id}`;
+    edgeLogger.debug('[SidebarHistory] Navigating to', { href });
+    window.location.href = href;
+  };
+
   return (
     <SidebarMenuItem className="px-1 py-0.5">
       <Link href={`/chat/${chat.id}`}>
@@ -124,7 +137,7 @@ const PureChatItem = ({
             "flex items-center group rounded-md px-3 py-2 hover:bg-sidebar-item-hover transition-colors w-full",
             isActive && "bg-gray-300 dark:bg-gray-700 text-gray-900 dark:text-white font-medium"
           )}
-          onClick={() => setOpenMobile(false)}
+          onClick={handleClick}
         >
           <div className="flex items-center gap-2 flex-1 min-w-0">
             <span className="truncate text-base">{chat.title || "New Chat"}</span>
@@ -213,6 +226,9 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
   const [renameId, setRenameId] = useState<string | null>(null);
   const [renameTitle, setRenameTitle] = useState('');
 
+  // Add component mounted ref
+  const isComponentMounted = useRef(true);
+
   // Helper functions
   const detectMobile = useCallback(() => {
     return typeof window !== 'undefined' && window.innerWidth < 768;
@@ -243,33 +259,33 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
     }
   }, [detectMobile]);
 
-  // ** Revised Initial Fetch Logic - Triggering on isAuthenticated **
+  // Manual refresh handler
+  const refreshHistory = useCallback(() => {
+    console.debug('[SidebarHistory] Manual refresh requested');
+    return fetchHistory(true).catch(error => {
+      console.error('[SidebarHistory] Error during manual refresh:', error);
+      setErrorMessage('Failed to refresh history');
+    });
+  }, [fetchHistory]);
+
+  // Fix the initial fetch effect
   useEffect(() => {
-    // Fetch only when authenticated AND not already loading history
-    if (auth.isAuthenticated && !isLoadingHistory) {
-      console.debug('[SidebarHistory] Authenticated and not loading, triggering initial fetch', {
+    // Only attempt to fetch history if we're authenticated and not already loading
+    if (auth.isAuthenticated && !isLoadingHistory && Object.keys(conversations).length === 0) {
+      console.debug('[SidebarHistory] Attempting initial history fetch', {
         userId: auth.user?.id,
         isAuthenticated: auth.isAuthenticated,
         currentHistoryCount: Object.keys(conversations).length
       });
-
-      // Schedule the fetch after a short delay to ensure auth is complete
-      const timeoutId = setTimeout(() => {
-        fetchHistory().catch(error => {
-          console.error('[SidebarHistory] Error during initial history fetch:', error);
-          setErrorMessage('Failed to load history');
-        });
-      }, 100); // Short delay to ensure auth state is stable
-
-      return () => clearTimeout(timeoutId);
-    } else {
-      console.debug('[SidebarHistory] Not ready for initial fetch', {
+      fetchHistory(false);
+    } else if (isLoadingHistory) {
+      console.debug('[SidebarHistory] Already loading history', {
         isAuthenticated: auth.isAuthenticated,
         isLoadingHistory,
         userId: auth.user?.id
       });
     }
-  }, [auth.isAuthenticated, auth.user?.id, fetchHistory, isLoadingHistory]);
+  }, [auth.isAuthenticated, auth.user?.id, conversations, isLoadingHistory, fetchHistory]);
 
   // Add explicit auth state change monitoring
   useEffect(() => {
@@ -280,29 +296,64 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
       conversationCount: Object.keys(conversations).length,
       pathname
     });
+
+    // Check if we have conversations but they're not being displayed
+    if (!auth.isAuthenticated && Object.keys(conversations).length > 0) {
+      console.debug('[SidebarHistory] We have conversations but auth is not ready yet');
+    }
   }, [auth.isAuthenticated, auth.user?.id, isLoadingHistory, conversations, pathname]);
 
-  // ** Polling Logic - ensure it also uses the correct auth check **
+  // Add a new effect to actually render conversations when either auth is ready OR we have conversations
   useEffect(() => {
-    // Wait for authentication before starting polling
-    if (!auth.isAuthenticated || isLoadingHistory) return;
+    // If we have conversations in the store, render them regardless of auth state
+    const hasConversations = Object.keys(conversations).length > 0;
 
-    const pollingInterval = isMobile ? 15 * 60 * 1000 : 8 * 60 * 1000;
-    const jitter = Math.floor(Math.random() * 45000);
-    const effectiveInterval = pollingInterval + jitter;
+    if (hasConversations || auth.isAuthenticated) {
+      console.debug('[SidebarHistory] Showing conversations:', {
+        count: Object.keys(conversations).length,
+        isAuthenticated: auth.isAuthenticated,
+        authDriven: !hasConversations && auth.isAuthenticated,
+        dataDriven: hasConversations
+      });
+    }
+  }, [conversations, auth.isAuthenticated]);
 
-    console.debug(`[SidebarHistory] Setting up history polling every ${Math.round(effectiveInterval / 1000)}s (Authenticated)`);
-    const intervalId = setInterval(() => {
-      // Check visibility and authentication again inside interval
-      if (isPageVisible() && auth.isAuthenticated) {
-        console.debug('[SidebarHistory] Polling: fetching history (Authenticated)');
-        fetchHistory(false);
+  // ** Polling Logic - ensure it also uses the correct auth check **
+  const setupHistoryPolling = useCallback(() => {
+    if (!auth.isAuthenticated) {
+      return;
+    }
+
+    // Use a much longer interval (5 minutes instead of ~500s) to reduce load
+    const baseInterval = 5 * 60 * 1000; // 5 minutes in milliseconds
+    const jitter = Math.floor(Math.random() * 30 * 1000); // Random jitter up to 30 seconds
+    const interval = baseInterval + jitter;
+
+    console.debug(`[SidebarHistory] Setting up history polling every ${Math.floor(interval / 1000)}s (Authenticated)`);
+
+    const timeoutId = setTimeout(() => {
+      if (!isComponentMounted.current) return;
+
+      // Only fetch if not already loading
+      if (!useChatStore.getState().isLoadingHistory) {
+        console.debug('[SidebarHistory] Polling: fetching history');
+        fetchHistory(false).catch(error => {
+          console.error('[SidebarHistory] Error during polling history fetch:', error);
+        });
+      } else {
+        console.debug('[SidebarHistory] Polling: skipping because already loading');
       }
-    }, effectiveInterval);
 
-    return () => clearInterval(intervalId);
-    // Dependency array: Re-run polling setup if isAuthenticated or visibility function changes
-  }, [fetchHistory, isMobile, isPageVisible, auth.isAuthenticated, isLoadingHistory]);
+      // Setup the next poll
+      if (isComponentMounted.current) {
+        setupHistoryPolling();
+      }
+    }, interval);
+
+    return () => {
+      clearTimeout(timeoutId);
+    };
+  }, [auth.isAuthenticated, fetchHistory]);
 
   // Set error message when store has errors
   useEffect(() => {
@@ -312,12 +363,6 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
       setErrorMessage(null);
     }
   }, [historyError]);
-
-  // Manual refresh function
-  const refreshHistory = useCallback(() => {
-    console.debug('[SidebarHistory] Manual refresh requested');
-    fetchHistory(true); // Force refresh
-  }, [fetchHistory]);
 
   // Handle delete button click
   const handleDeleteClick = useCallback((chatId: string) => {
@@ -386,243 +431,250 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
 
   // Group chats by date
   const groupedChats = useMemo(() => {
+    const hasChats = historyArray.length > 0;
+    console.debug('[SidebarHistory] Grouping chats:', {
+      count: historyArray.length,
+      isAuthenticated: auth.isAuthenticated,
+      hasChats
+    });
+
+    // Return grouped chats if we have them, regardless of auth state
     return groupChatsByDate(historyArray);
-  }, [historyArray]);
+  }, [historyArray, auth.isAuthenticated]);
 
   // Render chat sections - simple divs, no overflow control here
-  const renderChats = useCallback((chats: Array<Chat>) => {
-    if (chats.length === 0) {
-      return null;
+  const renderChatSection = useCallback(
+    (title: string, chats: Chat[], showAll = true) => {
+      // Don't render empty sections
+      if (!chats || chats.length === 0) return null;
+
+      // Get the first five chats for preview
+      const visibleChats = showAll ? chats : chats.slice(0, 5);
+      const hasMore = !showAll && chats.length > 5;
+
+      return (
+        <div className="mb-6 last:mb-0" key={title}>
+          <h2 className="mb-2 uppercase text-sm font-medium text-sidebar-foreground/50 pl-3">
+            {title}
+          </h2>
+          <div className="space-y-0.5">
+            {visibleChats?.map((chat) => (
+              <PureChatItem
+                key={chat.id}
+                chat={chat}
+                isActive={chat.id === id}
+                onDelete={(chatId) => handleDeleteClick(chatId)}
+                onRename={(chatId, title) => handleRenameClick(chatId, title)}
+                setOpenMobile={setOpenMobile}
+                isDeleting={isDeleting[chat.id] || false}
+              />
+            ))}
+            {hasMore && (
+              <div className="px-3 py-2 text-sm text-muted-foreground/70 hover:text-muted-foreground cursor-pointer" onClick={() => setShowAllOlder(true)}>
+                Show {chats.length - 5} more...
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    },
+    [id, isDeleting, setOpenMobile, handleDeleteClick, handleRenameClick]
+  );
+
+  // Check if we have content to display
+  const hasHistory =
+    groupedChats.today.length > 0 ||
+    groupedChats.yesterday.length > 0 ||
+    groupedChats.pastWeek.length > 0 ||
+    groupedChats.older.length > 0;
+
+  console.debug('[SidebarHistory] History availability check:', {
+    hasHistory,
+    todayCount: groupedChats.today.length,
+    yesterdayCount: groupedChats.yesterday.length,
+    pastWeekCount: groupedChats.pastWeek.length,
+    olderCount: groupedChats.older.length,
+    totalCount: Object.keys(conversations).length
+  });
+
+  // Show placeholder if no history
+  const renderHistoryContent = () => {
+    if (isLoadingHistory) {
+      return (
+        <div className="h-28 flex items-center justify-center">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        </div>
+      );
     }
 
-    const groupedChats = groupChatsByDate(chats);
+    if (historyError) {
+      return (
+        <div className="p-4 text-center">
+          <div className="flex justify-center mb-2">
+            <AlertCircle className="h-5 w-5 text-red-500" />
+          </div>
+          <p className="text-sm text-muted-foreground mb-2">{historyError}</p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => fetchHistory(true)}
+            className="flex items-center gap-1"
+          >
+            <RefreshCw className="h-3 w-3" /> Retry
+          </Button>
+        </div>
+      );
+    }
+
+    // Skip the auth check here - render if we have data, regardless of auth state
+    if (!hasHistory) {
+      return (
+        <div className="p-4 text-center">
+          <p className="text-sm text-muted-foreground">No chat history found.</p>
+          <p className="text-xs text-muted-foreground mt-1">Start a new chat to begin.</p>
+        </div>
+      );
+    }
 
     return (
       <>
-        {/* Today's chats */}
-        {groupedChats.today.length > 0 && (
-          <div className="mb-4">
-            <h3 className="font-semibold mb-1 text-xs text-sidebar-foreground/60 px-4">Today</h3>
-            <div className="flex flex-col gap-1">
-              {groupedChats.today.map((chat) => (
-                <PureChatItem
-                  key={chat.id}
-                  chat={chat}
-                  isActive={chat.id === id}
-                  onDelete={handleDeleteClick}
-                  onRename={handleRenameClick}
-                  setOpenMobile={setOpenMobile}
-                  isDeleting={isDeleting[chat.id] || false}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Yesterday's chats */}
-        {groupedChats.yesterday.length > 0 && (
-          <div className="mb-4">
-            <h3 className="font-semibold mb-1 text-xs text-sidebar-foreground/60 px-4">Yesterday</h3>
-            <div className="flex flex-col gap-1">
-              {groupedChats.yesterday.map((chat) => (
-                <PureChatItem
-                  key={chat.id}
-                  chat={chat}
-                  isActive={chat.id === id}
-                  onDelete={handleDeleteClick}
-                  onRename={handleRenameClick}
-                  setOpenMobile={setOpenMobile}
-                  isDeleting={isDeleting[chat.id] || false}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Past week's chats */}
-        {groupedChats.pastWeek.length > 0 && (
-          <div className="mb-4">
-            <h3 className="font-semibold mb-1 text-xs text-sidebar-foreground/60 px-4">Past Week</h3>
-            <div className="flex flex-col gap-1">
-              {groupedChats.pastWeek.map((chat) => (
-                <PureChatItem
-                  key={chat.id}
-                  chat={chat}
-                  isActive={chat.id === id}
-                  onDelete={handleDeleteClick}
-                  onRename={handleRenameClick}
-                  setOpenMobile={setOpenMobile}
-                  isDeleting={isDeleting[chat.id] || false}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Older chats (with toggle) */}
-        {groupedChats.older.length > 0 && (
-          <div className="mb-4">
-            <h3 className="font-semibold mb-1 text-xs text-sidebar-foreground/60 px-4 flex justify-between items-center">
-              <span>Older</span>
-              {groupedChats.older.length > 5 && (
-                <button
-                  onClick={() => setShowAllOlder(!showAllOlder)}
-                  className="text-xs font-medium text-blue-500 hover:text-blue-700 dark:hover:text-blue-300"
-                >
-                  {showAllOlder ? "Show Less" : `Show All (${groupedChats.older.length})`}
-                </button>
-              )}
-            </h3>
-            <div className="flex flex-col gap-1">
-              {(showAllOlder ? groupedChats.older : groupedChats.older.slice(0, 5)).map((chat) => (
-                <PureChatItem
-                  key={chat.id}
-                  chat={chat}
-                  isActive={chat.id === id}
-                  onDelete={handleDeleteClick}
-                  onRename={handleRenameClick}
-                  setOpenMobile={setOpenMobile}
-                  isDeleting={isDeleting[chat.id] || false}
-                />
-              ))}
-            </div>
-          </div>
-        )}
+        {renderChatSection('Today', groupedChats.today)}
+        {renderChatSection('Yesterday', groupedChats.yesterday)}
+        {renderChatSection('Past Week', groupedChats.pastWeek)}
+        {renderChatSection('Older', groupedChats.older, showAllOlder)}
       </>
     );
-    // Restore original dependencies
-  }, [groupChatsByDate, handleDeleteClick, handleRenameClick, id, isDeleting, setOpenMobile, showAllOlder]);
+  };
 
-  // Compute empty state
-  const isEmpty = useMemo(() => {
-    return historyArray.length === 0 && !isLoadingHistory;
-  }, [historyArray.length, isLoadingHistory]);
+  // Show update dialog
+  const renderRenameDialog = () => {
+    return (
+      <Dialog open={showRenameDialog} onOpenChange={(open) => {
+        if (!open) {
+          setShowRenameDialog(false);
+          setRenameId(null);
+          setRenameTitle('');
+        }
+      }}>
+        <DialogContent className="sm:max-w-md" onEscapeKeyDown={() => setShowRenameDialog(false)}>
+          <DialogHeader>
+            <DialogTitle>Rename Conversation</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <Input
+              type="text"
+              placeholder="Enter a new title"
+              value={renameTitle}
+              onChange={(e) => setRenameTitle(e.target.value)}
+              className="w-full"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && renameId) {
+                  handleRenameConfirm();
+                }
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setShowRenameDialog(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleRenameConfirm}
+              disabled={!renameTitle.trim() || isRenaming[renameId || ''] || false}
+            >
+              {isRenaming[renameId || ''] ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                'Save'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  };
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      isComponentMounted.current = false;
+    };
+  }, []);
+
+  // Add useEffect to start the polling
+  useEffect(() => {
+    if (auth.isAuthenticated) {
+      console.debug('[SidebarHistory] Starting history polling');
+      const cleanup = setupHistoryPolling();
+      return () => {
+        if (cleanup) cleanup();
+      };
+    }
+  }, [auth.isAuthenticated, setupHistoryPolling]);
 
   // Simplified render - return a Fragment containing the header and the menu
   return (
     <>
-      {/* Header section with refresh button */}
-      <div className="flex items-center justify-end h-8 px-2 pt-2">
-        <div className="flex items-center gap-1">
-          {historyError ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div className="p-1">
-                  <AlertCircle className="h-4 w-4 text-amber-500" />
-                </div>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p className="max-w-60 text-sm">
-                  {historyError}
-                </p>
-              </TooltipContent>
-            </Tooltip>
-          ) : null}
-          <SidebarMenuAction
-            onClick={refreshHistory}
-            className="ml-auto" // Position to the right
-            disabled={isLoadingHistory}
-            title="Refresh chat history"
-          >
-            {isLoadingHistory ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <RefreshCw className="h-4 w-4" />
-            )}
-          </SidebarMenuAction>
-        </div>
+      <div className="flex justify-between items-center mb-4 px-2">
+        <SidebarMenuButton
+          onClick={refreshHistory}
+          className="flex items-center gap-2 rounded-md px-3 py-2 hover:bg-sidebar-item-hover transition-colors w-full text-sidebar-foreground"
+        >
+          <RefreshCw className="h-5 w-5" />
+          <span className="font-medium">Refresh History</span>
+        </SidebarMenuButton>
       </div>
 
-      {/* Chat history list rendered directly */}
+      {/* Debug indicator for circuit breaker */}
+      {historyError && historyError.includes('circuit') && (
+        <div className="p-2 mb-4 rounded bg-yellow-100 dark:bg-yellow-900 text-xs">
+          <p>History API circuit open. Wait or reset.</p>
+        </div>
+      )}
+
+      {/* Chat history list */}
       <SidebarMenu className="px-2 pb-20"> {/* Add padding here */}
-        {isLoadingHistory ? (
-          <div className="flex justify-center py-8">
-            <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-          </div>
-        ) : isEmpty ? (
-          <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground px-4">
-            <p className="text-base">No chat history found</p>
-            <p className="text-sm mt-1">Start a new conversation to get started</p>
-          </div>
-        ) : errorMessage ? (
-          <div className="flex flex-col items-center justify-center py-8 text-center text-destructive px-4">
-            <p className="text-base">{errorMessage}</p>
-            <button
-              className="text-sm mt-2 px-4 py-2 bg-muted rounded-md hover:bg-muted/80 transition-colors"
-              onClick={() => fetchHistory(true)}
-            >
-              Try Again
-            </button>
-          </div>
-        ) : historyArray.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-8 text-center text-muted-foreground px-4">
-            <p className="text-base">No chat history found</p>
-            <p className="text-sm mt-1">Start a new conversation to get started</p>
-          </div>
-        ) : (
-          renderChats(historyArray)
-        )}
+        {renderHistoryContent()}
       </SidebarMenu>
 
       {/* Delete confirmation dialog */}
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Chat</AlertDialogTitle>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete this chat? This action cannot be undone.
+              This will permanently delete this chat and all its messages.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleDeleteConfirm}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            <AlertDialogCancel
+              onClick={() => {
+                setShowDeleteDialog(false);
+                setDeleteId(null);
+              }}
             >
-              Delete
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteConfirm}>
+              {isDeleting[deleteId || ''] ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                'Delete'
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
 
       {/* Rename dialog */}
-      <Dialog open={showRenameDialog} onOpenChange={setShowRenameDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Rename Chat</DialogTitle>
-          </DialogHeader>
-          <div className="py-4">
-            <Input
-              value={renameTitle}
-              onChange={(e) => setRenameTitle(e.target.value)}
-              placeholder="Enter a new title"
-              className="w-full"
-              autoFocus
-            />
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setShowRenameDialog(false);
-                setRenameTitle('');
-              }}
-            >
-              Cancel
-            </Button>
-            <Button onClick={handleRenameConfirm} disabled={!renameTitle.trim()}>
-              {isRenaming[renameId ?? ''] ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Renaming...
-                </>
-              ) : (
-                'Rename'
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {renderRenameDialog()}
     </>
   );
 };

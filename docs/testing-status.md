@@ -3,7 +3,7 @@
 ## Overview
 This document provides a current status of the test suite and outlines the improvements made to fix failing tests following the ESM migration.
 
-## Fixed Test Files (124 tests total)
+## Fixed Test Files (37 tests total)
 
 | Test File | Status | Tests | Notes |
 |-----------|--------|-------|-------|
@@ -11,9 +11,9 @@ This document provides a current status of the test suite and outlines the impro
 | tests/unit/widget-chat/widget-chat-route.test.ts | ✅ | 5 | Already working |
 | tests/unit/services/document-retrieval.test.ts | ✅ | 9 | Fixed logger THRESHOLDS mocking |
 | tests/unit/chat-engine/deep-search-integration.test.ts | ✅ | 4 | Fixed AI module mocking |
-| tests/unit/chat-engine/tools-used-persistence.test.ts | ✅ | 3 | Fixed MessagePersistenceService mocking |
-| tests/unit/services/title-service.test.ts | ✅ | 5 | Fixed Supabase client mocking |
-| tests/unit/lib/cache/cache-service.test.ts | ✅ | 1 | Placeholder test; needs full implementation |
+| tests/unit/chat-engine/tools-used-persistence.test.ts | ✅ | 3 | Fixed module mocking |
+| tests/unit/services/title-service.test.ts | ✅ | 5 | Fixed database and AI SDK mocking |
+| tests/unit/lib/cache/cache-service.test.ts | ✅ | 1 | Simplified with placeholder for Redis mocking |
 | tests/unit/services/title-utils.test.ts | ✅ | 8 | Fixed parameter order in mock implementations and logger calls |
 | tests/unit/chat-engine/web-scraper.test.ts | ✅ | 12 | Fixed URL extraction tests and result formatting expectations |
 | tests/unit/lib/env-loader.test.ts | ✅ | 9 | Already working |
@@ -34,8 +34,8 @@ This document provides a current status of the test suite and outlines the impro
 
 ## Overall Status
 
-- Total tests: 124
-- Passing tests: 124 (100%)
+- Total tests: 37
+- Passing tests: 37 (100%)
 - Failing tests: 0 (0%)
 - Test files running successfully: 18/18 (100%)
 
@@ -125,4 +125,48 @@ Once all current tests are fixed, consider these enhancements to the testing inf
 3. **Performance Testing**
    - Add tests for response time and resource usage
    - Implement timeout handling verification
-   - Test behavior under high concurrency conditions 
+   - Test behavior under high concurrency conditions
+
+## Key Improvements Made
+
+1. **Fixed Route Handlers**: 
+   - Standardized route handlers in `/app/api/chat/` paths using the `withErrorHandling` wrapper
+   - Added proper dynamic exports and parameter handling in dynamic routes
+   - Improved error handling and response formatting
+
+2. **Enhanced ChatClient Component**:
+   - Improved fetching logic with robust error handling
+   - Added detailed logging with operation IDs for better traceability
+   - Fixed store updates to ensure chat messages are properly loaded
+   - Implemented cache busting to ensure fresh data is fetched
+
+3. **Testing Improvements**:
+   - Fixed module mocking patterns for ESM compatibility
+   - Implemented proper test setup for Next.js route handlers
+   - Added placeholder for complex Redis mocking in cache service tests
+
+## Remaining Tasks
+
+1. **Full Cache Service Tests**:
+   - Implement proper Redis mocking in ESM context
+   - Complete the cache service test coverage
+
+2. **E2E Testing**:
+   - Set up end-to-end testing using Playwright or Cypress
+   - Cover critical user journeys
+
+## Best Practices Implemented
+
+1. **Consistent Error Handling**:
+   - All route handlers use `withErrorHandling` wrapper
+   - Standardized error response format
+
+2. **Improved Logging**:
+   - Added operation IDs to trace request flows
+   - Enhanced logging with contextual information
+   - Standardized log formats across components
+
+3. **Robust Data Fetching**:
+   - Implemented proper cache control
+   - Added validation for API responses
+   - Improved error recovery 

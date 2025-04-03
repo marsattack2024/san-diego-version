@@ -63,7 +63,11 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
     // Use the ChatEngine facade to handle the request
-    const chatEngine = createChatEngine();
+    const chatEngine = createChatEngine({
+      operationName: 'chat_default',
+      corsEnabled: false,
+      requiresAuth: true
+    });
     return await chatEngine.handleRequest(request);
   } catch (error) {
     edgeLogger.error('Unexpected error in chat API', {

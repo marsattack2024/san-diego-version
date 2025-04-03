@@ -3,18 +3,35 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 import type { Message } from 'ai';
 import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
 import type { IdParam } from '@/lib/types/route-handlers';
+import { handleCors } from '@/lib/utils/http-utils';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
+/**
+ * GET handler to retrieve paginated messages for a specific chat
+ */
 export async function GET(
     request: Request,
     { params }: IdParam
 ): Promise<Response> {
+    const operationId = `messages_${Math.random().toString(36).substring(2, 10)}`;
+
     try {
+        // Extract params safely by awaiting the Promise
         const { id: chatId } = await params;
+
         const { searchParams } = new URL(request.url);
         const page = parseInt(searchParams.get('page') || '1');
-        const pageSize = parseInt(searchParams.get('pageSize') || '20');
+        const pageSize = parseInt(searchParams.get('pageSize') || '100'); // Default to larger page size
+
+        edgeLogger.info('Fetching messages', {
+            operation: 'fetch_messages',
+            operationId,
+            chatId: chatId.slice(0, 8), // Only log partial ID for privacy
+            page,
+            pageSize
+        });
 
         // Basic validation
         if (!chatId) {
@@ -37,25 +54,16 @@ export async function GET(
 
         if (authError || !user) {
             edgeLogger.warn('Authentication failed fetching messages', {
-                operation: 'fetch_paginated_messages',
+                operation: 'fetch_messages',
+                operationId,
                 error: authError?.message || 'No user found'
             });
 
-            return unauthorizedError();
+            return handleCors(unauthorizedError(), request, true);
         }
 
         // Calculate offset for pagination
         const offset = (page - 1) * pageSize;
-
-        // Log the request
-        edgeLogger.info('Fetching paginated messages', {
-            operation: 'fetch_paginated_messages',
-            chatId: chatId.slice(0, 8), // Only log partial ID for privacy
-            page,
-            pageSize,
-            offset,
-            userId: user.id.slice(0, 8)
-        });
 
         // Query the database for the messages
         const { data, error } = await supabase
@@ -66,8 +74,9 @@ export async function GET(
             .range(offset, offset + pageSize - 1);
 
         if (error) {
-            edgeLogger.error('Error fetching paginated messages', {
-                operation: 'fetch_paginated_messages',
+            edgeLogger.error('Error fetching messages', {
+                operation: 'fetch_messages',
+                operationId,
                 error: error.message,
                 chatId: chatId.slice(0, 8),
                 page,
@@ -82,21 +91,42 @@ export async function GET(
             id: record.id,
             role: record.role,
             content: record.content,
-            createdAt: record.created_at
+            createdAt: record.created_at,
+            toolsUsed: record.tools_used
         }));
 
         // Log the result
-        edgeLogger.info('Successfully fetched paginated messages', {
-            operation: 'fetch_paginated_messages',
+        edgeLogger.info('Successfully fetched messages', {
+            operation: 'fetch_messages',
+            operationId,
             chatId: chatId.slice(0, 8),
             page,
             pageSize,
             count: messages.length
         });
 
-        return successResponse(messages);
+        // Add DEBUG logging to check message content
+        if (messages.length > 0) {
+            edgeLogger.debug('Message sample', {
+                operation: 'fetch_messages',
+                operationId,
+                firstMessageId: messages[0].id,
+                messageCount: messages.length,
+                firstMessageContent: messages[0].content.substring(0, 100) + '...'
+            });
+        }
+
+        // Return success response with CORS headers
+        const response = successResponse(messages);
+        return handleCors(response, request, true);
     } catch (error) {
-        // Handle unexpected errors
-        return errorResponse('Unexpected error fetching paginated messages', error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        edgeLogger.error('Unexpected error fetching messages', {
+            operation: 'fetch_messages',
+            error: errorMsg
+        });
+        // Return error response with CORS headers
+        const response = errorResponse('Unexpected error fetching messages', error, 500);
+        return handleCors(response, request, true);
     }
 } 
