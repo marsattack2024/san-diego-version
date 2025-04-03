@@ -39,10 +39,10 @@ export class ChatSetupService {
     }
 
     /**
-     * Determines configuration. Always uses orchestrator for non-widgets.
-     * @returns A promise resolving to OrchestratedResponse (main chat) or ChatEngineConfig (widget).
+     * Determines configuration. FOR WIDGETS ONLY.
+     * @returns A promise resolving to ChatEngineConfig (widget).
      */
-    async prepareConfig(input: ChatSetupInput): Promise<ChatEngineConfig | OrchestratedResponse> {
+    async prepareConfig(input: ChatSetupInput): Promise<ChatEngineConfig> {
         const { requestBody, userId, isWidget } = input;
         const setupStartTime = Date.now();
 
@@ -88,56 +88,15 @@ export class ChatSetupService {
                 durationMs: Date.now() - setupStartTime,
             });
             return widgetConfig;
-        }
-
-        // --- Handle Main Chat Path (Always Use Orchestrator) --- 
-        edgeLogger.info('Processing main chat request: Invoking orchestrator.', { category: LOG_CATEGORIES.SYSTEM, operationId: this.operationId });
-
-        // Extract necessary info for orchestrator
-        const requestedAgentId = requestBody.agentId as AgentType || 'default';
-        const sessionId = requestBody.id || requestBody.sessionId;
-        let lastUserMessageContent: string = '';
-        if (requestBody.messages && Array.isArray(requestBody.messages) && requestBody.messages.length > 0) {
-            const lastMessage = requestBody.messages[requestBody.messages.length - 1];
-            if (lastMessage.role === 'user' && typeof lastMessage.content === 'string') {
-                lastUserMessageContent = lastMessage.content;
-            }
-        } else if (requestBody.message && typeof requestBody.message.content === 'string') {
-            lastUserMessageContent = requestBody.message.content;
-        }
-
-        if (!lastUserMessageContent) {
-            edgeLogger.error('Could not extract user message content for orchestrator', { category: LOG_CATEGORIES.SYSTEM, operationId: this.operationId, sessionId });
-            // Handle error appropriately - maybe throw or return default error response? Here we throw.
-            throw new Error('Missing user message content');
-        }
-
-        try {
-            // Always run the orchestrator for non-widget requests
-            const orchestratorResult = await this.agentOrchestrator.run(lastUserMessageContent, requestedAgentId);
-
-            // Package the result
-            const response: OrchestratedResponse = {
-                type: 'orchestrated',
-                data: orchestratorResult
-            };
-
-            edgeLogger.info('Orchestration completed successfully via ChatSetupService', {
-                category: LOG_CATEGORIES.ORCHESTRATOR,
+        } else {
+            // This path should no longer be taken by the main /api/chat route
+            edgeLogger.error('prepareConfig called for non-widget path, which is deprecated.', {
+                category: LOG_CATEGORIES.SYSTEM,
                 operationId: this.operationId,
-                durationMs: Date.now() - setupStartTime
+                important: true,
             });
-            return response;
-
-        } catch (orchestrationError) {
-            edgeLogger.error('Orchestration failed within ChatSetupService', {
-                category: LOG_CATEGORIES.ORCHESTRATOR,
-                operationId: this.operationId,
-                error: orchestrationError instanceof Error ? orchestrationError.message : String(orchestrationError),
-                important: true
-            });
-            // Re-throw to let the API handler manage the final error response
-            throw orchestrationError;
+            // Throw an error because this indicates a logic flaw elsewhere if it's called
+            throw new Error('ChatSetupService.prepareConfig should only be used for widget setups.');
         }
     }
 } 

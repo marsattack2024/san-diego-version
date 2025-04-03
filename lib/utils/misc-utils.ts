@@ -53,4 +53,23 @@ export function parseBooleanValue(value: any): boolean {
 
     // Default to false for null, undefined, or any other type
     return false;
+}
+
+/**
+ * Generates a standard UUID (v4).
+ * @returns A standard UUID string.
+ */
+export function generateUUID(): string {
+    // Use the built-in crypto module for standard UUID generation
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        return crypto.randomUUID();
+    } else {
+        // Fallback for environments without crypto.randomUUID (less common now)
+        // Consider importing the 'uuid' library if this fallback is needed frequently
+        console.warn('Using fallback UUID generation. Consider installing the uuid library.');
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+            const r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
+    }
 } 

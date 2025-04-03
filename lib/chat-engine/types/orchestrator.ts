@@ -1,6 +1,8 @@
 import { z } from 'zod';
 // Import both the type and the runtime array
 import { AgentType, AVAILABLE_AGENT_TYPES } from '../prompts';
+// Add Message type import
+import type { Message } from 'ai';
 
 // Zod enum for agent types (dynamically created from the runtime array)
 // Ensure the array is treated as non-empty for Zod's enum
@@ -54,4 +56,19 @@ export type WorkflowStep = z.infer<typeof WorkflowStepSchema>;
 // Type alias for the agent output schema inference
 export type AgentOutput = z.infer<typeof AgentOutputSchema>;
 // Type alias for the orchestrator result schema inference
-export type OrchestratorResult = z.infer<typeof OrchestratorResultSchema>; 
+export type OrchestratorResult = z.infer<typeof OrchestratorResultSchema>;
+
+// New Type for Context Preparation Flow
+export interface OrchestrationContext {
+    targetModelId: string; // Model ID for the final streamText call
+    finalSystemPrompt?: string; // Optional override for streamText system prompt
+    contextMessages?: Array<Message>; // Messages (e.g., tool results) gathered during orchestration
+    // Add other relevant context fields as needed
+    planSummary?: string[]; // e.g., list of agent types used in the plan
+}
+
+// Wrapper type used by ChatSetupService to differentiate return types
+export interface OrchestratedResponse {
+    type: 'orchestrated';
+    data: OrchestratorResult; // This might need adjustment if ChatSetupService changes
+} 

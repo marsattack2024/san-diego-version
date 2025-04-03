@@ -15,11 +15,15 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 // Utilities & Route Handling
 import { errorResponse, unauthorizedError, validationError } from '@/lib/utils/route-handler';
+// Import generateUUID
+import { generateUUID } from '@/lib/utils/misc-utils';
 // Chat Engine & Persistence
 import { MessagePersistenceService, ToolsUsedData } from '@/lib/chat-engine/message-persistence';
 import { AgentOrchestrator } from '@/lib/chat-engine/services/orchestrator.service'; // Keep for now, adjust later
 import { openai } from '@ai-sdk/openai'; // Example provider
 import { z } from 'zod'; // For request validation
+// Import AgentType
+import { AgentType } from '@/lib/chat-engine/prompts';
 
 // Define request schema for validation
 // Based on useChat hook and experimental_prepareRequestBody in components/chat.tsx
@@ -109,24 +113,32 @@ export async function POST(request: Request): Promise<Response> {
 
     const currentMessages = appendClientMessage({ messages: previousMessages, message: userMessageForAppend });
 
-    // 5. **Orchestration Placeholder**
-    // TODO: Replace this with actual orchestrator call returning context/prompt/model
-    edgeLogger.info('[Placeholder] Running Orchestration Logic...', { operationId, sessionId });
-    const orchestratorContext = {
-      // Example: Get refined prompt or specific instructions from orchestrator
-      // finalPrompt: await orchestrator.getRefinedPrompt(userMessage.content, agentId, previousMessages),
-      // targetModel: await orchestrator.getTargetModel(agentId)
-      finalPrompt: userMessage.content, // Default to user content for now
-      targetModel: openai(agentId || 'gpt-4o-mini') // Use selected agent or default
-    };
-    edgeLogger.info('[Placeholder] Orchestration complete. Using determined context.', { operationId, sessionId });
+    // 5. Prepare Orchestration Context
+    edgeLogger.info('Preparing orchestration context...', { operationId, sessionId, agentId });
+    const orchestrator = new AgentOrchestrator();
+    // Call the new method
+    const {
+      targetModelId,
+      finalSystemPrompt,
+      contextMessages = [] // Default to empty array if none provided
+    } = await orchestrator.prepareContext(userMessage.content, agentId as AgentType | undefined);
+    edgeLogger.info('Orchestration context prepared.', {
+      operationId,
+      sessionId,
+      targetModelId: targetModelId,
+      contextMsgCount: contextMessages.length
+    });
+
+    // Append context messages from orchestrator to the history if any
+    const messagesForFinalStream = [...currentMessages, ...contextMessages];
 
     // 6. Generate & Stream Final Response using streamText
     const result = streamText({
-      // model: orchestratorContext.targetModel, // Use model determined by orchestrator
-      model: openai('gpt-4o-mini'), // TEMP: Hardcoded for now
-      messages: currentMessages, // Provide history + current user message
-      // prompt: orchestratorContext.finalPrompt, // Use refined prompt if orchestrator provides it
+      model: openai(targetModelId || 'gpt-4o-mini'), // Use model determined by orchestrator or fallback
+      messages: messagesForFinalStream, // History + User Msg + Orchestrator Context Msgs
+      system: finalSystemPrompt, // Optional: Use refined system prompt if provided
+      // Add the custom ID generator for assistant messages
+      experimental_generateMessageId: generateUUID,
 
       async onFinish({ response, usage, finishReason }) {
         const finishTime = Date.now();

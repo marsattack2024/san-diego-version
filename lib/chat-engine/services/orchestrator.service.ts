@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { openai } from '@ai-sdk/openai'; // Assuming OpenAI is configured
-import { generateObject, LanguageModel } from 'ai';
+import { generateObject, LanguageModel, Message } from 'ai';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { AgentType, AVAILABLE_AGENT_TYPES } from '../prompts';
@@ -13,7 +13,8 @@ import {
     AgentOutput,
     WorkflowContext,
     OrchestratorResultSchema,
-    OrchestratorResult
+    OrchestratorResult,
+    OrchestrationContext
 } from '../types/orchestrator';
 // Import AI SDK tool type if needed for passing tools
 import type { Tool } from 'ai';
@@ -79,7 +80,11 @@ Analyze this request and generate the appropriate workflow plan (either single-s
             });
 
             const durationMs = Date.now() - startTime;
-            this.logger.info('Workflow plan generated successfully', {
+            const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
+            const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
+            // Use warn if slow or important, otherwise info
+            const planLogMethod = isSlow || isImportant ? this.logger.warn : this.logger.info;
+            planLogMethod.call(this.logger, 'Workflow plan generated successfully', {
                 category: LOG_CATEGORIES.ORCHESTRATOR,
                 operation: 'generate_plan_success',
                 operationId,
@@ -119,113 +124,143 @@ Analyze this request and generate the appropriate workflow plan (either single-s
     }
 
     /**
-     * Executes the workflow plan step-by-step.
+     * Executes the workflow plan step-by-step to gather context.
+     * Modified to return collected context messages and final config.
      */
-    async executePlan(plan: WorkflowPlan, initialRequest: string): Promise<{ context: WorkflowContext, finalPlan: WorkflowPlan }> {
-        const operationId = `exec_${Date.now().toString(36)}`;
+    private async executePlanAndGatherContext(plan: WorkflowPlan, initialRequest: string):
+        Promise<{ contextMessages: Message[], finalPlan: WorkflowPlan, targetModelId: string, finalSystemPrompt?: string }> {
+        const operationId = `exec_ctx_${Date.now().toString(36)}`;
         const execStartTime = Date.now();
-        this.logger.info('Executing workflow plan', {
+        this.logger.info('Executing workflow plan to gather context', {
             category: LOG_CATEGORIES.ORCHESTRATOR,
-            operation: 'execute_plan_start',
+            operation: 'execute_plan_context_start',
             operationId,
             stepCount: plan.steps.length
         });
 
-        let context: WorkflowContext = {};
         let iteration = 0;
         let currentPlan = { ...plan, steps: [...plan.steps] }; // Deep copy steps for modification
+        let completedStepOutputs: Record<number, AgentOutput> = {}; // Store outputs temporarily (Use LET)
+        const contextMessages: Message[] = []; // Collect messages to pass to final stream
+
+        // Determine default target model - can be overridden by plan/logic later
+        let targetModelId = getAgentConfig(currentPlan.steps[currentPlan.steps.length - 1].agent as AgentType)?.model || 'gpt-4o-mini';
+        let finalSystemPrompt: string | undefined = undefined; // Default system prompt
 
         while (iteration < currentPlan.maxIterations) {
             const iterStartTime = Date.now();
-            this.logger.info(`Starting execution iteration ${iteration + 1}/${currentPlan.maxIterations}`, {
+            this.logger.info(`Starting context gathering iteration ${iteration + 1}/${currentPlan.maxIterations}`, {
                 category: LOG_CATEGORIES.ORCHESTRATOR,
                 operationId,
                 iteration: iteration + 1
-                // ... other relevant iter log data
             });
 
             let madeProgress = false;
-            let allStepsComplete = true;
+            let allStepsCompleteOrSkipped = true; // Assume completion
             let planChangedThisIteration = false;
 
             for (let i = 0; i < currentPlan.steps.length; i++) {
-                if (planChangedThisIteration) break;
+                if (planChangedThisIteration) break; // Restart iteration if plan changed
 
                 const step = currentPlan.steps[i];
                 const stepLogId = `${operationId}_step_${i}`;
 
-                if (context[i]) { continue; }
+                // Skip if already processed in this run
+                if (completedStepOutputs[i]) { continue; }
 
-                allStepsComplete = false;
-
-                const dependenciesMet = !step.dependsOn || step.dependsOn.every(depIndex => context[depIndex]);
+                // Check dependencies based on temporary outputs
+                const dependenciesMet = !step.dependsOn || step.dependsOn.every(depIndex => completedStepOutputs[depIndex]);
                 if (!dependenciesMet) {
+                    allStepsCompleteOrSkipped = false; // Mark as not yet complete
                     this.logger.debug(`Step ${i} (${step.agent}) dependencies not met`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, step: i });
                     continue;
                 }
 
-                this.logger.info(`Executing Step ${i}: Agent=${step.agent}`, {
-                    category: LOG_CATEGORIES.ORCHESTRATOR, operation: 'execute_step_start',
+                // Check if this is potentially the *final* generation step defined in the plan
+                // We might want to SKIP this step if the API route's streamText will handle it.
+                // Decision: Let's assume for now the plan includes context steps ONLY.
+                // If a plan *needs* an intermediate generation (e.g., summarize research),
+                // that agent ('copywriter') should run.
+                // The *very last* step of a plan might implicitly be the final streamText call.
+                // TODO: Refine this logic - how do we know which step is the final generation?
+                // Simple approach: If it's the last step, assume it's context for the API streamText.
+                // Let's try executing all steps defined in the plan for now, and add their outputs as context.
+
+                this.logger.info(`Executing Step ${i}: Agent=${step.agent} for context`, {
+                    category: LOG_CATEGORIES.ORCHESTRATOR, operation: 'execute_step_context_start',
                     operationId, step: i, agent: step.agent, stepLogId
                 });
                 const stepStartTime = Date.now();
 
                 try {
-                    // Cast needed as workaround for persistent TS error
                     const agentConfig = getAgentConfig(step.agent as AgentType);
                     if (!agentConfig) throw new Error(`Agent configuration not found for type: ${step.agent}`);
 
-                    // Prepare context string (simple version)
-                    // TODO: Improve context passing
+                    // Prepare context string from *previous* completed steps
                     let workerContextInput = `Initial Request: "${initialRequest}"\n`;
                     if (step.dependsOn && step.dependsOn.length > 0) {
                         workerContextInput += "\nRelevant previous step results:\n";
                         step.dependsOn.forEach(depIndex => {
-                            if (context[depIndex]) {
-                                workerContextInput += `--- Output from Step ${depIndex} (${currentPlan.steps[depIndex]?.agent}) ---\n${context[depIndex].result}\n\n`;
+                            if (completedStepOutputs[depIndex]) {
+                                workerContextInput += `--- Output from Step ${depIndex} (${currentPlan.steps[depIndex]?.agent}) ---\n${completedStepOutputs[depIndex].result}\n\n`;
                             }
                         });
                     }
                     const workerPrompt = `${workerContextInput}\nYour Task: ${step.task}`;
 
-                    // Dynamically create tool set for the agent if needed
-                    // let toolsForAgent: Record<string, Tool<any, any>> | undefined = undefined;
-                    // if (agentConfig.toolOptions && Object.values(agentConfig.toolOptions).some(v => v === true)) {
-                    //     toolsForAgent = createToolSet(agentConfig.toolOptions);
-                    // }
-
                     // Execute Worker Agent
-                    const { object: output, usage: agentUsage, finishReason: agentFinishReason, warnings: agentWarnings } = await generateObject({
-                        model: openai(agentConfig.model || 'gpt-4o'), // Use agent model or default
+                    const { object: output, usage: agentUsage, finishReason: agentFinishReason } = await generateObject({
+                        model: openai(agentConfig.model || 'gpt-4o'),
                         schema: AgentOutputSchema,
                         system: agentConfig.systemPrompt,
                         prompt: workerPrompt,
                         temperature: agentConfig.temperature,
                         maxTokens: agentConfig.maxTokens,
                         maxRetries: 1,
-                        // tools: toolsForAgent // Pass tools if defined
                     });
 
                     const stepDurationMs = Date.now() - stepStartTime;
-                    this.logger.info(`Step ${i} (${step.agent}) completed successfully`, {
-                        category: LOG_CATEGORIES.ORCHESTRATOR, operation: 'execute_step_success',
+                    const isSlow = stepDurationMs > THRESHOLDS.SLOW_OPERATION;
+                    const isImportant = stepDurationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
+                    // Use warn if slow or important, otherwise info
+                    const stepLogMethod = isSlow || isImportant ? this.logger.warn : this.logger.info;
+                    stepLogMethod.call(this.logger, `Step ${i} (${step.agent}) context gathered successfully`, {
+                        category: LOG_CATEGORIES.ORCHESTRATOR, operation: 'execute_step_context_success',
                         operationId, step: i, agent: step.agent, stepLogId, durationMs: stepDurationMs,
                         usage: agentUsage, finishReason: agentFinishReason,
                         needsRevision: output.metadata.needsRevision,
-                        // Add performance flags
-                        slow: stepDurationMs > THRESHOLDS.SLOW_OPERATION,
-                        important: stepDurationMs > THRESHOLDS.IMPORTANT_THRESHOLD,
+                        slow: isSlow,
+                        important: isImportant,
                     });
 
-                    context[i] = output;
+                    // Store output for dependency tracking
+                    completedStepOutputs[i] = output;
                     madeProgress = true;
 
-                    // --- Handle Re-planning ---
+                    // Add result as context message for the final stream
+                    // Format: Use assistant role to represent intermediate results
+                    contextMessages.push({
+                        id: `ctx_${operationId}_${i}`,
+                        role: 'assistant',
+                        content: `Context from ${step.agent}: ${output.result}`,
+                        // TODO: Should we include tool call info here if the agent used tools?
+                    });
+
+                    // If the last agent executed has a specific system prompt, maybe use it?
+                    if (i === currentPlan.steps.length - 1 && agentConfig.systemPrompt) {
+                        // Potentially override the default system prompt for the final stream
+                        // finalSystemPrompt = agentConfig.systemPrompt;
+                        // Also update the target model based on this last agent
+                        targetModelId = agentConfig.model || targetModelId;
+                    }
+
+                    // --- Handle Re-planning (Keep this logic) ---
                     if (output.metadata.needsRevision) {
                         this.logger.warn(`Step ${i} (${step.agent}) flagged for revision. Initiating re-planning.`, {
                             category: LOG_CATEGORIES.ORCHESTRATOR, operationId, step: i, agent: step.agent, important: true
                         });
-                        const replanStartTime = Date.now();
+                        // ... (Re-planning logic remains the same) ...
+                        // Reset completedStepOutputs and contextMessages if plan changes
                         try {
                             const availableSpecializedAgents = AVAILABLE_AGENT_TYPES.filter(a => a !== 'default').join(', ');
                             const replanSystemPrompt = `You are the workflow manager. Adjust the workflow based on agent feedback. You can modify steps, add new steps (e.g., a copyeditor step), or re-order tasks. Available agents: ${availableSpecializedAgents}.`;
@@ -247,153 +282,149 @@ Analyze this request and generate the appropriate workflow plan (either single-s
                             this.logger.info('Re-planning successful', { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, newStepCount: revisedPlanData.steps.length });
 
                             currentPlan = revisedPlanData;
-                            context = {}; // Reset context
+                            completedStepOutputs = {}; // Reset completed steps (OK with LET)
+                            contextMessages.length = 0; // Clear context messages
                             planChangedThisIteration = true;
                             madeProgress = false;
-                            allStepsComplete = false;
+                            allStepsCompleteOrSkipped = false;
                             this.logger.warn('Workflow plan updated. Resetting context and restarting iteration.', { category: LOG_CATEGORIES.ORCHESTRATOR, operationId });
 
                         } catch (replanError) {
+                            const replanStartTime = Date.now(); // Should be defined before try block
                             const replanDurationMs = Date.now() - replanStartTime;
                             this.logger.error('Re-planning failed', {
                                 category: LOG_CATEGORIES.ORCHESTRATOR,
                                 operationId,
                                 stepTriggeringReplan: i,
                                 durationMs: replanDurationMs,
-                                // Add type check for error before logging
                                 error: replanError instanceof Error ? replanError.message : String(replanError),
-                                important: true
+                                important: true // Error is always important
                             });
-                            allStepsComplete = false; // Prevent premature termination if re-plan fails
+                            allStepsCompleteOrSkipped = false; // Prevent premature termination if re-plan fails
                         }
                     }
                 } catch (error) {
                     const stepDurationMs = Date.now() - stepStartTime;
-                    this.logger.error(`Error executing Step ${i} (${step.agent})`, {
-                        category: LOG_CATEGORIES.ORCHESTRATOR, operation: 'execute_step_error',
+                    this.logger.error(`Error executing Step ${i} (${step.agent}) for context`, {
+                        category: LOG_CATEGORIES.ORCHESTRATOR, operation: 'execute_step_context_error',
                         operationId, step: i, agent: step.agent, stepLogId, durationMs: stepDurationMs,
                         error: error instanceof Error ? error.message : String(error),
                         stack: error instanceof Error ? error.stack : undefined,
                         important: true,
                     });
-                    allStepsComplete = false;
+                    allStepsCompleteOrSkipped = false; // Mark as incomplete on error
+                    // Decide if we should continue other steps or abort context gathering
+                    // For now, let's allow other independent branches to continue
                 }
             } // End for loop (steps)
 
             const iterDurationMs = Date.now() - iterStartTime;
             if (planChangedThisIteration) {
                 this.logger.info(`Plan changed in iteration ${iteration + 1}. Restarting loop.`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId });
-                continue;
+                continue; // Go to next iteration immediately
             }
 
-            if (allStepsComplete) {
-                this.logger.info(`All steps completed in iteration ${iteration + 1}.`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId });
-                break;
+            // Check for completion or lack of progress
+            if (allStepsCompleteOrSkipped) {
+                this.logger.info(`All context gathering steps completed or skipped in iteration ${iteration + 1}.`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId });
+                break; // Exit loop
             }
             if (!madeProgress) {
-                this.logger.warn(`No progress made in iteration ${iteration + 1}. Aborting.`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, important: true });
-                break;
+                this.logger.warn(`No progress made in context gathering iteration ${iteration + 1}. Aborting.`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, important: true });
+                break; // Exit loop
             }
-            this.logger.info(`Finished execution iteration ${iteration + 1}`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId });
+
+            this.logger.info(`Finished context gathering iteration ${iteration + 1}`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, durationMs: iterDurationMs });
 
             iteration++;
             if (iteration >= currentPlan.maxIterations) {
-                this.logger.warn(`Max iterations (${currentPlan.maxIterations}) reached. Aborting.`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, important: true });
+                this.logger.warn(`Max iterations (${currentPlan.maxIterations}) reached for context gathering. Aborting.`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, important: true });
                 break;
             }
         } // End while loop (iterations)
 
         const execDurationMs = Date.now() - execStartTime;
-        this.logger.info('Finished workflow plan execution', {
+        this.logger.info('Finished workflow plan execution for context gathering', {
             category: LOG_CATEGORIES.ORCHESTRATOR,
             operationId,
             durationMs: execDurationMs,
-            // Add performance flags
+            contextMessageCount: contextMessages.length,
             slow: execDurationMs > THRESHOLDS.SLOW_OPERATION,
             important: execDurationMs > THRESHOLDS.IMPORTANT_THRESHOLD,
         });
 
-        return { context, finalPlan: currentPlan };
+        return { contextMessages, finalPlan: currentPlan, targetModelId, finalSystemPrompt };
     }
 
     /**
-     * Compiles the results, assuming the last completed step has the final output.
+     * Prepares the context for the final streaming call by the API route.
+     * This involves planning and executing steps to gather information.
      */
-    compileResults(context: WorkflowContext, finalPlan: WorkflowPlan): string {
-        this.logger.info('Compiling results', { category: LOG_CATEGORIES.ORCHESTRATOR });
-
-        if (!finalPlan.steps || finalPlan.steps.length === 0) { return "Error: Plan was empty."; }
-
-        let lastCompletedStepIndex = -1;
-        for (let i = finalPlan.steps.length - 1; i >= 0; i--) {
-            if (context[i]) {
-                lastCompletedStepIndex = i;
-                break;
-            }
-        }
-
-        if (lastCompletedStepIndex !== -1) {
-            this.logger.info(`Using result from last completed step (${lastCompletedStepIndex})`, { category: LOG_CATEGORIES.ORCHESTRATOR });
-            return context[lastCompletedStepIndex].result;
-        } else {
-            this.logger.warn(`No steps completed successfully.`, { category: LOG_CATEGORIES.ORCHESTRATOR });
-            return "Error: Workflow failed to produce a result.";
-        }
-    }
-
-    /**
-     * Runs the full orchestration process.
-     */
-    async run(request: string, initialAgentType?: AgentType): Promise<OrchestratorResult> {
-        const operationId = `run_${Date.now().toString(36)}`;
+    async prepareContext(request: string, initialAgentType?: AgentType): Promise<OrchestrationContext> {
+        const operationId = `prep_ctx_${Date.now().toString(36)}`;
         const startTime = Date.now();
-        this.logger.info('Orchestrator run started', {
+        this.logger.info('Orchestrator prepareContext started', {
             category: LOG_CATEGORIES.ORCHESTRATOR,
-            operation: 'run_start',
+            operation: 'prepare_context_start',
             operationId,
             requestPreview: request.substring(0, 100) + '...',
         });
 
         try {
+            // Step 1: Generate the plan
             const initialPlan = await this.generatePlan(request, initialAgentType);
-            const { context, finalPlan } = await this.executePlan(initialPlan, request);
-            const finalResultString = this.compileResults(context, finalPlan);
 
-            const result: OrchestratorResult = {
-                finalResult: finalResultString,
-                stepsTakenDetails: context,
-                finalPlan: finalPlan
+            // Step 2: Execute plan to gather context
+            const { contextMessages, finalPlan, targetModelId, finalSystemPrompt } = await this.executePlanAndGatherContext(initialPlan, request);
+
+            // Step 3: Assemble the final OrchestrationContext
+            const result: OrchestrationContext = {
+                targetModelId,
+                finalSystemPrompt,
+                contextMessages,
+                planSummary: finalPlan.steps.map(s => s.agent)
             };
-
-            OrchestratorResultSchema.parse(result); // Validate final output
 
             const durationMs = Date.now() - startTime;
             const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
             const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
-
             // Use warn if slow or important, otherwise info
-            const logMethod = isSlow || isImportant ? this.logger.warn : this.logger.info;
-            logMethod.call(this.logger, 'Orchestrator run finished successfully', {
+            const contextLogMethod = isSlow || isImportant ? this.logger.warn : this.logger.info;
+            contextLogMethod.call(this.logger, 'Orchestrator prepareContext finished successfully', {
                 category: LOG_CATEGORIES.ORCHESTRATOR,
-                operation: 'run_success',
+                operation: 'prepare_context_success',
                 operationId,
                 durationMs,
+                contextMessageCount: contextMessages.length,
+                targetModelId: result.targetModelId,
                 slow: isSlow,
                 important: isImportant,
             });
             return result;
         } catch (error) {
             const durationMs = Date.now() - startTime;
-            this.logger.error('Orchestrator run failed', {
+            this.logger.error('Orchestrator prepareContext failed', {
                 category: LOG_CATEGORIES.ORCHESTRATOR,
-                operation: 'run_error',
+                operation: 'prepare_context_error',
                 operationId,
                 durationMs: durationMs,
                 error: error instanceof Error ? error.message : String(error),
                 stack: error instanceof Error ? error.stack : undefined,
-                important: true, // Error is always important
+                important: true,
             });
-            throw error; // Propagate error up
+            // Re-throw the error to be handled by the API route
+            throw error;
         }
     }
+
+    // --- Deprecated Methods (Commented out for now) ---
+    /*
+    compileResults(context: WorkflowContext, finalPlan: WorkflowPlan): string {
+        // ... (old implementation) ...
+    }
+
+    async run(request: string, initialAgentType?: AgentType): Promise<OrchestratorResult> {
+        // ... (old implementation) ...
+    }
+    */
 }
