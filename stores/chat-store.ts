@@ -21,6 +21,18 @@ export interface Conversation {
   deepSearchEnabled?: boolean; // Track if DeepSearch is enabled for this conversation
 }
 
+// Define a lightweight ConversationMetadata type for the sidebar
+export interface ConversationMetadata {
+  id: string;
+  title?: string;
+  createdAt: string;
+  updatedAt: string;
+  userId?: string;
+  agentId: AgentType;
+  deepSearchEnabled?: boolean;
+  messageCount: number; // Track message count without storing messages
+}
+
 // Define previous state versions for migrations
 interface ChatStateV0 {
   conversations: Record<string, {
@@ -33,7 +45,11 @@ interface ChatStateV0 {
 }
 
 interface ChatState {
-  conversations: Record<string, Conversation>;
+  // Split conversations into two separate data structures
+  conversations: Record<string, Conversation>; // Legacy support for backward compatibility
+  conversationsIndex: Record<string, ConversationMetadata>; // Lightweight metadata for sidebar
+  loadedConversations: Record<string, Conversation>; // Full conversations with messages for active chats
+
   currentConversationId: string | null;
   selectedAgentId: AgentType;
   deepSearchEnabled: boolean;
@@ -71,6 +87,11 @@ interface ChatState {
 
   // Refresh history data without changing current conversation ID
   refreshHistoryData: () => Promise<void>;
+
+  // Add new actions for managing the split storage
+  getConversationMetadata: (id: string) => ConversationMetadata | undefined;
+  ensureConversationLoaded: (id: string) => Promise<Conversation | undefined>;
+  isConversationLoaded: (id: string) => boolean;
 }
 
 // Custom storage with debug logging
@@ -121,7 +142,9 @@ const createDebugStorage = (options?: { enabled?: boolean }): StateStorage => {
 export const useChatStore = create<ChatState>()(
   persist(
     (set, get) => ({
-      conversations: {},
+      conversations: {}, // Keep for backward compatibility
+      conversationsIndex: {}, // New lightweight sidebar index
+      loadedConversations: {}, // New storage for fully loaded conversations
       currentConversationId: null,
       selectedAgentId: 'default' as AgentType,
       deepSearchEnabled: false,
@@ -139,8 +162,8 @@ export const useChatStore = create<ChatState>()(
         console.log('[ChatStore] Starting syncConversationsFromHistory with', historyData.length, 'items');
         console.time('[ChatStore] conversion to map');
 
-        // Convert array to map for faster access
-        const conversationsMap: Record<string, Conversation> = {};
+        // Convert array to map for faster access - ONLY METADATA
+        const conversationsIndexMap: Record<string, ConversationMetadata> = {};
 
         let index = 0;
         for (const chat of historyData) {
@@ -156,15 +179,16 @@ export const useChatStore = create<ChatState>()(
           }
 
           try {
-            conversationsMap[chat.id] = {
+            // Create metadata object (no messages)
+            conversationsIndexMap[chat.id] = {
               id: chat.id,
-              messages: chat.messages || [],
+              title: chat.title || 'Untitled',
               createdAt: chat.createdAt || new Date().toISOString(),
               updatedAt: chat.updatedAt || new Date().toISOString(),
-              title: chat.title || 'Untitled',
               agentId: ((chat as any).agentId as AgentType) || 'default',
               deepSearchEnabled: (chat as any).deepSearchEnabled || false,
-              userId: chat.userId
+              userId: chat.userId,
+              messageCount: Array.isArray(chat.messages) ? chat.messages.length : 0
             };
           } catch (error) {
             console.error('[ChatStore] Error processing chat item:', error, chat);
@@ -174,50 +198,99 @@ export const useChatStore = create<ChatState>()(
         }
 
         console.timeEnd('[ChatStore] conversion to map');
-        console.log('[ChatStore] Finished converting history to map, updating state with', Object.keys(conversationsMap).length, 'conversations');
+        console.log('[ChatStore] Finished converting history to index map with', Object.keys(conversationsIndexMap).length, 'conversations');
 
         try {
           console.time('[ChatStore] state update');
           set((state) => {
-            // Get the current state conversations
-            const existingConversations = state.conversations;
+            // Get the current states
+            const existingIndex = state.conversationsIndex;
+            const existingLoaded = state.loadedConversations;
 
-            // Create a new merged map
-            const mergedConversations: Record<string, Conversation> = { ...existingConversations };
+            // Create a new merged index
+            const mergedIndex = { ...existingIndex };
 
-            // --> ADD LOGGING HERE <--
+            // Log pre-merge state
             console.debug('[ChatStore] Pre-merge state', {
               category: 'chat',
               operation: 'syncConversationsFromHistory',
-              existingCount: Object.keys(existingConversations).length,
-              fetchedCount: Object.keys(conversationsMap).length,
+              existingIndexCount: Object.keys(existingIndex).length,
+              existingLoadedCount: Object.keys(existingLoaded).length,
+              fetchedCount: Object.keys(conversationsIndexMap).length,
               // Log keys to see IDs
-              existingKeys: JSON.stringify(Object.keys(existingConversations)),
-              fetchedKeys: JSON.stringify(Object.keys(conversationsMap))
+              existingIndexKeys: JSON.stringify(Object.keys(existingIndex).slice(0, 5)),
+              fetchedKeys: JSON.stringify(Object.keys(conversationsIndexMap).slice(0, 5))
             });
-            // --> END ADD LOGGING <--
 
-            // Update or add conversations from the fetched data
-            for (const chatId in conversationsMap) {
-              mergedConversations[chatId] = {
-                ...(existingConversations[chatId] || {}), // Keep existing data if any
-                ...conversationsMap[chatId] // Overwrite with newer fetched data
+            // Update only the index with new metadata
+            for (const chatId in conversationsIndexMap) {
+              mergedIndex[chatId] = {
+                ...(existingIndex[chatId] || {}), // Keep existing metadata if any
+                ...conversationsIndexMap[chatId], // Update with new metadata
               };
+
+              // If this conversation is currently loaded, update its metadata too
+              // but preserve its messages
+              if (existingLoaded[chatId]) {
+                existingLoaded[chatId] = {
+                  ...existingLoaded[chatId],
+                  title: conversationsIndexMap[chatId].title,
+                  updatedAt: conversationsIndexMap[chatId].updatedAt,
+                  agentId: conversationsIndexMap[chatId].agentId,
+                  deepSearchEnabled: conversationsIndexMap[chatId].deepSearchEnabled,
+                  userId: conversationsIndexMap[chatId].userId,
+                  // NOTE: We don't update messages - they remain as loaded
+                };
+              }
             }
 
-            // --> MOVE/ENHANCE LOGGING <--
-            // Log the final merged map *before* returning it
+            // Also update legacy conversations map for backward compatibility
+            const legacyConversations = { ...state.conversations };
+            for (const chatId in conversationsIndexMap) {
+              if (legacyConversations[chatId]) {
+                // If it exists in legacy map, update metadata but preserve messages
+                legacyConversations[chatId] = {
+                  ...legacyConversations[chatId],
+                  title: conversationsIndexMap[chatId].title,
+                  updatedAt: conversationsIndexMap[chatId].updatedAt,
+                  agentId: conversationsIndexMap[chatId].agentId,
+                  deepSearchEnabled: conversationsIndexMap[chatId].deepSearchEnabled,
+                  userId: conversationsIndexMap[chatId].userId,
+                };
+              } else if (existingLoaded[chatId]) {
+                // If loaded but not in legacy, add from loaded
+                legacyConversations[chatId] = existingLoaded[chatId];
+              } else {
+                // If neither loaded nor in legacy, add skeleton with empty messages
+                legacyConversations[chatId] = {
+                  id: chatId,
+                  title: conversationsIndexMap[chatId].title,
+                  createdAt: conversationsIndexMap[chatId].createdAt,
+                  updatedAt: conversationsIndexMap[chatId].updatedAt,
+                  messages: [], // empty messages for skeleton
+                  agentId: conversationsIndexMap[chatId].agentId,
+                  deepSearchEnabled: conversationsIndexMap[chatId].deepSearchEnabled,
+                  userId: conversationsIndexMap[chatId].userId,
+                };
+              }
+            }
+
+            // Log the final merged state
             console.debug(`[ChatStore] Merged state result`, {
               category: 'chat',
               operation: 'syncConversationsFromHistory',
-              mergedCount: Object.keys(mergedConversations).length,
-              // Log merged keys
-              mergedKeys: JSON.stringify(Object.keys(mergedConversations)),
-              fetchedCount: Object.keys(conversationsMap).length // Repeat for context
+              mergedIndexCount: Object.keys(mergedIndex).length,
+              loadedConversationsCount: Object.keys(existingLoaded).length,
+              legacyConversationsCount: Object.keys(legacyConversations).length,
+              fetchedCount: Object.keys(conversationsIndexMap).length
             });
-            // --> END MOVE/ENHANCE LOGGING <--
 
-            return { conversations: mergedConversations };
+            // Return updated state - keep loadedConversations unchanged
+            return {
+              conversationsIndex: mergedIndex,
+              conversations: legacyConversations, // Update legacy for compatibility
+              // loadedConversations remains unchanged!
+            };
           });
           console.timeEnd('[ChatStore] state update');
           console.log('[ChatStore] State updated successfully via merge');
@@ -225,7 +298,87 @@ export const useChatStore = create<ChatState>()(
           console.error('[ChatStore] Error updating state with conversations:', error);
         }
 
-        console.debug(`[ChatStore] Synchronized ${historyData.length} conversations from history`);
+        console.debug(`[ChatStore] Synchronized ${historyData.length} conversations to index`);
+      },
+
+      // Get conversation metadata (for sidebar)
+      getConversationMetadata: (id) => {
+        return get().conversationsIndex[id];
+      },
+
+      // Check if a conversation is fully loaded
+      isConversationLoaded: (id) => {
+        return !!get().loadedConversations[id];
+      },
+
+      // Ensure conversation is loaded - fetch if needed
+      ensureConversationLoaded: async (id) => {
+        const state = get();
+
+        // Already loaded
+        if (state.loadedConversations[id]) {
+          console.debug(`[ChatStore] Conversation ${id} already loaded`);
+          return state.loadedConversations[id];
+        }
+
+        console.debug(`[ChatStore] Loading conversation ${id} from API`);
+
+        try {
+          // Set loading state if needed
+
+          // Fetch from API
+          const response = await fetch(`/api/chat/${id}?_=${Date.now()}`, {
+            method: 'GET',
+            cache: 'no-store',
+            headers: {
+              'Content-Type': 'application/json',
+              'Cache-Control': 'no-cache'
+            },
+            credentials: 'same-origin'
+          });
+
+          if (!response.ok) {
+            throw new Error(`Failed to load conversation: ${response.status}`);
+          }
+
+          const data = await response.json();
+          const chatData = data.success && data.data ? data.data : data;
+
+          if (!chatData || !chatData.id) {
+            throw new Error('Invalid chat data received');
+          }
+
+          // Create full conversation object
+          const conversation: Conversation = {
+            id: id,
+            messages: Array.isArray(chatData.messages) ? chatData.messages : [],
+            createdAt: chatData.createdAt || new Date().toISOString(),
+            updatedAt: chatData.updatedAt || new Date().toISOString(),
+            title: chatData.title || 'New Chat',
+            agentId: chatData.agentId || state.selectedAgentId,
+            deepSearchEnabled: chatData.deepSearchEnabled || false,
+            userId: chatData.userId
+          };
+
+          // Update store with loaded conversation
+          set(state => ({
+            loadedConversations: {
+              ...state.loadedConversations,
+              [id]: conversation
+            },
+            // Also update legacy conversations for compatibility
+            conversations: {
+              ...state.conversations,
+              [id]: conversation
+            }
+          }));
+
+          console.debug(`[ChatStore] Successfully loaded conversation ${id} (${conversation.messages.length} messages)`);
+          return conversation;
+        } catch (error) {
+          console.error(`[ChatStore] Error loading conversation ${id}:`, error);
+          return undefined;
+        }
       },
 
       // New method to fetch history from API
@@ -435,6 +588,11 @@ export const useChatStore = create<ChatState>()(
       },
 
       getConversation: (id) => {
+        // First check loaded conversations
+        const loaded = get().loadedConversations[id];
+        if (loaded) return loaded;
+
+        // Fall back to legacy
         return get().conversations[id];
       },
 

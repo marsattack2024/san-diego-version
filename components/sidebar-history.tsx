@@ -196,23 +196,23 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
   const auth = useAuth();
 
   // Use Zustand store selectors
-  const conversations = useChatStore(state => state.conversations);
+  const conversationsIndex = useChatStore(state => state.conversationsIndex);
   const fetchHistory = useChatStore(state => state.fetchHistory);
   const isLoadingHistory = useChatStore(state => state.isLoadingHistory);
   const historyError = useChatStore(state => state.historyError);
   const deleteConversation = useChatStore(state => state.deleteConversation);
 
-  // Convert conversations map to Chat array for display
+  // Convert conversationsIndex map to Chat array for display
   const historyArray = useMemo(() => {
-    return Object.values(conversations).map(conv => ({
-      id: conv.id,
-      title: conv.title || '',
-      createdAt: conv.createdAt,
-      updatedAt: conv.updatedAt || conv.createdAt, // Ensure updatedAt has a fallback
-      userId: conv.userId || '',
-      messages: [] // We don't need the messages for display
+    return Object.values(conversationsIndex).map(metadata => ({
+      id: metadata.id,
+      title: metadata.title || '',
+      createdAt: metadata.createdAt,
+      updatedAt: metadata.updatedAt || metadata.createdAt, // Ensure updatedAt has a fallback
+      userId: metadata.userId || '',
+      messages: [] // We don't need the messages for display, and metadata doesn't include them
     } as Chat));
-  }, [conversations]);
+  }, [conversationsIndex]);
 
   // Local UI state
   const [isDeleting, setIsDeleting] = useState<Record<string, boolean>>({});
@@ -262,20 +262,30 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
   // Manual refresh handler
   const refreshHistory = useCallback(() => {
     console.debug('[SidebarHistory] Manual refresh requested');
+
+    // Add more debug info about the refresh
+    edgeLogger.debug('[SidebarHistory] Current history state before refresh', {
+      indexCount: Object.keys(conversationsIndex).length,
+      historyArrayLength: historyArray.length,
+      isAuthenticated: auth.isAuthenticated,
+      userId: auth.user?.id,
+      isCurrentlyLoading: isLoadingHistory
+    });
+
     return fetchHistory(true).catch(error => {
       console.error('[SidebarHistory] Error during manual refresh:', error);
       setErrorMessage('Failed to refresh history');
     });
-  }, [fetchHistory]);
+  }, [fetchHistory, conversationsIndex, historyArray.length, auth.isAuthenticated, auth.user?.id, isLoadingHistory]);
 
   // Fix the initial fetch effect
   useEffect(() => {
     // Only attempt to fetch history if we're authenticated and not already loading
-    if (auth.isAuthenticated && !isLoadingHistory && Object.keys(conversations).length === 0) {
+    if (auth.isAuthenticated && !isLoadingHistory && Object.keys(conversationsIndex).length === 0) {
       console.debug('[SidebarHistory] Attempting initial history fetch', {
         userId: auth.user?.id,
         isAuthenticated: auth.isAuthenticated,
-        currentHistoryCount: Object.keys(conversations).length
+        currentHistoryCount: Object.keys(conversationsIndex).length
       });
       fetchHistory(false);
     } else if (isLoadingHistory) {
@@ -285,7 +295,7 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
         userId: auth.user?.id
       });
     }
-  }, [auth.isAuthenticated, auth.user?.id, conversations, isLoadingHistory, fetchHistory]);
+  }, [auth.isAuthenticated, auth.user?.id, conversationsIndex, isLoadingHistory, fetchHistory]);
 
   // Add explicit auth state change monitoring
   useEffect(() => {
@@ -293,30 +303,30 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
       isAuthenticated: auth.isAuthenticated,
       userId: auth.user?.id,
       isLoadingHistory,
-      conversationCount: Object.keys(conversations).length,
+      conversationCount: Object.keys(conversationsIndex).length,
       pathname
     });
 
     // Check if we have conversations but they're not being displayed
-    if (!auth.isAuthenticated && Object.keys(conversations).length > 0) {
+    if (!auth.isAuthenticated && Object.keys(conversationsIndex).length > 0) {
       console.debug('[SidebarHistory] We have conversations but auth is not ready yet');
     }
-  }, [auth.isAuthenticated, auth.user?.id, isLoadingHistory, conversations, pathname]);
+  }, [auth.isAuthenticated, auth.user?.id, isLoadingHistory, conversationsIndex, pathname]);
 
   // Add a new effect to actually render conversations when either auth is ready OR we have conversations
   useEffect(() => {
     // If we have conversations in the store, render them regardless of auth state
-    const hasConversations = Object.keys(conversations).length > 0;
+    const hasConversations = Object.keys(conversationsIndex).length > 0;
 
     if (hasConversations || auth.isAuthenticated) {
       console.debug('[SidebarHistory] Showing conversations:', {
-        count: Object.keys(conversations).length,
+        count: Object.keys(conversationsIndex).length,
         isAuthenticated: auth.isAuthenticated,
         authDriven: !hasConversations && auth.isAuthenticated,
         dataDriven: hasConversations
       });
     }
-  }, [conversations, auth.isAuthenticated]);
+  }, [conversationsIndex, auth.isAuthenticated]);
 
   // ** Polling Logic - ensure it also uses the correct auth check **
   const setupHistoryPolling = useCallback(() => {
@@ -494,7 +504,7 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
     yesterdayCount: groupedChats.yesterday.length,
     pastWeekCount: groupedChats.pastWeek.length,
     olderCount: groupedChats.older.length,
-    totalCount: Object.keys(conversations).length
+    totalCount: Object.keys(conversationsIndex).length
   });
 
   // Show placeholder if no history
