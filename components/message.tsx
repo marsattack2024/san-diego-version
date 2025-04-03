@@ -49,6 +49,11 @@ const PurePreviewMessage = ({
     return message.content;
   }, [message.content]);
 
+  // Check for message parts (used by AI SDK for tool calls)
+  const hasParts = useMemo(() => {
+    return message.parts && Array.isArray(message.parts) && message.parts.length > 0;
+  }, [message.parts]);
+
   return (
     <AnimatePresence>
       <motion.div
@@ -97,7 +102,7 @@ const PurePreviewMessage = ({
               />
             )}
 
-            {(message.content || message.reasoning) && mode === 'view' && (
+            {(message.content || message.reasoning || hasParts) && mode === 'view' && (
               <div className="flex flex-row gap-1 items-start">
                 {message.role === 'user' && !isReadonly && (
                   <Tooltip>
@@ -126,15 +131,55 @@ const PurePreviewMessage = ({
                       : styles.messageContent.assistant
                   )}
                 >
-                  <Markdown
-                    className={cn({
-                      'text-foreground': message.role === 'assistant',
-                      'text-white': message.role === 'user',
-                      'opacity-90': isLoading && message.role === 'assistant',
-                    })}
-                  >
-                    {formattedContent}
-                  </Markdown>
+                  {/* Render message parts if available, otherwise fall back to content */}
+                  {hasParts ? (
+                    <div>
+                      {message.parts?.map((part, idx) => {
+                        // Handle text part type
+                        if (part.type === 'text' && 'text' in part) {
+                          return (
+                            <Markdown
+                              key={idx}
+                              className={cn({
+                                'text-foreground': message.role === 'assistant',
+                                'text-white': message.role === 'user',
+                                'opacity-90': isLoading && message.role === 'assistant',
+                              })}
+                            >
+                              {part.text}
+                            </Markdown>
+                          );
+                        }
+
+                        // Handle tool calls more generically to avoid type issues
+                        // This will catch any part that appears to be a tool call regardless of specific format
+                        if ('tool_call_id' in part || 'name' in part || part.type?.toString().includes('tool')) {
+                          // Get the tool name from whatever property might contain it
+                          const toolName =
+                            ('name' in part && typeof part.name === 'string') ? part.name :
+                              'unknown tool';
+
+                          return (
+                            <div key={idx} className="text-xs text-muted-foreground my-1 p-1 bg-muted/30 rounded">
+                              <span className="font-medium">Tool Call:</span> {toolName}
+                            </div>
+                          );
+                        }
+
+                        return null;
+                      })}
+                    </div>
+                  ) : (
+                    <Markdown
+                      className={cn({
+                        'text-foreground': message.role === 'assistant',
+                        'text-white': message.role === 'user',
+                        'opacity-90': isLoading && message.role === 'assistant',
+                      })}
+                    >
+                      {formattedContent}
+                    </Markdown>
+                  )}
 
                   {message.role === 'assistant' && isLoading && (
                     <ThinkingMessage
@@ -259,6 +304,9 @@ export const PreviewMessage = memo(
     )
       return false;
     if (!equal(prevProps.vote, nextProps.vote)) return false;
+
+    // Check for changes in message.parts
+    if (!equal(prevProps.message.parts, nextProps.message.parts)) return false;
 
     return true;
   },

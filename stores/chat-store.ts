@@ -411,7 +411,15 @@ export const useChatStore = create<ChatState>()(
 
           console.debug('[ChatStore] Calling historyService.fetchHistory()');
           // Attempt to fetch history from API
-          const historyData = await historyService.fetchHistory(forceRefresh);
+          const historyData = await historyService.fetchHistory(forceRefresh).catch(error => {
+            // Handle authentication errors gracefully
+            if (error?.message?.includes('Auth') || error?.message?.includes('auth')) {
+              console.log('[ChatStore] Auth error in fetchHistory, returning empty array');
+              return [];
+            }
+            throw error; // Re-throw non-auth errors
+          });
+
           console.debug('[ChatStore] Got history data from historyService:', {
             count: historyData?.length || 0,
             firstFewIds: historyData?.slice(0, 3).map(h => h.id).join(', ') || 'none'

@@ -56,14 +56,16 @@ export function VirtualizedChat({
 
   // Update allMessages when messages prop changes, BUT ONLY if content differs
   useEffect(() => {
-    // Use deep comparison to avoid updates just for reference changes
-    if (!equal(messages, allMessages)) {
-      console.log('[VirtualizedChat] Messages prop differs from internal state. Updating internal state.');
+    // Store current messages in a ref to avoid dependency issues
+    const messagesChanged = !equal(messages, allMessages);
+
+    if (messagesChanged) {
+      console.log('[VirtualizedChat] Messages content differs from internal state. Updating internal state.');
       setAllMessages(messages);
     } else {
-      console.log('[VirtualizedChat] Messages prop reference changed, but content is equal. Skipping internal state update.');
+      console.log('[VirtualizedChat] Messages reference changed, but content is equal. Skipping update.');
     }
-  }, [messages]); // Keep dependency on messages prop reference
+  }, [messages]); // Only depend on messages prop changes, not allMessages (which would cause a loop)
 
   // Fetch total message count on initial load
   useEffect(() => {

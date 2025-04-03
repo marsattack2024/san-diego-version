@@ -279,7 +279,16 @@ export function ChatWidgetV2({ config = {} }: ChatWidgetProps) {
                                             : 'bg-gray-100 text-gray-800'
                                             }`}
                                     >
-                                        {typeof message.content === 'string' ? message.content : JSON.stringify(message.content)}
+                                        {typeof message.content === 'string'
+                                            ? message.content
+                                            : message.parts && Array.isArray(message.parts) && message.parts.length > 0
+                                                ? message.parts.map((part, idx) =>
+                                                    part.type === 'text' && 'text' in part
+                                                        ? <div key={idx}>{part.text}</div>
+                                                        : null
+                                                )
+                                                : JSON.stringify(message.content)
+                                        }
                                     </div>
                                 </div>
                             )}

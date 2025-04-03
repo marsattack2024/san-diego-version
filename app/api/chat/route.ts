@@ -24,6 +24,7 @@ import { openai } from '@ai-sdk/openai'; // Example provider
 import { z } from 'zod'; // For request validation
 // Import AgentType
 import { AgentType } from '@/lib/chat-engine/prompts';
+import { createAgentToolSet, getAgentConfig } from '@/lib/chat-engine/agent-router';
 
 // Define request schema for validation
 // Based on useChat hook and experimental_prepareRequestBody in components/chat.tsx
@@ -119,14 +120,26 @@ export async function POST(request: Request): Promise<Response> {
     // Call the new method
     const {
       targetModelId,
-      finalSystemPrompt,
       contextMessages = [] // Default to empty array if none provided
     } = await orchestrator.prepareContext(userMessage.content, agentId as AgentType | undefined);
-    edgeLogger.info('Orchestration context prepared.', {
+
+    // Determine effective agent ID
+    const effectiveAgentId = (agentId || 'default') as AgentType;
+
+    // Build the system prompt for the identified agent
+    const agentConfig = getAgentConfig(effectiveAgentId);
+    const finalSystemPrompt = agentConfig.systemPrompt;
+
+    // Create the tool set for this agent based on its configuration
+    const agentToolSet = createAgentToolSet(effectiveAgentId);
+
+    edgeLogger.info('Orchestration context prepared with tools and prompt', {
       operationId,
       sessionId,
-      targetModelId: targetModelId,
-      contextMsgCount: contextMessages.length
+      targetModelId,
+      effectiveAgentId,
+      contextMsgCount: contextMessages.length,
+      hasTools: !!agentToolSet && Object.keys(agentToolSet).length > 0
     });
 
     // Append context messages from orchestrator to the history if any
@@ -136,8 +149,8 @@ export async function POST(request: Request): Promise<Response> {
     const result = streamText({
       model: openai(targetModelId || 'gpt-4o-mini'), // Use model determined by orchestrator or fallback
       messages: messagesForFinalStream, // History + User Msg + Orchestrator Context Msgs
-      system: finalSystemPrompt, // Optional: Use refined system prompt if provided
-      // Add the custom ID generator for assistant messages
+      system: finalSystemPrompt, // Use the agent-specific system prompt
+      tools: agentToolSet, // Include the agent-specific tools
       experimental_generateMessageId: generateUUID,
 
       async onFinish({ response, usage, finishReason }) {

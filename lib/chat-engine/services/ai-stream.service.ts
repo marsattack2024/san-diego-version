@@ -197,7 +197,7 @@ export class AIStreamService {
                 tools: config.tools,
                 temperature: config.temperature,
                 maxTokens: config.maxTokens,
-                maxSteps: 5,
+                maxSteps: 15,
                 toolChoice: 'auto',
                 onStepFinish({ text, toolCalls: currentStepToolCalls, toolResults, finishReason, usage }) {
                     edgeLogger.debug('AI Stream: Step completed', {
