@@ -94,23 +94,29 @@ describe('ChatSetupService', () => {
         it('should call detectAgentType and createToolSet with default settings', async () => {
             const config = await chatSetupService.prepareConfig(baseInput);
 
-            // Assert using the imported mocks
-            expect(detectAgentType).toHaveBeenCalledWith('Hello', 'default');
-            expect(createToolSet).toHaveBeenCalledWith({
-                useKnowledgeBase: true,
-                useWebScraper: true,
-                useDeepSearch: false,
-                useProfileContext: true
-            });
-            expect(prompts.buildSystemPrompt).toHaveBeenCalledWith('default', false);
-            expect(config.agentType).toBe('default');
-            expect(config.requiresAuth).toBe(true);
-            expect(config.messagePersistenceDisabled).toBe(false);
-            expect(config.useDeepSearch).toBe(false);
-            expect(config.body?.deepSearchEnabled).toBe(false);
-            expect(config.body?.userId).toBe('user-abc');
-            expect(config.body?.isWidgetChat).toBe(false);
-            expect(config.tools).toEqual({ tool1: mockTool, tool2: mockTool });
+            // Add type guard before accessing ChatEngineConfig properties
+            if ('type' in config && config.type === 'orchestrated') {
+                // This shouldn't happen in this test case, fail if it does
+                expect.fail('Expected ChatEngineConfig but received OrchestratedResponse');
+            } else {
+                // Now TS knows config is ChatEngineConfig here
+                expect(detectAgentType).toHaveBeenCalledWith('Hello', 'default');
+                expect(createToolSet).toHaveBeenCalledWith({
+                    useKnowledgeBase: true,
+                    useWebScraper: true,
+                    useDeepSearch: false,
+                    useProfileContext: true
+                });
+                expect(prompts.buildSystemPrompt).toHaveBeenCalledWith('default', false);
+                expect(config.agentType).toBe('default');
+                expect(config.requiresAuth).toBe(true);
+                expect(config.messagePersistenceDisabled).toBe(false);
+                expect(config.useDeepSearch).toBe(false);
+                expect(config.body?.deepSearchEnabled).toBe(false);
+                expect(config.body?.userId).toBe('user-abc');
+                expect(config.body?.isWidgetChat).toBe(false);
+                expect(config.tools).toEqual({ tool1: mockTool, tool2: mockTool });
+            }
         });
 
         it('should enable DeepSearch AND pass useProfileContext when flag is true and agent supports it', async () => {
@@ -129,16 +135,20 @@ describe('ChatSetupService', () => {
             const input = { ...baseInput, requestBody: { ...baseInput.requestBody, deepSearchEnabled: true } };
             const config = await chatSetupService.prepareConfig(input);
 
-            expect(detectAgentType).toHaveBeenCalled();
-            expect(createToolSet).toHaveBeenCalledWith({
-                useKnowledgeBase: true,
-                useWebScraper: true,
-                useDeepSearch: true, // Should be true now
-                useProfileContext: true // Should still be true
-            });
-            expect(prompts.buildSystemPrompt).toHaveBeenCalledWith('default', true);
-            expect(config.useDeepSearch).toBe(true);
-            expect(config.body?.deepSearchEnabled).toBe(true);
+            if ('type' in config && config.type === 'orchestrated') {
+                expect.fail('Expected ChatEngineConfig but received OrchestratedResponse');
+            } else {
+                expect(detectAgentType).toHaveBeenCalled();
+                expect(createToolSet).toHaveBeenCalledWith({
+                    useKnowledgeBase: true,
+                    useWebScraper: true,
+                    useDeepSearch: true, // Should be true now
+                    useProfileContext: true // Should still be true
+                });
+                expect(prompts.buildSystemPrompt).toHaveBeenCalledWith('default', true);
+                expect(config.useDeepSearch).toBe(true);
+                expect(config.body?.deepSearchEnabled).toBe(true);
+            }
         });
 
         it('should NOT enable DeepSearch when flag is true but agent does NOT support it', async () => {
@@ -150,15 +160,19 @@ describe('ChatSetupService', () => {
             const input = { ...baseInput, requestBody: { ...baseInput.requestBody, deepSearchEnabled: true } };
             const config = await chatSetupService.prepareConfig(input);
 
-            expect(detectAgentType).toHaveBeenCalled();
-            expect(createToolSet).toHaveBeenCalledWith({
-                useKnowledgeBase: true,
-                useWebScraper: true,
-                useDeepSearch: false // Should remain false
-            });
-            expect(prompts.buildSystemPrompt).toHaveBeenCalledWith('default', false);
-            expect(config.useDeepSearch).toBe(false);
-            expect(config.body?.deepSearchEnabled).toBe(false);
+            if ('type' in config && config.type === 'orchestrated') {
+                expect.fail('Expected ChatEngineConfig but received OrchestratedResponse');
+            } else {
+                expect(detectAgentType).toHaveBeenCalled();
+                expect(createToolSet).toHaveBeenCalledWith({
+                    useKnowledgeBase: true,
+                    useWebScraper: true,
+                    useDeepSearch: false // Should remain false
+                });
+                expect(prompts.buildSystemPrompt).toHaveBeenCalledWith('default', false);
+                expect(config.useDeepSearch).toBe(false);
+                expect(config.body?.deepSearchEnabled).toBe(false);
+            }
         });
 
         it('should use requestedAgentId for detection and config, including profile context flag', async () => {
@@ -173,17 +187,21 @@ describe('ChatSetupService', () => {
             const input = { ...baseInput, requestBody: { ...baseInput.requestBody, agentId: 'copywriting' } };
             const config = await chatSetupService.prepareConfig(input);
 
-            expect(detectAgentType).toHaveBeenCalledWith('Hello', 'copywriting');
-            expect(createToolSet).toHaveBeenCalledWith({
-                useKnowledgeBase: updatedCopywritingAgentConfig.toolOptions.useKnowledgeBase,
-                useWebScraper: updatedCopywritingAgentConfig.toolOptions.useWebScraper,
-                useDeepSearch: false, // Input flag overrides agent capability here
-                useProfileContext: true // Should be true for copywriting agent
-            });
-            expect(prompts.buildSystemPrompt).toHaveBeenCalledWith('copywriting', false);
-            expect(config.agentType).toBe('copywriting');
-            expect(config.temperature).toBe(copywritingAgentConfig.temperature);
-            expect(config.body?.agentType).toBe('copywriting');
+            if ('type' in config && config.type === 'orchestrated') {
+                expect.fail('Expected ChatEngineConfig but received OrchestratedResponse');
+            } else {
+                expect(detectAgentType).toHaveBeenCalledWith('Hello', 'copywriting');
+                expect(createToolSet).toHaveBeenCalledWith({
+                    useKnowledgeBase: updatedCopywritingAgentConfig.toolOptions.useKnowledgeBase,
+                    useWebScraper: updatedCopywritingAgentConfig.toolOptions.useWebScraper,
+                    useDeepSearch: false, // Input flag overrides agent capability here
+                    useProfileContext: true // Should be true for copywriting agent
+                });
+                expect(prompts.buildSystemPrompt).toHaveBeenCalledWith('copywriting', false);
+                expect(config.agentType).toBe('copywriting');
+                expect(config.temperature).toBe(copywritingAgentConfig.temperature);
+                expect(config.body?.agentType).toBe('copywriting');
+            }
         });
 
         it('should handle agent detection failure gracefully, falling back to default profile context setting', async () => {
@@ -194,33 +212,41 @@ describe('ChatSetupService', () => {
 
             const config = await chatSetupService.prepareConfig(baseInput);
 
-            expect(detectAgentType).toHaveBeenCalledWith('Hello', 'default');
-            expect(createToolSet).toHaveBeenCalledWith({
-                useKnowledgeBase: defaultAgentConfig.toolOptions.useKnowledgeBase,
-                useWebScraper: defaultAgentConfig.toolOptions.useWebScraper,
-                useDeepSearch: false,
-                useProfileContext: defaultAgentConfig.toolOptions.useProfileContext // Should use default's setting
-            });
-            expect(prompts.buildSystemPrompt).toHaveBeenCalledWith('default', false);
-            expect(config.agentType).toBe('default');
-            expect(config.useDeepSearch).toBe(false);
-            expect(mockLogger.error).toHaveBeenCalledWith(
-                expect.stringContaining('Agent detection failed'),
-                expect.objectContaining({ error: error.message })
-            );
+            if ('type' in config && config.type === 'orchestrated') {
+                expect.fail('Expected ChatEngineConfig but received OrchestratedResponse');
+            } else {
+                expect(detectAgentType).toHaveBeenCalledWith('Hello', 'default');
+                expect(createToolSet).toHaveBeenCalledWith({
+                    useKnowledgeBase: defaultAgentConfig.toolOptions.useKnowledgeBase,
+                    useWebScraper: defaultAgentConfig.toolOptions.useWebScraper,
+                    useDeepSearch: false,
+                    useProfileContext: defaultAgentConfig.toolOptions.useProfileContext // Should use default's setting
+                });
+                expect(prompts.buildSystemPrompt).toHaveBeenCalledWith('default', false);
+                expect(config.agentType).toBe('default');
+                expect(config.useDeepSearch).toBe(false);
+                expect(mockLogger.error).toHaveBeenCalledWith(
+                    expect.stringContaining('Agent detection failed'),
+                    expect.objectContaining({ error: error.message })
+                );
+            }
         });
 
         it('should populate config.body correctly', async () => {
             const input = { ...baseInput, requestBody: { ...baseInput.requestBody, deepSearchEnabled: true, id: 'session-xyz' } };
             const config = await chatSetupService.prepareConfig(input);
 
-            expect(config.body).toBeDefined();
-            expect(config.body?.deepSearchEnabled).toBe(config.useDeepSearch);
-            expect(config.body?.sessionId).toBe('session-xyz');
-            expect(config.body?.userId).toBe('user-abc');
-            expect(config.body?.agentType).toBe('default');
-            expect(config.body?.isWidgetChat).toBe(false);
-            expect(config.body?.bypassAuth).toBe(false); // Default for main chat
+            if ('type' in config && config.type === 'orchestrated') {
+                expect.fail('Expected ChatEngineConfig but received OrchestratedResponse');
+            } else {
+                expect(config.body).toBeDefined();
+                expect(config.body?.deepSearchEnabled).toBe(config.useDeepSearch);
+                expect(config.body?.sessionId).toBe('session-xyz');
+                expect(config.body?.userId).toBe('user-abc');
+                expect(config.body?.agentType).toBe('default');
+                expect(config.body?.isWidgetChat).toBe(false);
+                expect(config.body?.bypassAuth).toBe(false); // Default for main chat
+            }
         });
 
     });
@@ -270,13 +296,17 @@ describe('ChatSetupService', () => {
         it('should populate config.body correctly for widget', async () => {
             const config = await chatSetupService.prepareConfig(widgetInput);
 
-            expect(config.body).toBeDefined();
-            expect(config.body?.deepSearchEnabled).toBe(false);
-            expect(config.body?.sessionId).toBe('widget-session-123');
-            expect(config.body?.userId).toBeUndefined();
-            expect(config.body?.agentType).toBe('default'); // Underlying type
-            expect(config.body?.isWidgetChat).toBe(true);
-            expect(config.body?.bypassAuth).toBe(true);
+            if ('type' in config && config.type === 'orchestrated') {
+                expect.fail('Expected ChatEngineConfig but received OrchestratedResponse');
+            } else {
+                expect(config.body).toBeDefined();
+                expect(config.body?.deepSearchEnabled).toBe(false);
+                expect(config.body?.sessionId).toBe('widget-session-123');
+                expect(config.body?.userId).toBeUndefined();
+                expect(config.body?.agentType).toBe('default'); // Underlying type
+                expect(config.body?.isWidgetChat).toBe(true);
+                expect(config.body?.bypassAuth).toBe(true);
+            }
         });
     });
 }); 

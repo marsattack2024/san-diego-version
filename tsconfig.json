@@ -18,6 +18,10 @@
     "jsx": "preserve",
     "incremental": true,
     "allowSyntheticDefaultImports": true,
+    "types": [
+      "node",
+      "vitest/globals"
+    ],
     "plugins": [
       {
         "name": "next"

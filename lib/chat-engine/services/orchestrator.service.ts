@@ -159,7 +159,8 @@ export class AgentOrchestrator {
                 const stepStartTime = Date.now();
 
                 try {
-                    const agentConfig = getAgentConfig(step.agent);
+                    // Re-adding explicit cast as workaround for persistent linter error
+                    const agentConfig = getAgentConfig(step.agent as AgentType);
                     if (!agentConfig) throw new Error(`Agent configuration not found for type: ${step.agent}`);
 
                     // TODO: Implement smarter context summarization/selection
@@ -167,7 +168,7 @@ export class AgentOrchestrator {
                     const workerPrompt = `Initial Request: "${initialRequest}"\n\nRelevant previous step results:\n${relevantContextString}\n\nYour Task: ${step.task}`;
 
                     const { object: output, usage: agentUsage, finishReason: agentFinishReason, warnings: agentWarnings } = await generateObject({
-                        // Provide a default model if agentConfig.model is undefined
+                        // Revert: Pass the LanguageModel object, not just the ID string
                         model: openai(agentConfig.model || 'gpt-4o'),
                         schema: AgentOutputSchema, // Assuming a general output schema for now
                         system: agentConfig.systemPrompt,

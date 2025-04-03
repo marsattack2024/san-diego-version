@@ -85,6 +85,14 @@ export class ChatSetupService {
             messageContentPreview: lastUserMessageContent.substring(0, 50) + '...'
         });
 
+        // --- Orchestration Decision Point --- 
+        // Prevent orchestration for widget requests, regardless of the flag
+        const shouldOrchestrate = useOrchestratorFlag && !isWidget;
+
+        if (shouldOrchestrate) {
+            // Orchestration logic here
+        }
+
         // 2. Determine Agent Type and Config
         let agentType: AgentType = 'default'; // Default agent type
         let agentConfig = getAgentConfig('default'); // Start with default config

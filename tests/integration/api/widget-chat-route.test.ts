@@ -36,13 +36,6 @@ vi.mock('@/lib/utils/http-utils', () => ({ handleCors: mockHandleCors }));
 
 vi.mock('@/utils/supabase/server', () => ({ createClient: vi.fn() })); // Prevent cache error
 
-// 3. Import modules AFTER mocks are defined
-import { ChatSetupService } from '@/lib/chat-engine/chat-setup.service';
-import { createChatEngine } from '@/lib/chat-engine/chat-engine.facade';
-import { handleCors } from '@/lib/utils/http-utils';
-import { errorResponse, validationError, successResponse } from '@/lib/utils/route-handler';
-import type { ChatEngineConfig } from '@/lib/chat-engine/chat-engine.config';
-
 // 4. Test Suite
 describe('Shallow Integration Test: /api/widget-chat Route Handler Logic', () => {
 

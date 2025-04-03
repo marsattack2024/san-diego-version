@@ -7,20 +7,8 @@
  */
 
 import { type Message, type ToolSet } from 'ai';
-
-// Log categories for grouping and sampling
-const LOG_CATEGORIES = {
-  AUTH: 'auth',
-  CHAT: 'chat',
-  TOOLS: 'tools',
-  LLM: 'llm',
-  SYSTEM: 'system'
-} as const;
-
-type LogCategory = typeof LOG_CATEGORIES[keyof typeof LOG_CATEGORIES];
-
-// Add a log deduplication mechanism to reduce repeated logs
-// At the top of the file, after imports but before any exported code
+// Import constants
+import { LOG_CATEGORIES, LogCategory, LOG_LEVELS, LogLevel } from './constants';
 
 // Log deduplication cache
 const LOG_CACHE = new Map<string, {
@@ -73,7 +61,17 @@ const DEDUP_SETTINGS = {
     [LOG_CATEGORIES.CHAT]: 0.1,    // 10% of chat logs
     [LOG_CATEGORIES.TOOLS]: 0.1,   // 10% of tool logs
     [LOG_CATEGORIES.LLM]: 0.1,     // 10% of LLM logs
-    [LOG_CATEGORIES.SYSTEM]: 1.0    // 100% of system logs
+    [LOG_CATEGORIES.SYSTEM]: 1.0,   // 100% of system logs
+    // Add missing categories with default rate
+    [LOG_CATEGORIES.CACHE]: 0.1,
+    [LOG_CATEGORIES.API]: 0.1,
+    [LOG_CATEGORIES.DB]: 0.1,
+    [LOG_CATEGORIES.SEARCH]: 0.1,
+    [LOG_CATEGORIES.RAG]: 0.1,
+    [LOG_CATEGORIES.VECTOR]: 0.1,
+    [LOG_CATEGORIES.WEBSCRAPER]: 0.1,
+    [LOG_CATEGORIES.DEEPSEARCH]: 0.1,
+    [LOG_CATEGORIES.ORCHESTRATOR]: 0.1
   }
 };
 

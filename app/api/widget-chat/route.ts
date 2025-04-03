@@ -13,6 +13,7 @@ import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { handleCors } from '@/lib/utils/http-utils';
 import { z } from 'zod';
 import { ChatSetupService } from '@/lib/chat-engine/chat-setup.service';
+import { ChatEngineConfig } from '@/lib/chat-engine/chat-engine.config';
 
 export const runtime = 'edge';
 export const maxDuration = 30; // 30 seconds max duration for widget requests
@@ -134,15 +135,32 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     // --- Configuration Setup --- 
-    // Use the new ChatSetupService
     const chatSetupService = new ChatSetupService();
-    const engineConfig = await chatSetupService.prepareConfig({
+    const engineSetupResult = await chatSetupService.prepareConfig({
       requestBody: body,
       userId: undefined, // Widget is unauthenticated
       isWidget: true
     });
 
-    // --- Engine Creation & Execution --- 
+    // --- Type Check & Engine Creation --- 
+    // Ensure we didn't accidentally get an orchestrated response for a widget
+    if ('type' in engineSetupResult && engineSetupResult.type === 'orchestrated') {
+      edgeLogger.error('Orchestration response received for widget chat, which is not supported.', {
+        category: LOG_CATEGORIES.SYSTEM,
+        operationId,
+        sessionId: body.sessionId,
+        important: true
+      });
+      // Return an error - internal server error because this shouldn't happen
+      return handleCors(
+        errorResponse('Internal configuration error', 'Widget cannot use orchestration', 500),
+        req,
+        true
+      );
+    }
+
+    // We know it's a standard config now, cast it
+    const engineConfig = engineSetupResult as ChatEngineConfig;
     const engine = createChatEngine(engineConfig);
 
     edgeLogger.info('Widget chat engine created, handling request...', {
