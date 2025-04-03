@@ -180,7 +180,7 @@ export function getAgentConfig(agentType: AgentType): AgentConfig {
                 useWebScraper: false, // Reduced tool set for quiz agent
                 useDeepSearch: false,
                 useRagTool: true,
-                useProfileContext: false
+                useProfileContext: true
             }
         },
         'default': {
@@ -194,18 +194,6 @@ export function getAgentConfig(agentType: AgentType): AgentConfig {
                 useProfileContext: true
             }
         },
-        // Add placeholder configs for new agents
-        'validator': {
-            temperature: 0.2, // Low temperature for focused validation
-            model: 'gpt-4o-mini', // Can use a smaller model for validation
-            toolOptions: {
-                useKnowledgeBase: false,
-                useWebScraper: false,
-                useDeepSearch: false,
-                useRagTool: false,
-                useProfileContext: false // Validator might not need profile context
-            }
-        },
         'researcher': {
             temperature: 0.5,
             model: 'gpt-4o', // Needs a capable model for research
@@ -215,6 +203,17 @@ export function getAgentConfig(agentType: AgentType): AgentConfig {
                 useDeepSearch: true, // Researcher needs deep search
                 useRagTool: true,
                 useProfileContext: true // May need profile for context-aware research
+            }
+        },
+        'copyeditor': {
+            temperature: 0.6, // Balanced for refinement
+            model: 'gpt-4o',
+            toolOptions: {
+                useKnowledgeBase: true, // May need KB for brand voice guidelines
+                useWebScraper: false,
+                useDeepSearch: false,
+                useRagTool: true,
+                useProfileContext: true // May need profile for tailoring tone
             }
         }
     };

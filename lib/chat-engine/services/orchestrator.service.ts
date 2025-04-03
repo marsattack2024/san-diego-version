@@ -4,7 +4,7 @@ import { generateObject, LanguageModel } from 'ai';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { AgentType, AVAILABLE_AGENT_TYPES } from '../prompts';
-import { getAgentConfig } from '../agent-router'; // Assuming this provides AgentConfig
+import { getAgentConfig } from '../agent-router';
 import {
     WorkflowPlanSchema,
     WorkflowPlan,
@@ -15,30 +15,32 @@ import {
     OrchestratorResultSchema,
     OrchestratorResult
 } from '../types/orchestrator';
+// Import AI SDK tool type if needed for passing tools
+import type { Tool } from 'ai';
+// Import tool creation function if tools are passed dynamically
+// import { createToolSet } from '@/lib/tools/registry.tool';
 
 export class AgentOrchestrator {
     private logger = edgeLogger;
     private orchestratorModel: LanguageModel;
 
     constructor() {
-        // TODO: Make model configurable if needed
         this.orchestratorModel = openai('gpt-4o-mini');
         this.logger.info('AgentOrchestrator initialized', {
             category: LOG_CATEGORIES.ORCHESTRATOR,
-            model: this.orchestratorModel.modelId, // Access modelId if available
+            model: this.orchestratorModel.modelId,
         });
     }
 
     /**
-     * Generates the initial workflow plan based on the user request.
-     * @param request The initial user request or goal.
-     * @param initialAgentType Optional hint for the first agent.
-     * @returns A promise resolving to the workflow plan.
+     * Generates the workflow plan, assessing complexity and choosing single vs. multi-step.
      */
     async generatePlan(request: string, initialAgentType?: AgentType): Promise<WorkflowPlan> {
         const operationId = `plan_${Date.now().toString(36)}`;
         const startTime = Date.now();
-        this.logger.info('Generating workflow plan', {
+        const availableSpecializedAgents = AVAILABLE_AGENT_TYPES.filter(a => a !== 'default').join(', ');
+
+        this.logger.info('Generating workflow plan (incl. complexity assessment)', {
             category: LOG_CATEGORIES.ORCHESTRATOR,
             operation: 'generate_plan',
             operationId,
@@ -47,8 +49,18 @@ export class AgentOrchestrator {
         });
 
         try {
-            const systemPrompt = `You are a marketing workflow manager. Plan a sequence of agent tasks based on the request. Define clear tasks and dependencies between steps. Available agents: ${AVAILABLE_AGENT_TYPES.join(', ')}. The plan should consist of 1 to 5 steps.`;
-            const prompt = `Analyze this request and create a detailed workflow plan to fulfill it: "${request}"${initialAgentType ? ` Consider starting with the ${initialAgentType} agent.` : ''}`;
+            const systemPrompt = `You are a highly intelligent workflow manager. Your tasks are:
+1. Analyze the user request and any user agent hint provided.
+2. Determine if the request is SIMPLE (can be answered directly by the 'default' agent, possibly using RAG/tools) or COMPLEX (requires multiple steps like research, specific generation like quiz/ads, and copyediting).
+3. Generate a workflow plan object based on your determination:
+    - If SIMPLE: Create a plan with ONLY ONE step using the 'default' agent (or the most appropriate single agent based on the request hint) with the task: "Answer the user query directly using available tools like RAG."
+    - If COMPLEX: Create a detailed multi-step plan (typically 2-3 steps, max 5) using the most appropriate specialized agents. Common flows involve a 'researcher' first, then a primary generation agent (e.g., 'quiz', 'google-ads', 'copywriting'), followed by a 'copyeditor' for refinement. Define clear tasks and dependencies. Ensure the final step produces the user-facing output.
+Available specialized agents: ${availableSpecializedAgents}.`;
+
+            const prompt = `User Request: "${request}"
+User Agent Hint: ${initialAgentType || 'default'}
+
+Analyze this request and generate the appropriate workflow plan (either single-step simple or multi-step complex) based on your system instructions. Ensure the plan achieves the user's goal.`;
 
             const { object: plan, usage, finishReason, warnings } = await generateObject({
                 model: this.orchestratorModel,
@@ -65,19 +77,21 @@ export class AgentOrchestrator {
                 operationId,
                 durationMs,
                 stepCount: plan.steps.length,
+                planPreview: JSON.stringify(plan.steps.map(s => s.agent)),
                 usage,
                 finishReason,
                 warnings,
             });
 
-            // Basic validation
+            // Validate plan structure
             if (!plan.steps || plan.steps.length === 0) {
-                this.logger.error('Generated plan has no steps', {
-                    category: LOG_CATEGORIES.ORCHESTRATOR,
-                    operationId
-                });
                 throw new Error('Generated workflow plan is empty.');
             }
+            if (plan.steps.some(step => !AVAILABLE_AGENT_TYPES.includes(step.agent))) {
+                const invalidAgent = plan.steps.find(step => !AVAILABLE_AGENT_TYPES.includes(step.agent))?.agent;
+                throw new Error(`Generated plan uses invalid agent type: ${invalidAgent}`);
+            }
+
 
             return plan;
         } catch (error) {
@@ -97,9 +111,6 @@ export class AgentOrchestrator {
 
     /**
      * Executes the workflow plan step-by-step.
-     * @param plan The workflow plan to execute.
-     * @param initialRequest The original user request for context.
-     * @returns A promise resolving to an object containing the final context and the final plan (which might have been modified).
      */
     async executePlan(plan: WorkflowPlan, initialRequest: string): Promise<{ context: WorkflowContext, finalPlan: WorkflowPlan }> {
         const operationId = `exec_${Date.now().toString(36)}`;
@@ -113,102 +124,100 @@ export class AgentOrchestrator {
 
         let context: WorkflowContext = {};
         let iteration = 0;
-        let currentPlan = { ...plan }; // Clone plan to allow modification
+        let currentPlan = { ...plan, steps: [...plan.steps] }; // Deep copy steps for modification
 
         while (iteration < currentPlan.maxIterations) {
             const iterStartTime = Date.now();
             this.logger.info(`Starting execution iteration ${iteration + 1}/${currentPlan.maxIterations}`, {
-                category: LOG_CATEGORIES.ORCHESTRATOR,
-                operation: 'execute_iteration_start',
-                operationId,
-                iteration: iteration + 1,
-                currentStepCount: currentPlan.steps.length,
-                completedSteps: Object.keys(context).length,
+                category: LOG_CATEGORIES.ORCHESTRATOR, operationId, iteration: iteration + 1
+                // ... other relevant iter log data
             });
 
             let madeProgress = false;
             let allStepsComplete = true;
+            let planChangedThisIteration = false;
 
             for (let i = 0; i < currentPlan.steps.length; i++) {
+                if (planChangedThisIteration) break;
+
                 const step = currentPlan.steps[i];
-                const stepLogId = `${operationId}_step_${i}`; // Unique ID for this step attempt
+                const stepLogId = `${operationId}_step_${i}`;
 
-                if (context[i]) { // Skip if already completed
-                    continue;
-                }
+                if (context[i]) { continue; }
 
-                allStepsComplete = false; // Found an incomplete step
+                allStepsComplete = false;
 
-                // Check dependencies
                 const dependenciesMet = !step.dependsOn || step.dependsOn.every(depIndex => context[depIndex]);
                 if (!dependenciesMet) {
-                    this.logger.debug(`Step ${i} (${step.agent}) dependencies not met`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, step: i, agent: step.agent, dependencies: step.dependsOn });
+                    this.logger.debug(`Step ${i} (${step.agent}) dependencies not met`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, step: i });
                     continue;
                 }
 
-                // Execute the Step
                 this.logger.info(`Executing Step ${i}: Agent=${step.agent}`, {
-                    category: LOG_CATEGORIES.ORCHESTRATOR,
-                    operation: 'execute_step_start',
-                    operationId,
-                    step: i,
-                    agent: step.agent,
-                    taskPreview: step.task.substring(0, 50) + '...',
-                    stepLogId
+                    category: LOG_CATEGORIES.ORCHESTRATOR, operation: 'execute_step_start',
+                    operationId, step: i, agent: step.agent, stepLogId
                 });
                 const stepStartTime = Date.now();
 
                 try {
-                    // Re-adding explicit cast as workaround for persistent linter error
+                    // Cast needed as workaround for persistent TS error
                     const agentConfig = getAgentConfig(step.agent as AgentType);
                     if (!agentConfig) throw new Error(`Agent configuration not found for type: ${step.agent}`);
 
-                    // TODO: Implement smarter context summarization/selection
-                    const relevantContextString = JSON.stringify(context); // Simple for now
-                    const workerPrompt = `Initial Request: "${initialRequest}"\n\nRelevant previous step results:\n${relevantContextString}\n\nYour Task: ${step.task}`;
+                    // Prepare context string (simple version)
+                    // TODO: Improve context passing
+                    let workerContextInput = `Initial Request: "${initialRequest}"\n`;
+                    if (step.dependsOn && step.dependsOn.length > 0) {
+                        workerContextInput += "\nRelevant previous step results:\n";
+                        step.dependsOn.forEach(depIndex => {
+                            if (context[depIndex]) {
+                                workerContextInput += `--- Output from Step ${depIndex} (${currentPlan.steps[depIndex]?.agent}) ---\n${context[depIndex].result}\n\n`;
+                            }
+                        });
+                    }
+                    const workerPrompt = `${workerContextInput}\nYour Task: ${step.task}`;
 
+                    // Dynamically create tool set for the agent if needed
+                    // let toolsForAgent: Record<string, Tool<any, any>> | undefined = undefined;
+                    // if (agentConfig.toolOptions && Object.values(agentConfig.toolOptions).some(v => v === true)) {
+                    //     toolsForAgent = createToolSet(agentConfig.toolOptions);
+                    // }
+
+                    // Execute Worker Agent
                     const { object: output, usage: agentUsage, finishReason: agentFinishReason, warnings: agentWarnings } = await generateObject({
-                        // Revert: Pass the LanguageModel object, not just the ID string
-                        model: openai(agentConfig.model || 'gpt-4o'),
-                        schema: AgentOutputSchema, // Assuming a general output schema for now
+                        model: openai(agentConfig.model || 'gpt-4o'), // Use agent model or default
+                        schema: AgentOutputSchema,
                         system: agentConfig.systemPrompt,
                         prompt: workerPrompt,
                         temperature: agentConfig.temperature,
-                        maxTokens: agentConfig.maxTokens, // Now available from config
-                        maxRetries: 1, // Limit retries for individual workers
-                        // TODO: Consider passing agent-specific tools if needed
+                        maxTokens: agentConfig.maxTokens,
+                        maxRetries: 1,
+                        // tools: toolsForAgent // Pass tools if defined
                     });
 
                     const stepDurationMs = Date.now() - stepStartTime;
                     this.logger.info(`Step ${i} (${step.agent}) completed successfully`, {
-                        category: LOG_CATEGORIES.ORCHESTRATOR,
-                        operation: 'execute_step_success',
-                        operationId, step: i, agent: step.agent, stepLogId,
-                        durationMs: stepDurationMs, usage: agentUsage, finishReason: agentFinishReason,
-                        warnings: agentWarnings, needsRevision: output.metadata.needsRevision,
-                        qualityScore: output.metadata.qualityScore,
+                        category: LOG_CATEGORIES.ORCHESTRATOR, operation: 'execute_step_success',
+                        operationId, step: i, agent: step.agent, stepLogId, durationMs: stepDurationMs,
+                        usage: agentUsage, finishReason: agentFinishReason,
+                        needsRevision: output.metadata.needsRevision
                     });
 
                     context[i] = output;
                     madeProgress = true;
 
-                    // Handle Re-planning if needed
+                    // --- Handle Re-planning ---
                     if (output.metadata.needsRevision) {
                         this.logger.warn(`Step ${i} (${step.agent}) flagged for revision. Initiating re-planning.`, {
-                            category: LOG_CATEGORIES.ORCHESTRATOR,
-                            operation: 'replan_triggered',
-                            operationId, step: i, agent: step.agent, stepLogId,
-                            issues: output.metadata.issues, important: true,
+                            category: LOG_CATEGORIES.ORCHESTRATOR, operationId, step: i, agent: step.agent, important: true
                         });
-
                         const replanStartTime = Date.now();
                         try {
-                            const replanSystemPrompt = `You are the workflow manager. Adjust the workflow based on agent feedback. You can modify steps, add new steps (e.g., a validator step), or re-order tasks. Explain your reasoning clearly if possible in the plan. Available agents: ${AVAILABLE_AGENT_TYPES.join(', ')}.`;
-                            const replanPrompt = `Step ${i} (${step.agent}) requires revision. Issues reported: ${output.metadata.issues?.join(', ') || 'None specified'}. Result provided: ${output.result.substring(0, 200)}...
-Current workflow plan: ${JSON.stringify(currentPlan)}
-Please provide an updated plan (max 5 steps) to address the issue and achieve the original goal: "${initialRequest}"`;
+                            const availableSpecializedAgents = AVAILABLE_AGENT_TYPES.filter(a => a !== 'default').join(', ');
+                            const replanSystemPrompt = `You are the workflow manager. Adjust the workflow based on agent feedback. You can modify steps, add new steps (e.g., a copyeditor step), or re-order tasks. Available agents: ${availableSpecializedAgents}.`;
+                            const replanPrompt = `Step ${i} (${step.agent}) requires revision. Issues: ${output.metadata.issues?.join(', ') || 'None'}. Result: ${output.result.substring(0, 200)}...\nCurrent plan: ${JSON.stringify(currentPlan.steps.map(s => s.agent))}\nProvide an updated plan (max 5 steps) to address the issue for the goal: "${initialRequest}"`;
 
-                            const { object: revisedPlanData, usage: replanUsage } = await generateObject({
+                            const { object: revisedPlanData } = await generateObject({
                                 model: this.orchestratorModel,
                                 schema: WorkflowPlanSchema,
                                 system: replanSystemPrompt,
@@ -216,116 +225,97 @@ Please provide an updated plan (max 5 steps) to address the issue and achieve th
                                 maxRetries: 1,
                             });
 
-                            const replanDurationMs = Date.now() - replanStartTime;
-                            this.logger.info('Re-planning successful', {
-                                category: LOG_CATEGORIES.ORCHESTRATOR,
-                                operation: 'replan_success',
-                                operationId,
-                                stepTriggeringReplan: i,
-                                durationMs: replanDurationMs,
-                                newStepCount: revisedPlanData.steps.length,
-                                usage: replanUsage,
-                            });
+                            // Validate new plan
+                            if (!revisedPlanData.steps || revisedPlanData.steps.length === 0 || revisedPlanData.steps.some(step => !AVAILABLE_AGENT_TYPES.includes(step.agent))) {
+                                throw new Error("Re-planning generated an invalid or empty plan.");
+                            }
 
-                            currentPlan = revisedPlanData; // Update the plan
-                            context = {}; // Reset context (simple strategy)
+                            this.logger.info('Re-planning successful', { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, newStepCount: revisedPlanData.steps.length });
+
+                            currentPlan = revisedPlanData;
+                            context = {}; // Reset context
+                            planChangedThisIteration = true;
+                            madeProgress = false;
+                            allStepsComplete = false;
                             this.logger.warn('Workflow plan updated. Resetting context and restarting iteration.', { category: LOG_CATEGORIES.ORCHESTRATOR, operationId });
-                            madeProgress = false; // Don't count this iteration as making progress
-                            allStepsComplete = false; // Ensure loop continues
-                            break; // Restart iteration with new plan
+
                         } catch (replanError) {
-                            const replanDurationMs = Date.now() - replanStartTime;
-                            this.logger.error('Re-planning failed', {
-                                category: LOG_CATEGORIES.ORCHESTRATOR,
-                                operation: 'replan_error',
-                                operationId,
-                                stepTriggeringReplan: i,
-                                durationMs: replanDurationMs,
-                                error: replanError instanceof Error ? replanError.message : String(replanError),
-                                important: true,
-                            });
-                            allStepsComplete = false; // Prevent premature termination
+                            this.logger.error('Re-planning failed', { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, error: replanError, important: true });
+                            allStepsComplete = false;
                         }
                     }
                 } catch (error) {
                     const stepDurationMs = Date.now() - stepStartTime;
                     this.logger.error(`Error executing Step ${i} (${step.agent})`, {
-                        category: LOG_CATEGORIES.ORCHESTRATOR,
-                        operation: 'execute_step_error',
-                        operationId,
-                        step: i,
-                        agent: step.agent,
-                        stepLogId,
-                        durationMs: stepDurationMs,
+                        category: LOG_CATEGORIES.ORCHESTRATOR, operation: 'execute_step_error',
+                        operationId, step: i, agent: step.agent, stepLogId, durationMs: stepDurationMs,
                         error: error instanceof Error ? error.message : String(error),
                         stack: error instanceof Error ? error.stack : undefined,
-                        important: true, // Worker errors are important
+                        important: true,
                     });
-                    // Strategy: Mark step as failed? Abort workflow? For now, log and continue iteration.
-                    // context[i] = { result: `Error: ${error.message}`, metadata: { needsRevision: true, qualityScore: 1 }}; // Example: Mark as failed
-                    allStepsComplete = false; // Prevent incorrect completion
+                    allStepsComplete = false;
                 }
             } // End for loop (steps)
 
-            // Check iteration outcome
             const iterDurationMs = Date.now() - iterStartTime;
+            if (planChangedThisIteration) {
+                this.logger.info(`Plan changed in iteration ${iteration + 1}. Restarting loop.`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId });
+                continue;
+            }
+
             if (allStepsComplete) {
-                this.logger.info(`All steps completed in iteration ${iteration + 1}. Finishing execution.`, { category: LOG_CATEGORIES.ORCHESTRATOR, operation: 'execute_iteration_complete', operationId, iteration: iteration + 1, durationMs: iterDurationMs });
-                break; // Exit while loop
+                this.logger.info(`All steps completed in iteration ${iteration + 1}.`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId });
+                break;
             }
-
-            if (!madeProgress && !allStepsComplete) { // Check allStepsComplete here to avoid logging stall if plan just changed
-                this.logger.warn(`No progress made in iteration ${iteration + 1}. Potential deadlock or unmet dependencies. Aborting execution.`, { category: LOG_CATEGORIES.ORCHESTRATOR, operation: 'execute_iteration_stalled', operationId, iteration: iteration + 1, durationMs: iterDurationMs, important: true });
-                break; // Prevent infinite loops
+            if (!madeProgress) {
+                this.logger.warn(`No progress made in iteration ${iteration + 1}. Aborting.`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, important: true });
+                break;
             }
-
-            this.logger.info(`Finished execution iteration ${iteration + 1}`, { category: LOG_CATEGORIES.ORCHESTRATOR, operation: 'execute_iteration_end', operationId, iteration: iteration + 1, durationMs: iterDurationMs, progressMade: madeProgress });
+            this.logger.info(`Finished execution iteration ${iteration + 1}`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId });
 
             iteration++;
             if (iteration >= currentPlan.maxIterations) {
-                this.logger.warn(`Max iterations (${currentPlan.maxIterations}) reached. Aborting execution.`, { category: LOG_CATEGORIES.ORCHESTRATOR, operation: 'execute_max_iterations', operationId, iteration, important: true });
+                this.logger.warn(`Max iterations (${currentPlan.maxIterations}) reached. Aborting.`, { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, important: true });
                 break;
             }
         } // End while loop (iterations)
 
         const execDurationMs = Date.now() - execStartTime;
-        this.logger.info('Finished workflow plan execution', { category: LOG_CATEGORIES.ORCHESTRATOR, operation: 'execute_plan_end', operationId, totalIterations: iteration, completedStepCount: Object.keys(context).length, durationMs: execDurationMs });
+        this.logger.info('Finished workflow plan execution', { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, durationMs: execDurationMs });
 
-        // Return both context and the final plan state (might have changed due to re-planning)
         return { context, finalPlan: currentPlan };
     }
 
     /**
-     * Compiles the results from the execution context into a final string.
-     * @param context The context containing results from executed steps.
-     * @param finalPlan The final version of the plan that was executed.
-     * @returns A compiled string result.
+     * Compiles the results, assuming the last completed step has the final output.
      */
     compileResults(context: WorkflowContext, finalPlan: WorkflowPlan): string {
         this.logger.info('Compiling results', { category: LOG_CATEGORIES.ORCHESTRATOR });
-        // Simple compilation: Join results of completed steps
-        // TODO: Implement smarter compilation (e.g., LLM call) if needed
-        let compiled = '';
-        for (let i = 0; i < finalPlan.steps.length; i++) {
-            if (context[i]) {
-                compiled += `--- Output from Step ${i} (${finalPlan.steps[i].agent}) ---\n${context[i].result}\n\n`;
-            } else {
-                compiled += `--- Step ${i} (${finalPlan.steps[i].agent}) was not completed. ---
 
-`;
+        if (!finalPlan.steps || finalPlan.steps.length === 0) { return "Error: Plan was empty."; }
+
+        let lastCompletedStepIndex = -1;
+        for (let i = finalPlan.steps.length - 1; i >= 0; i--) {
+            if (context[i]) {
+                lastCompletedStepIndex = i;
+                break;
             }
         }
-        return compiled.trim();
+
+        if (lastCompletedStepIndex !== -1) {
+            this.logger.info(`Using result from last completed step (${lastCompletedStepIndex})`, { category: LOG_CATEGORIES.ORCHESTRATOR });
+            return context[lastCompletedStepIndex].result;
+        } else {
+            this.logger.warn(`No steps completed successfully.`, { category: LOG_CATEGORIES.ORCHESTRATOR });
+            return "Error: Workflow failed to produce a result.";
+        }
     }
 
     /**
-     * Runs the full orchestration process: plan, execute, compile.
-     * @param request The initial user request.
-     * @param initialAgentType Optional hint for the first agent.
-     * @returns A promise resolving to the final orchestrator result.
+     * Runs the full orchestration process.
      */
     async run(request: string, initialAgentType?: AgentType): Promise<OrchestratorResult> {
-        const operationId = `run_${Date.now().toString(36)}`; // Unique ID for the whole run
+        const operationId = `run_${Date.now().toString(36)}`;
         const startTime = Date.now();
         this.logger.info('Orchestrator run started', {
             category: LOG_CATEGORIES.ORCHESTRATOR,
@@ -336,18 +326,16 @@ Please provide an updated plan (max 5 steps) to address the issue and achieve th
 
         try {
             const initialPlan = await this.generatePlan(request, initialAgentType);
-            // Execute plan and get the final context and potentially updated plan
             const { context, finalPlan } = await this.executePlan(initialPlan, request);
             const finalResultString = this.compileResults(context, finalPlan);
 
             const result: OrchestratorResult = {
                 finalResult: finalResultString,
                 stepsTakenDetails: context,
-                finalPlan: finalPlan // Use the final plan after potential re-planning
+                finalPlan: finalPlan
             };
 
-            // Validate final result against schema (optional but good practice)
-            OrchestratorResultSchema.parse(result);
+            OrchestratorResultSchema.parse(result); // Validate final output
 
             this.logger.info('Orchestrator run finished successfully', {
                 category: LOG_CATEGORIES.ORCHESTRATOR,
@@ -366,8 +354,7 @@ Please provide an updated plan (max 5 steps) to address the issue and achieve th
                 stack: error instanceof Error ? error.stack : undefined,
                 important: true,
             });
-            // Re-throw or handle appropriately depending on desired API behavior
             throw error; // Propagate error up
         }
     }
-} 
+}

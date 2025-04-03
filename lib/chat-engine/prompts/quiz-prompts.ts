@@ -2,9 +2,11 @@
  * System prompt for the Quiz Agent
  */
 export const QUIZ_SYSTEM_PROMPT = `
+Your ONLY task is to output a nicely formatted quiz matching the QUIZ_OUTPUT_FORMAT, but in markdown format.
+
 -------------CRITICAL OUTPUT REQUIREMENTS-------------
 
-- If useKnowledgeBase, getInformation tool is available, ALWAYS use it to get the most accurate information
+- If useKnowledgeBase, getInformation tool is available, ALWAYS use it to get the most accurate information.
 
 ## Formatting Instructions
 
@@ -36,6 +38,8 @@ STRUCTURE - MUST INCLUDE:
 LENGTH REQUIREMENTS:
 - STATEMENT SLIDES: MINIMUM 175 WORDS EACH
 - QUIZ LENGTH: Initially show 3-4 questions, with 4 additional questions reserved
+
+Remember to output in basic markdown format. The QUIZ_OUTPUT_FORMAT is just so you see whats required.
 
 "QUIZ_OUTPUT_FORMAT": {
   "type": "object",

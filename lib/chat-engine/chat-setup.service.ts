@@ -39,30 +39,63 @@ export class ChatSetupService {
     }
 
     /**
-     * Prepares the full ChatEngineConfig based on the input request and context.
-     * @param input - Contains request body, user ID, and context flag.
-     * @returns A promise resolving to either ChatEngineConfig (single agent) or OrchestratedResponse.
+     * Determines configuration. Always uses orchestrator for non-widgets.
+     * @returns A promise resolving to OrchestratedResponse (main chat) or ChatEngineConfig (widget).
      */
     async prepareConfig(input: ChatSetupInput): Promise<ChatEngineConfig | OrchestratedResponse> {
         const { requestBody, userId, isWidget } = input;
         const setupStartTime = Date.now();
 
-        edgeLogger.info('Starting chat engine configuration setup', {
+        edgeLogger.info('Starting chat engine setup', {
             category: LOG_CATEGORIES.SYSTEM,
             operationId: this.operationId,
             isWidget,
             userIdProvided: !!userId,
-            bodyKeys: Object.keys(requestBody).join(', ')
         });
 
-        // 1. Extract Flags and Basic Info
-        const deepSearchEnabled = parseBooleanValue(requestBody.deepSearchEnabled);
-        const requestedAgentId = requestBody.agentId || 'default';
-        const sessionId = requestBody.id || requestBody.sessionId;
-        const disableMessagePersistence = parseBooleanValue(requestBody.disable_persistence);
-        const useOrchestratorFlag = parseBooleanValue(requestBody.useOrchestrator);
+        // --- Handle Widget Path (Simple, Single-Agent) --- 
+        if (isWidget) {
+            edgeLogger.info('Processing widget request: Using single-agent config.', { category: LOG_CATEGORIES.SYSTEM, operationId: this.operationId });
+            // Simplified widget config - directly return ChatEngineConfig
+            const widgetAgentConfig = getAgentConfig('default'); // Use default config as base
+            const widgetConfig: ChatEngineConfig = {
+                agentType: 'default',
+                tools: widgetTools,
+                systemPrompt: prompts.widget, // Use specific widget prompt
+                model: 'gpt-4o-mini',
+                temperature: 0.4,
+                requiresAuth: false,
+                messagePersistenceDisabled: true,
+                corsEnabled: true,
+                useDeepSearch: false,
+                useWebScraper: false,
+                operationName: `widget_chat_${this.operationId}`,
+                cacheEnabled: true,
+                messageHistoryLimit: 20,
+                maxTokens: 800,
+                body: {
+                    deepSearchEnabled: false,
+                    sessionId: requestBody.id || requestBody.sessionId,
+                    userId: undefined,
+                    agentType: 'default',
+                    isWidgetChat: true,
+                    bypassAuth: true
+                }
+            };
+            edgeLogger.info('Widget config prepared', {
+                category: LOG_CATEGORIES.SYSTEM,
+                operationId: this.operationId,
+                durationMs: Date.now() - setupStartTime,
+            });
+            return widgetConfig;
+        }
 
-        // Extract last user message content for agent detection
+        // --- Handle Main Chat Path (Always Use Orchestrator) --- 
+        edgeLogger.info('Processing main chat request: Invoking orchestrator.', { category: LOG_CATEGORIES.SYSTEM, operationId: this.operationId });
+
+        // Extract necessary info for orchestrator
+        const requestedAgentId = requestBody.agentId as AgentType || 'default';
+        const sessionId = requestBody.id || requestBody.sessionId;
         let lastUserMessageContent: string = '';
         if (requestBody.messages && Array.isArray(requestBody.messages) && requestBody.messages.length > 0) {
             const lastMessage = requestBody.messages[requestBody.messages.length - 1];
@@ -70,172 +103,41 @@ export class ChatSetupService {
                 lastUserMessageContent = lastMessage.content;
             }
         } else if (requestBody.message && typeof requestBody.message.content === 'string') {
-            // Handle the single message format
             lastUserMessageContent = requestBody.message.content;
         }
 
-        edgeLogger.debug('Extracted flags and info', {
-            category: LOG_CATEGORIES.SYSTEM,
-            operationId: this.operationId,
-            deepSearchEnabled,
-            requestedAgentId,
-            sessionId: sessionId?.substring(0, 8),
-            disableMessagePersistence,
-            useOrchestratorFlag,
-            messageContentPreview: lastUserMessageContent.substring(0, 50) + '...'
-        });
-
-        // --- Orchestration Decision Point --- 
-        // Prevent orchestration for widget requests, regardless of the flag
-        const shouldOrchestrate = useOrchestratorFlag && !isWidget;
-
-        if (shouldOrchestrate) {
-            // Orchestration logic here
+        if (!lastUserMessageContent) {
+            edgeLogger.error('Could not extract user message content for orchestrator', { category: LOG_CATEGORIES.SYSTEM, operationId: this.operationId, sessionId });
+            // Handle error appropriately - maybe throw or return default error response? Here we throw.
+            throw new Error('Missing user message content');
         }
 
-        // 2. Determine Agent Type and Config
-        let agentType: AgentType = 'default'; // Default agent type
-        let agentConfig = getAgentConfig('default'); // Start with default config
-        let shouldUseDeepSearch = false;
+        try {
+            // Always run the orchestrator for non-widget requests
+            const orchestratorResult = await this.agentOrchestrator.run(lastUserMessageContent, requestedAgentId);
 
-        if (isWidget) {
-            // Widget specific configuration
-            // Keep agentType as 'default' for type consistency, but override config
-            agentConfig = {
-                ...agentConfig, // Start with default agent config
-                model: 'gpt-4o-mini', // Override model
-                temperature: 0.4, // Override temperature
-                toolOptions: { // Explicitly define widget tool capabilities
-                    useKnowledgeBase: true,
-                    useWebScraper: false, // Disable scraper for widget
-                    useDeepSearch: false, // Disable deep search for widget
-                    useRagTool: true, // Ensure RAG is enabled
-                    useProfileContext: false // Explicitly disable profile context for widget
-                }
+            // Package the result
+            const response: OrchestratedResponse = {
+                type: 'orchestrated',
+                data: orchestratorResult
             };
-            shouldUseDeepSearch = false; // Explicitly false for widget
-            edgeLogger.info('Applying fixed widget configuration overrides', {
-                category: LOG_CATEGORIES.SYSTEM,
-                operationId: this.operationId,
-                finalAgentType: agentType, // Log the underlying agent type ('default')
-                widgetModel: agentConfig.model
-            });
-        } else {
-            // Main chat agent routing
-            try {
-                const detectionResult = await detectAgentType(
-                    lastUserMessageContent,
-                    requestedAgentId
-                );
-                agentType = detectionResult.agentType;
-                agentConfig = detectionResult.config;
-                edgeLogger.info('Agent detected for main chat', {
-                    category: LOG_CATEGORIES.CHAT,
-                    operationId: this.operationId,
-                    detectedAgent: agentType,
-                    reasoning: detectionResult.reasoning
-                });
-            } catch (error) {
-                edgeLogger.error('Agent detection failed, falling back to default', {
-                    category: LOG_CATEGORIES.CHAT,
-                    operationId: this.operationId,
-                    error: error instanceof Error ? error.message : String(error),
-                    fallbackAgent: 'default'
-                });
-                // Keep default agentType and agentConfig
-            }
 
-            // Determine final deep search status for main chat
-            const canAgentUseDeepSearch = agentConfig.toolOptions.useDeepSearch;
-            shouldUseDeepSearch = canAgentUseDeepSearch && deepSearchEnabled;
-            edgeLogger.info('Deep Search determination', {
-                category: LOG_CATEGORIES.SYSTEM,
+            edgeLogger.info('Orchestration completed successfully via ChatSetupService', {
+                category: LOG_CATEGORIES.ORCHESTRATOR,
                 operationId: this.operationId,
-                agentSupports: canAgentUseDeepSearch,
-                userEnabled: deepSearchEnabled,
-                finalDecision: shouldUseDeepSearch
+                durationMs: Date.now() - setupStartTime
             });
+            return response;
+
+        } catch (orchestrationError) {
+            edgeLogger.error('Orchestration failed within ChatSetupService', {
+                category: LOG_CATEGORIES.ORCHESTRATOR,
+                operationId: this.operationId,
+                error: orchestrationError instanceof Error ? orchestrationError.message : String(orchestrationError),
+                important: true
+            });
+            // Re-throw to let the API handler manage the final error response
+            throw orchestrationError;
         }
-
-        // 3. Configure Tool Set
-        let tools: ChatEngineConfig['tools'] = {};
-        if (isWidget) {
-            tools = widgetTools; // Use the fixed, minimal toolset for widget
-            edgeLogger.info('Using fixed widget toolset', {
-                category: LOG_CATEGORIES.TOOLS,
-                operationId: this.operationId,
-                toolCount: Object.keys(tools).length,
-                toolNames: Object.keys(tools).join(', ')
-            });
-        } else {
-            // Dynamically create toolset for main chat
-            tools = createToolSet({
-                useKnowledgeBase: agentConfig.toolOptions.useKnowledgeBase,
-                useWebScraper: agentConfig.toolOptions.useWebScraper,
-                useDeepSearch: shouldUseDeepSearch, // Use the final calculated value
-                useProfileContext: agentConfig.toolOptions.useProfileContext // Pass the flag
-            });
-            edgeLogger.info('Created dynamic toolset for main chat', {
-                category: LOG_CATEGORIES.TOOLS,
-                operationId: this.operationId,
-                toolCount: Object.keys(tools).length,
-                toolNames: Object.keys(tools).join(', ')
-            });
-        }
-
-        // 4. Generate System Prompt
-        const systemPrompt = prompts.buildSystemPrompt(agentType, shouldUseDeepSearch);
-
-        // 5. Determine Auth and Persistence
-        const requiresAuth = !isWidget;
-        const finalMessagePersistenceDisabled = isWidget || disableMessagePersistence;
-
-        // 6. Assemble Final ChatEngineConfig
-        const engineConfig: ChatEngineConfig = {
-            // Core settings determined by context/agent
-            agentType,
-            tools,
-            systemPrompt,
-            model: agentConfig.model || 'gpt-4o',
-            temperature: agentConfig.temperature || 0.7,
-            // Flags determined by context/request
-            requiresAuth,
-            messagePersistenceDisabled: finalMessagePersistenceDisabled,
-            corsEnabled: isWidget, // Enable CORS only for widget
-            useDeepSearch: shouldUseDeepSearch, // Pass final decision
-            useWebScraper: agentConfig.toolOptions.useWebScraper && !isWidget, // Also needs context
-            // Standard operational settings
-            operationName: isWidget ? `widget_chat_${this.operationId}` : `chat_${agentType}`,
-            cacheEnabled: true,
-            messageHistoryLimit: isWidget ? 20 : 50,
-            maxTokens: isWidget ? 800 : 16000, // Example: smaller limit for widget
-            // Body for tool context/flags
-            body: {
-                // **Critical:** Pass all flags tools might need
-                deepSearchEnabled: shouldUseDeepSearch,
-                sessionId,
-                userId, // Ensure userId is passed
-                agentType,
-                isWidgetChat: isWidget,
-                bypassAuth: !requiresAuth // Pass auth bypass status if needed downstream
-                // Add any other flags needed by specific tools here
-            }
-        };
-
-        edgeLogger.info('Chat engine configuration prepared', {
-            category: LOG_CATEGORIES.SYSTEM,
-            operationId: this.operationId,
-            durationMs: Date.now() - setupStartTime,
-            finalConfig: {
-                agentType: engineConfig.agentType,
-                model: engineConfig.model,
-                requiresAuth: engineConfig.requiresAuth,
-                persistenceDisabled: engineConfig.messagePersistenceDisabled,
-                useDeepSearch: engineConfig.useDeepSearch,
-                toolCount: Object.keys(engineConfig.tools || {}).length
-            }
-        });
-
-        return engineConfig;
     }
 } 

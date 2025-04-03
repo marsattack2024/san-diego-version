@@ -12,7 +12,6 @@ import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { errorResponse, unauthorizedError, validationError, successResponse } from '@/lib/utils/route-handler';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { ChatSetupService } from '@/lib/chat-engine/chat-setup.service';
-import { OrchestratedResponse } from '@/lib/chat-engine/types/orchestrator';
 import { ChatEngineConfig } from '@/lib/chat-engine/chat-engine.config';
 
 // Maintain existing runtime directives
@@ -35,10 +34,10 @@ export async function POST(request: Request): Promise<Response> {
   });
 
   let body: Record<string, any>;
-  let reqClone: Request;
 
   try {
-    reqClone = request.clone(); // Clone request early for potential use in error logging
+    // Keep request cloning and parsing
+    const reqClone = request.clone();
     body = await request.json();
 
     edgeLogger.debug('Parsed request body', {
@@ -48,7 +47,7 @@ export async function POST(request: Request): Promise<Response> {
       bodyKeys: Object.keys(body)
     });
 
-    // --- Basic Validation --- 
+    // --- Basic Validation (Keep) --- 
     const sessionId = body.id;
     if (!sessionId) {
       edgeLogger.warn('Validation Error: Missing session ID', { category: LOG_CATEGORIES.CHAT, operationId });
@@ -60,11 +59,9 @@ export async function POST(request: Request): Promise<Response> {
     }
     // Consider adding Zod validation here later for stricter schema checking
 
-    // --- Authentication --- 
-    // TODO: Add BYPASS_AUTH check here if still needed for development
+    // --- Authentication (Keep) --- 
     const supabase = await createRouteHandlerClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();
-
     if (authError || !user) {
       edgeLogger.warn('Authentication failed for chat request', {
         category: LOG_CATEGORIES.AUTH,
@@ -74,31 +71,29 @@ export async function POST(request: Request): Promise<Response> {
       });
       return unauthorizedError('Authentication required');
     }
-    const userId = user.id;
-    // Assuming persistenceUserId is the same as authenticated userId for main chat
-    const persistenceUserId = userId;
-
+    const persistenceUserId = user.id;
     edgeLogger.info('User authenticated', {
       category: LOG_CATEGORIES.AUTH,
       operationId,
       sessionId,
-      userId: userId.substring(0, 8) // Log partial ID
+      userId: persistenceUserId.substring(0, 8) // Log partial ID
     });
 
-    // --- Configuration Setup --- 
+    // --- Configuration Setup & Orchestration --- 
     const chatSetupService = new ChatSetupService();
-    // Result can be either standard config or orchestrated result
-    const engineSetupResult = await chatSetupService.prepareConfig({
+
+    // Call prepareConfig - it will handle calling the orchestrator for this route
+    // We expect an OrchestratedResponse here
+    const setupResult = await chatSetupService.prepareConfig({
       requestBody: body,
       userId: persistenceUserId,
-      isWidget: false // This is the main chat route
+      isWidget: false // Explicitly false for this route
     });
 
-    // --- Check if Orchestration Occurred --- 
-    if ('type' in engineSetupResult && engineSetupResult.type === 'orchestrated') {
-      // Handle Orchestrated Result
-      const orchestratedData = (engineSetupResult as OrchestratedResponse).data;
-
+    // --- Handle Orchestrated Result --- 
+    // Type check to be safe, although we expect OrchestratedResponse
+    if ('type' in setupResult && setupResult.type === 'orchestrated') {
+      const orchestratedData = setupResult.data;
       edgeLogger.info('Orchestration completed, returning JSON response', {
         category: LOG_CATEGORIES.ORCHESTRATOR,
         operationId,
@@ -106,53 +101,18 @@ export async function POST(request: Request): Promise<Response> {
         status: 200,
         durationMs: Date.now() - startTime
       });
-
-      // TODO: Consider persistence needs for orchestrated flows
-      // Maybe save the final result or key steps to the database?
-
-      // Use successResponse utility for consistent JSON formatting
+      // TODO: Persistence for orchestrated flows?
       return successResponse(orchestratedData);
     } else {
-      // --- Handle Single Agent Flow (Existing Logic) --- 
-      const engineConfig = engineSetupResult as ChatEngineConfig;
-      const engine = createChatEngine(engineConfig);
-
-      edgeLogger.info('Single-agent engine created, handling request...', {
-        category: LOG_CATEGORIES.CHAT,
+      // This case should theoretically not happen for /api/chat anymore
+      edgeLogger.error('Unexpected response type from ChatSetupService for main chat route.', {
+        category: LOG_CATEGORIES.SYSTEM,
         operationId,
         sessionId,
-        agentType: engineConfig.agentType,
-        useDeepSearch: engineConfig.useDeepSearch,
-        toolCount: Object.keys(engineConfig.tools || {}).length
+        responseType: typeof setupResult,
+        important: true,
       });
-
-      // Pass the cloned request with the already parsed body
-      const response = await engine.handleRequest(reqClone, { parsedBody: body });
-
-      // --- Stream Consumption (Existing Logic) ---
-      if (response.body && 'consumeStream' in (response as any)) {
-        (response as any).consumeStream().catch((streamError: any) => {
-          edgeLogger.error('Error consuming response stream post-response', {
-            category: LOG_CATEGORIES.CHAT,
-            operationId,
-            sessionId,
-            error: streamError instanceof Error ? streamError.message : String(streamError)
-          });
-        });
-        edgeLogger.info('Response stream consumption initiated', { category: LOG_CATEGORIES.CHAT, operationId, sessionId });
-      } else {
-        edgeLogger.warn('Response body does not support consumeStream', { category: LOG_CATEGORIES.CHAT, operationId, sessionId });
-      }
-
-      edgeLogger.info('Single-agent request processed successfully', {
-        category: LOG_CATEGORIES.CHAT,
-        operationId,
-        sessionId,
-        status: response.status,
-        durationMs: Date.now() - startTime
-      });
-
-      return response;
+      return errorResponse('Internal server error: Invalid setup configuration.', 'Unexpected setup result', 500);
     }
 
   } catch (error) {
@@ -164,8 +124,6 @@ export async function POST(request: Request): Promise<Response> {
       stack: error instanceof Error ? error.stack : undefined,
       important: true
     });
-
-    // Use the standardized error response utility
     return errorResponse(
       'An unexpected error occurred processing your message',
       error instanceof Error ? error.message : 'Unknown error',

@@ -5,8 +5,9 @@ import { FACEBOOK_ADS_SYSTEM_PROMPT } from './facebook-ads-prompts';
 import { QUIZ_SYSTEM_PROMPT } from './quiz-prompts';
 import { WIDGET_BASE_PROMPT } from './widget-prompt';
 
-// Agent types supported by the system - keep our custom type definitions
-export type AgentType = 'default' | 'copywriting' | 'google-ads' | 'facebook-ads' | 'quiz' | 'validator' | 'researcher';
+// Agent types supported by the system
+// Removed validator, added copyeditor
+export type AgentType = 'default' | 'copywriting' | 'google-ads' | 'facebook-ads' | 'quiz' | 'researcher' | 'copyeditor';
 
 // Runtime array of agent types for validation/iteration
 export const AVAILABLE_AGENT_TYPES: AgentType[] = [
@@ -15,8 +16,8 @@ export const AVAILABLE_AGENT_TYPES: AgentType[] = [
   'google-ads',
   'facebook-ads',
   'quiz',
-  'validator',
-  'researcher'
+  'researcher',
+  'copyeditor' // Added
 ];
 
 // Enhanced prompt types to support both the main chat and widget chat
@@ -24,13 +25,14 @@ export type ChatEnginePromptType = AgentType | 'widget';
 
 // Map of agent types to their specialized prompts - maintain our modular organization
 export const AGENT_PROMPTS: Record<AgentType, string> = {
-  'default': '',  // No additional prompt for default agent
+  'default': '',
   'copywriting': COPYWRITING_SYSTEM_PROMPT,
   'google-ads': GOOGLE_ADS_SYSTEM_PROMPT,
   'facebook-ads': FACEBOOK_ADS_SYSTEM_PROMPT,
-  'quiz': QUIZ_SYSTEM_PROMPT,
-  'validator': 'You are a meticulous validator agent, checking work against criteria.',
-  'researcher': 'You are an efficient research agent, gathering information using available tools.'
+  'quiz': QUIZ_SYSTEM_PROMPT, // Assuming you reverted this correctly
+  // 'validator': '...', // Removed
+  'researcher': 'You are an efficient research agent, gathering information using available tools.', // Placeholder
+  'copyeditor': 'You are a skilled copyeditor, refining text for clarity, tone, engagement, and adherence to requirements like word count.' // Placeholder
 };
 
 /**
@@ -159,8 +161,9 @@ export function buildChatEnginePrompt(promptType: ChatEnginePromptType): string 
     promptType === 'google-ads' ||
     promptType === 'facebook-ads' ||
     promptType === 'quiz' ||
-    promptType === 'validator' ||
-    promptType === 'researcher') {
+    // promptType === 'validator' || // Removed
+    promptType === 'researcher' ||
+    promptType === 'copyeditor') { // Added
     return buildSystemPrompt(promptType);
   }
 
@@ -182,8 +185,9 @@ export const prompts = {
   googleAds: buildSystemPrompt('google-ads'),
   facebookAds: buildSystemPrompt('facebook-ads'),
   quiz: buildSystemPrompt('quiz'),
-  validator: buildSystemPrompt('validator'),
+  // validator: buildSystemPrompt('validator'), // Removed
   researcher: buildSystemPrompt('researcher'),
+  copyeditor: buildSystemPrompt('copyeditor'), // Added
   widget: WIDGET_BASE_PROMPT,
 
   // Helper functions with standardized interfaces
