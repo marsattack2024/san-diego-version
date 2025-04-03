@@ -29,7 +29,11 @@ interface AIServiceCallbacks {
 export class AIStreamService {
 
     // Phase 8: Inject dependencies like logger, config subsets
-    constructor() { }
+    constructor() {
+        edgeLogger.info('AI Stream Service initialized', {
+            category: LOG_CATEGORIES.SYSTEM
+        });
+    }
 
     /**
      * Processes the chat request using the Vercel AI SDK's streamText.
@@ -41,7 +45,7 @@ export class AIStreamService {
      */
     async process(
         context: ChatEngineContext,
-        config: Pick<ChatEngineConfig, 'model' | 'systemPrompt' | 'tools' | 'temperature' | 'maxTokens' | 'body' | 'operationName'>,
+        config: ChatEngineConfig,
         callbacks: AIServiceCallbacks
     ): Promise<Response> {
         const operationName = config.operationName || 'ai_stream_process';
@@ -161,9 +165,34 @@ export class AIStreamService {
                 coreMessageCount: coreMessages.length
             });
 
+            // --- Context Injection Workaround --- 
+            // Prepare messages array for AI SDK
+            let messagesForSdk: CoreMessage[] = coreMessages;
+
+            // Inject context from config.body into a hidden system message
+            if (config.body && Object.keys(config.body).length > 0) {
+                const contextMessage: CoreMessage = {
+                    role: 'system',
+                    content: JSON.stringify(config.body),
+                    // Add a custom property or use a convention to identify this message
+                    // Note: The SDK might strip unknown properties, using content might be safer
+                    // experimental_hidden: true // Example custom property (might be stripped)
+                    // We rely on the tool to find and parse this specific message by its structure/content.
+                };
+                // Prepend context message - less likely to be truncated if history is long
+                messagesForSdk = [contextMessage, ...messagesForSdk];
+
+                edgeLogger.debug('Injected context message for tool execution', {
+                    category: LOG_CATEGORIES.LLM,
+                    operation: operationName,
+                    injectedContextKeys: Object.keys(config.body)
+                });
+            }
+            // ----------------------------------
+
             const result = await streamText({
                 model: openai(config.model || 'gpt-4o'),
-                messages: coreMessages, // Use CoreMessages now
+                messages: messagesForSdk, // Pass the array potentially including the context message
                 system: systemContent, // Pass system prompt here
                 tools: config.tools,
                 temperature: config.temperature,

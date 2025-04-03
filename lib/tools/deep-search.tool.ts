@@ -31,21 +31,53 @@ export const deepSearchTool = tool({
         const operationId = `deep-search-${Date.now().toString(36)}`;
         const startTime = Date.now();
 
-        try {
-            // Read the deepSearchEnabled flag ONLY from runOptions.body
-            // This relies on ChatSetupService correctly populating config.body
-            // @ts-ignore - Accessing body which might not be typed on runOptions directly
-            const deepSearchEnabled = runOptions.body?.deepSearchEnabled === true;
+        let deepSearchEnabled = false;
+        let executionContext: Record<string, any> | null = null;
 
-            // Log the received flag for verification
+        try {
+            // --- Try to extract context from the special system message --- 
+            if (runOptions?.messages && Array.isArray(runOptions.messages)) {
+                // Find the *first* system message (we prepend it)
+                const contextMsg = runOptions.messages.find(msg => msg.role === 'system');
+                if (contextMsg?.content) {
+                    try {
+                        // Attempt to parse the content as JSON
+                        executionContext = JSON.parse(contextMsg.content as string);
+                        // Check if the parsed content looks like our context object
+                        if (executionContext && typeof executionContext === 'object' && 'deepSearchEnabled' in executionContext) {
+                            deepSearchEnabled = executionContext.deepSearchEnabled === true;
+                            edgeLogger.debug('Successfully parsed context from system message', {
+                                category: LOG_CATEGORIES.TOOLS,
+                                operationId,
+                                toolCallId: runOptions.toolCallId,
+                                extractedFlag: deepSearchEnabled,
+                                contextKeys: Object.keys(executionContext)
+                            });
+                        } else {
+                            // Content wasn't our expected JSON context
+                            executionContext = null; // Reset if parse succeeded but format is wrong
+                            edgeLogger.warn('System message content parsed but not the expected context format', {
+                                category: LOG_CATEGORIES.TOOLS, operationId, toolCallId: runOptions.toolCallId
+                            });
+                        }
+                    } catch (e) {
+                        // Content wasn't valid JSON, ignore it
+                        edgeLogger.debug('System message content was not valid JSON', {
+                            category: LOG_CATEGORIES.TOOLS, operationId, toolCallId: runOptions.toolCallId
+                        });
+                    }
+                }
+            }
+            // ---------------------------------------------------------------
+
+            // Log the final determined flag value
             edgeLogger.info("Deep Search tool execution check", {
                 category: LOG_CATEGORIES.TOOLS,
                 operation: "deep_search_execution_check",
                 operationId,
                 toolCallId: runOptions.toolCallId,
-                // @ts-ignore
-                bodyKeys: runOptions.body ? Object.keys(runOptions.body) : 'none',
-                deepSearchEnabledFlag: deepSearchEnabled
+                deepSearchEnabledFlag: deepSearchEnabled, // Log the value found (or default false)
+                contextSource: executionContext ? 'system_message' : 'not_found'
             });
 
             // CRITICAL SAFETY CHECK: Verify deep search is explicitly enabled
@@ -59,7 +91,6 @@ export const deepSearchTool = tool({
                     searchTermPreview: search_term?.substring(0, 50) || '',
                     important: true
                 });
-
                 return "I'm sorry, but web search capabilities are not enabled for this conversation. Please enable Deep Search in your user settings if you'd like me to search the web for information.";
             }
 
