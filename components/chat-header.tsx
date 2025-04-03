@@ -11,7 +11,6 @@ import { useChatStore } from '@/stores/chat-store';
 import { AuthButton } from './auth/auth-button';
 import { useState } from 'react';
 import { historyService } from '@/lib/api/history-service';
-import { CircuitBreakerDebug } from './debug/circuit-breaker-debug';
 import { createClient } from '@/utils/supabase/client';
 
 export function PureChatHeader({
@@ -91,7 +90,8 @@ export function PureChatHeader({
       </div>
       <div className="flex items-center gap-2">
         <AuthButton />
-        <CircuitBreakerDebug inline={true} />
+        {/* Dev Mode: Show Admin Status */}
+        {/* {process.env.NODE_ENV === 'development' && <AdminStatusBadge />} */}
       </div>
     </header>
   );
