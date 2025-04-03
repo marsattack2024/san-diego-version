@@ -25,6 +25,8 @@ import { z } from 'zod'; // For request validation
 // Import AgentType
 import { AgentType } from '@/lib/chat-engine/prompts';
 import { createAgentToolSet, getAgentConfig } from '@/lib/chat-engine/agent-router';
+import { withAuth } from '@/lib/auth/with-auth'; // Import the auth wrapper
+import type { User } from '@supabase/supabase-js'; // Import User type
 
 // Define request schema for validation
 // Based on useChat hook and experimental_prepareRequestBody in components/chat.tsx
@@ -50,7 +52,7 @@ export const dynamic = 'force-dynamic'; // Ensure dynamic behavior
  * POST handler for the chat route
  * Handles creation of new chat messages and streaming responses following Vercel AI SDK standard pattern.
  */
-export async function POST(request: Request): Promise<Response> {
+export const POST = withAuth(async (user: User, request: Request): Promise<Response> => {
   const operationId = `chat_${Math.random().toString(36).substring(2, 10)}`;
   const startTime = Date.now();
 
@@ -81,19 +83,9 @@ export async function POST(request: Request): Promise<Response> {
       agentId
     } = validationResult.data;
 
-    // 2. Authentication
-    const supabase = await createRouteHandlerClient();
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      edgeLogger.warn('Authentication failed for chat request', {
-        category: LOG_CATEGORIES.AUTH,
-        operationId,
-        sessionId
-      });
-      return unauthorizedError('Authentication required');
-    }
-    const userId = user.id;
-    edgeLogger.info('User authenticated', {
+    // 2. Authentication (handled by withAuth wrapper)
+    const userId = user.id; // User object is passed from withAuth
+    edgeLogger.info('User authenticated (via withAuth)', {
       category: LOG_CATEGORIES.AUTH,
       operationId,
       sessionId,
@@ -251,4 +243,4 @@ export async function POST(request: Request): Promise<Response> {
       500
     );
   }
-} 
+}); 

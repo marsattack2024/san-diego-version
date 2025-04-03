@@ -11,21 +11,26 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { handleCors } from '@/lib/utils/http-utils';
 import type { IdParam } from '@/lib/types/route-handlers';
+import { withAuth } from '@/lib/auth/with-auth';
+import type { User } from '@supabase/supabase-js';
 
 export const runtime = 'edge';
 export const maxDuration = 15;
 export const dynamic = 'force-dynamic';
 
 // GET handler to retrieve a specific chat and its messages
-export async function GET(
-    request: Request,
-    { params }: IdParam
-): Promise<Response> {
+export const GET = withAuth(async (user: User, request: Request): Promise<Response> => {
     const operationId = `get_chat_${Math.random().toString(36).substring(2, 10)}`;
 
     try {
-        // Extract params safely by awaiting the Promise
-        const { id: chatId } = await params;
+        // Retrieve params from the request URL within the handler
+        const url = new URL(request.url);
+        const pathnameSegments = url.pathname.split('/');
+        const chatId = pathnameSegments[pathnameSegments.length - 1]; // Assuming ID is the last segment
+
+        if (!chatId) {
+            return errorResponse('Missing chat ID', null, 400);
+        }
 
         edgeLogger.info('Chat GET request started', {
             category: 'chat',
@@ -33,21 +38,15 @@ export async function GET(
             chatId
         });
 
-        // Authenticate user
-        const supabase = await createRouteHandlerClient();
-        const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-        if (authError || !user) {
-            edgeLogger.warn('Authentication failed getting chat', {
-                category: 'auth',
-                operationId,
-                error: authError?.message || 'No user found'
-            });
-
-            return handleCors(unauthorizedError(), request, true);
-        }
+        // Authentication handled by wrapper, user object is passed
+        edgeLogger.info('User authenticated (via withAuth)', {
+            category: 'auth',
+            operationId,
+            userId: user.id.substring(0, 8)
+        });
 
         // Get chat session data
+        const supabase = await createRouteHandlerClient(); // Need to create client here
         const { data: sessionData, error: sessionError } = await supabase
             .from('sd_chat_sessions')
             .select('id, title, created_at, updated_at, agent_id, user_id, deep_search_enabled')
@@ -66,7 +65,7 @@ export async function GET(
             return handleCors(notFoundError('Chat not found'), request, true);
         }
 
-        // Verify that the authenticated user owns this chat
+        // RLS should handle authorization, but double-check ownership for safety
         if (sessionData.user_id !== user.id) {
             edgeLogger.warn('User attempted to access chat they do not own', {
                 category: 'auth',
@@ -154,25 +153,116 @@ export async function GET(
         return handleCors(successResp, request, true);
 
     } catch (error) {
-        // In the catch block, we need to be careful with params which might be a Promise
-        let chatIdForLogging = 'unknown';
-        try {
-            chatIdForLogging = params ? (await params).id : 'unknown';
-        } catch {
-            // Ignore any errors accessing params
-        }
-
+        // In the catch block, log error without relying on potentially unresolved params
         edgeLogger.error('Unexpected error getting chat', {
             category: 'chat',
             operationId: `get_chat_error_${Math.random().toString(36).substring(2, 10)}`,
-            chatId: chatIdForLogging,
             error: error instanceof Error ? error.message : String(error),
             important: true
         });
 
-        const errorResp = errorResponse('Server error', error, 500);
+        const errorResp = errorResponse('Server error', error instanceof Error ? error.message : String(error), 500);
         return handleCors(errorResp, request, true);
     }
-}
+});
 
 // PATCH handler to update chat metadata
+export const PATCH = withAuth(async (user: User, request: Request): Promise<Response> => {
+    const operationId = `patch_chat_${Math.random().toString(36).substring(2, 10)}`;
+
+    try {
+        // Retrieve params from the request URL within the handler
+        const url = new URL(request.url);
+        const pathnameSegments = url.pathname.split('/');
+        const chatId = pathnameSegments[pathnameSegments.length - 1];
+
+        if (!chatId) {
+            return errorResponse('Missing chat ID', null, 400);
+        }
+
+        // Parse request body
+        const body = await request.json();
+        const { title } = body;
+
+        if (!title || typeof title !== 'string') {
+            return errorResponse('Invalid title provided', null, 400);
+        }
+
+        edgeLogger.info('Chat PATCH request started', {
+            category: 'chat',
+            operationId,
+            chatId,
+            userId: user.id.substring(0, 8),
+            newTitle: title
+        });
+
+        const supabase = await createRouteHandlerClient();
+
+        // Verify chat exists and belongs to user (using RLS indirectly)
+        const { data: existingChat, error: fetchError } = await supabase
+            .from('sd_chat_sessions')
+            .select('id, user_id') // Only select needed fields
+            .eq('id', chatId)
+            .single();
+
+        if (fetchError || !existingChat) {
+            edgeLogger.error('Error finding chat to update or chat not found', {
+                category: 'chat',
+                operationId,
+                chatId,
+                error: fetchError?.message || 'Chat not found'
+            });
+            return handleCors(notFoundError('Chat not found or access denied'), request, true);
+        }
+
+        // Double check ownership before updating
+        if (existingChat.user_id !== user.id) {
+            edgeLogger.warn('Attempt to update chat owned by another user', {
+                category: 'auth',
+                operationId,
+                chatId,
+                userId: user.id,
+                ownerId: existingChat.user_id
+            });
+            return handleCors(unauthorizedError('Not authorized to update this chat'), request, true);
+        }
+
+        // Update chat title
+        const { error: updateError } = await supabase
+            .from('sd_chat_sessions')
+            .update({ title: title.trim() })
+            .eq('id', chatId);
+
+        if (updateError) {
+            edgeLogger.error('Error updating chat title', {
+                category: 'chat',
+                operationId,
+                chatId,
+                error: updateError.message,
+                important: true
+            });
+            return handleCors(errorResponse('Failed to update chat', updateError), request, true);
+        }
+
+        edgeLogger.info('Successfully updated chat title', {
+            category: 'chat',
+            operationId,
+            chatId
+        });
+
+        // Return updated chat metadata
+        const successResp = successResponse({ id: chatId, title: title.trim() });
+        return handleCors(successResp, request, true);
+
+    } catch (error) {
+        edgeLogger.error('Unexpected error updating chat', {
+            category: 'chat',
+            operationId: `patch_chat_error_${Math.random().toString(36).substring(2, 10)}`,
+            error: error instanceof Error ? error.message : String(error),
+            important: true
+        });
+
+        const errorResp = errorResponse('Server error', error instanceof Error ? error.message : String(error), 500);
+        return handleCors(errorResp, request, true);
+    }
+});

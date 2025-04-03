@@ -4,6 +4,8 @@ import type { Message } from 'ai';
 import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
 import type { IdParam } from '@/lib/types/route-handlers';
 import { handleCors } from '@/lib/utils/http-utils';
+import { withAuth } from '@/lib/auth/with-auth';
+import type { User } from '@supabase/supabase-js';
 
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
@@ -11,17 +13,17 @@ export const dynamic = 'force-dynamic';
 /**
  * GET handler to retrieve paginated messages for a specific chat
  */
-export async function GET(
-    request: Request,
-    { params }: IdParam
-): Promise<Response> {
+export const GET = withAuth(async (user: User, request: Request): Promise<Response> => {
     const operationId = `messages_${Math.random().toString(36).substring(2, 10)}`;
 
     try {
-        // Extract params safely by awaiting the Promise
-        const { id: chatId } = await params;
+        // Retrieve chat ID from URL
+        const url = new URL(request.url);
+        const pathnameSegments = url.pathname.split('/');
+        const chatId = pathnameSegments[pathnameSegments.length - 2]; // ID is second to last segment
 
-        const { searchParams } = new URL(request.url);
+        // Get pagination params
+        const { searchParams } = url;
         const page = parseInt(searchParams.get('page') || '1');
         const pageSize = parseInt(searchParams.get('pageSize') || '100'); // Default to larger page size
 
@@ -29,6 +31,7 @@ export async function GET(
             operation: 'fetch_messages',
             operationId,
             chatId: chatId.slice(0, 8), // Only log partial ID for privacy
+            userId: user.id.substring(0, 8),
             page,
             pageSize
         });
@@ -49,23 +52,10 @@ export async function GET(
         // Create Supabase client
         const supabase = await createRouteHandlerClient();
 
-        // Get the current user from auth
-        const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-        if (authError || !user) {
-            edgeLogger.warn('Authentication failed fetching messages', {
-                operation: 'fetch_messages',
-                operationId,
-                error: authError?.message || 'No user found'
-            });
-
-            return handleCors(unauthorizedError(), request, true);
-        }
-
         // Calculate offset for pagination
         const offset = (page - 1) * pageSize;
 
-        // Query the database for the messages
+        // Query the database for the messages - RLS handles user auth
         const { data, error } = await supabase
             .from('sd_chat_histories')
             .select('*')
@@ -129,4 +119,4 @@ export async function GET(
         const response = errorResponse('Unexpected error fetching messages', error, 500);
         return handleCors(response, request, true);
     }
-} 
+}); 
