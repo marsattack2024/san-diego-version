@@ -175,7 +175,7 @@ The primary issue is that the main `/api/chat/route.ts` endpoint lacked the nece
 
 **Goal:** Implement a new tool to provide user profile context to the AI upon request.
 
-**Status:** Step 2 Complete. Starting Step 3.
+**Status:** Step 5 Complete. Starting Step 6.
 
 **Steps:**
 
@@ -196,15 +196,15 @@ The primary issue is that the main `/api/chat/route.ts` endpoint lacked the nece
     *   Conditionally add `toolSet.getUserProfileContext = profileContextTool;` if `useProfileContext` is true.
     *   Ensure `widgetTools` does not include this tool.
 
-3.  **(TODO) Update Agent Configuration (`lib/chat-engine/agent-router.ts`):**
+3.  **(DONE) Update Agent Configuration (`lib/chat-engine/agent-router.ts`):**
     *   Add `useProfileContext: boolean;` to `AgentConfig.toolOptions`.
     *   Enable the option (`true`) for relevant agent types (e.g., `default`, `copywriting`, `google-ads`, `facebook-ads`).
 
-4.  **(TODO) Update Setup Service (`lib/chat-engine/chat-setup.service.ts`):**
+4.  **(DONE) Update Setup Service (`lib/chat-engine/chat-setup.service.ts`):**
     *   Pass the correct `useProfileContext: agentConfig.toolOptions.useProfileContext` flag when calling `createToolSet` within `prepareConfig`.
     *   Ensure `userId` is reliably added to `config.body`.
 
-5.  **(TODO) Update System Prompt (`lib/chat-engine/prompts/base-prompt.ts`):**
+5.  **(DONE) Update System Prompt (`lib/chat-engine/prompts/base-prompt.ts`):**
     *   Add `getUserProfileContext` and its description to the "AVAILABLE TOOLS" section.
 
 6.  **(TODO) Testing:**

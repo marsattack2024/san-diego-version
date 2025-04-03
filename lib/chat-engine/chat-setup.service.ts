@@ -96,6 +96,7 @@ export class ChatSetupService {
                     useWebScraper: false, // Disable scraper for widget
                     useDeepSearch: false, // Disable deep search for widget
                     useRagTool: true, // Ensure RAG is enabled
+                    useProfileContext: false // Explicitly disable profile context for widget
                 }
             };
             shouldUseDeepSearch = false; // Explicitly false for widget
@@ -157,7 +158,8 @@ export class ChatSetupService {
             tools = createToolSet({
                 useKnowledgeBase: agentConfig.toolOptions.useKnowledgeBase,
                 useWebScraper: agentConfig.toolOptions.useWebScraper,
-                useDeepSearch: shouldUseDeepSearch // Use the final calculated value
+                useDeepSearch: shouldUseDeepSearch, // Use the final calculated value
+                useProfileContext: agentConfig.toolOptions.useProfileContext // Pass the flag
             });
             edgeLogger.info('Created dynamic toolset for main chat', {
                 category: LOG_CATEGORIES.TOOLS,
@@ -198,7 +200,7 @@ export class ChatSetupService {
                 // **Critical:** Pass all flags tools might need
                 deepSearchEnabled: shouldUseDeepSearch,
                 sessionId,
-                userId,
+                userId, // Ensure userId is passed
                 agentType,
                 isWidgetChat: isWidget,
                 bypassAuth: !requiresAuth // Pass auth bypass status if needed downstream
