@@ -171,16 +171,15 @@ describe('Deep Search Tool', () => {
       // Execute deep search
       await deepSearchTool.execute({ search_term: SAMPLE_SEARCH_TERM }, mockRunOptions);
 
-      // Verify detailed debug logging
+      // Verify detailed debug logging - EXPECT THE NEW LOG MESSAGE
       expect(mockLogger.info).toHaveBeenCalledWith(
-        'Deep Search complete runOptions debug',
+        'Deep Search tool execution check', // <-- UPDATED EXPECTED MESSAGE
         expect.objectContaining({
           category: LOG_CATEGORIES.TOOLS,
-          operation: 'deep_search_debug',
+          operation: 'deep_search_execution_check',
           toolCallId: 'tool-call-123',
-          runOptionsKeys: expect.any(Array),
-          bodyKeys: expect.any(Array),
-          deepSearchEnabledInBody: true
+          // bodyKeys: expect.any(Array), // Less brittle check
+          deepSearchEnabledFlag: true
         })
       );
     });

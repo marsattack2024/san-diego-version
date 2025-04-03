@@ -7,13 +7,12 @@
  */
 
 import { createChatEngine } from '@/lib/chat-engine/chat-engine.facade';
-import { widgetTools } from '@/lib/tools/registry.tool';
-import { prompts } from '@/lib/chat-engine/prompts';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { successResponse, errorResponse, validationError } from '@/lib/utils/route-handler';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { handleCors } from '@/lib/utils/http-utils';
 import { z } from 'zod';
+import { ChatSetupService } from '@/lib/chat-engine/chat-setup.service';
 
 export const runtime = 'edge';
 export const maxDuration = 30; // 30 seconds max duration for widget requests
@@ -40,7 +39,7 @@ export async function OPTIONS(req: Request): Promise<Response> {
 
 // Add GET method for wakeup ping and health check
 export async function GET(req: Request): Promise<Response> {
-  const operationId = `widget_${Math.random().toString(36).substring(2, 8)}`;
+  const operationId = `widget_get_${Math.random().toString(36).substring(2, 8)}`;
   const url = new URL(req.url);
   const isWakeupPing = req.headers.get('x-wakeup-ping') === 'true' || url.searchParams.get('ping') === 'true';
 
@@ -68,19 +67,19 @@ export async function GET(req: Request): Promise<Response> {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  const operationId = `widget_${Math.random().toString(36).substring(2, 8)}`;
+  const operationId = `widget_post_${Math.random().toString(36).substring(2, 8)}`;
+  const startTime = Date.now();
+
+  let body: Record<string, any>;
+  let reqClone: Request;
 
   try {
-    // Clone the request for potential debugging and for passing to the engine
-    const reqClone = req.clone();
+    reqClone = req.clone(); // Clone request early
 
-    // Log all headers in development for debugging
+    // Log headers in development
     if (process.env.NODE_ENV === 'development') {
       const headers: Record<string, string> = {};
-      reqClone.headers.forEach((value, key) => {
-        headers[key] = value;
-      });
-
+      reqClone.headers.forEach((value, key) => { headers[key] = value; });
       edgeLogger.debug('Widget chat: Request headers', {
         category: LOG_CATEGORIES.SYSTEM,
         operation: 'widget_chat',
@@ -89,12 +88,10 @@ export async function POST(req: Request): Promise<Response> {
       });
     }
 
-    // Parse and validate the request body
-    let body: any;
+    // --- Validation --- 
     try {
       body = await req.json();
-
-      edgeLogger.debug('Widget chat: Request received', {
+      edgeLogger.debug('Widget chat: Parsed request body', {
         category: LOG_CATEGORIES.SYSTEM,
         operation: 'widget_chat',
         operationId,
@@ -121,9 +118,7 @@ export async function POST(req: Request): Promise<Response> {
           true
         );
       }
-
-      // Update body with validated data
-      body = result.data;
+      body = result.data; // Use validated data
     } catch (parseError) {
       edgeLogger.error('Widget chat: Failed to parse request body', {
         category: LOG_CATEGORIES.SYSTEM,
@@ -138,27 +133,24 @@ export async function POST(req: Request): Promise<Response> {
       );
     }
 
-    // Create a configured chat engine instance for the widget chat
-    const engine = createChatEngine({
-      tools: widgetTools,
-      requiresAuth: false,  // Explicitly disable auth requirement
-      corsEnabled: true,
-      systemPrompt: prompts.widget,
-      maxTokens: 800,
-      temperature: 0.4,
-      model: 'gpt-4o-mini', // Use the smaller, faster model for the widget
-      useWebScraper: false,
-      useDeepSearch: false,
-      operationName: `widget_chat_${operationId}`,
-      cacheEnabled: true,
-      messageHistoryLimit: 20,
-      // Widget uses client-side storage for messages, disable server-side persistence
-      messagePersistenceDisabled: true,
-      body: {
-        sessionId: body.sessionId,
-        isWidgetChat: true, // Flag to identify widget chats
-        bypassAuth: true    // Skip authentication checks for widget
-      }
+    // --- Configuration Setup --- 
+    // Use the new ChatSetupService
+    const chatSetupService = new ChatSetupService();
+    const engineConfig = await chatSetupService.prepareConfig({
+      requestBody: body,
+      userId: undefined, // Widget is unauthenticated
+      isWidget: true
+    });
+
+    // --- Engine Creation & Execution --- 
+    const engine = createChatEngine(engineConfig);
+
+    edgeLogger.info('Widget chat engine created, handling request...', {
+      category: LOG_CATEGORIES.CHAT,
+      operationId,
+      sessionId: body.sessionId?.substring(0, 8),
+      agentType: engineConfig.agentType,
+      toolCount: Object.keys(engineConfig.tools || {}).length
     });
 
     // Pass the cloned request with pre-parsed body to the engine
@@ -175,38 +167,38 @@ export async function POST(req: Request): Promise<Response> {
       operation: 'widget_chat',
       operationId,
       sessionId: body.sessionId,
-      status: response.status
+      status: response.status,
+      durationMs: Date.now() - startTime
     });
 
-    // The engine's handleRequest already applies CORS via handleCors when corsEnabled is true
+    // CORS is handled within engine.handleRequest as config.corsEnabled is true
     return response;
+
   } catch (error) {
     edgeLogger.error('Unhandled error in widget chat route', {
       category: LOG_CATEGORIES.SYSTEM,
-      operation: 'widget_chat',
+      operation: 'widget_chat_error',
       operationId,
       error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined
+      stack: error instanceof Error ? error.stack : undefined,
+      important: true
     });
 
-    // Return a friendly error message that can be displayed to the user
-    const errorResponse = new Response(
-      JSON.stringify({
-        error: true,
-        message: "I apologize, but I encountered an error processing your request. Please try again.",
-        success: false,
-        id: crypto.randomUUID(), // Include message ID for consistency with AI SDK
-        role: "assistant", // Match format expected by the widget
-        content: "I apologize, but I encountered an error processing your request. Please try again.",
-        createdAt: new Date().toISOString()
-      }),
-      {
-        status: 200, // Use 200 here to allow the widget to display the error properly
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      }
-    );
+    // Return a friendly error message formatted for the widget UI
+    const errorPayload = {
+      error: true,
+      message: "I apologize, but I encountered an error processing your request. Please try again.",
+      success: false,
+      id: crypto.randomUUID(),
+      role: "assistant" as const,
+      content: "I apologize, but I encountered an error processing your request. Please try again.",
+      createdAt: new Date().toISOString()
+    };
+
+    const errorResponse = new Response(JSON.stringify(errorPayload), {
+      status: 200, // Use 200 for widget error display
+      headers: { 'Content-Type': 'application/json' }
+    });
 
     return handleCors(errorResponse, req, true);
   }

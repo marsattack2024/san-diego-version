@@ -32,61 +32,24 @@ export const deepSearchTool = tool({
         const startTime = Date.now();
 
         try {
-            // Enhanced logging for debugging
-            edgeLogger.info("Deep Search complete runOptions debug", {
+            // Read the deepSearchEnabled flag ONLY from runOptions.body
+            // This relies on ChatSetupService correctly populating config.body
+            // @ts-ignore - Accessing body which might not be typed on runOptions directly
+            const deepSearchEnabled = runOptions.body?.deepSearchEnabled === true;
+
+            // Log the received flag for verification
+            edgeLogger.info("Deep Search tool execution check", {
                 category: LOG_CATEGORIES.TOOLS,
-                operation: "deep_search_debug",
+                operation: "deep_search_execution_check",
                 operationId,
                 toolCallId: runOptions.toolCallId,
-                runOptionsKeys: Object.keys(runOptions),
-                // Log all available properties
-                messagesAvailable: !!runOptions.messages,
-                messagesCount: runOptions.messages ? runOptions.messages.length : 0,
-                // @ts-ignore - Check all possible locations for deepSearchEnabled
-                bodyAvailable: !!runOptions.body,
-                // @ts-ignore - Custom property added in app/api/chat/route.ts
-                bodyKeys: runOptions.body ? Object.keys(runOptions.body) : [],
-                // @ts-ignore - Custom property added in app/api/chat/route.ts
-                deepSearchEnabledInBody: runOptions.body?.deepSearchEnabled,
-                // Check if present in parent object
-                deepSearchEnabledInParent: (runOptions as any).deepSearchEnabled
+                // @ts-ignore
+                bodyKeys: runOptions.body ? Object.keys(runOptions.body) : 'none',
+                deepSearchEnabledFlag: deepSearchEnabled
             });
-
-            // ==== HOT FIX: Force enable DeepSearch for development ====
-            // TEMPORARILY FORCE ENABLE DEEPSEARCH until we fix the proper flag passing
-            // THIS SHOULD BE REMOVED IN PRODUCTION
-            const FORCE_ENABLE_DEEPSEARCH = true;
-
-            // Try multiple places where the flag might be set
-            const deepSearchEnabled =
-                // Force enable for development/testing
-                FORCE_ENABLE_DEEPSEARCH ||
-                // @ts-ignore - Check the body first (where it should be)
-                runOptions.body?.deepSearchEnabled === true ||
-                // @ts-ignore - Check the root object as fallback
-                (runOptions as any).deepSearchEnabled === true ||
-                // @ts-ignore - Check in messages configuration
-                runOptions.messages?.[0]?.configuration?.deepSearchEnabled === true ||
-                // Last resort - always enable for development
-                process.env.FORCE_DEEP_SEARCH === 'true';
-
-            // Log what we detected
-            edgeLogger.info("Deep Search flag detection", {
-                category: LOG_CATEGORIES.TOOLS,
-                operation: "deep_search_flag_detection",
-                operationId,
-                toolCallId: runOptions.toolCallId,
-                detectedValue: deepSearchEnabled,
-                searchTerm: search_term.substring(0, 50),
-                forceEnabled: FORCE_ENABLE_DEEPSEARCH,
-                envFallbackUsed: deepSearchEnabled && process.env.FORCE_DEEP_SEARCH === 'true',
-            });
-
-            // Skip the check completely due to our emergency fix
-            const bypassCheck = true;
 
             // CRITICAL SAFETY CHECK: Verify deep search is explicitly enabled
-            if (!deepSearchEnabled && !bypassCheck) {
+            if (!deepSearchEnabled) {
                 edgeLogger.warn("Deep Search tool was invoked without being enabled", {
                     category: LOG_CATEGORIES.TOOLS,
                     operation: "deep_search_disabled_attempt",

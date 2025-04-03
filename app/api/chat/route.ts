@@ -7,46 +7,16 @@
  */
 
 import { createChatEngine } from '@/lib/chat-engine/chat-engine.facade';
-import { createToolSet } from '@/lib/tools/registry.tool';
-import { detectAgentType } from '@/lib/chat-engine/agent-router';
-import type { AgentType } from '@/types/core/agent';
-import { prompts } from '@/lib/chat-engine/prompts';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { errorResponse, unauthorizedError, validationError } from '@/lib/utils/route-handler';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
-// Import config from its dedicated file
-import { ChatEngineConfig } from '@/lib/chat-engine/chat-engine.config';
+import { ChatSetupService } from '@/lib/chat-engine/chat-setup.service';
 
 // Maintain existing runtime directives
 export const runtime = 'edge';
 export const maxDuration = 120;
-export const dynamic = 'force-dynamic';
-
-/**
- * Helper to safely convert various representations of boolean values
- * Handles true/false, "true"/"false", 1/0, "1"/"0" and similar variations
- */
-function parseBooleanValue(value: any): boolean {
-  // Handle direct boolean values
-  if (typeof value === 'boolean') {
-    return value;
-  }
-
-  // Handle string representations ("true", "false", "1", "0")
-  if (typeof value === 'string') {
-    const lowercaseValue = value.toLowerCase().trim();
-    return lowercaseValue === 'true' || lowercaseValue === '1' || lowercaseValue === 'yes';
-  }
-
-  // Handle numeric values (1, 0)
-  if (typeof value === 'number') {
-    return value === 1;
-  }
-
-  // Default to false for null, undefined, or any other type
-  return false;
-}
+export const dynamic = 'force-dynamic'; // Ensure dynamic behavior
 
 /**
  * POST handler for the chat route
@@ -54,23 +24,115 @@ function parseBooleanValue(value: any): boolean {
  */
 export async function POST(request: Request): Promise<Response> {
   const operationId = `chat_${Math.random().toString(36).substring(2, 10)}`;
+  const startTime = Date.now();
 
-  edgeLogger.debug('Chat POST request received', {
+  edgeLogger.info('Chat POST request received', {
     category: LOG_CATEGORIES.CHAT,
     operation: 'chat_post',
     operationId
   });
 
+  let body: Record<string, any>;
+  let reqClone: Request;
+
   try {
-    // Use the ChatEngine facade to handle the request
-    const chatEngine = createChatEngine({
-      operationName: 'chat_default',
-      corsEnabled: false,
-      requiresAuth: true
+    reqClone = request.clone(); // Clone request early for potential use in error logging
+    body = await request.json();
+
+    edgeLogger.debug('Parsed request body', {
+      category: LOG_CATEGORIES.CHAT,
+      operation: 'chat_post',
+      operationId,
+      bodyKeys: Object.keys(body)
     });
-    return await chatEngine.handleRequest(request);
+
+    // --- Basic Validation --- 
+    const sessionId = body.id;
+    if (!sessionId) {
+      edgeLogger.warn('Validation Error: Missing session ID', { category: LOG_CATEGORIES.CHAT, operationId });
+      return validationError('Session ID (id) is required');
+    }
+    if (!body.messages && !body.message) {
+      edgeLogger.warn('Validation Error: Missing message(s)', { category: LOG_CATEGORIES.CHAT, operationId, sessionId });
+      return validationError('Either message or messages field is required');
+    }
+    // Consider adding Zod validation here later for stricter schema checking
+
+    // --- Authentication --- 
+    // TODO: Add BYPASS_AUTH check here if still needed for development
+    const supabase = await createRouteHandlerClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      edgeLogger.warn('Authentication failed for chat request', {
+        category: LOG_CATEGORIES.AUTH,
+        operationId,
+        sessionId,
+        error: authError?.message || 'No user found'
+      });
+      return unauthorizedError('Authentication required');
+    }
+    const userId = user.id;
+    // Assuming persistenceUserId is the same as authenticated userId for main chat
+    const persistenceUserId = userId;
+
+    edgeLogger.info('User authenticated', {
+      category: LOG_CATEGORIES.AUTH,
+      operationId,
+      sessionId,
+      userId: userId.substring(0, 8) // Log partial ID
+    });
+
+    // --- Configuration Setup --- 
+    const chatSetupService = new ChatSetupService();
+    const engineConfig = await chatSetupService.prepareConfig({
+      requestBody: body,
+      userId: persistenceUserId,
+      isWidget: false // This is the main chat route
+    });
+
+    // --- Engine Creation & Execution --- 
+    const engine = createChatEngine(engineConfig);
+
+    edgeLogger.info('Chat engine created, handling request...', {
+      category: LOG_CATEGORIES.CHAT,
+      operationId,
+      sessionId,
+      agentType: engineConfig.agentType,
+      useDeepSearch: engineConfig.useDeepSearch,
+      toolCount: Object.keys(engineConfig.tools || {}).length
+    });
+
+    // Pass the cloned request with the already parsed body
+    const response = await engine.handleRequest(reqClone, { parsedBody: body });
+
+    // --- Stream Consumption (Ensures persistence on disconnect) ---
+    if (response.body && 'consumeStream' in (response as any)) {
+      (response as any).consumeStream().catch((streamError: any) => {
+        edgeLogger.error('Error consuming response stream post-response', {
+          category: LOG_CATEGORIES.CHAT,
+          operationId,
+          sessionId,
+          error: streamError instanceof Error ? streamError.message : String(streamError)
+        });
+      });
+      edgeLogger.info('Response stream consumption initiated', { category: LOG_CATEGORIES.CHAT, operationId, sessionId });
+    } else {
+      edgeLogger.warn('Response body does not support consumeStream', { category: LOG_CATEGORIES.CHAT, operationId, sessionId });
+    }
+
+    edgeLogger.info('Chat request processed successfully', {
+      category: LOG_CATEGORIES.CHAT,
+      operationId,
+      sessionId,
+      status: response.status,
+      durationMs: Date.now() - startTime
+    });
+
+    return response;
+
   } catch (error) {
-    edgeLogger.error('Unexpected error in chat API', {
+    edgeLogger.error('Unhandled error in main chat API', {
       category: LOG_CATEGORIES.CHAT,
       operation: 'chat_post_error',
       operationId,
@@ -79,17 +141,11 @@ export async function POST(request: Request): Promise<Response> {
       important: true
     });
 
-    return new Response(
-      JSON.stringify({
-        error: 'An unexpected error occurred processing your message',
-        details: error instanceof Error ? error.message : 'Unknown error'
-      }),
-      {
-        status: 500,
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      }
+    // Use the standardized error response utility
+    return errorResponse(
+      'An unexpected error occurred processing your message',
+      error instanceof Error ? error.message : 'Unknown error',
+      500
     );
   }
 } 

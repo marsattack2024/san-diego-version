@@ -78,9 +78,8 @@ export class ChatEngineFacade {
         aiStreamService: AIStreamService,
         persistenceService: MessagePersistenceService
     ) {
-        // Apply default configuration
-        this.config = {
-            // Default values
+        // Apply default configuration FIRST
+        const defaultConfig: Partial<ChatEngineConfig> = {
             corsEnabled: false,
             model: 'gpt-4o',
             maxTokens: 4096,
@@ -93,24 +92,13 @@ export class ChatEngineFacade {
             requiresAuth: true,
             cacheEnabled: true,
             messageHistoryLimit: 50,
-            messagePersistenceDisabled: false,
-            // Override with provided config
-            ...config
+            messagePersistenceDisabled: false
         };
 
-        // Explicit override from the body parameter if available
-        if (this.config.body?.deepSearchEnabled === true) {
-            this.config.useDeepSearch = true;
-        }
-
-        // Fix deepSearchEnabled flag - make sure it's propagated
-        // IMPORTANT: This ensures the flag is passed to tool execution context
-        if (this.config.useDeepSearch) {
-            if (!this.config.body) {
-                this.config.body = {};
-            }
-            this.config.body.deepSearchEnabled = true;
-        }
+        // Merge provided config over defaults
+        // The ChatSetupService is now responsible for determining flags like
+        // useDeepSearch and populating config.body correctly.
+        this.config = { ...defaultConfig, ...config };
 
         // Store service dependencies
         this.apiAuthService = apiAuthService;
@@ -118,16 +106,18 @@ export class ChatEngineFacade {
         this.aiStreamService = aiStreamService;
         this.persistenceService = persistenceService;
 
-        // Log initialization
+        // Log initialization using the final, merged config
         edgeLogger.info('Chat engine facade initialized', {
             category: LOG_CATEGORIES.SYSTEM,
             operation: this.config.operationName,
             model: this.config.model,
+            agentType: this.config.agentType,
             requiresAuth: this.config.requiresAuth,
-            useDeepSearch: this.config.useDeepSearch,
-            useWebScraper: this.config.useWebScraper,
+            useDeepSearch: this.config.useDeepSearch, // Reflects final decision from ChatSetupService
+            useWebScraper: this.config.useWebScraper, // Reflects final decision from ChatSetupService
             cacheEnabled: this.config.cacheEnabled,
-            messagePersistenceDisabled: this.config.messagePersistenceDisabled
+            messagePersistenceDisabled: this.config.messagePersistenceDisabled,
+            toolCount: Object.keys(this.config.tools || {}).length
         });
     }
 

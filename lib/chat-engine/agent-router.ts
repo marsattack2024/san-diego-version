@@ -130,7 +130,7 @@ export async function detectAgentType(message: string, currentAgentType: AgentTy
  * @param agentType The agent type to get configuration for
  * @returns Configuration for the specified agent
  */
-function getAgentConfig(agentType: AgentType): AgentConfig {
+export function getAgentConfig(agentType: AgentType): AgentConfig {
     // Get system prompt using the new prompts module
     const systemPrompt = buildSystemPrompt(agentType);
 
