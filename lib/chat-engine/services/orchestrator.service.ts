@@ -20,6 +20,14 @@ import type { Tool } from 'ai';
 // Import tool creation function if tools are passed dynamically
 // import { createToolSet } from '@/lib/tools/registry.tool';
 
+// Define thresholds based on logging-rules.mdc
+// TODO: Move these to a shared constants file like @/lib/logger/constants.ts
+const THRESHOLDS = {
+    SLOW_OPERATION: 2000,    // 2 seconds
+    IMPORTANT_THRESHOLD: 5000 // 5 seconds
+    // Add other specific thresholds (e.g., RAG_TIMEOUT) if needed directly by the orchestrator
+};
+
 export class AgentOrchestrator {
     private logger = edgeLogger;
     private orchestratorModel: LanguageModel;
@@ -203,7 +211,10 @@ Analyze this request and generate the appropriate workflow plan (either single-s
                         category: LOG_CATEGORIES.ORCHESTRATOR, operation: 'execute_step_success',
                         operationId, step: i, agent: step.agent, stepLogId, durationMs: stepDurationMs,
                         usage: agentUsage, finishReason: agentFinishReason,
-                        needsRevision: output.metadata.needsRevision
+                        needsRevision: output.metadata.needsRevision,
+                        // Add performance flags
+                        slow: stepDurationMs > THRESHOLDS.SLOW_OPERATION,
+                        important: stepDurationMs > THRESHOLDS.IMPORTANT_THRESHOLD,
                     });
 
                     context[i] = output;
@@ -293,7 +304,14 @@ Analyze this request and generate the appropriate workflow plan (either single-s
         } // End while loop (iterations)
 
         const execDurationMs = Date.now() - execStartTime;
-        this.logger.info('Finished workflow plan execution', { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, durationMs: execDurationMs });
+        this.logger.info('Finished workflow plan execution', {
+            category: LOG_CATEGORIES.ORCHESTRATOR,
+            operationId,
+            durationMs: execDurationMs,
+            // Add performance flags
+            slow: execDurationMs > THRESHOLDS.SLOW_OPERATION,
+            important: execDurationMs > THRESHOLDS.IMPORTANT_THRESHOLD,
+        });
 
         return { context, finalPlan: currentPlan };
     }
@@ -349,22 +367,31 @@ Analyze this request and generate the appropriate workflow plan (either single-s
 
             OrchestratorResultSchema.parse(result); // Validate final output
 
-            this.logger.info('Orchestrator run finished successfully', {
+            const durationMs = Date.now() - startTime;
+            const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
+            const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
+
+            // Use warn if slow or important, otherwise info
+            const logMethod = isSlow || isImportant ? this.logger.warn : this.logger.info;
+            logMethod.call(this.logger, 'Orchestrator run finished successfully', {
                 category: LOG_CATEGORIES.ORCHESTRATOR,
                 operation: 'run_success',
                 operationId,
-                durationMs: Date.now() - startTime,
+                durationMs,
+                slow: isSlow,
+                important: isImportant,
             });
             return result;
         } catch (error) {
+            const durationMs = Date.now() - startTime;
             this.logger.error('Orchestrator run failed', {
                 category: LOG_CATEGORIES.ORCHESTRATOR,
                 operation: 'run_error',
                 operationId,
-                durationMs: Date.now() - startTime,
+                durationMs: durationMs,
                 error: error instanceof Error ? error.message : String(error),
                 stack: error instanceof Error ? error.stack : undefined,
-                important: true,
+                important: true, // Error is always important
             });
             throw error; // Propagate error up
         }
