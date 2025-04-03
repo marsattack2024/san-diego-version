@@ -157,7 +157,7 @@ The primary issue is that the main `/api/chat/route.ts` endpoint lacked the nece
     *   **C. (DONE) Update Existing Unit Tests:** Reviewed relevant unit tests (`deep-search.test.ts`); confirmed alignment.
     *   **D. (DONE) Manual Verification (Smoke Testing):** Performed for main chat; confirmed refactoring successful & tools working as expected.
 
-9.  **(TODO) Documentation:**
+9.  **(IN PROGRESS) Documentation:**
     *   Update this plan document (`agent refactor plan.md`) marking steps as complete.
     *   Update any READMEs mentioning chat API endpoints.
 
@@ -205,11 +205,11 @@ The primary issue is that the main `/api/chat/route.ts` endpoint lacked the nece
 5.  **(DONE) Update System Prompt (`lib/chat-engine/prompts/base-prompt.ts`):**
     *   Add `getUserProfileContext` and its description to the "AVAILABLE TOOLS" section.
 
-6.  **(DONE - Automated Portion / Manual Verified)** Testing:
-    *   **A. (DONE) Add unit tests for `profile-context.tool.ts`:** Mocked Supabase client, verified context extraction, DB query, output formatting.
+6.  **(DONE) Testing:**
+    *   **A. (DONE) Add unit tests for `profile-context.tool.ts`:** Mocked Supabase client, verified context extraction, DB query, output formatting. (Note: Manual fix applied for linter issue).
     *   **B. (DONE) Update unit tests for `ChatSetupService`:** Verified the `useProfileContext` flag is handled correctly.
     *   **C. (SKIPPED - BLOCKED) Update/add integration tests:** Skipped due to ongoing issues with integration test environment/mocking.
     *   **D. (DONE) Manual/E2E tests:** Verified the AI calls the tool appropriately and uses the context via manual testing.
 
-7.  **(TODO) Documentation:**
+7.  **(IN PROGRESS) Documentation:**
     *   Update relevant READMEs (this plan, tools documentation) to include the new tool.
