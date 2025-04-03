@@ -784,70 +784,68 @@ export const useChatStore = create<ChatState>()(
         });
       },
 
+      // Delete a conversation
       deleteConversation: (conversationId) => {
-        const { conversations, currentConversationId } = get();
-        const newConversations = { ...conversations };
+        const state = get();
 
-        // Optimistically delete from local state first
-        delete newConversations[conversationId];
-
-        // If we're deleting the current conversation, find the most recent one
-        let newCurrentId = currentConversationId;
-
-        if (currentConversationId === conversationId) {
-          // Find the most recent conversation by updatedAt date
-          const remainingConversations = Object.values(newConversations);
-          if (remainingConversations.length > 0) {
-            // Sort by updatedAt in descending order (newest first)
-            remainingConversations.sort((a, b) =>
-              new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-            );
-            newCurrentId = remainingConversations[0].id;
-
-            // Navigate to the most recent conversation if we're in the browser
-            if (typeof window !== 'undefined') {
-              // Use setTimeout to avoid state update conflicts
-              setTimeout(() => {
-                // Use client-side navigation to the chat
-                window.location.href = `/chat/${newCurrentId}`;
-              }, 0);
-            }
-          } else {
-            // If no conversations left, set currentConversationId to null
-            // but don't create a new one automatically - redirect to main chat page
-            newCurrentId = null;
-
-            // Navigate to the main chat page if no conversations left
-            if (typeof window !== 'undefined') {
-              setTimeout(() => {
-                window.location.href = '/chat';
-              }, 0);
-            }
-          }
+        // Verify conversation exists before trying to delete
+        if (!state.conversationsIndex[conversationId]) {
+          console.warn(`[ChatStore] Attempted to delete non-existent conversation: ${conversationId}`);
+          return;
         }
 
-        // Update local state immediately (optimistic update)
-        set({
-          conversations: newConversations,
-          currentConversationId: newCurrentId
+        console.debug(`[ChatStore] Deleting conversation: ${conversationId}`);
+
+        // Update state to remove conversation from all data structures
+        set(state => {
+          // Create new objects without the deleted conversation
+          const newConversationsIndex = { ...state.conversationsIndex };
+          const newLoadedConversations = { ...state.loadedConversations };
+          const newConversations = { ...state.conversations }; // Legacy
+
+          // Delete from all maps
+          delete newConversationsIndex[conversationId];
+          delete newLoadedConversations[conversationId];
+          delete newConversations[conversationId];
+
+          // Update current conversation ID if needed
+          let newCurrentId = state.currentConversationId;
+          if (state.currentConversationId === conversationId) {
+            // Find a new conversation to select
+            const remainingIds = Object.keys(newConversationsIndex);
+            newCurrentId = remainingIds.length > 0 ? remainingIds[0] : null;
+
+            // Redirect if we're in browser
+            if (typeof window !== 'undefined') {
+              if (newCurrentId) {
+                window.location.href = `/chat/${newCurrentId}`;
+              } else {
+                window.location.href = '/chat';
+              }
+            }
+          }
+
+          return {
+            conversationsIndex: newConversationsIndex,
+            loadedConversations: newLoadedConversations,
+            conversations: newConversations,
+            currentConversationId: newCurrentId
+          };
         });
 
-        // Call the historyService to delete from database
+        // Delete from backend asynchronously
         if (typeof window !== 'undefined') {
           (async () => {
             try {
-              // Use the history service to delete the chat from the database
-              const success = await historyService.deleteChat(conversationId);
+              const deleted = await historyService.deleteChat(conversationId);
 
-              if (!success) {
-                console.error(`Failed to delete chat from database: ${conversationId}`);
-                // No need to revert the optimistic update, as refreshing history will restore the correct state
+              if (deleted) {
+                console.debug(`[ChatStore] Successfully deleted conversation ${conversationId} from backend`);
+              } else {
+                console.error(`[ChatStore] Failed to delete conversation ${conversationId} from backend`);
               }
             } catch (error) {
-              console.error('Error deleting chat:', error);
-            } finally {
-              // Refresh history after deletion to update sidebar
-              setTimeout(() => get().fetchHistory(true), 500);
+              console.error(`[ChatStore] Error deleting conversation ${conversationId}:`, error);
             }
           })();
         }
@@ -991,10 +989,42 @@ export const useChatStore = create<ChatState>()(
       migrate: (persistedState: any, version: number) => {
         if (version === 0) {
           const v0State = persistedState as ChatStateV0;
+
+          // Create initial conversationsIndex from legacy conversations
+          const conversationsIndex: Record<string, ConversationMetadata> = {};
+
+          // Copy conversations to loadedConversations when migrating
+          const loadedConversations: Record<string, Conversation> = {};
+
+          // Process old conversation data
+          Object.entries(v0State.conversations).forEach(([id, conv]) => {
+            // Create metadata for the index
+            conversationsIndex[id] = {
+              id,
+              title: conv.title || 'Untitled',
+              createdAt: conv.createdAt,
+              updatedAt: conv.createdAt, // Old format didn't have updatedAt
+              agentId: 'default' as AgentType,
+              deepSearchEnabled: false,
+              messageCount: Array.isArray(conv.messages) ? conv.messages.length : 0
+            };
+
+            // Store full conversation in loadedConversations
+            loadedConversations[id] = {
+              ...conv,
+              agentId: 'default' as AgentType,
+              deepSearchEnabled: false,
+              updatedAt: conv.createdAt
+            };
+          });
+
+          // Return migrated state with new data structures
           return {
             ...v0State,
             selectedAgentId: 'default' as AgentType,
             deepSearchEnabled: false,
+            conversationsIndex,
+            loadedConversations,
             conversations: Object.fromEntries(
               Object.entries(v0State.conversations).map(([id, conv]) => [
                 id,
@@ -1008,6 +1038,34 @@ export const useChatStore = create<ChatState>()(
             )
           };
         }
+
+        // For newer persisted states that might have conversations but not the new fields
+        if (persistedState.conversations && !persistedState.conversationsIndex) {
+          console.debug('[ChatStore] Migrating modern state to include conversationsIndex');
+
+          // Create conversationsIndex from conversations
+          const conversationsIndex: Record<string, ConversationMetadata> = {};
+
+          Object.entries(persistedState.conversations).forEach(([id, conv]: [string, any]) => {
+            conversationsIndex[id] = {
+              id,
+              title: conv.title || 'Untitled',
+              createdAt: conv.createdAt || new Date().toISOString(),
+              updatedAt: conv.updatedAt || conv.createdAt || new Date().toISOString(),
+              agentId: conv.agentId || 'default',
+              deepSearchEnabled: conv.deepSearchEnabled || false,
+              userId: conv.userId,
+              messageCount: Array.isArray(conv.messages) ? conv.messages.length : 0
+            };
+          });
+
+          return {
+            ...persistedState,
+            conversationsIndex,
+            loadedConversations: { ...persistedState.conversations }
+          };
+        }
+
         return persistedState;
       }
     }

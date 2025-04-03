@@ -54,9 +54,11 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { useChatStore, type Conversation } from '@/stores/chat-store';
+import { useChatStore, type Conversation, type ConversationMetadata } from '@/stores/chat-store';
 import { shallow } from 'zustand/shallow';
 import { useAuth } from '@/utils/supabase/auth-provider';
+
+const log = edgeLogger; // Create a local reference for cleaner code
 
 // Consistent type definition for grouped chats
 type GroupedChats = {
@@ -264,7 +266,8 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
     console.debug('[SidebarHistory] Manual refresh requested');
 
     // Add more debug info about the refresh
-    edgeLogger.debug('[SidebarHistory] Current history state before refresh', {
+    log.debug('[SidebarHistory] Current history state before refresh', {
+      category: LOG_CATEGORIES.CHAT,
       indexCount: Object.keys(conversationsIndex).length,
       historyArrayLength: historyArray.length,
       isAuthenticated: auth.isAuthenticated,
