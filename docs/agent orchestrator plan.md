@@ -1,285 +1,118 @@
-# Plan: Implement AI Workflow Orchestrator using Vercel AI SDK
+# Plan: Implement AI Workflow Orchestrator
 
-**Goal:** Create a flexible, multi-step AI workflow orchestrator in `lib/ai/orchestrator.ts` based on the provided plan ("GROX idea"), using the Vercel AI SDK (`ai` package) for dynamic routing and agent management.
+**Goal:** Integrate a flexible, multi-step AI workflow orchestrator into the existing chat engine (`lib/chat-engine`), leveraging the Vercel AI SDK (`ai` package) for dynamic routing and agent execution, following the Orchestrator-Worker pattern. This will replace the initial plan based on the "GROX idea" and integrate directly with our current architecture.
 
-**Instructions:**
+**Phase 1: Core Orchestrator Logic & Types**
 
-1.  **Install Dependencies:**
-    * Ensure the necessary packages are installed in your project.
-    * Run the following command in your terminal:
-        ```bash
-        npm install ai @ai-sdk/openai zod
-        # or pnpm install ai @ai-sdk/openai zod
-        # or yarn add ai @ai-sdk/openai zod
-        ```
+*   **Objective:** Build the foundational components of the orchestrator service and define necessary data structures.
 
-2.  **Create Orchestrator File (`lib/ai/orchestrator.ts`):**
-    * Create the directory `lib/ai` if it doesn't exist.
-    * Create a new file named `orchestrator.ts` inside `lib/ai`.
-    * Populate `lib/ai/orchestrator.ts` with the following TypeScript code:
+1.  **Define Orchestrator Types (`lib/chat-engine/types/orchestrator.ts`):**
+    *   Create a new file `orchestrator.ts` within `lib/chat-engine/types/`.
+    *   Define core interfaces and Zod schemas:
+        *   `AgentConfig`: Reuse or adapt from `lib/chat-engine/agent-router.ts`.
+        *   `AgentType`: Import from `lib/chat-engine/prompts/index.ts`. **Update this enum to include `validator` and `researcher`.**
+        *   `WorkflowStepSchema`: `z.object({ agent: z.nativeEnum(AgentType), task: z.string(), dependsOn: z.array(z.number()).optional() })`.
+        *   `WorkflowPlanSchema`: `z.object({ steps: z.array(WorkflowStepSchema), maxIterations: z.number().default(5) })`.
+        *   `AgentOutputSchema`: `z.object({ result: z.string(), metadata: z.object({ qualityScore: z.number().min(1).max(10), needsRevision: z.boolean(), issues: z.array(z.string()).optional() }) })`.
+        *   `WorkflowContext`: `Record<number, z.infer<typeof AgentOutputSchema>>`.
+        *   `OrchestratorResult`: `z.object({ finalResult: z.string(), stepsTakenDetails: WorkflowContext, finalPlan: z.infer<typeof WorkflowPlanSchema> })`.
 
-        ```typescript
-        import { openai } from '@ai-sdk/openai';
-        import { generateObject, generateText, LanguageModel } from 'ai'; // Added LanguageModel type
-        import { z } from 'zod';
+2.  **Create Orchestrator Service (`lib/chat-engine/services/orchestrator.service.ts`):**
+    *   Create the new service file `orchestrator.service.ts` within `lib/chat-engine/services/`.
+    *   Implement the `AgentOrchestrator` class.
+    *   **Dependencies:** Inject `edgeLogger`.
+    *   **`generatePlan` Method:**
+        *   Accepts `request: string`, optionally `initialAgentType: AgentType`.
+        *   Uses `generateObject` with `openai('gpt-4o-mini')` (or similar) and `workflowPlanSchema`.
+        *   System Prompt: **Update** to include new agents: "You are a marketing workflow manager... Available agents: default, copywriting, google-ads, facebook-ads, quiz, **validator, researcher**".
+        *   Prompt: `Analyze this request and create a detailed workflow plan: "${request}"`.
+        *   Log plan generation details (usage, duration) using `edgeLogger` following `logging-rules.mdc`.
+        *   Returns `Promise<z.infer<typeof WorkflowPlanSchema>>`.
+    *   **`executePlan` Method:**
+        *   Accepts `plan: z.infer<typeof WorkflowPlanSchema>`, `initialRequest: string`.
+        *   Initializes `context: WorkflowContext = {}`, `iteration = 0`, `currentPlan = plan`.
+        *   Implements the main execution loop (`while (iteration < currentPlan.maxIterations)`):
+            *   Iterates through `currentPlan.steps`.
+            *   Checks dependencies and completion status (`context[stepIndex]`).
+            *   If executable:
+                *   Retrieves agent config using `getAgentConfig` from `agent-router.ts`. **Note:** Need to add configurations for `validator` and `researcher` in `agent-router.ts` (defining their models, prompts, and potential tool access - researcher likely needs web/deep search tools).
+                *   Prepares worker prompt (system prompt, task, relevant context).
+                *   Executes worker using `generateObject` with agent's model and `agentOutputSchema`. **Note:** The `validator` agent might need a different output schema focused on evaluation metrics.
+                *   Logs worker execution details.
+                *   Stores output in `context`.
+                *   Handles re-planning if `output.metadata.needsRevision` (especially useful after a `validator` step):
+                    *   Calls `generateObject` with orchestrator model to get `revisedPlanData`.
+                    *   Updates `currentPlan`, resets `context`, logs re-planning, breaks inner loop.
+                *   Implements `try...catch` for worker execution errors, logs errors.
+            *   Checks for loop termination conditions (all steps complete, no progress, max iterations).
+        *   Returns `Promise<WorkflowContext>`.
+    *   **`compileResults` Method:**
+        *   Accepts `context: WorkflowContext`, `finalPlan: z.infer<typeof WorkflowPlanSchema>`.
+        *   Compiles `result` strings from `context` into a final output string.
+        *   Returns `string`.
+    *   **`run` Method (Main Entry Point):**
+        *   Accepts `request: string`, optionally `initialAgentType: AgentType`.
+        *   Calls `generatePlan`, `executePlan`, `compileResults`.
+        *   Logs overall orchestration start/end and duration.
+        *   Returns `Promise<z.infer<typeof OrchestratorResult>>`.
 
-        // Define Agent Configuration Structure
-        interface AgentConfig {
-          model: LanguageModel; // Use LanguageModel type from 'ai'
-          system: string;
-        }
+**Phase 2: Integration into Chat Engine**
 
-        // Define agent types and their configs
-        const AGENTS: Record<string, AgentConfig> = {
-          copywriter: {
-            model: openai('gpt-4o'), // Ensure you have configured OpenAI provider
-            system: 'You are a copywriting expert focusing on emotional appeal, benefits, and clarity.',
-          },
-          googleAds: {
-            model: openai('gpt-4o'),
-            system: 'You are a Google Ads specialist creating targeted campaigns with strong CTAs.',
-          },
-          validator: {
-            model: openai('gpt-4o'),
-            system: 'You are a quality checker evaluating marketing content for consistency and effectiveness.',
-          },
-          // Add other agents like 'featureExtractor', 'strategicPlanner' etc. as needed
-        };
+*   **Objective:** Connect the orchestrator service to the existing chat request flow.
 
-        // Define available agent keys as an enum for schema validation
-        const agentKeys = Object.keys(AGENTS) as [keyof typeof AGENTS, ...(keyof typeof AGENTS)[]]; // Ensures at least one key
-        const agentEnum = z.enum(agentKeys);
+3.  **Modify `ChatSetupService` (`lib/chat-engine/chat-setup.service.ts`):**
+    *   Inject `AgentOrchestrator` dependency.
+    *   **Enhance `prepareConfig`:**
+        *   Define a clear trigger for orchestration (e.g., specific request flag `useOrchestrator: true`, complex query classification via LLM, specific agent selection).
+        *   **If Orchestration Triggered**:
+            *   Call `await this.agentOrchestrator.run(...)`.
+            *   Define `OrchestratedResponse` interface (e.g., `{ type: 'orchestrated', data: OrchestratorResult }`).
+            *   Return this `OrchestratedResponse`.
+        *   **Else (Single Agent)**: Return standard `ChatEngineConfig`.
+    *   Update `prepareConfig` return type: `Promise<ChatEngineConfig | OrchestratedResponse>`.
 
-        // Schema for a single step in the workflow plan
-        const workflowStepSchema = z.object({
-          agent: agentEnum,
-          task: z.string().describe("Specific instructions for the agent for this step."),
-          dependsOn: z.array(z.number()).optional().describe("Indices of steps (0-based) that must be completed before this step can start."),
-        });
+4.  **Update API Route (`app/api/chat/route.ts`):**
+    *   **Modify `POST` Handler:**
+        *   After `const engineSetupResult = await chatSetupService.prepareConfig(...)`.
+        *   Check the type of `engineSetupResult`: `if ('type' in engineSetupResult && engineSetupResult.type === 'orchestrated')`.
+        *   **If Orchestrated**:
+            *   Log orchestration completion.
+            *   Use `successResponse` (from `lib/utils/route-handler.ts`) to return the `engineSetupResult.data` as a JSON payload (non-streaming).
+            *   Address message persistence implications for orchestrated flows (potentially log the final result or key steps).
+        *   **Else (Standard `ChatEngineConfig`)**:
+            *   Proceed with `createChatEngine(engineSetupResult)` and `engine.handleRequest(...)` for streaming.
+    *   Ensure adherence to `routing-rules.mdc` for responses and error handling.
 
-        // Schema for the overall workflow plan
-        const workflowPlanSchema = z.object({
-          steps: z.array(workflowStepSchema).describe("Sequence of steps to execute."),
-          maxIterations: z.number().default(5).describe("Maximum iterations to prevent infinite loops during re-planning."),
-        });
+**Phase 3: Refinement & Testing**
 
-        // Schema for the output expected from each agent worker
-        const agentOutputSchema = z.object({
-          result: z.string().describe("The main output content generated by the agent."),
-          metadata: z.object({
-            qualityScore: z.number().min(1).max(10).describe("Agent's self-assessment of output quality (1-10)."),
-            needsRevision: z.boolean().describe("Flag indicating if the agent believes its output needs review or revision."),
-            issues: z.array(z.string()).optional().describe("Specific issues identified if revision is needed."),
-          }).describe("Metadata about the agent's execution and output quality."),
-        });
+*   **Objective:** Improve robustness, observability, and validate the implementation.
 
-        // Type for the context object storing results
-        type WorkflowContext = Record<number, z.infer<typeof agentOutputSchema>>;
+5.  **Logging & Observability:**
+    *   Review and enhance logging across all new/modified components (`AgentOrchestrator`, `ChatSetupService`, API route) using `edgeLogger`.
+    *   Ensure logs include relevant IDs (operation, session, tool call), durations, agent types, decisions, errors, and token usage, following `logging-rules.mdc`.
 
-        /**
-         * Runs the AI workflow orchestrator.
-         * @param request The initial user request or goal.
-         * @returns An object containing the final compiled result and the detailed steps taken.
-         */
-        export async function runOrchestrator(request: string) {
-          // Ensure OPENAI_API_KEY is configured via environment variables for @ai-sdk/openai
-          const orchestratorModel = openai('gpt-4o'); // Or potentially a smaller/faster model for planning like 'gpt-4o-mini'
+6.  **Error Handling:**
+    *   Implement robust `try...catch` blocks around all `generateObject`/`generateText` calls.
+    *   Refine error handling within the `executePlan` loop (retry logic, fallback strategies, marking steps as failed).
 
-          console.log("Orchestrator: Generating initial workflow plan...");
-          // Step 1: Generate the initial workflow plan
-          const { object: plan, usage: planUsage } = await generateObject({
-            model: orchestratorModel,
-            schema: workflowPlanSchema,
-            system: `You are a marketing workflow manager. Plan a sequence of agent tasks based on the request. Define clear tasks and dependencies between steps. Available agents: ${agentKeys.join(', ')}.`,
-            prompt: `Analyze this request and create a detailed workflow plan: "${request}"`,
-          });
-          console.log("Orchestrator: Initial plan generated:", JSON.stringify(plan, null, 2));
-          console.log("Orchestrator: Planning usage:", planUsage);
+7.  **Context Management:**
+    *   Improve context passing to worker agents. Instead of `JSON.stringify(context)`, implement summarization or selective history retrieval to manage token limits.
 
+8.  **Testing:**
+    *   **Unit Tests**:
+        *   `AgentOrchestrator`: Mock `generateObject`, test planning, execution logic, re-planning, result compilation.
+        *   `ChatSetupService`: Verify orchestration decision logic and correct return types.
+    *   **Integration Tests**: Test interaction between `ChatSetupService` and `AgentOrchestrator`.
+    *   **API Route Tests**: Update `/api/chat` tests for both streaming and new JSON (orchestrated) responses.
+    *   **Manual/E2E Testing**: Test diverse user queries designed to trigger (and not trigger) orchestration flows, including those requiring validation or research steps.
 
-          // Context to store outputs and state
-          let context: WorkflowContext = {};
-          let iteration = 0;
-          let currentPlan = plan; // Use a mutable variable for the plan
+**Key Considerations & Adherence to Rules:**
 
-          console.log(`Orchestrator: Starting execution loop (max ${currentPlan.maxIterations} iterations)...`);
-          // Step 2: Execute the plan with dynamic routing
-          while (iteration < currentPlan.maxIterations) {
-            console.log(`Orchestrator: --- Iteration ${iteration + 1} ---`);
-            let madeProgress = false; // Track if any step was executed in this iteration
-            let allStepsComplete = true; // Assume completion until a step is found incomplete
-
-            for (let i = 0; i < currentPlan.steps.length; i++) {
-              const step = currentPlan.steps[i];
-
-              // Check if step already completed
-              if (context[i]) {
-                console.log(`Orchestrator: Step ${i} (${step.agent}) already completed.`);
-                continue;
-              }
-
-              allStepsComplete = false; // Found an incomplete step
-
-              // Check dependencies
-              const dependenciesMet = !step.dependsOn || step.dependsOn.every(depIndex => context[depIndex]);
-              if (!dependenciesMet) {
-                console.log(`Orchestrator: Step ${i} (${step.agent}) dependencies not met yet.`);
-                continue; // Skip this step for now
-              }
-
-              console.log(`Orchestrator: Executing Step ${i}: Agent=${step.agent}, Task=${step.task}`);
-              // --- Run the agent ---
-              const agentConfig = AGENTS[step.agent];
-              if (!agentConfig) {
-                 console.error(`Orchestrator: Error - Agent configuration for '${step.agent}' not found.`);
-                 // Decide how to handle this - skip, fail, re-plan?
-                 continue; // Simple skip for now
-              }
-
-              // Prepare context string carefully - potentially summarize or select relevant parts
-              const relevantContext = JSON.stringify(context); // Simplistic context passing
-
-              try {
-                const { object: output, usage: agentUsage } = await generateObject({
-                  model: agentConfig.model,
-                  schema: agentOutputSchema,
-                  system: agentConfig.system,
-                  prompt: `Task: ${step.task}\n\nRelevant previous results:\n${relevantContext}`,
-                   // Add temperature, maxTokens etc. if needed per agent
-                });
-                console.log(`Orchestrator: Step ${i} (${step.agent}) completed. Output metadata:`, output.metadata);
-                console.log(`Orchestrator: Agent usage:`, agentUsage);
-
-
-                context[i] = output; // Store successful output
-                madeProgress = true;
-
-                // --- Step 3: Evaluate and potentially adjust plan ---
-                if (output.metadata.needsRevision) {
-                  console.log(`Orchestrator: Step ${i} (${step.agent}) flagged for revision. Re-planning...`);
-                  const { object: revisedPlanData, usage: replanUsage } = await generateObject({
-                    model: orchestratorModel, // Use orchestrator model for re-planning
-                    schema: workflowPlanSchema,
-                    system: 'You are the workflow manager. Adjust the workflow based on agent feedback. You can modify steps, add new steps (e.g., an editing step before validation), or re-order tasks. Explain your reasoning clearly if possible in the plan.',
-                    prompt: `Step ${i} (${step.agent}) requires revision based on its output: ${JSON.stringify(output)}\n\nCurrent workflow plan: ${JSON.stringify(currentPlan)}\n\nPlease provide an updated plan to address the issue and achieve the original goal: "${request}"`,
-                  });
-
-                  console.log("Orchestrator: Re-planning complete. New plan:", JSON.stringify(revisedPlanData, null, 2));
-                  console.log("Orchestrator: Re-planning usage:", replanUsage);
-
-
-                  currentPlan = revisedPlanData; // Update the plan
-                  context = {}; // Reset context as the plan changed significantly (or implement smarter context migration)
-                  console.log("Orchestrator: Plan updated due to revision request. Resetting context and restarting iteration loop.");
-                  madeProgress = false; // Don't count this as progress for termination check below
-                  allStepsComplete = false; // Ensure loop continues with new plan
-                  break; // Exit inner loop (steps) to restart the iteration with the new plan
-                }
-              } catch(error) {
-                 console.error(`Orchestrator: Error executing Step ${i} (${step.agent}):`, error);
-                 // Implement error handling: retry, mark step as failed, re-plan, etc.
-                 // For now, just log and continue, which might stall the workflow
-                 allStepsComplete = false; // Ensure workflow doesn't incorrectly terminate
-              }
-            } // End of for loop (steps)
-
-            // Check for termination conditions
-            if (allStepsComplete) {
-               console.log("Orchestrator: All planned steps completed.");
-               break; // Exit while loop
-            }
-
-            if (!madeProgress && !allStepsComplete) {
-               console.warn("Orchestrator: No progress made in this iteration, potential deadlock or unmet dependencies. Exiting.");
-               break; // Prevent infinite loops if stuck
-            }
-
-            iteration++;
-            if (iteration >= currentPlan.maxIterations) {
-               console.warn("Orchestrator: Max iterations reached. Exiting loop.");
-            }
-
-          } // End of while loop (iterations)
-
-          console.log("Orchestrator: Execution loop finished.");
-          // Step 4: Compile final result
-          // Simple compilation - could be smarter, e.g., use another LLM call
-          const finalResult = Object.values(context)
-            .map((output, index) => `--- Output from Step ${index} (${currentPlan.steps[index]?.agent || 'N/A'}) ---\n${output.result}`)
-            .join('\n\n');
-
-          console.log("Orchestrator: Workflow finished. Returning final result.");
-          return {
-             finalResult: finalResult,
-             stepsTakenDetails: context,
-             finalPlan: currentPlan // Return the final plan used
-         };
-        }
-
-        // Example usage (can be removed or placed elsewhere, e.g., API route)
-        /*
-        async function runExample() {
-          // Ensure OPENAI_API_KEY is set in your environment
-          const request = "Create a compelling Google Ads campaign and identify 3 key website copy sections for promoting spring photography mini-sessions targeting young families in Miami. Focus on capturing fleeting moments.";
-          try {
-            const result = await runOrchestrator(request);
-            console.log("\n--- FINAL COMPILED RESULT ---");
-            console.log(result.finalResult);
-            console.log("\n--- DETAILED STEPS ---");
-            console.log(JSON.stringify(result.stepsTakenDetails, null, 2));
-            console.log("\n--- FINAL PLAN ---");
-            console.log(JSON.stringify(result.finalPlan, null, 2));
-          } catch (error) {
-            console.error("Error running orchestrator example:", error);
-          }
-        }
-
-        // runExample(); // Uncomment to run example when executing this file directly
-        */
-        ```
-
-3.  **Environment Setup (Crucial Note):**
-    * Remind the user that this code uses `@ai-sdk/openai`.
-    * Instruct them to ensure their OpenAI API key is correctly configured as an environment variable (typically `OPENAI_API_KEY`). They should consult the Vercel AI SDK documentation for setting up providers if needed.
-
-4.  **Integration Point (Placeholder / Next Step):**
-    * Advise the user that `runOrchestrator` needs to be called from somewhere.
-    * Suggest creating a Next.js API route (e.g., `app/api/orchestrate/route.ts`) as a common integration point.
-    * Provide a basic skeleton for this route:
-
-        ```typescript
-        // app/api/orchestrate/route.ts (Example)
-        import { NextRequest, NextResponse } from 'next/server';
-        import { runOrchestrator } from '@/lib/ai/orchestrator'; // Adjust import path as needed
-
-        export async function POST(request: NextRequest) {
-          try {
-            const body = await request.json();
-            const userRequest = body.request;
-
-            if (!userRequest) {
-              return NextResponse.json({ error: 'Request query is required' }, { status: 400 });
-            }
-
-            // Add validation for userRequest if needed
-
-            const result = await runOrchestrator(userRequest);
-
-            return NextResponse.json(result);
-
-          } catch (error: any) {
-            console.error("API Error in /api/orchestrate:", error);
-            // Return a generic error message or more specific details based on error type
-            return NextResponse.json({ error: 'Failed to run orchestrator', details: error.message || 'Unknown error' }, { status: 500 });
-          }
-        }
-        ```
-
-5.  **Future Enhancements (Add as Comments or Notes):**
-    * Suggest adding robust `try...catch` blocks around API calls (`generateObject`) within the loop for better error handling.
-    * Recommend exploring more sophisticated context management instead of `JSON.stringify(context)` for larger workflows (e.g., summarizing, selecting relevant history).
-    * Suggest refining the evaluation logic (e.g., specific score thresholds, different actions based on feedback).
-    * Mention considering persistent state storage (e.g., database) if workflows need to be long-running or resumable.
-    * Suggest adding logging/tracing for better debugging.
-
-This plan provides Cursor with specific, actionable instructions to scaffold the orchestrator implementation using the desired Vercel AI SDK approach.
+*   **New Agents:** Explicitly adds `validator` and `researcher` agents to the available pool for the orchestrator.
+*   **Vercel AI SDK:** Utilizes `generateObject`, `openai` provider.
+*   **Modularity:** Introduces `AgentOrchestrator` service, integrates with existing `ChatSetupService`.
+*   **Single Responsibility:** Clear roles for orchestrator, workers, setup service.
+*   **Logging:** Comprehensive logging using `edgeLogger` per `logging-rules.mdc`.
+*   **Routing:** API route adapts response type based on outcome, follows `routing-rules.mdc`.
+*   **ESM:** Assumes ESM syntax.
+*   **Existing Structure:** Builds upon current chat engine components.
