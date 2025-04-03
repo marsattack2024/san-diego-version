@@ -6,11 +6,9 @@
  * - PATCH: Updates chat metadata (like title)
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/utils/supabase/server';
-import { edgeLogger } from '@/lib/logger/edge-logger';
 import { successResponse, errorResponse, unauthorizedError, notFoundError } from '@/lib/utils/route-handler';
-import type { IdParam } from '@/lib/types/route-handlers';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 
 export const runtime = 'edge';
 export const maxDuration = 15;
@@ -18,11 +16,11 @@ export const dynamic = 'force-dynamic';
 
 // GET handler to retrieve a specific chat and its messages
 export async function GET(
-    req: Request,
-    { params }: IdParam
+    request: Request,
+    { params }: { params: { id: string } }
 ): Promise<Response> {
     const operationId = `get_chat_${Math.random().toString(36).substring(2, 10)}`;
-    const { id: chatId } = await params;
+    const chatId = params.id;
 
     edgeLogger.info('Chat GET request started', {
         category: 'chat',
@@ -32,7 +30,7 @@ export async function GET(
 
     try {
         // Authenticate user
-        const supabase = await createClient();
+        const supabase = await createRouteHandlerClient();
         const { data: { user }, error: authError } = await supabase.auth.getUser();
 
         if (authError || !user) {
@@ -163,10 +161,10 @@ export async function GET(
 // PATCH handler to update chat metadata
 export async function PATCH(
     request: Request,
-    { params }: IdParam
+    { params }: { params: { id: string } }
 ): Promise<Response> {
     const operationId = `patch_chat_${Math.random().toString(36).substring(2, 10)}`;
-    const { id: chatId } = await params;
+    const chatId = params.id;
 
     edgeLogger.info('Chat PATCH request started', {
         category: 'chat',
@@ -191,7 +189,7 @@ export async function PATCH(
         }
 
         // Authenticate user
-        const supabase = await createClient();
+        const supabase = await createRouteHandlerClient();
         const { data: { user }, error: authError } = await supabase.auth.getUser();
 
         if (authError || !user) {
@@ -204,20 +202,19 @@ export async function PATCH(
             return unauthorizedError();
         }
 
-        // Verify the chat exists and belongs to this user
+        // Verify chat exists and user has access
         const { data: sessionData, error: sessionError } = await supabase
             .from('sd_chat_sessions')
-            .select('id, user_id')
+            .select('user_id')
             .eq('id', chatId)
             .single();
 
         if (sessionError || !sessionData) {
-            edgeLogger.error('Error fetching chat session for update', {
+            edgeLogger.error('Chat not found', {
                 category: 'chat',
                 operationId,
                 chatId,
-                error: sessionError?.message || 'Session not found',
-                important: true
+                error: sessionError?.message
             });
 
             return notFoundError('Chat not found');
@@ -229,44 +226,45 @@ export async function PATCH(
                 category: 'auth',
                 operationId,
                 userId: user.id,
-                chatUserId: sessionData.user_id
+                chatId
             });
 
             return errorResponse('Unauthorized - you do not have access to this chat', null, 403);
         }
 
-        // Extract properties to update
-        const updateData: Record<string, any> = {};
+        // Perform the update
+        const allowedUpdates = ['title'];
+        const updates: Record<string, any> = {};
+        let updateCount = 0;
 
-        // Check for valid title update
-        if (body.title !== undefined) {
-            if (typeof body.title !== 'string') {
-                return errorResponse('Invalid title format', null, 400);
+        for (const key of allowedUpdates) {
+            if (key in body) {
+                updates[key] = body[key];
+                updateCount++;
             }
-            updateData.title = body.title.trim();
         }
 
-        // Check for agent_id update
-        if (body.agentId !== undefined) {
-            if (typeof body.agentId !== 'string') {
-                return errorResponse('Invalid agent ID format', null, 400);
-            }
-            updateData.agent_id = body.agentId;
-        }
+        if (updateCount === 0) {
+            edgeLogger.warn('No valid fields to update', {
+                category: 'chat',
+                operationId,
+                chatId,
+                providedFields: Object.keys(body)
+            });
 
-        // Check if there's anything to update
-        if (Object.keys(updateData).length === 0) {
             return errorResponse('No valid fields to update', null, 400);
         }
 
-        // Set updated_at timestamp
-        updateData.updated_at = new Date().toISOString();
+        // Add updated_at timestamp
+        updates.updated_at = new Date().toISOString();
 
         // Update the chat session
-        const { error: updateError } = await supabase
+        const { data, error: updateError } = await supabase
             .from('sd_chat_sessions')
-            .update(updateData)
-            .eq('id', chatId);
+            .update(updates)
+            .eq('id', chatId)
+            .select()
+            .single();
 
         if (updateError) {
             edgeLogger.error('Error updating chat', {
@@ -277,18 +275,17 @@ export async function PATCH(
                 important: true
             });
 
-            return errorResponse('Error updating chat', updateError);
+            return errorResponse('Error updating chat', updateError, 500);
         }
 
-        edgeLogger.info('Successfully updated chat', {
+        edgeLogger.info('Chat updated successfully', {
             category: 'chat',
             operationId,
             chatId,
-            fields: Object.keys(updateData).join(', ')
+            updatedFields: Object.keys(updates)
         });
 
-        return successResponse({ success: true });
-
+        return successResponse(data);
     } catch (error) {
         edgeLogger.error('Unexpected error updating chat', {
             category: 'chat',
