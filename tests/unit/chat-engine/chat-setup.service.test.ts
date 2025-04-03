@@ -48,13 +48,13 @@ describe('ChatSetupService', () => {
         systemPrompt: 'Default Prompt',
         temperature: 0.5,
         model: 'gpt-4o',
-        toolOptions: { useKnowledgeBase: true, useWebScraper: true, useDeepSearch: true, useRagTool: true }
+        toolOptions: { useKnowledgeBase: true, useWebScraper: true, useDeepSearch: true, useRagTool: true, useProfileContext: true }
     };
     const copywritingAgentConfig = {
         systemPrompt: 'Copywriting Prompt',
         temperature: 0.7,
         model: 'gpt-4o',
-        toolOptions: { useKnowledgeBase: true, useWebScraper: true, useDeepSearch: true, useRagTool: true }
+        toolOptions: { useKnowledgeBase: true, useWebScraper: true, useDeepSearch: true, useRagTool: true, useProfileContext: true }
     };
 
     // Create a minimal mock tool structure
@@ -99,7 +99,8 @@ describe('ChatSetupService', () => {
             expect(createToolSet).toHaveBeenCalledWith({
                 useKnowledgeBase: true,
                 useWebScraper: true,
-                useDeepSearch: false
+                useDeepSearch: false,
+                useProfileContext: true
             });
             expect(prompts.buildSystemPrompt).toHaveBeenCalledWith('default', false);
             expect(config.agentType).toBe('default');
@@ -112,11 +113,18 @@ describe('ChatSetupService', () => {
             expect(config.tools).toEqual({ tool1: mockTool, tool2: mockTool });
         });
 
-        it('should enable DeepSearch when flag is true and agent supports it', async () => {
-            // Mock agent detection to return an agent that supports deep search
-            const deepSearchAgentConfig = { ...defaultAgentConfig, toolOptions: { ...defaultAgentConfig.toolOptions, useDeepSearch: true } };
-            vi.mocked(detectAgentType).mockResolvedValue({ agentType: 'default', config: deepSearchAgentConfig, reasoning: 'Default detection' });
-            vi.mocked(getAgentConfig).mockReturnValue(deepSearchAgentConfig);
+        it('should enable DeepSearch AND pass useProfileContext when flag is true and agent supports it', async () => {
+            // Mock agent detection to return an agent that supports deep search AND profile context
+            const agentConfigWithTools = {
+                ...defaultAgentConfig,
+                toolOptions: {
+                    ...defaultAgentConfig.toolOptions,
+                    useDeepSearch: true,
+                    useProfileContext: true
+                }
+            };
+            vi.mocked(detectAgentType).mockResolvedValue({ agentType: 'default', config: agentConfigWithTools, reasoning: 'Default detection' });
+            vi.mocked(getAgentConfig).mockReturnValue(agentConfigWithTools); // Ensure getAgentConfig returns the same
 
             const input = { ...baseInput, requestBody: { ...baseInput.requestBody, deepSearchEnabled: true } };
             const config = await chatSetupService.prepareConfig(input);
@@ -125,7 +133,8 @@ describe('ChatSetupService', () => {
             expect(createToolSet).toHaveBeenCalledWith({
                 useKnowledgeBase: true,
                 useWebScraper: true,
-                useDeepSearch: true // Should be true now
+                useDeepSearch: true, // Should be true now
+                useProfileContext: true // Should still be true
             });
             expect(prompts.buildSystemPrompt).toHaveBeenCalledWith('default', true);
             expect(config.useDeepSearch).toBe(true);
@@ -152,19 +161,24 @@ describe('ChatSetupService', () => {
             expect(config.body?.deepSearchEnabled).toBe(false);
         });
 
-        it('should use requestedAgentId for detection and config', async () => {
-            vi.mocked(detectAgentType).mockResolvedValue({ agentType: 'copywriting', config: copywritingAgentConfig, reasoning: 'User request' });
+        it('should use requestedAgentId for detection and config, including profile context flag', async () => {
+            // Ensure the mock copywriting config includes the profile flag
+            const updatedCopywritingAgentConfig = {
+                ...copywritingAgentConfig,
+                toolOptions: { ...copywritingAgentConfig.toolOptions, useProfileContext: true }
+            };
+            vi.mocked(detectAgentType).mockResolvedValue({ agentType: 'copywriting', config: updatedCopywritingAgentConfig, reasoning: 'User request' });
+            vi.mocked(getAgentConfig).mockReturnValue(updatedCopywritingAgentConfig);
 
             const input = { ...baseInput, requestBody: { ...baseInput.requestBody, agentId: 'copywriting' } };
             const config = await chatSetupService.prepareConfig(input);
 
             expect(detectAgentType).toHaveBeenCalledWith('Hello', 'copywriting');
-            // Assert based on the *actual* flags passed, not the agent default toolOptions
-            // Since deepSearchEnabled is false/missing in input, useDeepSearch should be false
             expect(createToolSet).toHaveBeenCalledWith({
-                useKnowledgeBase: copywritingAgentConfig.toolOptions.useKnowledgeBase,
-                useWebScraper: copywritingAgentConfig.toolOptions.useWebScraper,
-                useDeepSearch: false // Input flag overrides agent capability here
+                useKnowledgeBase: updatedCopywritingAgentConfig.toolOptions.useKnowledgeBase,
+                useWebScraper: updatedCopywritingAgentConfig.toolOptions.useWebScraper,
+                useDeepSearch: false, // Input flag overrides agent capability here
+                useProfileContext: true // Should be true for copywriting agent
             });
             expect(prompts.buildSystemPrompt).toHaveBeenCalledWith('copywriting', false);
             expect(config.agentType).toBe('copywriting');
@@ -172,18 +186,20 @@ describe('ChatSetupService', () => {
             expect(config.body?.agentType).toBe('copywriting');
         });
 
-        it('should handle agent detection failure gracefully', async () => {
+        it('should handle agent detection failure gracefully, falling back to default profile context setting', async () => {
             const error = new Error('LLM routing failed');
             vi.mocked(detectAgentType).mockRejectedValue(error);
+            // Ensure getAgentConfig returns default when called with 'default'
+            vi.mocked(getAgentConfig).mockReturnValue(defaultAgentConfig);
 
             const config = await chatSetupService.prepareConfig(baseInput);
 
             expect(detectAgentType).toHaveBeenCalledWith('Hello', 'default');
-            // Falls back to default config, useDeepSearch is false by default input flag
             expect(createToolSet).toHaveBeenCalledWith({
                 useKnowledgeBase: defaultAgentConfig.toolOptions.useKnowledgeBase,
                 useWebScraper: defaultAgentConfig.toolOptions.useWebScraper,
-                useDeepSearch: false // Input flag overrides agent capability here
+                useDeepSearch: false,
+                useProfileContext: defaultAgentConfig.toolOptions.useProfileContext // Should use default's setting
             });
             expect(prompts.buildSystemPrompt).toHaveBeenCalledWith('default', false);
             expect(config.agentType).toBe('default');

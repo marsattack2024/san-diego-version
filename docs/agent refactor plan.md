@@ -2,7 +2,7 @@
 
 **Goal:** Refactor the chat API endpoints to correctly handle dynamic agent selection, tool configuration (including DeepSearch, WebScraper, RAG), and request flags while adhering to the Single Responsibility Principle (SRP) and Vercel AI SDK best practices. Consolidate primary chat logic into a single, robust `/api/chat/route.ts` and prepare the architecture for future multi-agent patterns.
 
-**Status:** Automated Testing Complete (Unit Tests Passing, Integration Tests Blocked). Ready for Manual Verification.
+**Status:** Automated Testing Complete (Unit Tests Passing, Integration Tests Blocked). Manual Verification Complete.
 
 ## Current State Analysis (Pre-Refactor)
 
@@ -155,9 +155,7 @@ The primary issue is that the main `/api/chat/route.ts` endpoint lacked the nece
     *   **A. (DONE) Unit Tests for `ChatSetupService`:** Verified core config logic.
     *   **B. (FAILING - BLOCKED) Integration Tests for API Routes:** Route handler tests (`/api/chat`, `/api/widget-chat`) are currently failing due to environment issues (`cache()` function). **Require separate debugging effort using adjusted shallow mocking strategy or alternative approach.**
     *   **C. (DONE) Update Existing Unit Tests:** Reviewed relevant unit tests (`deep-search.test.ts`); confirmed alignment.
-    *   **D. (TODO - Next) Manual Verification (Smoke Testing):** Needs to be performed by running the application.
-        *   **Main Chat:** Test basic messages, agent selection, DeepSearch toggle (verify network/response), URL scraping (verify logs/response), RAG.
-        *   **Widget:** Test basic messages, RAG, verify DeepSearch/WebScraper inactive.
+    *   **D. (DONE) Manual Verification (Smoke Testing):** Performed for main chat; confirmed refactoring successful & tools working as expected.
 
 9.  **(TODO) Documentation:**
     *   Update this plan document (`agent refactor plan.md`) marking steps as complete.
@@ -175,7 +173,7 @@ The primary issue is that the main `/api/chat/route.ts` endpoint lacked the nece
 
 **Goal:** Implement a new tool to provide user profile context to the AI upon request.
 
-**Status:** Step 5 Complete. Starting Step 6.
+**Status:** Step 7 (Documentation) IN PROGRESS.
 
 **Steps:**
 
@@ -207,10 +205,11 @@ The primary issue is that the main `/api/chat/route.ts` endpoint lacked the nece
 5.  **(DONE) Update System Prompt (`lib/chat-engine/prompts/base-prompt.ts`):**
     *   Add `getUserProfileContext` and its description to the "AVAILABLE TOOLS" section.
 
-6.  **(TODO) Testing:**
-    *   Add unit tests for `profile-context.tool.ts`, mocking the Supabase client and verifying context extraction, DB query, and output formatting.
-    *   Update unit tests for `ChatSetupService` to verify the `useProfileContext` flag is handled correctly.
-    *   Update/add integration tests (once unblocked) or rely on E2E/manual tests to verify the AI calls the tool appropriately and uses the context.
+6.  **(DONE - Automated Portion / Manual Verified)** Testing:
+    *   **A. (DONE) Add unit tests for `profile-context.tool.ts`:** Mocked Supabase client, verified context extraction, DB query, output formatting.
+    *   **B. (DONE) Update unit tests for `ChatSetupService`:** Verified the `useProfileContext` flag is handled correctly.
+    *   **C. (SKIPPED - BLOCKED) Update/add integration tests:** Skipped due to ongoing issues with integration test environment/mocking.
+    *   **D. (DONE) Manual/E2E tests:** Verified the AI calls the tool appropriately and uses the context via manual testing.
 
 7.  **(TODO) Documentation:**
     *   Update relevant READMEs (this plan, tools documentation) to include the new tool.
