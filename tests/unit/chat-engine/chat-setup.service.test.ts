@@ -1,7 +1,8 @@
 // 1. Imports
 import { describe, expect, it, beforeEach, vi, Mock } from 'vitest';
 import { setupLoggerMock, mockLogger } from '@/tests/helpers/mock-logger';
-import type { AgentType } from '@/types/core/agent';
+// Use an alias to disambiguate AgentType
+import type { AgentType as CoreAgentType } from '@/types/core/agent';
 import type { ChatEngineConfig } from '@/lib/chat-engine/chat-engine.config';
 import { z } from 'zod';
 import type { Tool } from 'ai';
@@ -24,7 +25,7 @@ vi.mock('@/lib/chat-engine/prompts', () => ({
     prompts: {
         buildSystemPrompt: vi.fn() // Define mock inside factory
     },
-    AgentType: { Default: 'default', Copywriting: 'copywriting', /* ... other agent types ... */ } // Keep type export if needed
+    AVAILABLE_AGENT_TYPES: ['default', 'copywriting', 'google-ads', 'facebook-ads', 'quiz'] // Add the missing export
 }));
 
 // Mock misc utils if needed, parseBooleanValue is simple enough maybe not needed
@@ -71,7 +72,7 @@ describe('ChatSetupService', () => {
 
         // Provide default implementations for mocks using vi.mocked
         vi.mocked(detectAgentType).mockResolvedValue({ agentType: 'default', config: defaultAgentConfig, reasoning: 'Default detection' });
-        vi.mocked(getAgentConfig).mockImplementation((agentType: AgentType) => {
+        vi.mocked(getAgentConfig).mockImplementation((agentType) => {
             if (agentType === 'copywriting') return copywritingAgentConfig;
             return defaultAgentConfig;
         });

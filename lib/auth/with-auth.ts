@@ -4,7 +4,8 @@ import type { User } from '@supabase/supabase-js';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
-type AuthHandler = (user: User, req: Request) => Promise<Response>;
+// Export the handler type for use in tests
+export type AuthHandler = (user: User, req: Request) => Promise<Response>;
 
 /**
  * Middleware wrapper for route handlers that require authentication
