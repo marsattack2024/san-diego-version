@@ -9,6 +9,7 @@
 import { knowledgeBaseTool } from './knowledge-base.tool';
 import { scrapeWebContentTool } from './web-scraper.tool';
 import { deepSearchTool } from './deep-search.tool';
+import { profileContextTool } from './profile-context.tool';
 import { Tool } from 'ai';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
@@ -48,11 +49,13 @@ export function createToolSet(options: {
     useKnowledgeBase?: boolean;
     useWebScraper?: boolean;
     useDeepSearch?: boolean;
+    useProfileContext?: boolean;
 }): Record<string, Tool<any, any>> {
     const {
         useKnowledgeBase = true,
         useWebScraper = false,
-        useDeepSearch = false
+        useDeepSearch = false,
+        useProfileContext = false
     } = options;
 
     const toolSet: Record<string, Tool<any, any>> = {};
@@ -63,7 +66,8 @@ export function createToolSet(options: {
         operation: 'create_tool_set',
         useKnowledgeBase,
         useWebScraper,
-        useDeepSearch
+        useDeepSearch,
+        useProfileContext
     });
 
     // Add knowledge base tool if enabled
@@ -79,6 +83,11 @@ export function createToolSet(options: {
     // Add Deep Search tool ONLY if explicitly enabled
     if (useDeepSearch) {
         toolSet.deepSearch = deepSearchTool;
+    }
+
+    // Add Profile Context tool if enabled
+    if (useProfileContext) {
+        toolSet.getUserProfileContext = profileContextTool;
     }
 
     return toolSet;

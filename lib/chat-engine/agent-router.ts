@@ -24,6 +24,7 @@ interface AgentConfig {
         useWebScraper: boolean;
         useDeepSearch: boolean;
         useRagTool: boolean;
+        useProfileContext: boolean;
     };
 }
 
@@ -144,7 +145,8 @@ export function getAgentConfig(agentType: AgentType): AgentConfig {
                 useKnowledgeBase: true,
                 useWebScraper: true,
                 useDeepSearch: true,
-                useRagTool: true
+                useRagTool: true,
+                useProfileContext: true
             }
         },
         'google-ads': {
@@ -154,7 +156,8 @@ export function getAgentConfig(agentType: AgentType): AgentConfig {
                 useKnowledgeBase: true,
                 useWebScraper: true,
                 useDeepSearch: true,
-                useRagTool: true
+                useRagTool: true,
+                useProfileContext: true
             }
         },
         'facebook-ads': {
@@ -164,7 +167,8 @@ export function getAgentConfig(agentType: AgentType): AgentConfig {
                 useKnowledgeBase: true,
                 useWebScraper: true,
                 useDeepSearch: true,
-                useRagTool: true
+                useRagTool: true,
+                useProfileContext: true
             }
         },
         'quiz': {
@@ -174,7 +178,8 @@ export function getAgentConfig(agentType: AgentType): AgentConfig {
                 useKnowledgeBase: true,
                 useWebScraper: false, // Reduced tool set for quiz agent
                 useDeepSearch: false,
-                useRagTool: true
+                useRagTool: true,
+                useProfileContext: false
             }
         },
         'default': {
@@ -184,7 +189,8 @@ export function getAgentConfig(agentType: AgentType): AgentConfig {
                 useKnowledgeBase: true,
                 useWebScraper: true,
                 useDeepSearch: true, // Allow deep search by default
-                useRagTool: true
+                useRagTool: true,
+                useProfileContext: true
             }
         }
     };

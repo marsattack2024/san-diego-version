@@ -141,7 +141,7 @@ The primary issue is that the main `/api/chat/route.ts` endpoint lacked the nece
 
 5.  **(DONE) Review & Update Tool Implementations (e.g., `deep-search.tool.ts`):**
     *   **Action:** Remove the `FORCE_ENABLE_DEEPSEARCH` constant and related bypass logic.
-    *   **Verification:** Ensure the tool's `execute` function correctly reads `deepSearchEnabled` (and any other needed flags) exclusively from `runOptions.body.deepSearchEnabled`.
+    *   **Verification:** Ensure the tool's `execute` function correctly reads `deepSearchEnabled` (and any other needed flags) exclusively from the injected system message workaround.
 
 6.  **(DONE) Deprecate `/api/agent-chat/route.ts`:**
     *   **Action:** Delete the file `/app/api/agent-chat/route.ts`.
@@ -170,3 +170,47 @@ The primary issue is that the main `/api/chat/route.ts` endpoint lacked the nece
 *   **Maintainability:** Improved.
 *   **Consistency:** Unified configuration approach.
 *   **Validation/Auth:** Existing mechanisms preserved and integrated.
+
+## Post-Refactor Enhancement Plan
+
+**Goal:** Implement a new tool to provide user profile context to the AI upon request.
+
+**Status:** Step 2 Complete. Starting Step 3.
+
+**Steps:**
+
+1.  **(DONE) Create `profile-context.tool.ts` (`lib/tools/`):**
+    *   Define tool `getUserProfileContext` using `import { tool } from 'ai';`.
+    *   Add description guiding AI on *when* to use it (personalized advice/content).
+    *   Define empty Zod parameters: `z.object({})`.
+    *   Implement `execute` function:
+        *   Extract `userId` from context (initially via system message workaround).
+        *   If `userId` exists, query `sd_user_profiles` for relevant fields (`full_name`, `company_name`, `website_url`, `company_description`, `location`, `website_summary`).
+        *   Format results clearly (string or JSON).
+        *   Return formatted data or error message.
+        *   Add logging (start, success, error, duration) following `logging-rules.mdc`.
+
+2.  **(DONE) Update Tool Registry (`lib/tools/registry.tool.ts`):**
+    *   Import the new `profileContextTool`.
+    *   Add `useProfileContext?: boolean;` to `createToolSet` options.
+    *   Conditionally add `toolSet.getUserProfileContext = profileContextTool;` if `useProfileContext` is true.
+    *   Ensure `widgetTools` does not include this tool.
+
+3.  **(TODO) Update Agent Configuration (`lib/chat-engine/agent-router.ts`):**
+    *   Add `useProfileContext: boolean;` to `AgentConfig.toolOptions`.
+    *   Enable the option (`true`) for relevant agent types (e.g., `default`, `copywriting`, `google-ads`, `facebook-ads`).
+
+4.  **(TODO) Update Setup Service (`lib/chat-engine/chat-setup.service.ts`):**
+    *   Pass the correct `useProfileContext: agentConfig.toolOptions.useProfileContext` flag when calling `createToolSet` within `prepareConfig`.
+    *   Ensure `userId` is reliably added to `config.body`.
+
+5.  **(TODO) Update System Prompt (`lib/chat-engine/prompts/base-prompt.ts`):**
+    *   Add `getUserProfileContext` and its description to the "AVAILABLE TOOLS" section.
+
+6.  **(TODO) Testing:**
+    *   Add unit tests for `profile-context.tool.ts`, mocking the Supabase client and verifying context extraction, DB query, and output formatting.
+    *   Update unit tests for `ChatSetupService` to verify the `useProfileContext` flag is handled correctly.
+    *   Update/add integration tests (once unblocked) or rely on E2E/manual tests to verify the AI calls the tool appropriately and uses the context.
+
+7.  **(TODO) Documentation:**
+    *   Update relevant READMEs (this plan, tools documentation) to include the new tool.
