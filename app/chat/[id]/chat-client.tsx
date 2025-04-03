@@ -190,31 +190,5 @@ export function ChatClient({ chatId }: ChatClientProps) {
     );
   }
 
-  // If conversation exists but has no messages, show empty state
-  if (!isLoading && !error && currentConversation && messagesToPass.length === 0) {
-    return (
-      <div className="h-screen flex flex-col items-center justify-center">
-        <div className="text-gray-700 mb-4">This chat exists but has no messages.</div>
-        <div className="flex gap-4">
-          <button
-            onClick={() => {
-              setHasFetchedMessages(false);
-              setError(null);
-            }}
-            className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
-          >
-            Retry Loading Chat
-          </button>
-          <button
-            onClick={() => window.location.href = '/chat'}
-            className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
-          >
-            Return to New Chat
-          </button>
-        </div>
-      </div>
-    );
-  }
-
   return <Chat id={chatId} initialMessages={messagesToPass} isReadonly={false} />;
 } 

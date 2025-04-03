@@ -478,14 +478,22 @@ export const useChatStore = create<ChatState>()(
         console.warn(`[ChatStore] Removing optimistically created conversation ${id} due to database failure`);
 
         set(state => {
+          // Create new objects without the failed conversation
           const newConversations = { ...state.conversations };
+          const newConversationsIndex = { ...state.conversationsIndex };
+          const newLoadedConversations = { ...state.loadedConversations };
+
+          // Remove from all data structures
           delete newConversations[id];
+          delete newConversationsIndex[id];
+          delete newLoadedConversations[id];
 
           // If this was the current conversation, find a new one
           let newCurrentId = state.currentConversationId;
 
           if (state.currentConversationId === id) {
-            const conversationIds = Object.keys(newConversations);
+            // Try to find a conversation from the index (most reliable)
+            const conversationIds = Object.keys(newConversationsIndex);
             newCurrentId = conversationIds.length > 0 ? conversationIds[0] : null;
 
             // Navigate if needed
@@ -500,6 +508,8 @@ export const useChatStore = create<ChatState>()(
 
           return {
             conversations: newConversations,
+            conversationsIndex: newConversationsIndex,
+            loadedConversations: newLoadedConversations,
             currentConversationId: newCurrentId
           };
         });
@@ -523,26 +533,41 @@ export const useChatStore = create<ChatState>()(
           deepSearchEnabled
         };
 
-        // 1. Update local state immediately (optimistic update)
+        // Create metadata for index
+        const newMetadata: ConversationMetadata = {
+          id,
+          title: 'New Conversation',
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          agentId: selectedAgentId,
+          deepSearchEnabled,
+          messageCount: 0
+        };
+
+        // 1. Update local state immediately (optimistic update for all data structures)
         set((state) => {
-          // Create a new conversations object
-          const newConversations: Record<string, Conversation> = {};
-
-          // Add the new conversation first (so it appears at the top)
-          newConversations[id] = newConversation;
-
-          // Then add all existing conversations
-          Object.keys(state.conversations).forEach(key => {
-            newConversations[key] = state.conversations[key];
-          });
-
+          // Update all three data structures
           return {
-            conversations: newConversations,
+            // Legacy conversations
+            conversations: {
+              [id]: newConversation,
+              ...state.conversations
+            },
+            // Index for sidebar
+            conversationsIndex: {
+              [id]: newMetadata,
+              ...state.conversationsIndex
+            },
+            // Fully loaded conversations
+            loadedConversations: {
+              [id]: newConversation,
+              ...state.loadedConversations
+            },
             currentConversationId: id
           };
         });
 
-        console.debug(`[ChatStore] Optimistically created new chat ${id}`);
+        console.debug(`[ChatStore] Optimistically created new chat ${id} in all data structures`);
 
         // 2. Create session in the database asynchronously
         if (typeof window !== 'undefined') {
@@ -698,21 +723,35 @@ export const useChatStore = create<ChatState>()(
           deepSearchEnabled
         };
 
-        // Update local state immediately
+        // Create metadata for index
+        const newMetadata: ConversationMetadata = {
+          id,
+          title: 'New Conversation',
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          agentId: selectedAgentId,
+          deepSearchEnabled,
+          messageCount: 0
+        };
+
+        // Update local state immediately in all data structures
         set((state) => {
-          // Create a new conversations object
-          const newConversations: Record<string, Conversation> = {};
-
-          // Add the new conversation first (so it appears at the top)
-          newConversations[id] = newConversation;
-
-          // Then add all existing conversations
-          Object.keys(state.conversations).forEach(key => {
-            newConversations[key] = state.conversations[key];
-          });
-
           return {
-            conversations: newConversations,
+            // Legacy conversations
+            conversations: {
+              [id]: newConversation,
+              ...state.conversations
+            },
+            // Index for sidebar
+            conversationsIndex: {
+              [id]: newMetadata,
+              ...state.conversationsIndex
+            },
+            // Fully loaded conversations
+            loadedConversations: {
+              [id]: newConversation,
+              ...state.loadedConversations
+            },
             currentConversationId: id
           };
         });
