@@ -1,6 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/utils/supabase/server';
-import { cookies } from 'next/headers';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import type { Message } from 'ai';
 import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
@@ -32,7 +30,7 @@ export async function GET(
         }
 
         // Create Supabase client
-        const supabase = await createClient();
+        const supabase = await createRouteHandlerClient();
 
         // Get the current user from auth
         const { data: { user }, error: authError } = await supabase.auth.getUser();

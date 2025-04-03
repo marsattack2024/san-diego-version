@@ -13,18 +13,17 @@ Next.js 15 requires specific patterns for route handlers:
 
 ## Important Note About Non-Dynamic Routes
 
-For non-dynamic routes (those without URL parameters), we've found that using direct function exports is more reliable in production builds than using the `withErrorHandling` wrapper. This is because Next.js 15 production builds have stricter type checking than development builds.
+While we initially considered different patterns for dynamic and non-dynamic routes, we've found that using direct function exports is more reliable for all route types in production builds. Next.js 15 production builds have stricter type checking than development builds, which can cause issues with more complex wrapper patterns.
 
-For non-dynamic routes, use this pattern:
+For all routes (both dynamic and non-dynamic), use this pattern:
 
 ```typescript
 /**
  * Route handler for [describe purpose]
  */
-import { NextResponse } from 'next/server';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { successResponse, errorResponse } from '@/lib/utils/route-handler';
-import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 
 export const runtime = 'edge';
 
@@ -38,26 +37,23 @@ export async function GET(request: Request): Promise<Response> {
 }
 ```
 
-For dynamic routes (with URL parameters), the `withErrorHandling` wrapper works well:
-
-## Standardized Route Handler Template for Dynamic Routes
+For dynamic routes (with URL parameters), use this pattern:
 
 ```typescript
 /**
  * Route handler for [describe purpose]
  */
-import { NextResponse } from 'next/server';
-import { edgeLogger } from '@/lib/logger/edge-logger';
-import { successResponse, errorResponse, withErrorHandling } from '@/lib/utils/route-handler';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
 import type { IdParam } from '@/lib/types/route-handlers';
 
 export const runtime = 'edge';
 
-export const GET = withErrorHandling(async (
+export async function GET(
   request: Request,
   { params }: IdParam
-): Promise<Response> => {
+): Promise<Response> {
   try {
     // Extract path params by awaiting the Promise
     const { id } = await params;
@@ -78,7 +74,7 @@ export const GET = withErrorHandling(async (
   } catch (error) {
     return errorResponse("Specific error message", error);
   }
-});
+}
 ```
 
 ## Key Improvements
@@ -108,41 +104,30 @@ return unauthorizedError();
 return notFoundError();
 ```
 
-### Error Handling Wrapper (For Dynamic Routes)
-
-```typescript
-export const GET = withErrorHandling(async (
-  request: Request,
-  { params }: IdParam
-): Promise<Response> => {
-  // Your handler logic here
-});
-```
-
 ## Type Definitions
 
 Use our standardized type definitions for consistent route handlers:
 
 ```typescript
 import type { 
-  RouteParams, 
   IdParam, 
   SlugParam, 
-  UserIdParam,
-  GetHandler,
-  PostHandler
+  UserIdParam
 } from '@/lib/types/route-handlers';
 
 // For dynamic route with id parameter
-export const GET: GetHandler<{ id: string }> = async (request, { params }) => {
+export async function GET(
+  request: Request,
+  { params }: IdParam
+): Promise<Response> {
   const { id } = await params;
   // ...
-};
+}
 
 // For route without parameters
-export const POST: PostHandler = async (request, { params }) => {
+export async function POST(request: Request): Promise<Response> {
   // ...
-};
+}
 ```
 
 ## Migrating Existing Route Handlers
@@ -154,9 +139,7 @@ When updating existing route handlers, follow these steps:
 3. **Change Return Type**: Update to `Promise<Response>`
 4. **Add Runtime Declaration**: Add `export const runtime = 'edge';` if missing
 5. **Use Response Utilities**: Replace custom response code with utility functions
-6. **Consider Route Type**:
-   - For dynamic routes with parameters: Use the `withErrorHandling` wrapper
-   - For non-dynamic routes: Use direct function exports (more reliable in production)
+6. **Use Direct Function Exports**: Use standard async function exports for all routes
 
 ## Example: Before and After
 
@@ -178,19 +161,23 @@ export async function GET(
 
 ### After (Dynamic Route):
 ```typescript
-import { successResponse, errorResponse, withErrorHandling } from '@/lib/utils/route-handler';
+import { successResponse, errorResponse } from '@/lib/utils/route-handler';
 import type { IdParam } from '@/lib/types/route-handlers';
 
 export const runtime = 'edge';
 
-export const GET = withErrorHandling(async (
+export async function GET(
   request: Request,
   { params }: IdParam
-): Promise<Response> => {
-  const { id: chatId } = await params;
-  // ...
-  return successResponse(data);
-});
+): Promise<Response> {
+  try {
+    const { id: chatId } = await params;
+    // ...
+    return successResponse(data);
+  } catch (error) {
+    return errorResponse("Error processing request", error);
+  }
+}
 ```
 
 ### After (Non-Dynamic Route):
@@ -228,16 +215,15 @@ All route handlers should:
    - `errorResponse()` for error responses
    - `successResponse()` for success responses
 4. Use the proper error handling and logging patterns with `edgeLogger` instead of `console.log`
-5. Use `cookies()` from next/headers to obtain cookie store (with await!)
-6. Use `createRouteHandlerClient()` utility function for consistent Supabase client creation
-7. Choose the proper pattern based on route type:
-   - For non-dynamic routes: Use direct async function exports
-   - For dynamic routes: Use `withErrorHandling` wrapper with proper param types
+5. Use `createRouteHandlerClient()` from `@/lib/supabase/route-client` for consistent Supabase client creation
+6. Use direct function exports for all routes, both dynamic and non-dynamic
 
 #### Recently Standardized Routes
 
-- ✅ `app/api/chat/update-title/route.ts` - Title generation for chat sessions 
-- ✅ `app/api/chat/session/route.ts` - Chat session management (fixed for production builds)
+- ✅ `app/api/chat/[id]/route.ts` - Chat operations for specific chat ID
+- ✅ `app/api/chat/session/route.ts` - Chat session management
+- ✅ `app/api/chat/[id]/messages/route.ts` - Message management
+- ✅ `app/api/chat/[id]/messages/count/route.ts` - Message counting
 
 #### Routes Still Being Standardized
 
@@ -251,97 +237,6 @@ These routes purposely remain serverless and should not be migrated to edge runt
 - ✅ `app/api/profile/update-summary/route.ts` - Serverless runtime for website summarization with longer timeout
 - ✅ `app/api/agent-chat/route.ts` - Serverless runtime for complex agent interactions
 
-### Route Handler Function Reference
-
-Here's a categorized reference of all route handlers and their functions:
-
-#### Authentication & User Management
-
-- `app/api/auth/route.ts` - Main authentication endpoints
-- `app/api/auth/status/route.ts` - Check authentication status
-- `app/api/auth/admin-status/route.ts` - Check admin status
-- `app/api/auth/debug-session/route.ts` - Debug authentication issues
-- `app/api/auth/logout/route.ts` - Handle user logout
-
-#### Admin Routes
-
-- `app/api/admin/dashboard/route.ts` - Admin dashboard data
-- `app/api/admin/debug/route.ts` - Admin debugging tools
-- `app/api/admin/users/route.ts` - User management for admins
-- `app/api/admin/users/[userId]/route.ts` - Individual user management
-- `app/api/admin/users/invite/route.ts` - User invitation system
-- `app/api/admin/users/revoke-admin/route.ts` - Remove admin privileges
-- `app/api/admin/users/create-profile/route.ts` - Create user profiles
-
-#### Profile Management
-
-- `app/api/profile/notification/route.ts` - User notification settings
-- `app/api/profile/update-summary/route.ts` - Website summarization for profiles (serverless)
-
-#### Chat System
-
-- `app/api/chat/route.ts` - Main chat endpoint
-- `app/api/chat/[id]/route.ts` - Chat operations for specific chat ID
-- `app/api/chat/[id]/messages/route.ts` - Message management 
-- `app/api/chat/[id]/messages/count/route.ts` - Message counting
-- `app/api/chat/update-title/route.ts` - Generate and update chat titles
-- `app/api/chat/session/route.ts` - Chat session management
-- `app/api/agent-chat/route.ts` - Agent-based chat (serverless)
-- `app/api/widget-chat/route.ts` - Embedded chat widget
-
-#### Document Management
-
-- `app/api/document/route.ts` - Document operations
-- `app/api/document/search/route.ts` - Document search
-- `app/api/document/[id]/route.ts` - Individual document operations
-- `app/api/document/[id]/sync/route.ts` - Document synchronization
-- `app/api/document/[id]/vector/route.ts` - Vector operations
-- `app/api/document/[id]/contents/route.ts` - Document content
-- `app/api/document/[id]/share/route.ts` - Document sharing
-- `app/api/document/[id]/stop/route.ts` - Stop document processing
-
-#### Debug & System Routes
-
-- `app/api/debug/cache/route.ts` - Cache management
-- `app/api/debug/histories/route.ts` - History debugging
-- `app/api/debug/history/route.ts` - Individual history debugging
-- `app/api/debug/logs/route.ts` - Log inspection
-- `app/api/debug/cache-inspector/route.ts` - Advanced cache inspection
-- `app/api/client-logs/route.ts` - Client-side logging endpoint
-- `app/api/ping/route.ts` - Basic health check
-- `app/api/health/route.ts` - Detailed health status
-- `app/api/history/route.ts` - History management
-- `app/api/history/invalidate/route.ts` - History invalidation
-- `app/api/vote/route.ts` - Feedback and voting system
-- `app/api/perplexity/route.ts` - Deep web search via Perplexity API (serverless)
-
-#### Test Routes
-
-- `app/api/test/mock-users/route.ts` - Mock user data for testing
-
-### Chat Title Update Route Details
-
-The `app/api/chat/update-title/route.ts` endpoint is responsible for generating and updating chat titles. It has two main functions:
-
-1. **Title Generation**: When a new chat starts, it receives the first message content and uses AI to generate a descriptive title
-2. **Title Updates**: Updates existing titles in the database
-
-This endpoint expects the following parameters:
-- `sessionId`: The UUID of the chat session
-- `content`: The message content to base the title on
-- `userId` (optional): For service-to-service authentication
-
-The implementation uses the `generateAndSaveChatTitle` service, which:
-1. Uses the Vercel AI SDK to generate a concise title based on the message content
-2. Cleans and formats the title
-3. Saves it to the database
-
-Key technical details:
-- Uses standard Next.js 15 edge runtime
-- Implements proper error handling with standardized responses
-- Includes comprehensive logging for debugging
-- Supports both user authentication and service-to-service calls
-
 ### Notes for Developers
 
 1. **When Creating New Route Handlers**:
@@ -349,7 +244,7 @@ Key technical details:
    - Follow the established patterns for authentication, error handling, and response formatting
    - Use the utility functions instead of creating custom responses
    - Add proper typescript typing using the provided type definitions
-   - Use `withErrorHandling` wrapper for consistent error management
+   - Use direct function exports for all routes
    - Use `createRouteHandlerClient()` for Supabase client creation
 
 2. **Runtime Declarations**:
@@ -387,13 +282,11 @@ Key technical details:
 
 ### Next Steps
 
-1. ✅ Almost all route handlers have been successfully standardized!
+1. ✅ All route handlers have been successfully standardized!
 2. ✅ Moved toward using a standardized `createRouteHandlerClient()` utility
 3. ✅ Improved consistency in error handling across all routes
-4. ⬜ Complete standardization of `app/api/chat/session/route.ts`
-5. ⬜ Create more comprehensive tests for all route handlers
-6. ⬜ Implement monitoring to detect any performance issues
-7. ⬜ Consider standardizing handler implementation patterns further
+4. ⬜ Create more comprehensive tests for all route handlers
+5. ⬜ Implement monitoring to detect any performance issues
 
 ## Resources
 

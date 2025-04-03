@@ -250,64 +250,162 @@ export const historyService = {
       }
     }
 
-    lastHistoryRequestTime = Date.now();
-
+    // Use circuit breaker to protect against repeated failures
     try {
-      edgeLogger.debug('Executing fetch via circuit breaker', { category: 'chat', operationId });
-      return await historyCircuitBreaker.execute(async () => {
-        if (pendingRequests[cacheKey]) {
-          try {
-            return await pendingRequests[cacheKey]!;
-          } catch (error) {
-            // On error, clear pending request and continue with a new fetch
-            pendingRequests[cacheKey] = null;
-          }
-        }
+      console.debug(`[HistoryService] Making API call to fetch history (operationId: ${operationId})`);
 
+      // Execute within circuit breaker
+      return await historyCircuitBreaker.execute(async () => {
         try {
-          edgeLogger.info('Initiating NEW API call for history fetch', { // Changed to info
+          // Global request throttling
+          const now = Date.now();
+          const timeSinceLastRequest = now - lastHistoryRequestTime;
+          if (timeSinceLastRequest < MIN_REQUEST_INTERVAL) {
+            const waitTime = MIN_REQUEST_INTERVAL - timeSinceLastRequest;
+            console.debug(`[HistoryService] Throttling history request for ${waitTime}ms`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+          }
+          lastHistoryRequestTime = Date.now();
+
+          // Get the Supabase client
+          const supabase = createClient();
+          console.debug(`[HistoryService] Got Supabase client (operationId: ${operationId})`);
+
+          // Make explicit authorization check for better error handling
+          console.debug(`[HistoryService] Checking auth status (operationId: ${operationId})`);
+          const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+          if (authError) {
+            // Specific handling for auth errors
+            console.error(`[HistoryService] Auth error: ${authError.message} (operationId: ${operationId})`);
+            edgeLogger.error('Authentication error during history fetch', {
+              category: LOG_CATEGORIES.AUTH,
+              operation: 'fetchHistory',
+              operationId,
+              error: authError.message,
+              important: true
+            });
+            throw new Error(`Authentication error: ${authError.message}`);
+          }
+
+          if (!user) {
+            console.error(`[HistoryService] No authenticated user found (operationId: ${operationId})`);
+            edgeLogger.error('No authenticated user for history fetch', {
+              category: LOG_CATEGORIES.AUTH,
+              operation: 'fetchHistory',
+              operationId,
+              important: true
+            });
+            throw new Error('No authenticated user');
+          }
+
+          console.debug(`[HistoryService] Authenticated as user ${user.id.substring(0, 8)} (operationId: ${operationId})`);
+
+          // Fetch the chat sessions
+          console.debug(`[HistoryService] Fetching chat sessions from DB (operationId: ${operationId})`);
+          const { data: sessions, error: fetchError } = await supabase
+            .from('sd_chat_sessions')
+            .select('id, title, created_at, updated_at, agent_id, user_id, deep_search_enabled')
+            .eq('user_id', user.id)
+            .order('updated_at', { ascending: false });
+
+          if (fetchError) {
+            console.error(`[HistoryService] Fetch error: ${fetchError.message} (operationId: ${operationId})`);
+            edgeLogger.error('Error fetching chat sessions', {
+              category: LOG_CATEGORIES.CHAT,
+              operation: 'fetchHistory',
+              operationId,
+              error: fetchError.message,
+              important: true
+            });
+            throw new Error(`Error fetching chat sessions: ${fetchError.message}`);
+          }
+
+          if (!sessions) {
+            console.error(`[HistoryService] No sessions returned from DB (operationId: ${operationId})`);
+            throw new Error('No chat sessions found');
+          }
+
+          // Map sessions to the expected Chat format
+          const chats: Chat[] = sessions.map(session => ({
+            id: session.id,
+            title: session.title || 'Untitled Chat',
+            createdAt: session.created_at,
+            updatedAt: session.updated_at,
+            userId: session.user_id,
+            messages: [],
+            agentId: session.agent_id || 'default',
+            deepSearchEnabled: session.deep_search_enabled || false
+          }));
+
+          console.debug(`[HistoryService] Successfully mapped ${chats.length} chats (operationId: ${operationId})`);
+
+          // Cache the results
+          try {
+            clientCache.set(cacheKey, chats, CACHE_TTL);
+            console.debug(`[HistoryService] Successfully cached ${chats.length} chats (operationId: ${operationId})`);
+          } catch (cacheError) {
+            console.warn(`[HistoryService] Error caching chat history: ${cacheError} (operationId: ${operationId})`);
+            // Don't throw, just log it - we can continue without caching
+          }
+
+          // Track successful fetch - part of adaptive refresh logic
+          lastSuccessfulFetch = Date.now();
+          consecutiveSuccessfulFetches++;
+
+          edgeLogger.info('Successfully fetched chat history', {
             category: LOG_CATEGORIES.CHAT,
             operation: 'fetchHistory',
             operationId,
-            cacheKey
+            count: chats.length,
+            userId: user.id.substring(0, 8) // Only log part of ID for privacy
           });
-          pendingRequests[cacheKey] = this.fetchHistoryFromAPI(cacheKey, operationId);
-          const result = await pendingRequests[cacheKey];
-          pendingRequests[cacheKey] = null;
-          edgeLogger.debug('API call completed successfully via breaker', { category: 'chat', operationId, count: result?.length ?? 0 });
-          return result;
+
+          return chats;
         } catch (error) {
-          pendingRequests[cacheKey] = null;
-          edgeLogger.error('API call within breaker failed', {
-            category: 'chat',
-            operationId,
-            error: error instanceof Error ? error.message : String(error)
+          // Log detailed error information
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          const errorStack = error instanceof Error ? error.stack : undefined;
+
+          console.error(`[HistoryService] Error in fetchHistory: ${errorMessage} (operationId: ${operationId})`, {
+            stack: errorStack
           });
-          throw error; // Re-throw for breaker
+
+          edgeLogger.error('Error fetching chat history', {
+            category: LOG_CATEGORIES.CHAT,
+            operation: 'fetchHistory',
+            operationId,
+            error: errorMessage,
+            errorStack,
+            important: true
+          });
+
+          // Store empty array in cache on error to prevent repeated failures
+          try {
+            clientCache.set(cacheKey, [], CACHE_TTL_ERROR);
+          } catch (cacheError) {
+            // Just log caching errors
+            console.warn(`[HistoryService] Error caching empty result on failure: ${cacheError}`);
+          }
+
+          // Rethrow for the circuit breaker to handle
+          throw error;
         }
       });
     } catch (error) {
-      edgeLogger.warn('History fetch failed (circuit open or API error)', {
-        category: LOG_CATEGORIES.AUTH,
+      // This handles circuit breaker errors
+      console.error(`[HistoryService] Circuit breaker error: ${error instanceof Error ? error.message : String(error)}`);
+
+      edgeLogger.error('Circuit breaker prevented history fetch', {
+        category: LOG_CATEGORIES.CHAT,
+        operation: 'fetchHistory',
+        operationId,
         error: error instanceof Error ? error.message : String(error),
-        operationId
+        circuitState: this.getCircuitState().state,
+        important: true
       });
 
-      // Return cached data if available, otherwise empty array
-      try {
-        const cachedData = clientCache.get(cacheKey) as Chat[] | undefined;
-        edgeLogger.info('Returning cached data due to API error/circuit open', { // Changed to info
-          category: LOG_CATEGORIES.SYSTEM, // Temp use SYSTEM for Cache
-          operation: 'fetchHistory',
-          operationId,
-          count: cachedData?.length ?? 0,
-          cacheKey
-        });
-        return (cachedData && Array.isArray(cachedData)) ? cachedData : []; // Ensure return array
-      } catch (e) {
-        edgeLogger.error('Error retrieving cache after API error', { category: LOG_CATEGORIES.SYSTEM /* Temp */, /* ... */ });
-        return [];
-      }
+      return []; // Return empty array on error
     }
   },
 

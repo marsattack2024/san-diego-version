@@ -247,18 +247,40 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
   useEffect(() => {
     // Fetch only when authenticated AND not already loading history
     if (auth.isAuthenticated && !isLoadingHistory) {
-      console.debug('[SidebarHistory] Authenticated and not loading, triggering initial fetch', { userId: auth.user?.id });
-      fetchHistory(false); // Fetch without forcing refresh 
-    } else {
-      // Log why we skipped
-      console.debug('[SidebarHistory] Skipping initial fetch:', {
+      console.debug('[SidebarHistory] Authenticated and not loading, triggering initial fetch', {
+        userId: auth.user?.id,
         isAuthenticated: auth.isAuthenticated,
-        isLoadingHistory: isLoadingHistory,
-        isAuthLoading: auth.isLoading // Keep for context
+        currentHistoryCount: Object.keys(conversations).length
+      });
+
+      // Schedule the fetch after a short delay to ensure auth is complete
+      const timeoutId = setTimeout(() => {
+        fetchHistory().catch(error => {
+          console.error('[SidebarHistory] Error during initial history fetch:', error);
+          setErrorMessage('Failed to load history');
+        });
+      }, 100); // Short delay to ensure auth state is stable
+
+      return () => clearTimeout(timeoutId);
+    } else {
+      console.debug('[SidebarHistory] Not ready for initial fetch', {
+        isAuthenticated: auth.isAuthenticated,
+        isLoadingHistory,
+        userId: auth.user?.id
       });
     }
-    // Dependency array: Re-run when isAuthenticated changes or loading state changes
-  }, [auth.isAuthenticated, fetchHistory, isLoadingHistory]);
+  }, [auth.isAuthenticated, auth.user?.id, fetchHistory, isLoadingHistory]);
+
+  // Add explicit auth state change monitoring
+  useEffect(() => {
+    console.debug('[SidebarHistory] Auth state changed', {
+      isAuthenticated: auth.isAuthenticated,
+      userId: auth.user?.id,
+      isLoadingHistory,
+      conversationCount: Object.keys(conversations).length,
+      pathname
+    });
+  }, [auth.isAuthenticated, auth.user?.id, isLoadingHistory, conversations, pathname]);
 
   // ** Polling Logic - ensure it also uses the correct auth check **
   useEffect(() => {

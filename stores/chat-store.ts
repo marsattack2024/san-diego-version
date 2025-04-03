@@ -248,80 +248,51 @@ export const useChatStore = create<ChatState>()(
 
         // Prevent multiple concurrent fetches unless forced
         if (state.isLoadingHistory && !forceRefresh) {
-          console.debug(`[ChatStore] History fetch already in progress, skipping`);
+          console.log('[ChatStore] History fetch already in progress, skipping duplicate fetch');
           return;
         }
 
-        // Implement adaptive refresh timing - only refresh if needed
-        const now = Date.now();
-        const timeSinceLastFetch = state.lastHistoryFetch ? now - state.lastHistoryFetch : Infinity;
-        const minRefreshInterval = 30 * 1000; // 30 seconds between refreshes
-
-        if (!forceRefresh && timeSinceLastFetch < minRefreshInterval) {
-          console.debug(`[ChatStore] Skipping fetchHistory - last fetch was ${Math.round(timeSinceLastFetch / 1000)}s ago`);
-          return;
-        }
-
-        console.log('[ChatStore] Setting isLoadingHistory=true');
-        set({ isLoadingHistory: true, historyError: null });
-
-        let timerStarted = false; // Flag to track timer state
         try {
-          console.debug(`[ChatStore] Fetching history (forceRefresh=${forceRefresh})`);
-          console.time('[ChatStore] historyService.fetchHistory');
-          timerStarted = true; // Mark timer as started
+          // Set loading state
+          set({ isLoadingHistory: true, historyError: null });
+
+          console.debug('[ChatStore] Calling historyService.fetchHistory()');
+          // Attempt to fetch history from API
           const historyData = await historyService.fetchHistory(forceRefresh);
+          console.debug('[ChatStore] Got history data from historyService:', {
+            count: historyData?.length || 0,
+            firstFewIds: historyData?.slice(0, 3).map(h => h.id).join(', ') || 'none'
+          });
 
-          if (timerStarted) {
-            console.timeEnd('[ChatStore] historyService.fetchHistory');
+          if (!historyData || !Array.isArray(historyData)) {
+            console.error('[ChatStore] History data is not an array or is empty');
+            throw new Error('Received invalid history data');
           }
 
-          // --> ADD LOGGING HERE <--
-          console.debug('[ChatStore] Raw data from historyService.fetchHistory', {
-            category: 'chat', // Use 'chat' for history loading as per rules
-            operation: 'fetchHistory',
-            dataType: typeof historyData,
-            isArray: Array.isArray(historyData),
-            count: Array.isArray(historyData) ? historyData.length : 'N/A',
-            // Log first item safely
-            sample: Array.isArray(historyData) && historyData.length > 0 ? JSON.stringify(historyData[0]).substring(0, 100) + '...' : '[]'
-          });
-          // --> END ADD LOGGING <--
-
-          console.log('[ChatStore] Received history data:', {
-            dataType: typeof historyData,
-            isArray: Array.isArray(historyData),
-            length: Array.isArray(historyData) ? historyData.length : 'N/A',
-            sample: Array.isArray(historyData) && historyData.length > 0
-              ? JSON.stringify(historyData[0]).substring(0, 200)
-              : 'No data'
-          });
-
-          // Process history data into conversations map
-          console.log('[ChatStore] Before syncConversationsFromHistory');
-          console.time('[ChatStore] syncConversationsFromHistory');
-          get().syncConversationsFromHistory(historyData);
-          console.timeEnd('[ChatStore] syncConversationsFromHistory');
-          console.log('[ChatStore] After syncConversationsFromHistory');
-
-          console.log('[ChatStore] Setting isLoadingHistory=false and updating lastHistoryFetch');
+          // If we get here, the fetch was successful
           set({
             isLoadingHistory: false,
-            lastHistoryFetch: Date.now()
+            lastHistoryFetch: Date.now(),
+            historyError: null
           });
+          console.debug('[ChatStore] Successfully fetched history:', historyData.length, 'items');
 
-          console.log(`[ChatStore] History fetched and store updated with ${historyData.length} conversations`);
+          // Synchronize the fetched history with our store
+          state.syncConversationsFromHistory(historyData);
+
+          console.debug('[ChatStore] History fetch complete and synchronized.');
+          return;
         } catch (error) {
-          console.error("Failed to fetch history:", error);
-          if (timerStarted) {
-            // Ensure timer is ended even on error if it was started
-            console.timeEnd('[ChatStore] historyService.fetchHistory');
-          }
+          // Handle errors
+          console.error('[ChatStore] Error fetching history:', error);
+
           set({
             isLoadingHistory: false,
-            historyError: error instanceof Error ? error.message : 'Failed to load history',
-            lastHistoryFetch: Date.now() // Still update timestamp to prevent immediate retry
+            historyError: error instanceof Error ? error.message : 'Failed to fetch history'
           });
+
+          // Don't throw - we want to handle the error in the UI
+          return;
         }
       },
 

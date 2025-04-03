@@ -7,14 +7,14 @@
  */
 
 import { createChatEngine } from '@/lib/chat-engine/chat-engine.facade';
-import { detectAgentType } from '@/lib/chat-engine/agent-router';
 import { createToolSet } from '@/lib/tools/registry.tool';
+import { detectAgentType } from '@/lib/chat-engine/agent-router';
+import type { AgentType } from '@/types/core/agent';
 import { prompts } from '@/lib/chat-engine/prompts';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { createClient } from '@/utils/supabase/server';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
-import { createServerClient } from '@supabase/ssr';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 // Import config from its dedicated file
 import { ChatEngineConfig } from '@/lib/chat-engine/chat-engine.config';
 
@@ -48,369 +48,44 @@ function parseBooleanValue(value: any): boolean {
   return false;
 }
 
-export async function POST(req: Request): Promise<Response> {
-  const startTime = Date.now();
+/**
+ * POST handler for the chat route
+ * Handles creation of new chat messages and streaming responses
+ */
+export async function POST(request: Request): Promise<Response> {
+  const operationId = `chat_${Math.random().toString(36).substring(2, 10)}`;
+
+  edgeLogger.debug('Chat POST request received', {
+    category: LOG_CATEGORIES.CHAT,
+    operation: 'chat_post',
+    operationId
+  });
 
   try {
-    // Extract the request body
-    let body;
-    try {
-      body = await req.json();
-      edgeLogger.info('Successfully parsed JSON body', {
-        operation: 'request_validation',
-        bodyKeys: Object.keys(body)
-      });
-    } catch (error) {
-      edgeLogger.error('Failed to parse request JSON', {
-        operation: 'request_validation',
-        error: error instanceof Error ? error.message : String(error)
-      });
-
-      return errorResponse('Invalid JSON: Failed to parse request body', error, 400);
-    }
-
-    // Handle validation directly instead of using the validator
-    // Process the messages from either format (array or single message)
-    let clientMessages = [];
-
-    if (body.messages && Array.isArray(body.messages)) {
-      clientMessages = body.messages;
-      edgeLogger.info('Using messages array format', {
-        operation: 'request_validation',
-        messageCount: clientMessages.length
-      });
-    } else if (body.message && typeof body.message === 'object') {
-      edgeLogger.info('Using optimized single message format', {
-        operation: 'request_validation',
-        messageId: body.message.id
-      });
-      clientMessages = [body.message];
-    } else {
-      edgeLogger.error('Invalid message format', {
-        operation: 'request_validation',
-        body: JSON.stringify(body).substring(0, 200) // Log first 200 chars
-      });
-
-      return errorResponse(
-        'Invalid request: messages required',
-        { bodyProvided: Object.keys(body) },
-        400
-      );
-    }
-
-    // Parse deepSearchEnabled flag
-    const deepSearchEnabled = parseBooleanValue(body.deepSearchEnabled);
-
-    // Add more detailed logging for the DeepSearch flag
-    edgeLogger.info('DeepSearch flag parsed', {
-      operation: 'deepsearch_flag',
-      rawDeepSearchValue: body.deepSearchEnabled,
-      rawValueType: typeof body.deepSearchEnabled,
-      parsedDeepSearchValue: deepSearchEnabled,
-      parsedValueType: typeof deepSearchEnabled
-    });
-
-    // Get sessionId and agentId
-    const sessionId = body.id;
-    const requestedAgentId = body.agentId || 'default';
-
-    // Basic validation
-    if (!clientMessages || !Array.isArray(clientMessages) || clientMessages.length === 0) {
-      edgeLogger.error('Empty or invalid messages array', {
-        operation: 'request_validation',
-        messagesType: typeof clientMessages,
-        isArray: Array.isArray(clientMessages),
-        length: clientMessages?.length
-      });
-
-      return errorResponse('Invalid request: messages required', null, 400);
-    }
-
-    if (!sessionId) {
-      edgeLogger.error('Missing session ID', {
-        operation: 'request_validation'
-      });
-
-      return errorResponse('Invalid request: session ID required', null, 400);
-    }
-
-    // Get the latest user message for agent detection
-    const lastUserMessage = clientMessages[clientMessages.length - 1];
-
-    edgeLogger.info('Validation passed', {
-      operation: 'request_validation',
-      sessionId,
-      requestedAgentId,
-      messageCount: clientMessages.length,
-      lastMessageContent: typeof lastUserMessage.content === 'string'
-        ? lastUserMessage.content.substring(0, 50) + '...'
-        : typeof lastUserMessage.content
-    });
-
-    edgeLogger.info('Chat request received', {
-      operation: 'chat_request',
-      sessionId,
-      deepSearchEnabled,
-      requestedAgentId,
-      messageCount: clientMessages.length
-    });
-
-    // Detect the appropriate agent type based on message content
-    try {
-      var { agentType, config: agentConfig, reasoning } = await detectAgentType(
-        lastUserMessage.content as string,
-        requestedAgentId as any
-      );
-
-      // Log agent selection with detailed information
-      edgeLogger.info('Agent type detected', {
-        category: LOG_CATEGORIES.CHAT,
-        operation: 'agent_detection',
-        sessionId,
-        requestedAgent: requestedAgentId,
-        detectedAgent: agentType,
-        selectionMethod: requestedAgentId === 'default' ? 'automatic' : 'user-selected',
-        reason: reasoning ? reasoning.substring(0, 150) + (reasoning.length > 150 ? '...' : '') : undefined,
-        messagePreview: (lastUserMessage.content as string).substring(0, 50) + '...',
-        messageTokenCount: (lastUserMessage.content as string).length / 4 // Rough estimate
-      });
-    } catch (agentError) {
-      edgeLogger.error('Agent detection failed', {
-        category: LOG_CATEGORIES.CHAT,
-        operation: 'agent_detection',
-        sessionId,
-        error: agentError instanceof Error ? agentError.message : String(agentError),
-        requestedAgent: requestedAgentId,
-        fallbackAgent: 'default',
-        important: true
-      });
-
-      return errorResponse(
-        'Agent detection failed',
-        agentError instanceof Error ? agentError.message : 'Unknown error',
-        500
-      );
-    }
-
-    // Determine if this agent type can use Deep Search
-    const canAgentUseDeepSearch = agentConfig.toolOptions.useDeepSearch;
-
-    // Only enable Deep Search if both the user has toggled it AND the agent supports it
-    const shouldUseDeepSearch = canAgentUseDeepSearch && deepSearchEnabled;
-
-    // Create tools object with conditional inclusion of Deep Search
-    try {
-      var tools = createToolSet({
-        useKnowledgeBase: agentConfig.toolOptions.useKnowledgeBase,
-        useWebScraper: agentConfig.toolOptions.useWebScraper,
-        useDeepSearch: shouldUseDeepSearch // Only include if explicitly enabled
-      });
-
-      edgeLogger.info('Tool selection', {
-        operation: 'tool_selection',
-        toolNames: Object.keys(tools),
-        deepSearchEnabled,
-        shouldUseDeepSearch,
-        deepSearchIncluded: 'deepSearch' in tools
-      });
-    } catch (toolError) {
-      edgeLogger.error('Tool creation failed', {
-        operation: 'tool_creation',
-        error: toolError instanceof Error ? toolError.message : String(toolError)
-      });
-
-      return errorResponse(
-        'Tool creation failed',
-        toolError instanceof Error ? toolError.message : 'Unknown error',
-        500
-      );
-    }
-
-    // TEMPORARY: Check for bypass_auth flag to help during development
-    const bypassAuth = process.env.NODE_ENV !== 'production' ||
-      process.env.BYPASS_AUTH === 'true' ||
-      parseBooleanValue(body.bypass_auth);
-
-    if (bypassAuth) {
-      edgeLogger.warn('Auth requirement bypassed for testing', {
-        operation: 'chat_engine_config'
-      });
-    }
-
-    // Get the authenticated user (if any)
-    const authClient = await createClient();
-    const { data: { user }, error: authError } = await authClient.auth.getUser();
-
-    const userId = user?.id;
-
-    if (!bypassAuth && (!userId || authError)) {
-      edgeLogger.warn('Authentication required', {
-        operation: 'chat_request',
-        authenticated: !!userId,
-        authError: authError?.message
-      });
-
-      return unauthorizedError();
-    }
-
-    // For testing: when auth is bypassed, use a default user ID for persistence
-    // This ensures messages can still be saved even when auth is bypassed
-    const persistenceUserId = userId || (bypassAuth ? '00000000-0000-0000-0000-000000000000' : undefined);
-
-    if (bypassAuth && !userId) {
-      edgeLogger.warn('Using default userId for persistence in bypass mode', {
-        operation: 'chat_request',
-        persistenceUserId
-      });
-    }
-
-    // Check if message persistence should be disabled
-    const disableMessagePersistence = parseBooleanValue(body.disable_persistence);
-
-    if (disableMessagePersistence) {
-      edgeLogger.info('Message persistence disabled for this request', {
-        operation: 'chat_engine_config',
-        sessionId
-      });
-    }
-
-    // Log authentication and user ID information for debugging
-    edgeLogger.info('Authentication status for chat request', {
-      operation: 'chat_request_auth',
-      hasAuthUser: !!userId,
-      bypassAuth,
-      persistenceUserId,
-      sessionId
-    });
-
-    // Configure the chat engine
-    const engineConfig: ChatEngineConfig = {
-      operationName: shouldUseDeepSearch ? 'chat_deep_search' : 'chat_default',
-      tools,
-      useDeepSearch: shouldUseDeepSearch,
-      // Use enhanced system prompt following AI SDK standards
-      systemPrompt: prompts.buildSystemPrompt(agentType, shouldUseDeepSearch),
-      // Configure message persistence
-      messagePersistenceDisabled: disableMessagePersistence,
-      // Set agent type
-      agentType,
-      // Standard engine configuration
-      requiresAuth: !bypassAuth, // Allow bypassing auth for testing
-      corsEnabled: false,
-      model: agentConfig.model || 'gpt-4o',
-      temperature: agentConfig.temperature || 0.7,
-      maxTokens: 16000,
-      cacheEnabled: true,
-      messageHistoryLimit: 50,
-      // Pass additional configuration for tools following AI SDK patterns
-      body: {
-        deepSearchEnabled: shouldUseDeepSearch, // Pass for safety check in execute function
-        sessionId,
-        userId: persistenceUserId, // Pass the authenticated user ID for message persistence
-        agentType,
-        // AI SDK standard configuration for multi-step agents
-        maxSteps: 5, // Allow up to 5 steps for complex reasoning chains
-        toolChoice: 'auto' // Always allow tools to be used
-      }
-    };
-
-    // Log user ID for message persistence
-    edgeLogger.info('Chat engine configuration', {
-      operation: 'chat_engine_config',
-      sessionId,
-      userId: persistenceUserId,
-      authBypass: bypassAuth,
-      persistenceDisabled: disableMessagePersistence
-    });
-
-    try {
-      var engine = createChatEngine(engineConfig);
-
-      edgeLogger.info('Chat engine created', {
-        operation: 'chat_engine_created',
-        sessionId,
-        agentType,
-        deepSearchEnabled: shouldUseDeepSearch,
-        toolCount: Object.keys(tools).length,
-        elapsedMs: Date.now() - startTime
-      });
-    } catch (engineError) {
-      edgeLogger.error('Chat engine creation failed', {
-        operation: 'chat_engine_creation',
-        error: engineError instanceof Error ? engineError.message : String(engineError)
-      });
-
-      return errorResponse(
-        'Chat engine creation failed',
-        engineError instanceof Error ? engineError.message : 'Unknown error',
-        500
-      );
-    }
-
-    // Clone the request before passing it to handleRequest to preserve it for debugging
-    const reqClone = new Request(req.url, {
-      method: req.method,
-      headers: req.headers,
-      body: JSON.stringify(body)
-    });
-
-    edgeLogger.info('Calling handleRequest', {
-      operation: 'route_handler',
-      requestBody: JSON.stringify(body).substring(0, 200) // Log first 200 chars
-    });
-
-    try {
-      // Let the engine handle the request
-      const response = await engine.handleRequest(reqClone);
-
-      // Log successful handling
-      edgeLogger.info('Request handled successfully', {
-        operation: 'route_handler',
-        status: response.status,
-        statusText: response.statusText,
-        contentType: response.headers.get('Content-Type'),
-        elapsedMs: Date.now() - startTime
-      });
-
-      // Consume the response stream to ensure processing continues even if client disconnects
-      // This is crucial for ensuring message persistence completes even during disconnects
-      if (response.body && 'consumeStream' in response) {
-        // Non-awaited call so we don't block the response
-        (response as any).consumeStream();
-
-        edgeLogger.info('Stream consumption initiated to handle potential client disconnects', {
-          operation: 'route_handler',
-          sessionId
-        });
-      }
-
-      return response;
-    } catch (handleRequestError) {
-      edgeLogger.error('Handle request failed', {
-        operation: 'handle_request',
-        error: handleRequestError instanceof Error ? handleRequestError.message : String(handleRequestError),
-        stack: handleRequestError instanceof Error ? handleRequestError.stack : undefined
-      });
-
-      return errorResponse(
-        'Request handling failed',
-        handleRequestError instanceof Error ? handleRequestError.message : 'Unknown error',
-        500
-      );
-    }
-
+    // Use the ChatEngine facade to handle the request
+    const chatEngine = createChatEngine();
+    return await chatEngine.handleRequest(request);
   } catch (error) {
-    // Log the error
-    edgeLogger.error('Unhandled error in chat route', {
+    edgeLogger.error('Unexpected error in chat API', {
+      category: LOG_CATEGORIES.CHAT,
+      operation: 'chat_post_error',
+      operationId,
       error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined
+      stack: error instanceof Error ? error.stack : undefined,
+      important: true
     });
 
-    // Return a user-friendly error response
-    return errorResponse(
-      'An error occurred processing your request',
-      error instanceof Error ? error.message : 'Unknown error',
-      500
+    return new Response(
+      JSON.stringify({
+        error: 'An unexpected error occurred processing your message',
+        details: error instanceof Error ? error.message : 'Unknown error'
+      }),
+      {
+        status: 500,
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      }
     );
   }
 } 
