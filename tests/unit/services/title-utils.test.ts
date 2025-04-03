@@ -8,9 +8,9 @@ setupLoggerMock();
 
 // Mock Supabase client
 const mockSupabase = {
-    from: vi.fn(),
-    update: vi.fn(),
-    eq: vi.fn()
+    from: vi.fn().mockReturnThis(),
+    update: vi.fn().mockReturnThis(),
+    eq: vi.fn().mockResolvedValue({ data: null, error: null })
 };
 
 vi.mock('@/utils/supabase/server', () => ({
@@ -41,7 +41,7 @@ vi.mock('@/lib/chat/title-utils', () => ({
         }
         return cleanedTitle;
     }),
-    updateTitleInDatabase: vi.fn().mockImplementation(async (chatId, newTitle, userId) => {
+    updateTitleInDatabase: vi.fn().mockImplementation(async (supabase, chatId, newTitle, userId) => {
         try {
             // Simulate successful database update
             return true;
@@ -63,11 +63,6 @@ describe('Title Utilities', () => {
     beforeEach(() => {
         // Reset all mocks
         vi.clearAllMocks();
-
-        // Setup the mock chain structure
-        mockSupabase.from.mockReturnThis();
-        mockSupabase.update.mockReturnThis();
-        mockSupabase.eq.mockResolvedValue({ data: null, error: null });
 
         // Reset fetch mock
         (fetch as Mock).mockReset();
@@ -107,20 +102,17 @@ describe('Title Utilities', () => {
             // Arrange
             const newTitle = 'Updated Title';
 
-            // Setup mocks
-            mockSupabase.from.mockReturnValue(mockSupabase);
-            mockSupabase.update.mockReturnValue(mockSupabase);
-            mockSupabase.eq.mockResolvedValue({ data: null, error: null });
+            // Mock fetch to resolve successfully
             (fetch as Mock).mockResolvedValue({ ok: true });
 
             // Mock the actual implementation for this test
-            (updateTitleInDatabase as Mock).mockImplementation(async (chatId, title, userId) => {
+            (updateTitleInDatabase as Mock).mockImplementation(async (supabase, chatId, title, userId) => {
                 await fetch('/api/history/invalidate', { method: 'POST' });
                 titleLogger.titleUpdateResult({
-                    chatId,
+                    chatId: chatId,
+                    userId: userId,
                     newTitle: title,
                     success: true,
-                    userId,
                     durationMs: 100
                 });
                 return true;
@@ -142,9 +134,9 @@ describe('Title Utilities', () => {
             expect(titleLogger.titleUpdateResult).toHaveBeenCalledWith(
                 expect.objectContaining({
                     chatId: TEST_CHAT_ID,
+                    userId: TEST_USER_ID,
                     newTitle,
                     success: true,
-                    userId: TEST_USER_ID,
                     durationMs: expect.any(Number)
                 })
             );
@@ -156,12 +148,12 @@ describe('Title Utilities', () => {
             const dbError = { message: 'Database update failed' };
 
             // Mock implementation for database error
-            (updateTitleInDatabase as Mock).mockImplementation(async (chatId, title, userId) => {
+            (updateTitleInDatabase as Mock).mockImplementation(async (supabase, chatId, title, userId) => {
                 titleLogger.titleUpdateResult({
-                    chatId,
+                    chatId: chatId,
+                    userId: userId,
                     newTitle: title,
                     success: false,
-                    userId,
                     error: 'Database update failed: Database update failed',
                     durationMs: 100
                 });
@@ -178,9 +170,9 @@ describe('Title Utilities', () => {
             expect(titleLogger.titleUpdateResult).toHaveBeenCalledWith(
                 expect.objectContaining({
                     chatId: TEST_CHAT_ID,
+                    userId: TEST_USER_ID,
                     newTitle,
                     success: false,
-                    userId: TEST_USER_ID,
                     error: expect.stringContaining('Database update failed'),
                     durationMs: expect.any(Number)
                 })
@@ -199,23 +191,23 @@ describe('Title Utilities', () => {
             (fetch as Mock).mockRejectedValue(cacheError);
 
             // Mock the implementation to handle the fetch error
-            (updateTitleInDatabase as Mock).mockImplementation(async (chatId, title, userId) => {
+            (updateTitleInDatabase as Mock).mockImplementation(async (supabase, chatId, title, userId) => {
                 try {
                     await fetch('/api/history/invalidate', { method: 'POST' });
                 } catch (cacheError) {
                     titleLogger.titleGenerationFailed({
-                        chatId,
-                        userId,
+                        chatId: chatId,
+                        userId: userId,
                         error: `Cache invalidation fetch failed: ${cacheError instanceof Error ? cacheError.message : String(cacheError)}`,
                         durationMs: 0
                     });
                 }
 
                 titleLogger.titleUpdateResult({
-                    chatId,
+                    chatId: chatId,
+                    userId: userId,
                     newTitle: title,
                     success: true,
-                    userId,
                     durationMs: 100
                 });
 
@@ -247,9 +239,9 @@ describe('Title Utilities', () => {
             expect(titleLogger.titleUpdateResult).toHaveBeenCalledWith(
                 expect.objectContaining({
                     chatId: TEST_CHAT_ID,
+                    userId: TEST_USER_ID,
                     newTitle,
                     success: true,
-                    userId: TEST_USER_ID,
                     durationMs: expect.any(Number)
                 })
             );
@@ -260,16 +252,13 @@ describe('Title Utilities', () => {
             const newTitle = 'Unexpected Error Title';
             const unexpectedError = new Error('Unexpected connection error');
 
-            // Setup createClient to throw an error
-            (createClient as Mock).mockRejectedValue(unexpectedError);
-
-            // Update the mock implementation for this test
-            (updateTitleInDatabase as Mock).mockImplementation(async (chatId, title, userId) => {
+            // Mock implementation for unexpected error
+            (updateTitleInDatabase as Mock).mockImplementation(async (supabase, chatId, title, userId) => {
                 titleLogger.titleUpdateResult({
-                    chatId,
+                    chatId: chatId,
+                    userId: userId,
                     newTitle: title,
                     success: false,
-                    userId,
                     error: 'Unexpected connection error',
                     durationMs: 100
                 });
@@ -286,9 +275,9 @@ describe('Title Utilities', () => {
             expect(titleLogger.titleUpdateResult).toHaveBeenCalledWith(
                 expect.objectContaining({
                     chatId: TEST_CHAT_ID,
+                    userId: TEST_USER_ID,
                     newTitle,
                     success: false,
-                    userId: TEST_USER_ID,
                     error: expect.stringContaining('Unexpected connection error'),
                     durationMs: expect.any(Number)
                 })
