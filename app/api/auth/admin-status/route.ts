@@ -3,141 +3,59 @@ import { createServerClient } from '@supabase/ssr';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { withAdminAuth } from '@/lib/auth/with-auth';
+import type { User } from '@supabase/supabase-js';
 
 export const runtime = 'edge';
 
 /**
  * GET route to check if the current user has admin status
- * This endpoint prioritizes checking JWT claims in app_metadata,
- * then falls back to checking the profile table
+ * Uses withAdminAuth which verifies the user is authenticated and has the is_admin JWT claim.
  */
-export async function GET(request: Request): Promise<Response> {
+export const GET = withAdminAuth(async (user: User, request: Request): Promise<Response> => {
     const operationId = `admin_check_${Date.now().toString(36).substring(2, 7)}`;
 
     try {
-        // Create Supabase client using the server function
-        const cookieStore = await cookies();
-        const supabase = createServerClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-            {
-                cookies: {
-                    getAll() {
-                        return cookieStore.getAll();
-                    },
-                    setAll(cookiesToSet) {
-                        try {
-                            cookiesToSet.forEach(({ name, value, options }) => {
-                                cookieStore.set(name, value, options);
-                            });
-                        } catch (error) {
-                            // This can be ignored in Server Components
-                        }
-                    },
-                },
-            }
-        );
-
-        // Get the current user from the request
-        const { data: { user }, error: userError } = await supabase.auth.getUser();
-
-        if (userError || !user) {
-            edgeLogger.warn('User not authenticated for admin check', {
-                category: LOG_CATEGORIES.AUTH,
-                operationId,
-                error: userError?.message
-            });
-            return unauthorizedError('User not authenticated');
-        }
-
-        edgeLogger.debug('Checking admin status', {
-            category: LOG_CATEGORIES.AUTH,
-            operationId,
-            userId: user.id.substring(0, 8) + '...'
-        });
-
-        // 1. Check JWT claims in app_metadata first (most efficient)
-        const jwtAdmin = user.app_metadata?.is_admin === true;
-
-        if (jwtAdmin) {
-            edgeLogger.info('Admin status confirmed via JWT claim', {
-                category: LOG_CATEGORIES.AUTH,
-                operationId,
-                userId: user.id.substring(0, 8) + '...',
-                method: 'jwt_claim'
-            });
-
-            // Set a cookie to cache the admin status on the client
-            const response = successResponse({
-                admin: true,
-                authenticated: true,
-                userId: user.id,
-                source: 'jwt_claim'
-            });
-
-            // Set cookie for client-side caching - 1 hour expiry
-            response.headers.set('Set-Cookie', `x-is-admin=true; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax`);
-
-            // Cache for 30 minutes (1800 seconds)
-            response.headers.set('Cache-Control', 'private, max-age=1800');
-
-            return response;
-        }
-
-        // 2. Check profile table as fallback
-        edgeLogger.debug('No JWT admin claim, checking profile table', {
-            category: LOG_CATEGORIES.AUTH,
-            operationId
-        });
-
-        const { data: profileData, error: profileError } = await supabase
-            .from('sd_user_profiles')
-            .select('is_admin')
-            .eq('user_id', user.id)
-            .single();
-
-        if (profileError) {
-            edgeLogger.error('Error checking admin status in profile', {
-                category: LOG_CATEGORIES.AUTH,
-                operationId,
-                userId: user.id.substring(0, 8) + '...',
-                error: profileError.message
-            });
-
-            return errorResponse(
-                'Failed to check admin status',
-                profileError,
-                500
-            );
-        }
-
-        const isAdmin = profileData?.is_admin === true;
-
-        edgeLogger.info('Admin status check completed', {
+        // User is guaranteed to be authenticated and an admin by the wrapper
+        edgeLogger.info('Admin status confirmed via withAdminAuth wrapper (JWT claim)', {
             category: LOG_CATEGORIES.AUTH,
             operationId,
             userId: user.id.substring(0, 8) + '...',
-            isAdmin,
-            method: 'profile_check'
+            method: 'jwt_claim_via_wrapper'
         });
 
-        // Set a longer cache time for this response to avoid repeated checks
+        // Return success response indicating admin status
         const response = successResponse({
-            admin: isAdmin,
+            admin: true, // Confirmed by the wrapper
             authenticated: true,
             userId: user.id,
-            source: 'profile_table'
+            source: 'jwt_claim_via_wrapper' // Indicate source was the wrapper check
         });
 
-        // Set cookie for client-side caching - 1 hour expiry
-        response.headers.set('Set-Cookie',
-            `x-is-admin=${isAdmin ? 'true' : 'false'}; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax`
-        );
+        // Set a cookie to cache the admin status on the client
+        // Note: The main middleware likely sets this already, but setting it here provides robustness.
+        response.headers.set('Set-Cookie', `x-is-admin=true; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax`);
 
         // Cache for 30 minutes (1800 seconds)
         response.headers.set('Cache-Control', 'private, max-age=1800');
 
         return response;
+
+        // --- Removed manual checks as withAdminAuth handles it --- 
+        /*
+        // Create Supabase client using the server function
+        // ... client creation code removed ...
+
+        // Get the current user from the request
+        // ... getUser call removed ...
+
+        // 1. Check JWT claims in app_metadata first (most efficient)
+        // ... JWT check removed ...
+
+        // 2. Check profile table as fallback
+        // ... profile check code removed ...
+        */
+
     } catch (error) {
         edgeLogger.error('Unexpected error in admin status check', {
             category: LOG_CATEGORIES.AUTH,
@@ -152,4 +70,4 @@ export async function GET(request: Request): Promise<Response> {
             500
         );
     }
-} 
+}); 
