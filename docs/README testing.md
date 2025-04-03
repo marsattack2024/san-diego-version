@@ -94,7 +94,7 @@ tests/
 **3. Supabase Client (`@/utils/supabase/server` or route-client):**
    ```typescript
    const mockSupabase = {
-     from: vi.fn().mockReturnThis(),
+       from: vi.fn().mockReturnThis(),
      select: vi.fn().mockReturnThis(),
      eq: vi.fn().mockReturnThis(),
      // ... other methods (update, maybeSingle, etc.) ...
@@ -107,29 +107,29 @@ tests/
    ```
 
 **4. Redis Client (`@upstash/redis` or `@/lib/utils/redis-client`):**
-   ```typescript
+```typescript
    // (Using in-memory store pattern from cheatsheet)
-   vi.mock('@upstash/redis', () => {
-     const mockStore = new Map<string, any>();
+vi.mock('@upstash/redis', () => {
+  const mockStore = new Map<string, any>();
      /* ... expiration logic ... */
-     return {
-       Redis: {
+  return {
+    Redis: {
          fromEnv: vi.fn().mockReturnValue({
            set: vi.fn(/* implementation using mockStore */),
            get: vi.fn(/* implementation using mockStore & expirations */),
            del: vi.fn(/* ... */),
            exists: vi.fn(/* ... */),
-         })
-       }
-     };
-   });
+      })
+    }
+  };
+});
    // Also mock the local client if used directly
    vi.mock('@/lib/utils/redis-client', () => ({ getRedisClient: vi.fn(/* ... */) }));
    ```
 
 **5. Logger (`@/lib/logger/edge-logger` & specific loggers):**
    *Use `setupLoggerMock()` from `tests/helpers/mock-logger.ts`. It handles mocking `edgeLogger` and includes constants like `LOG_CATEGORIES`.*
-   ```typescript
+```typescript
    import { setupLoggerMock, mockLogger } from '@/tests/helpers/mock-logger';
    setupLoggerMock(); // Call BEFORE importing code that logs
 
@@ -138,7 +138,7 @@ tests/
    ```
 
 **6. Route Handler Utilities (`@/lib/utils/route-handler`):**
-   ```typescript
+```typescript
    vi.mock('@/lib/utils/route-handler', () => ({
      successResponse: vi.fn((data) => new Response(JSON.stringify(data), { status: 200, /* ...headers */ })),
      errorResponse: vi.fn((msg, err, status=500) => new Response(JSON.stringify({ error: msg }), { status, /* ...headers */ })),
@@ -206,12 +206,12 @@ import { ServiceUnderTest } from '@/lib/service-under-test';
 // 4. Test Suite
 describe('ServiceUnderTest', () => {
   let service: ServiceUnderTest;
-
+  
   beforeEach(() => {
     // Reset mocks for isolation
     vi.resetAllMocks(); // Or vi.clearAllMocks()
     mockLogger.reset();
-
+    
     // (Re)Initialize service instance if needed
     service = new ServiceUnderTest(/* Pass mocked dependencies if constructor requires */);
   });

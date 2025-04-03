@@ -3,6 +3,8 @@ import { describe, expect, it, beforeEach, vi, Mock } from 'vitest';
 import { setupLoggerMock, mockLogger } from '@/tests/helpers/mock-logger';
 import type { AgentType } from '@/types/core/agent';
 import type { ChatEngineConfig } from '@/lib/chat-engine/chat-engine.config';
+import { z } from 'zod';
+import type { Tool } from 'ai';
 
 // 2. Mocks (BEFORE importing module under test)
 setupLoggerMock();
@@ -55,6 +57,13 @@ describe('ChatSetupService', () => {
         toolOptions: { useKnowledgeBase: true, useWebScraper: true, useDeepSearch: true, useRagTool: true }
     };
 
+    // Create a minimal mock tool structure
+    const mockTool: Tool<any, any> = {
+        description: "Mock tool description",
+        parameters: z.object({}), // Assuming Zod is imported or use simple object
+        execute: async () => ({ result: "mock execution" })
+    };
+
     beforeEach(() => {
         // Reset mocks for isolation
         vi.resetAllMocks();
@@ -66,7 +75,7 @@ describe('ChatSetupService', () => {
             if (agentType === 'copywriting') return copywritingAgentConfig;
             return defaultAgentConfig;
         });
-        vi.mocked(createToolSet).mockReturnValue({ tool1: {}, tool2: {} });
+        vi.mocked(createToolSet).mockReturnValue({ tool1: mockTool, tool2: mockTool });
         vi.mocked(prompts.buildSystemPrompt).mockReturnValue('Generated System Prompt');
 
         // Initialize service instance
@@ -100,7 +109,7 @@ describe('ChatSetupService', () => {
             expect(config.body?.deepSearchEnabled).toBe(false);
             expect(config.body?.userId).toBe('user-abc');
             expect(config.body?.isWidgetChat).toBe(false);
-            expect(config.tools).toEqual({ tool1: {}, tool2: {} });
+            expect(config.tools).toEqual({ tool1: mockTool, tool2: mockTool });
         });
 
         it('should enable DeepSearch when flag is true and agent supports it', async () => {
