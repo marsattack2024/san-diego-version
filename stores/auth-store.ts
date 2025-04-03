@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { createClient } from '@/utils/supabase/client';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
 interface User {
   id: string;
@@ -8,6 +10,7 @@ interface User {
   name?: string;
   user_metadata?: any;
   last_sign_in_at?: string;
+  app_metadata?: any;
 }
 
 interface UserProfile {
@@ -234,29 +237,53 @@ export const useAuthStore = create<AuthState>()(
         }
 
         try {
-          // 1. Check the cookie first (most efficient)
+          edgeLogger.debug('Checking admin role status', {
+            category: LOG_CATEGORIES.AUTH,
+            userId: state.user.id.substring(0, 8) + '...',
+          });
+
+          // 1. Check JWT claims in app_metadata first (highest priority and most efficient)
+          if (state.user.app_metadata?.is_admin === true) {
+            edgeLogger.debug('Admin status found in JWT claims', {
+              category: LOG_CATEGORIES.AUTH,
+              isAdmin: true
+            });
+            set({ isAdmin: true });
+            return true;
+          }
+
+          // 2. Check if the profile has is_admin flag (already cached in state)
+          if (state.profile?.is_admin) {
+            edgeLogger.debug('Admin status found in cached profile', {
+              category: LOG_CATEGORIES.AUTH,
+              isAdmin: true
+            });
+            set({ isAdmin: true });
+            return true;
+          }
+
+          // 3. Check the cookie first (client-side cache)
           if (typeof window !== 'undefined') {
             const cookies = document.cookie.split(';');
             const adminCookie = cookies.find(c => c.trim().startsWith('x-is-admin='));
 
             if (adminCookie) {
               const isAdmin = adminCookie.includes('true');
-              console.log('Admin check: Using admin cookie value:', isAdmin);
+              edgeLogger.debug('Admin status from cookie', {
+                category: LOG_CATEGORIES.AUTH,
+                isAdmin
+              });
               set({ isAdmin });
               return isAdmin;
             }
           }
 
-          // 2. Check if the profile has is_admin flag (already cached in state)
-          if (state.profile?.is_admin) {
-            console.log('Admin check: Using cached profile admin flag');
-            set({ isAdmin: true });
-            return true;
-          }
-
-          // 3. If no cookie or profile in state, use the admin-status API
+          // 4. If no JWT claim, profile, or cookie, use the admin-status API
           try {
-            console.log('Admin check: Calling admin-status API');
+            edgeLogger.debug('No admin status in JWT/profile/cookie, calling API', {
+              category: LOG_CATEGORIES.AUTH
+            });
+
             const response = await fetch('/api/auth/admin-status', {
               method: 'GET',
               credentials: 'include',
@@ -269,20 +296,35 @@ export const useAuthStore = create<AuthState>()(
             if (response.ok) {
               const data = await response.json();
               const isAdmin = !!data.admin;
-              console.log('Admin check: API result:', isAdmin);
+
+              edgeLogger.debug('Admin status from API', {
+                category: LOG_CATEGORIES.AUTH,
+                isAdmin
+              });
+
               set({ isAdmin });
               return isAdmin;
             }
           } catch (apiError) {
-            console.error('Admin API check error:', apiError);
+            edgeLogger.error('Admin API check error', {
+              category: LOG_CATEGORIES.AUTH,
+              error: apiError instanceof Error ? apiError.message : String(apiError)
+            });
           }
 
-          // 4. Default to non-admin if all checks fail
-          console.log('Admin check: All checks failed, defaulting to non-admin');
+          // 5. Default to non-admin if all checks fail
+          edgeLogger.debug('All admin checks failed, defaulting to non-admin', {
+            category: LOG_CATEGORIES.AUTH
+          });
+
           set({ isAdmin: false });
           return false;
         } catch (error) {
-          console.error('Admin check error:', error);
+          edgeLogger.error('Admin check error', {
+            category: LOG_CATEGORIES.AUTH,
+            error: error instanceof Error ? error.message : String(error)
+          });
+
           set({ isAdmin: false });
           return false;
         }

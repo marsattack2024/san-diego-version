@@ -125,8 +125,11 @@ export function AppSidebar({ user: serverUser }: { user: User | undefined }) {
                       setOpenMobile(false);
 
                       try {
+                        // Get supabase client
+                        const supabase = createClient();
+
                         // Create a new session in the database first
-                        const { id, success, error } = await historyService.createNewSession();
+                        const { id, success, error } = await historyService.createNewSession(supabase);
 
                         if (success) {
                           // Navigate to the new chat directly

@@ -7,6 +7,8 @@ import { historyService } from '@/lib/api/history-service';
 import { Chat } from '@/lib/db/schema';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { shallow } from 'zustand/shallow';
+import { createClient } from '@/utils/supabase/client';
+import { type User } from '@supabase/supabase-js';
 
 // Define a more comprehensive conversation type for Supabase integration
 export interface Conversation {
@@ -392,12 +394,8 @@ export const useChatStore = create<ChatState>()(
           conversationCount: Object.keys(state.conversations).length
         });
 
-        // BYPASS AUTH FAILURE CIRCUIT BREAKER FOR NOW
-        // This will force history fetch regardless of previous failures
-        if (historyService.isInAuthFailure()) {
-          console.debug('[ChatStore] Bypassing auth failure circuit breaker to force history refresh');
-          historyService.resetAuthFailure();
-        }
+        // Remove circuit breaker code as it's no longer needed with RLS
+        // and the refactored history service
 
         // Prevent multiple concurrent fetches unless forced
         if (state.isLoadingHistory && !forceRefresh) {
@@ -410,8 +408,12 @@ export const useChatStore = create<ChatState>()(
           set({ isLoadingHistory: true, historyError: null });
 
           console.debug('[ChatStore] Calling historyService.fetchHistory()');
-          // Attempt to fetch history from API
-          const historyData = await historyService.fetchHistory(forceRefresh).catch(error => {
+
+          // Create a Supabase client for the historyService
+          const supabase = createClient();
+
+          // Attempt to fetch history from API with the client
+          const historyData = await historyService.fetchHistory(supabase, forceRefresh).catch(error => {
             // Handle authentication errors gracefully
             if (error?.message?.includes('Auth') || error?.message?.includes('auth')) {
               console.log('[ChatStore] Auth error in fetchHistory, returning empty array');
@@ -832,59 +834,43 @@ export const useChatStore = create<ChatState>()(
       },
 
       // Delete a conversation
-      deleteConversation: (conversationId) => {
-        const state = get();
+      deleteConversation: (conversationId: string) => {
+        console.debug(`[ChatStore] Deleting conversation: ${conversationId}`);
 
-        // Verify conversation exists before trying to delete
-        if (!state.conversationsIndex[conversationId]) {
-          console.warn(`[ChatStore] Attempted to delete non-existent conversation: ${conversationId}`);
+        // Get the current state
+        const { conversations, conversationsIndex, loadedConversations, currentConversationId } = get();
+
+        // Skip if conversation doesn't exist
+        if (!conversations[conversationId]) {
+          console.warn(`[ChatStore] Cannot delete conversation: ${conversationId} does not exist`);
           return;
         }
 
-        console.debug(`[ChatStore] Deleting conversation: ${conversationId}`);
+        // Create copies without the conversation to be deleted
+        const newConversations = { ...conversations };
+        const newConversationsIndex = { ...conversationsIndex };
+        const newLoadedConversations = { ...loadedConversations };
 
-        // Update state to remove conversation from all data structures
-        set(state => {
-          // Create new objects without the deleted conversation
-          const newConversationsIndex = { ...state.conversationsIndex };
-          const newLoadedConversations = { ...state.loadedConversations };
-          const newConversations = { ...state.conversations }; // Legacy
+        // Remove conversation from all data structures
+        delete newConversations[conversationId];
+        delete newConversationsIndex[conversationId];
+        delete newLoadedConversations[conversationId];
 
-          // Delete from all maps
-          delete newConversationsIndex[conversationId];
-          delete newLoadedConversations[conversationId];
-          delete newConversations[conversationId];
-
-          // Update current conversation ID if needed
-          let newCurrentId = state.currentConversationId;
-          if (state.currentConversationId === conversationId) {
-            // Find a new conversation to select
-            const remainingIds = Object.keys(newConversationsIndex);
-            newCurrentId = remainingIds.length > 0 ? remainingIds[0] : null;
-
-            // Redirect if we're in browser
-            if (typeof window !== 'undefined') {
-              if (newCurrentId) {
-                window.location.href = `/chat/${newCurrentId}`;
-              } else {
-                window.location.href = '/chat';
-              }
-            }
-          }
-
-          return {
-            conversationsIndex: newConversationsIndex,
-            loadedConversations: newLoadedConversations,
-            conversations: newConversations,
-            currentConversationId: newCurrentId
-          };
+        // Update state
+        set({
+          conversations: newConversations,
+          conversationsIndex: newConversationsIndex,
+          loadedConversations: newLoadedConversations,
+          // Clear current conversation if deleting the active one
+          currentConversationId: currentConversationId === conversationId ? null : currentConversationId
         });
 
-        // Delete from backend asynchronously
+        // Delete from the backend if available
         if (typeof window !== 'undefined') {
           (async () => {
             try {
-              const deleted = await historyService.deleteChat(conversationId);
+              const supabase = createClient();
+              const deleted = await historyService.deleteChat(supabase, conversationId);
 
               if (deleted) {
                 console.debug(`[ChatStore] Successfully deleted conversation ${conversationId} from backend`);
@@ -969,8 +955,11 @@ export const useChatStore = create<ChatState>()(
           // Store the current ID to preserve it throughout the refresh
           const idToRestore = currentId;
 
-          // Fetch history data
-          const data = await historyService.fetchHistory(true);
+          // Create a Supabase client for the history service
+          const supabase = createClient();
+
+          // Fetch history data with the client
+          const data = await historyService.fetchHistory(supabase, true);
 
           // Sync conversations without changing current ID
           get().syncConversationsFromHistory(data);

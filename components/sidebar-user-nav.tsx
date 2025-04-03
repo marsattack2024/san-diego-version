@@ -34,8 +34,15 @@ export interface User {
 export function SidebarUserNav({ user }: { user: User }) {
   const { setTheme, theme } = useTheme();
   const router = useRouter();
-  const { profile, isAdmin, refreshAdminStatus } = useAuth(); // Use the unified auth hook
-  const logout = useAuthStore(state => state.logout);
+  // Use auth store directly for auth state
+  const { isLoading: authLoading } = useAuth();
+  const {
+    profile,
+    isAdmin,
+    checkAdminRole: refreshAdminStatus,
+    logout
+  } = useAuthStore();
+
   const [adminStatus, setAdminStatus] = useState<boolean>(isAdmin);
   const refreshAttempted = useRef(false);
   const previousAdminCookieRef = useRef<boolean | null>(null);

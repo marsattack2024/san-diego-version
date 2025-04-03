@@ -14,11 +14,13 @@ begin
       jsonb_build_object('is_admin', true)
     where id = new.user_id;
     
-    -- Log the admin role assignment
-    insert into public.audit_logs(event_type, user_id, metadata)
+    -- Log the admin role assignment to sd_audit_logs
+    insert into sd_audit_logs(action, entity_type, entity_id, actor_id, details)
     values (
       'admin_role_granted', 
-      new.user_id, 
+      'user',
+      new.user_id,
+      new.user_id, -- Self-assignment or system assignment
       jsonb_build_object(
         'profile_id', new.id,
         'timestamp', current_timestamp
@@ -30,11 +32,13 @@ begin
       coalesce(raw_app_meta_data, '{}'::jsonb) - 'is_admin'
     where id = new.user_id;
     
-    -- Log the admin role removal
-    insert into public.audit_logs(event_type, user_id, metadata)
+    -- Log the admin role removal to sd_audit_logs
+    insert into sd_audit_logs(action, entity_type, entity_id, actor_id, details)
     values (
       'admin_role_revoked', 
-      new.user_id, 
+      'user',
+      new.user_id,
+      new.user_id, -- Self-removal or system removal
       jsonb_build_object(
         'profile_id', new.id,
         'timestamp', current_timestamp
@@ -51,28 +55,16 @@ create or replace trigger on_admin_status_update
   after insert or update of is_admin on public.sd_user_profiles
   for each row execute procedure public.set_admin_claim();
 
--- IMPORTANT: Ensure the audit_logs table exists
--- If it doesn't exist, you can create it with:
-
+-- Note: The sd_audit_logs table should already exist in the database
+-- It has the following structure:
 /*
-create table if not exists public.audit_logs (
-  id uuid primary key default uuid_generate_v4(),
-  event_type text not null,
-  user_id uuid references auth.users(id),
-  metadata jsonb default '{}',
-  created_at timestamptz default now()
+CREATE TABLE IF NOT EXISTS sd_audit_logs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  action TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id UUID,
+  actor_id UUID, -- The user who performed the action
+  details JSONB,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
-
--- Add RLS policy for audit logs
-alter table public.audit_logs enable row level security;
-
--- Only allow admins to read audit logs
-create policy "Admins can read audit logs" on public.audit_logs
-  for select using ((
-    select is_admin from sd_user_profiles where user_id = auth.uid()
-  ) = true);
-
--- Only system can insert audit logs
-create policy "System can insert audit logs" on public.audit_logs
-  for insert with check (true);
 */ 

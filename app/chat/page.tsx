@@ -7,10 +7,11 @@ import { historyService } from '@/lib/api/history-service';
 import { Chat } from '@/components/chat';
 import { Chat as ChatType } from '@/lib/db/schema';
 import { clientLogger } from '@/lib/logger/client-logger';
+import { edgeLogger as log } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { createClient } from '@/utils/supabase/client';
 
 export const dynamic = 'force-dynamic';
-
-const log = clientLogger;
 
 export default function ChatPage() {
   const isHydrated = useChatStore(state => state.isHydrated);
@@ -26,11 +27,15 @@ export default function ChatPage() {
     try {
       setHistoryLoading(true);
 
-      const data = await historyService.fetchHistory(false);
+      const supabase = createClient();
+
+      const data = await historyService.fetchHistory(supabase, false);
 
       setHistory(data || []);
     } catch (error) {
-      log.error('Error fetching history:', error);
+      log.error('Error fetching history:', {
+        error: error instanceof Error ? error.message : String(error)
+      });
     } finally {
       setHistoryLoading(false);
     }
@@ -52,7 +57,7 @@ export default function ChatPage() {
     if (typeof window !== 'undefined') {
       const urlParams = new URLSearchParams(window.location.search);
       const isNewChat = urlParams.get('new') === 'true';
-      const timestamp = urlParams.get('t');
+      const timestamp = urlParams.get('t') || '';
 
       if (isNewChat) {
         log.debug('Creating new chat from URL parameter', { timestamp });

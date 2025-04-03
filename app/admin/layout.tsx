@@ -2,30 +2,121 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { ThemeProvider } from '@/components/theme-provider';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { Home, Users, ArrowLeft, Menu, X } from 'lucide-react';
+import { Home, Users, ArrowLeft, Menu, X, AlertTriangle, Loader2 } from 'lucide-react';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useAuthStore } from '@/stores/auth-store';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
   const pathname = usePathname();
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const { isAdmin } = useAuthStore();
+  const { isAdmin, checkAdminRole, isAuthenticated, user } = useAuthStore();
+  const [isVerifyingAdmin, setIsVerifyingAdmin] = useState(true);
+  const [adminVerified, setAdminVerified] = useState(false);
+  const [verificationError, setVerificationError] = useState('');
 
-  // Simplified logging for all admin pages
+  // Enhanced admin verification on mount
   useEffect(() => {
-    console.log('[AdminLayout] Rendering admin layout:', {
-      pathname,
-      isAdmin,
-      currentTime: new Date().toISOString()
-    });
-  }, [pathname, isAdmin]);
+    async function verifyAdminStatus() {
+      try {
+        setIsVerifyingAdmin(true);
+        setVerificationError('');
+
+        if (!isAuthenticated || !user) {
+          edgeLogger.warn('Unauthenticated user attempting to access admin area', {
+            category: LOG_CATEGORIES.AUTH,
+            path: pathname || ''
+          });
+
+          setVerificationError('You must be logged in to access the admin area');
+          router.push(`/login?returnTo=${encodeURIComponent(pathname || '/')}`);
+          return;
+        }
+
+        // Use store's checkAdminRole which checks JWT, profile, and API in that order
+        const isAdminResult = await checkAdminRole();
+
+        edgeLogger.info('Admin verification result', {
+          category: LOG_CATEGORIES.AUTH,
+          isAdmin: isAdminResult,
+          userId: user.id.substring(0, 8) + '...',
+          path: pathname || ''
+        });
+
+        setAdminVerified(isAdminResult);
+
+        if (!isAdminResult) {
+          setVerificationError('You do not have admin privileges');
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+
+        edgeLogger.error('Error verifying admin status', {
+          category: LOG_CATEGORIES.AUTH,
+          error: errorMessage,
+          path: pathname || ''
+        });
+
+        setVerificationError('Error verifying admin status');
+      } finally {
+        setIsVerifyingAdmin(false);
+      }
+    }
+
+    verifyAdminStatus();
+  }, [isAuthenticated, user, pathname, router, checkAdminRole]);
 
   const toggleSidebar = () => setSidebarOpen(!sidebarOpen);
+
+  // Loading state while verifying admin status
+  if (isVerifyingAdmin) {
+    return (
+      <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
+        <div className="flex h-screen w-screen items-center justify-center">
+          <div className="text-center">
+            <Loader2 className="mx-auto h-10 w-10 animate-spin text-primary" />
+            <p className="mt-4 text-lg">Verifying admin privileges...</p>
+          </div>
+        </div>
+      </ThemeProvider>
+    );
+  }
+
+  // Error state if not admin
+  if (!adminVerified) {
+    return (
+      <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">
+        <div className="flex h-screen w-screen items-center justify-center p-6">
+          <div className="max-w-md w-full">
+            <Alert variant="destructive" className="mb-6">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>Access Denied</AlertTitle>
+              <AlertDescription>
+                {verificationError || 'You do not have permission to access this area'}
+              </AlertDescription>
+            </Alert>
+
+            <Button
+              className="w-full"
+              variant="default"
+              onClick={() => router.push('/chat')}
+            >
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Return to Chat
+            </Button>
+          </div>
+        </div>
+      </ThemeProvider>
+    );
+  }
 
   return (
     <ThemeProvider defaultTheme="system" storageKey="vite-ui-theme">

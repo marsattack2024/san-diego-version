@@ -2,13 +2,16 @@
 
 import { useEffect } from 'react';
 import { useAuth } from '@/utils/supabase/auth-provider';
+import { useAuthStore } from '@/stores/auth-store';
 
 /**
  * This component sets up authentication headers for all requests
  * to optimize middleware auth checks and reduce the need for full auth verification
  */
 export function AuthHeadersSetup() {
-  const { user, isAuthenticated, profile } = useAuth();
+  // Get auth state from auth hook and auth store
+  const { isLoading } = useAuth();
+  const { user, isAuthenticated, profile } = useAuthStore();
 
   useEffect(() => {
     if (typeof window === 'undefined') return;

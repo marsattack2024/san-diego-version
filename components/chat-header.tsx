@@ -12,6 +12,7 @@ import { AuthButton } from './auth/auth-button';
 import { useState } from 'react';
 import { historyService } from '@/lib/api/history-service';
 import { CircuitBreakerDebug } from './debug/circuit-breaker-debug';
+import { createClient } from '@/utils/supabase/client';
 
 export function PureChatHeader({
   chatId,
@@ -41,8 +42,11 @@ export function PureChatHeader({
     setIsCreatingChat(true);
 
     try {
+      // Get supabase client
+      const supabase = createClient();
+
       // Create a new session in the database first
-      const { id, success, error } = await historyService.createNewSession();
+      const { id, success, error } = await historyService.createNewSession(supabase);
 
       if (success) {
         // Navigate to the new chat directly

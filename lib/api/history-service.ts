@@ -184,6 +184,78 @@ export const historyService = {
   },
 
   /**
+   * Create a new chat session
+   * @param supabase - The Supabase client instance
+   * @returns Promise resolving to an object with id, success, and optional error
+   */
+  async createNewSession(supabase: SupabaseClient): Promise<{ id: string; success: boolean; error?: string }> {
+    const operationId = `create_session_${Date.now().toString(36).substring(2, 8)}`;
+    const id = crypto.randomUUID();
+
+    try {
+      edgeLogger.debug('Creating new chat session', {
+        category: LOG_CATEGORIES.CHAT,
+        operationId,
+        sessionId: id
+      });
+
+      // Get the current authenticated user (RLS will validate)
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+      if (authError || !user) {
+        edgeLogger.error('Authentication error creating session', {
+          category: LOG_CATEGORIES.AUTH,
+          operationId,
+          error: authError?.message || 'No authenticated user'
+        });
+        return { id, success: false, error: 'Authentication required' };
+      }
+
+      // Insert the new session
+      const { error } = await supabase
+        .from('sd_chat_sessions')
+        .insert({
+          id,
+          title: 'New Chat',
+          user_id: user.id,
+          agent_id: 'default',
+          deep_search_enabled: false,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
+
+      if (error) {
+        edgeLogger.error('Error creating chat session', {
+          category: LOG_CATEGORIES.CHAT,
+          operationId,
+          sessionId: id,
+          error: error.message
+        });
+        return { id, success: false, error: error.message };
+      }
+
+      // Invalidate cache to ensure new session appears
+      this.invalidateCache();
+
+      edgeLogger.info('Successfully created chat session', {
+        category: LOG_CATEGORIES.CHAT,
+        operationId,
+        sessionId: id
+      });
+
+      return { id, success: true };
+    } catch (error) {
+      edgeLogger.error('Unexpected error creating chat session', {
+        category: LOG_CATEGORIES.CHAT,
+        operationId,
+        sessionId: id,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return { id, success: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  },
+
+  /**
    * Rename a chat session
    * @param supabase - The Supabase client instance
    * @param chatId - ID of the chat to rename

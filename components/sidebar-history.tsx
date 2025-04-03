@@ -57,6 +57,7 @@ import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { useChatStore, type Conversation, type ConversationMetadata } from '@/stores/chat-store';
 import { shallow } from 'zustand/shallow';
 import { useAuth } from '@/utils/supabase/auth-provider';
+import { useAuthStore } from '@/stores/auth-store';
 
 const log = edgeLogger; // Create a local reference for cleaner code
 
@@ -194,8 +195,9 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
   const pathname = usePathname();
   const router = useRouter();
 
-  // Get auth state
-  const auth = useAuth();
+  // Get auth state from auth store instead of auth provider
+  const { isLoading: authLoading, supabase } = useAuth();
+  const { isAuthenticated, user, profile } = useAuthStore();
 
   // Use Zustand store selectors
   const conversationsIndex = useChatStore(state => state.conversationsIndex);
@@ -270,8 +272,8 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
       category: LOG_CATEGORIES.CHAT,
       indexCount: Object.keys(conversationsIndex).length,
       historyArrayLength: historyArray.length,
-      isAuthenticated: auth.isAuthenticated,
-      userId: auth.user?.id,
+      isAuthenticated,
+      userId: user?.id,
       isCurrentlyLoading: isLoadingHistory
     });
 
@@ -279,61 +281,61 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
       console.error('[SidebarHistory] Error during manual refresh:', error);
       setErrorMessage('Failed to refresh history');
     });
-  }, [fetchHistory, conversationsIndex, historyArray.length, auth.isAuthenticated, auth.user?.id, isLoadingHistory]);
+  }, [fetchHistory, conversationsIndex, historyArray.length, isAuthenticated, user?.id, isLoadingHistory]);
 
   // Fix the initial fetch effect
   useEffect(() => {
     // Only attempt to fetch history if we're authenticated and not already loading
-    if (auth.isAuthenticated && !isLoadingHistory && Object.keys(conversationsIndex).length === 0) {
+    if (isAuthenticated && !isLoadingHistory && Object.keys(conversationsIndex).length === 0) {
       console.debug('[SidebarHistory] Attempting initial history fetch', {
-        userId: auth.user?.id,
-        isAuthenticated: auth.isAuthenticated,
+        userId: user?.id,
+        isAuthenticated,
         currentHistoryCount: Object.keys(conversationsIndex).length
       });
       fetchHistory(false);
     } else if (isLoadingHistory) {
       console.debug('[SidebarHistory] Already loading history', {
-        isAuthenticated: auth.isAuthenticated,
+        isAuthenticated,
         isLoadingHistory,
-        userId: auth.user?.id
+        userId: user?.id
       });
     }
-  }, [auth.isAuthenticated, auth.user?.id, conversationsIndex, isLoadingHistory, fetchHistory]);
+  }, [isAuthenticated, user?.id, conversationsIndex, isLoadingHistory, fetchHistory]);
 
   // Add explicit auth state change monitoring
   useEffect(() => {
     console.debug('[SidebarHistory] Auth state changed', {
-      isAuthenticated: auth.isAuthenticated,
-      userId: auth.user?.id,
+      isAuthenticated,
+      userId: user?.id,
       isLoadingHistory,
       conversationCount: Object.keys(conversationsIndex).length,
       pathname
     });
 
     // Check if we have conversations but they're not being displayed
-    if (!auth.isAuthenticated && Object.keys(conversationsIndex).length > 0) {
+    if (!isAuthenticated && Object.keys(conversationsIndex).length > 0) {
       console.debug('[SidebarHistory] We have conversations but auth is not ready yet');
     }
-  }, [auth.isAuthenticated, auth.user?.id, isLoadingHistory, conversationsIndex, pathname]);
+  }, [isAuthenticated, user?.id, isLoadingHistory, conversationsIndex, pathname]);
 
   // Add a new effect to actually render conversations when either auth is ready OR we have conversations
   useEffect(() => {
     // If we have conversations in the store, render them regardless of auth state
     const hasConversations = Object.keys(conversationsIndex).length > 0;
 
-    if (hasConversations || auth.isAuthenticated) {
+    if (hasConversations || isAuthenticated) {
       console.debug('[SidebarHistory] Showing conversations:', {
         count: Object.keys(conversationsIndex).length,
-        isAuthenticated: auth.isAuthenticated,
-        authDriven: !hasConversations && auth.isAuthenticated,
+        isAuthenticated,
+        authDriven: !hasConversations && isAuthenticated,
         dataDriven: hasConversations
       });
     }
-  }, [conversationsIndex, auth.isAuthenticated]);
+  }, [conversationsIndex, isAuthenticated]);
 
   // ** Polling Logic - ensure it also uses the correct auth check **
   const setupHistoryPolling = useCallback(() => {
-    if (!auth.isAuthenticated) {
+    if (!isAuthenticated) {
       return;
     }
 
@@ -366,7 +368,7 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
     return () => {
       clearTimeout(timeoutId);
     };
-  }, [auth.isAuthenticated, fetchHistory]);
+  }, [isAuthenticated, fetchHistory]);
 
   // Set error message when store has errors
   useEffect(() => {
@@ -446,13 +448,13 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
     const hasChats = historyArray.length > 0;
     console.debug('[SidebarHistory] Grouping chats:', {
       count: historyArray.length,
-      isAuthenticated: auth.isAuthenticated,
+      isAuthenticated,
       hasChats
     });
 
     // Return grouped chats if we have them, regardless of auth state
     return groupChatsByDate(historyArray);
-  }, [historyArray, auth.isAuthenticated]);
+  }, [historyArray, isAuthenticated]);
 
   // Render chat sections - simple divs, no overflow control here
   const renderChatSection = useCallback(
@@ -619,14 +621,14 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
 
   // Add useEffect to start the polling
   useEffect(() => {
-    if (auth.isAuthenticated) {
+    if (isAuthenticated) {
       console.debug('[SidebarHistory] Starting history polling');
       const cleanup = setupHistoryPolling();
       return () => {
         if (cleanup) cleanup();
       };
     }
-  }, [auth.isAuthenticated, setupHistoryPolling]);
+  }, [isAuthenticated, setupHistoryPolling]);
 
   // Add a function to create a new chat using the server
   const createNewChat = useCallback(async () => {
@@ -643,7 +645,7 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
         .insert({
           id,
           title: 'New Chat',
-          user_id: auth.user?.id,
+          user_id: user?.id,
           agent_id: 'default',
           deep_search_enabled: false,
           created_at: new Date().toISOString(),
@@ -663,7 +665,7 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
       console.error('Failed to create new chat:', error);
       toast.error('Failed to create new chat');
     }
-  }, [auth.user?.id, refreshHistory, router]);
+  }, [user?.id, refreshHistory, router]);
 
   // Simplified render - return a Fragment containing the header and the menu
   return (
@@ -671,67 +673,75 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
       <div className="flex flex-col gap-2 mb-4 px-2">
         <Button
           onClick={createNewChat}
+          className="w-full mb-4"
         >
-          <div className="flex justify-between items-center mb-4 px-2">
-            <SidebarMenuButton
-              onClick={refreshHistory}
-              className="flex items-center gap-2 rounded-md px-3 py-2 hover:bg-sidebar-item-hover transition-colors w-full text-sidebar-foreground"
-            >
-              <RefreshCw className="h-5 w-5" />
-              <span className="font-medium">Refresh History</span>
-            </SidebarMenuButton>
+          <div className="flex items-center gap-2">
+            <PlusCircle className="h-4 w-4" />
+            <span>New Chat</span>
           </div>
+        </Button>
 
-          {/* Debug indicator for circuit breaker */}
-          {historyError && historyError.includes('circuit') && (
-            <div className="p-2 mb-4 rounded bg-yellow-100 dark:bg-yellow-900 text-xs">
-              <p>History API circuit open. Wait or reset.</p>
-            </div>
-          )}
+        <div className="flex justify-between items-center mb-4 px-2">
+          <SidebarMenuButton
+            onClick={refreshHistory}
+            className="flex items-center gap-2 rounded-md px-3 py-2 hover:bg-sidebar-item-hover transition-colors w-full text-sidebar-foreground"
+          >
+            <RefreshCw className="h-5 w-5" />
+            <span className="font-medium">Refresh History</span>
+          </SidebarMenuButton>
+        </div>
 
-          {/* Chat history list */}
-          <SidebarMenu className="px-2 pb-20"> {/* Add padding here */}
-            {renderHistoryContent()}
-          </SidebarMenu>
+        {/* Debug indicator for circuit breaker */}
+        {historyError && historyError.includes('circuit') && (
+          <div className="p-2 mb-4 rounded bg-yellow-100 dark:bg-yellow-900 text-xs">
+            <p>History API circuit open. Wait or reset.</p>
+          </div>
+        )}
 
-          {/* Delete confirmation dialog */}
-          <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  This will permanently delete this chat and all its messages.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel
-                  onClick={() => {
-                    setShowDeleteDialog(false);
-                    setDeleteId(null);
-                  }}
-                >
-                  Cancel
-                </AlertDialogCancel>
-                <AlertDialogAction onClick={handleDeleteConfirm}>
-                  {isDeleting[deleteId || ''] ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Deleting...
-                    </>
-                  ) : (
-                    'Delete'
-                  )}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+        {/* Chat history list */}
+        <SidebarMenu className="px-2 pb-20"> {/* Add padding here */}
+          {renderHistoryContent()}
+        </SidebarMenu>
 
-          {/* Rename dialog */}
-          {renderRenameDialog()}
+        {/* Delete confirmation dialog */}
+        <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently delete this chat and all its messages.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel
+                onClick={() => {
+                  setShowDeleteDialog(false);
+                  setDeleteId(null);
+                }}
+              >
+                Cancel
+              </AlertDialogCancel>
+              <AlertDialogAction onClick={handleDeleteConfirm}>
+                {isDeleting[deleteId || ''] ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Deleting...
+                  </>
+                ) : (
+                  'Delete'
+                )}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Rename dialog */}
+        {renderRenameDialog()}
       </div>
-      );
+    </>
+  );
 };
 
-      // Export memoized version for better performance
-      export const SidebarHistory = React.memo(PureSidebarHistory);
-      export default SidebarHistory;
+// Export memoized version for better performance
+export const SidebarHistory = React.memo(PureSidebarHistory);
+export default SidebarHistory;
