@@ -9,9 +9,11 @@
 import { createChatEngine } from '@/lib/chat-engine/chat-engine.facade';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { errorResponse, unauthorizedError, validationError } from '@/lib/utils/route-handler';
+import { errorResponse, unauthorizedError, validationError, successResponse } from '@/lib/utils/route-handler';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { ChatSetupService } from '@/lib/chat-engine/chat-setup.service';
+import { OrchestratedResponse } from '@/lib/chat-engine/types/orchestrator';
+import { ChatEngineConfig } from '@/lib/chat-engine/chat-engine.config';
 
 // Maintain existing runtime directives
 export const runtime = 'edge';
@@ -85,51 +87,73 @@ export async function POST(request: Request): Promise<Response> {
 
     // --- Configuration Setup --- 
     const chatSetupService = new ChatSetupService();
-    const engineConfig = await chatSetupService.prepareConfig({
+    // Result can be either standard config or orchestrated result
+    const engineSetupResult = await chatSetupService.prepareConfig({
       requestBody: body,
       userId: persistenceUserId,
       isWidget: false // This is the main chat route
     });
 
-    // --- Engine Creation & Execution --- 
-    const engine = createChatEngine(engineConfig);
+    // --- Check if Orchestration Occurred --- 
+    if ('type' in engineSetupResult && engineSetupResult.type === 'orchestrated') {
+      // Handle Orchestrated Result
+      const orchestratedData = (engineSetupResult as OrchestratedResponse).data;
 
-    edgeLogger.info('Chat engine created, handling request...', {
-      category: LOG_CATEGORIES.CHAT,
-      operationId,
-      sessionId,
-      agentType: engineConfig.agentType,
-      useDeepSearch: engineConfig.useDeepSearch,
-      toolCount: Object.keys(engineConfig.tools || {}).length
-    });
-
-    // Pass the cloned request with the already parsed body
-    const response = await engine.handleRequest(reqClone, { parsedBody: body });
-
-    // --- Stream Consumption (Ensures persistence on disconnect) ---
-    if (response.body && 'consumeStream' in (response as any)) {
-      (response as any).consumeStream().catch((streamError: any) => {
-        edgeLogger.error('Error consuming response stream post-response', {
-          category: LOG_CATEGORIES.CHAT,
-          operationId,
-          sessionId,
-          error: streamError instanceof Error ? streamError.message : String(streamError)
-        });
+      edgeLogger.info('Orchestration completed, returning JSON response', {
+        category: LOG_CATEGORIES.ORCHESTRATOR,
+        operationId,
+        sessionId,
+        status: 200,
+        durationMs: Date.now() - startTime
       });
-      edgeLogger.info('Response stream consumption initiated', { category: LOG_CATEGORIES.CHAT, operationId, sessionId });
+
+      // TODO: Consider persistence needs for orchestrated flows
+      // Maybe save the final result or key steps to the database?
+
+      // Use successResponse utility for consistent JSON formatting
+      return successResponse(orchestratedData);
     } else {
-      edgeLogger.warn('Response body does not support consumeStream', { category: LOG_CATEGORIES.CHAT, operationId, sessionId });
+      // --- Handle Single Agent Flow (Existing Logic) --- 
+      const engineConfig = engineSetupResult as ChatEngineConfig;
+      const engine = createChatEngine(engineConfig);
+
+      edgeLogger.info('Single-agent engine created, handling request...', {
+        category: LOG_CATEGORIES.CHAT,
+        operationId,
+        sessionId,
+        agentType: engineConfig.agentType,
+        useDeepSearch: engineConfig.useDeepSearch,
+        toolCount: Object.keys(engineConfig.tools || {}).length
+      });
+
+      // Pass the cloned request with the already parsed body
+      const response = await engine.handleRequest(reqClone, { parsedBody: body });
+
+      // --- Stream Consumption (Existing Logic) ---
+      if (response.body && 'consumeStream' in (response as any)) {
+        (response as any).consumeStream().catch((streamError: any) => {
+          edgeLogger.error('Error consuming response stream post-response', {
+            category: LOG_CATEGORIES.CHAT,
+            operationId,
+            sessionId,
+            error: streamError instanceof Error ? streamError.message : String(streamError)
+          });
+        });
+        edgeLogger.info('Response stream consumption initiated', { category: LOG_CATEGORIES.CHAT, operationId, sessionId });
+      } else {
+        edgeLogger.warn('Response body does not support consumeStream', { category: LOG_CATEGORIES.CHAT, operationId, sessionId });
+      }
+
+      edgeLogger.info('Single-agent request processed successfully', {
+        category: LOG_CATEGORIES.CHAT,
+        operationId,
+        sessionId,
+        status: response.status,
+        durationMs: Date.now() - startTime
+      });
+
+      return response;
     }
-
-    edgeLogger.info('Chat request processed successfully', {
-      category: LOG_CATEGORIES.CHAT,
-      operationId,
-      sessionId,
-      status: response.status,
-      durationMs: Date.now() - startTime
-    });
-
-    return response;
 
   } catch (error) {
     edgeLogger.error('Unhandled error in main chat API', {

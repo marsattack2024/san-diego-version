@@ -19,6 +19,7 @@ interface AgentConfig {
     systemPrompt: string;
     temperature: number;
     model?: string;
+    maxTokens?: number;
     toolOptions: {
         useKnowledgeBase: boolean;
         useWebScraper: boolean;
@@ -191,6 +192,29 @@ export function getAgentConfig(agentType: AgentType): AgentConfig {
                 useDeepSearch: true, // Allow deep search by default
                 useRagTool: true,
                 useProfileContext: true
+            }
+        },
+        // Add placeholder configs for new agents
+        'validator': {
+            temperature: 0.2, // Low temperature for focused validation
+            model: 'gpt-4o-mini', // Can use a smaller model for validation
+            toolOptions: {
+                useKnowledgeBase: false,
+                useWebScraper: false,
+                useDeepSearch: false,
+                useRagTool: false,
+                useProfileContext: false // Validator might not need profile context
+            }
+        },
+        'researcher': {
+            temperature: 0.5,
+            model: 'gpt-4o', // Needs a capable model for research
+            toolOptions: {
+                useKnowledgeBase: true,
+                useWebScraper: true, // Researcher needs web access
+                useDeepSearch: true, // Researcher needs deep search
+                useRagTool: true,
+                useProfileContext: true // May need profile for context-aware research
             }
         }
     };

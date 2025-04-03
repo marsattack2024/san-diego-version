@@ -12,9 +12,11 @@ import { prompts } from '@/lib/chat-engine/prompts';
 import { detectAgentType, getAgentConfig } from '@/lib/chat-engine/agent-router';
 import { createToolSet, widgetTools } from '@/lib/tools/registry.tool';
 import { parseBooleanValue } from '@/lib/utils/misc-utils';
-import type { AgentType } from '@/types/core/agent';
+import type { AgentType } from '@/lib/chat-engine/prompts';
 import type { ChatEngineConfig } from './chat-engine.config';
 import type { Message } from 'ai';
+import { AgentOrchestrator } from './services/orchestrator.service';
+import { OrchestratedResponse, OrchestratorResult } from './types/orchestrator';
 
 interface ChatSetupInput {
     requestBody: Record<string, any>; // Parsed request body
@@ -24,10 +26,12 @@ interface ChatSetupInput {
 
 export class ChatSetupService {
     private operationId: string;
+    private agentOrchestrator: AgentOrchestrator;
 
     constructor() {
         // Generate a unique ID for logging within this service instance
         this.operationId = `setup_${Math.random().toString(36).substring(2, 10)}`;
+        this.agentOrchestrator = new AgentOrchestrator();
         edgeLogger.debug('ChatSetupService initialized', {
             category: LOG_CATEGORIES.SYSTEM,
             operationId: this.operationId
@@ -37,9 +41,9 @@ export class ChatSetupService {
     /**
      * Prepares the full ChatEngineConfig based on the input request and context.
      * @param input - Contains request body, user ID, and context flag.
-     * @returns A promise resolving to the fully configured ChatEngineConfig.
+     * @returns A promise resolving to either ChatEngineConfig (single agent) or OrchestratedResponse.
      */
-    async prepareConfig(input: ChatSetupInput): Promise<ChatEngineConfig> {
+    async prepareConfig(input: ChatSetupInput): Promise<ChatEngineConfig | OrchestratedResponse> {
         const { requestBody, userId, isWidget } = input;
         const setupStartTime = Date.now();
 
@@ -56,6 +60,7 @@ export class ChatSetupService {
         const requestedAgentId = requestBody.agentId || 'default';
         const sessionId = requestBody.id || requestBody.sessionId;
         const disableMessagePersistence = parseBooleanValue(requestBody.disable_persistence);
+        const useOrchestratorFlag = parseBooleanValue(requestBody.useOrchestrator);
 
         // Extract last user message content for agent detection
         let lastUserMessageContent: string = '';
@@ -76,6 +81,7 @@ export class ChatSetupService {
             requestedAgentId,
             sessionId: sessionId?.substring(0, 8),
             disableMessagePersistence,
+            useOrchestratorFlag,
             messageContentPreview: lastUserMessageContent.substring(0, 50) + '...'
         });
 

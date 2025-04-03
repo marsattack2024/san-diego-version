@@ -6,7 +6,18 @@ import { QUIZ_SYSTEM_PROMPT } from './quiz-prompts';
 import { WIDGET_BASE_PROMPT } from './widget-prompt';
 
 // Agent types supported by the system - keep our custom type definitions
-export type AgentType = 'default' | 'copywriting' | 'google-ads' | 'facebook-ads' | 'quiz';
+export type AgentType = 'default' | 'copywriting' | 'google-ads' | 'facebook-ads' | 'quiz' | 'validator' | 'researcher';
+
+// Runtime array of agent types for validation/iteration
+export const AVAILABLE_AGENT_TYPES: AgentType[] = [
+  'default',
+  'copywriting',
+  'google-ads',
+  'facebook-ads',
+  'quiz',
+  'validator',
+  'researcher'
+];
 
 // Enhanced prompt types to support both the main chat and widget chat
 export type ChatEnginePromptType = AgentType | 'widget';
@@ -17,7 +28,9 @@ export const AGENT_PROMPTS: Record<AgentType, string> = {
   'copywriting': COPYWRITING_SYSTEM_PROMPT,
   'google-ads': GOOGLE_ADS_SYSTEM_PROMPT,
   'facebook-ads': FACEBOOK_ADS_SYSTEM_PROMPT,
-  'quiz': QUIZ_SYSTEM_PROMPT
+  'quiz': QUIZ_SYSTEM_PROMPT,
+  'validator': 'You are a meticulous validator agent, checking work against criteria.',
+  'researcher': 'You are an efficient research agent, gathering information using available tools.'
 };
 
 /**
@@ -48,8 +61,9 @@ export function buildSystemPromptWithDeepSearch(agentType: AgentType, deepSearch
   const withToolDescription = `${basePrompt}\n\n### AVAILABLE TOOLS:\n\n` +
     `You have access to the following resources:\n` +
     `- Knowledge Base, getInformation: Retrieve information from our internal knowledge base\n` +
-    `- Web Scraper: Extract content from specific URLs provided by the user\n` +
-    `- Deep Search: Conduct in-depth research on complex topics using Perplexity AI\n\n` +
+    `- Web Scraper, scrapeWebContent: Extract content from specific URLs provided by the user\n` +
+    `- Deep Search, deepSearch: Conduct in-depth research on complex topics using Perplexity AI\n` +
+    `- Profile Context, getUserProfileContext: Retrieve the user\'s saved business profile information\n\n` +
     `Use these resources when appropriate to provide accurate and comprehensive responses.`;
 
   // Add DeepSearch-specific instructions with enhanced attribution requirements
@@ -144,7 +158,9 @@ export function buildChatEnginePrompt(promptType: ChatEnginePromptType): string 
     promptType === 'copywriting' ||
     promptType === 'google-ads' ||
     promptType === 'facebook-ads' ||
-    promptType === 'quiz') {
+    promptType === 'quiz' ||
+    promptType === 'validator' ||
+    promptType === 'researcher') {
     return buildSystemPrompt(promptType);
   }
 
@@ -166,6 +182,8 @@ export const prompts = {
   googleAds: buildSystemPrompt('google-ads'),
   facebookAds: buildSystemPrompt('facebook-ads'),
   quiz: buildSystemPrompt('quiz'),
+  validator: buildSystemPrompt('validator'),
+  researcher: buildSystemPrompt('researcher'),
   widget: WIDGET_BASE_PROMPT,
 
   // Helper functions with standardized interfaces

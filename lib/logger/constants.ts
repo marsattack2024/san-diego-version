@@ -14,7 +14,8 @@ export const LOG_CATEGORIES = {
   TOOLS: 'tools',
   VECTOR: 'vector',
   WEBSCRAPER: 'webscraper',
-  DEEPSEARCH: 'deepsearch'
+  DEEPSEARCH: 'deepsearch',
+  ORCHESTRATOR: 'orchestrator'
 } as const;
 
 /**
