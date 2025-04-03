@@ -1,139 +1,139 @@
-import { edgeLogger } from './lib/logger/edge-logger';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { updateSession } from '@/utils/supabase/middleware';
+import { createServerClient } from '@supabase/ssr';
+import { edgeLogger } from './lib/logger/edge-logger';
+import { LOG_CATEGORIES } from './lib/logger/constants';
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Skip excessive logging for common paths
-  const isCommonPath = pathname.includes('favicon') ||
-    pathname.startsWith('/_next/') ||
-    pathname.includes('.svg');
-
-  if (!isCommonPath) {
-    edgeLogger.debug('[Middleware] Processing request', {
-      category: 'auth',
-      path: pathname
-    });
-  }
-
-  // Special bypass for internal API endpoints that handle their own auth
-  if (
-    pathname.startsWith('/api/perplexity') ||
-    pathname.startsWith('/api/auth/admin-status')
-  ) {
-    if (!isCommonPath) {
-      edgeLogger.debug('Bypassing auth middleware for internal API', {
-        category: 'auth',
-        path: pathname
-      });
+  // Create response and middleware client with proper session handling
+  const response = NextResponse.next();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        get(name: string) {
+          return request.cookies.get(name)?.value;
+        },
+        set(name: string, value: string, options: Record<string, any>) {
+          // Setting cookies in both the request and response
+          request.cookies.set({
+            name,
+            value,
+            ...options
+          });
+          response.cookies.set({
+            name,
+            value,
+            ...options
+          });
+        },
+        remove(name: string, options: Record<string, any>) {
+          // Remove from both request and response
+          request.cookies.set({
+            name,
+            value: '',
+            ...options
+          });
+          response.cookies.set({
+            name,
+            value: '',
+            ...options
+          });
+        },
+      },
     }
-    return;
-  }
-
-  // Special bypass for widget-related paths to allow anonymous access
-  if (
-    pathname.startsWith('/api/widget-chat') ||
-    pathname.startsWith('/widget/') || // Trailing slash prevents matching '/admin/widget'
-    pathname === '/widget.js' ||
-    pathname === '/debug.js'
-  ) {
-    if (!isCommonPath) {
-      edgeLogger.debug('Bypassing auth middleware for Widget features', {
-        category: 'auth',
-        path: pathname
-      });
-    }
-    return;
-  }
-
-  // Only log admin page processing for debugging purposes
-  if (pathname.startsWith('/admin')) {
-    edgeLogger.debug('Processing admin page with normal auth flow', {
-      category: 'auth',
-      path: pathname
-    });
-  }
+  );
 
   try {
-    // The session cookie is updated/refreshed in the response
-    const response = await updateSession(request);
+    // This updates session cookies AND validates the session with Supabase server
+    // More secure than using getSession() as it validates the JWT with Supabase
+    const { data: { user } } = await supabase.auth.getUser();
 
-    // CRITICAL FIX: Ensure cookies have proper attributes for better persistence
-    if (response && response.cookies) {
-      const cookies = response.cookies.getAll();
+    // Calculate auth completion time for client diagnostics
+    const authCompletionTime = Date.now();
+    const authTimestamp = authCompletionTime.toString();
 
-      // Reapply all auth cookies with stronger settings to prevent issues
-      cookies.forEach(cookie => {
-        if (cookie.name.includes('sb-') && cookie.name.includes('-auth-token')) {
-          // Log the cookie we're reinforcing
-          edgeLogger.debug('Reinforcing auth cookie settings', {
-            category: 'auth',
-            cookieName: cookie.name,
-          });
+    // Set auth-ready header for client-side detection
+    response.headers.set('x-auth-ready', 'true');
+    response.headers.set('x-auth-ready-time', authTimestamp);
 
-          // Apply stronger cookie settings
-          response.cookies.set({
-            name: cookie.name,
-            value: cookie.value,
-            path: '/',
-            sameSite: 'lax',
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            maxAge: 60 * 60 * 24 * 7, // 7 days
-            priority: 'high',
-          });
-        }
-      });
-    }
+    // Set auth headers based on user status
+    if (user) {
+      response.headers.set('x-supabase-auth', user.id);
+      response.headers.set('x-auth-valid', 'true');
+      response.headers.set('x-auth-time', authTimestamp);
+      response.headers.set('x-auth-state', 'authenticated');
 
-    // Log authentication results for debugging
-    if (pathname.startsWith('/admin')) {
-      edgeLogger.debug('Admin page auth processed', {
-        category: 'auth',
-        path: pathname,
-        status: response?.status || 'No response'
+      // Check admin status directly from user JWT claims (after Phase 6 implementation)
+      // This avoids redundant database checks
+      const isAdmin = user.app_metadata?.is_admin === true;
+      response.headers.set('x-is-admin', isAdmin ? 'true' : 'false');
+
+      // Set session health cookie to help client-side detection
+      response.cookies.set('x-session-health', 'active', {
+        maxAge: 60 * 60 * 24, // 24 hours
+        path: '/',
+        sameSite: 'lax',
+        httpOnly: false, // Accessible from JS for health checks
+        secure: process.env.NODE_ENV === 'production',
       });
 
-      // Generic debug info for all admin routes
-      const redirectUrl = response?.headers?.get('location');
-      if (response?.redirected || redirectUrl) {
-        edgeLogger.debug('Admin route is being redirected', {
-          category: 'auth',
-          path: pathname,
-          redirectUrl: redirectUrl || 'unknown',
-          responseStatus: response?.status
+      edgeLogger.debug('Session authenticated', {
+        category: LOG_CATEGORIES.AUTH,
+        userId: user.id.substring(0, 8) + '...',
+        path: pathname
+      });
+    } else {
+      // No authenticated user - set explicit headers
+      response.headers.set('x-supabase-auth', 'anonymous');
+      response.headers.set('x-auth-valid', 'false');
+      response.headers.set('x-auth-time', authTimestamp);
+      response.headers.set('x-auth-state', 'unauthenticated');
+      response.headers.set('x-is-admin', 'false');
+
+      // Clear session health cookie
+      response.cookies.set('x-session-health', '', {
+        maxAge: 0, // Expire immediately
+        path: '/',
+      });
+
+      // If accessing a protected route, redirect to login
+      if (!user) {
+        edgeLogger.debug('Redirecting unauthenticated user to login', {
+          category: LOG_CATEGORIES.AUTH,
+          path: pathname
         });
+
+        const redirectUrl = new URL('/login', request.url);
+        redirectUrl.searchParams.set('redirectTo', request.nextUrl.pathname);
+        return NextResponse.redirect(redirectUrl);
       }
     }
 
     return response;
   } catch (error) {
     edgeLogger.error('Middleware error processing request', {
-      category: 'auth',
+      category: LOG_CATEGORIES.AUTH,
       path: pathname,
       error: error instanceof Error ? error.message : String(error),
       important: true
     });
 
     // Return next response if middleware fails to prevent breaking the app
-    return NextResponse.next();
+    return response;
   }
 }
 
+// Configure middleware to run ONLY on routes that require authentication
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except for the ones starting with:
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     * - images/ (app images)
-     * - styles/ (app styles)
-     * - We also exclude /api/check-status since it's used for health checks
-     * - We must exclude the widget script path specifically so it can be loaded on external sites
-     */
-    '/((?!_next/static|_next/image|favicon.ico|api/check-status|widget/chat-widget.js|images/|styles/).*)',
+    // Include paths requiring auth
+    '/chat/:path*',
+    '/admin/:path*',
+    '/api/chat/:path*',
+    '/api/history/:path*',
   ],
 };

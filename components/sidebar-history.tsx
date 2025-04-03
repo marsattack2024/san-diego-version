@@ -417,15 +417,14 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
     setIsRenaming(prev => ({ ...prev, [renameId]: true }));
 
     try {
-      const supabase = await createClient();
+      const supabase = createClient();
 
-      // Update title in database
-      const { error } = await supabase
-        .from('sd_chat_sessions')
-        .update({ title: renameTitle.trim() })
-        .eq('id', renameId);
+      // Use historyService with dependency injection
+      const success = await historyService.renameChat(supabase, renameId, renameTitle.trim());
 
-      if (error) throw error;
+      if (!success) {
+        throw new Error('Failed to rename chat');
+      }
 
       // Update conversation title in Zustand store
       useChatStore.getState().updateConversationTitle(renameId, renameTitle.trim());
@@ -629,69 +628,110 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
     }
   }, [auth.isAuthenticated, setupHistoryPolling]);
 
+  // Add a function to create a new chat using the server
+  const createNewChat = useCallback(async () => {
+    try {
+      // Get the supabase client from our utils
+      const supabase = createClient();
+
+      // Create a new UUID for the chat
+      const id = crypto.randomUUID();
+
+      // Insert the chat into the database
+      const { error } = await supabase
+        .from('sd_chat_sessions')
+        .insert({
+          id,
+          title: 'New Chat',
+          user_id: auth.user?.id,
+          agent_id: 'default',
+          deep_search_enabled: false,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
+
+      if (error) {
+        throw error;
+      }
+
+      // Force refresh the chat list
+      refreshHistory();
+
+      // Navigate to the new chat
+      router.push(`/chat/${id}`);
+    } catch (error) {
+      console.error('Failed to create new chat:', error);
+      toast.error('Failed to create new chat');
+    }
+  }, [auth.user?.id, refreshHistory, router]);
+
   // Simplified render - return a Fragment containing the header and the menu
   return (
     <>
-      <div className="flex justify-between items-center mb-4 px-2">
-        <SidebarMenuButton
-          onClick={refreshHistory}
-          className="flex items-center gap-2 rounded-md px-3 py-2 hover:bg-sidebar-item-hover transition-colors w-full text-sidebar-foreground"
+      <div className="flex flex-col gap-2 mb-4 px-2">
+        <Button
+          onClick={createNewChat}
         >
-          <RefreshCw className="h-5 w-5" />
-          <span className="font-medium">Refresh History</span>
-        </SidebarMenuButton>
-      </div>
-
-      {/* Debug indicator for circuit breaker */}
-      {historyError && historyError.includes('circuit') && (
-        <div className="p-2 mb-4 rounded bg-yellow-100 dark:bg-yellow-900 text-xs">
-          <p>History API circuit open. Wait or reset.</p>
-        </div>
-      )}
-
-      {/* Chat history list */}
-      <SidebarMenu className="px-2 pb-20"> {/* Add padding here */}
-        {renderHistoryContent()}
-      </SidebarMenu>
-
-      {/* Delete confirmation dialog */}
-      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently delete this chat and all its messages.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel
-              onClick={() => {
-                setShowDeleteDialog(false);
-                setDeleteId(null);
-              }}
+          <div className="flex justify-between items-center mb-4 px-2">
+            <SidebarMenuButton
+              onClick={refreshHistory}
+              className="flex items-center gap-2 rounded-md px-3 py-2 hover:bg-sidebar-item-hover transition-colors w-full text-sidebar-foreground"
             >
-              Cancel
-            </AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteConfirm}>
-              {isDeleting[deleteId || ''] ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Deleting...
-                </>
-              ) : (
-                'Delete'
-              )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+              <RefreshCw className="h-5 w-5" />
+              <span className="font-medium">Refresh History</span>
+            </SidebarMenuButton>
+          </div>
 
-      {/* Rename dialog */}
-      {renderRenameDialog()}
-    </>
-  );
+          {/* Debug indicator for circuit breaker */}
+          {historyError && historyError.includes('circuit') && (
+            <div className="p-2 mb-4 rounded bg-yellow-100 dark:bg-yellow-900 text-xs">
+              <p>History API circuit open. Wait or reset.</p>
+            </div>
+          )}
+
+          {/* Chat history list */}
+          <SidebarMenu className="px-2 pb-20"> {/* Add padding here */}
+            {renderHistoryContent()}
+          </SidebarMenu>
+
+          {/* Delete confirmation dialog */}
+          <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will permanently delete this chat and all its messages.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel
+                  onClick={() => {
+                    setShowDeleteDialog(false);
+                    setDeleteId(null);
+                  }}
+                >
+                  Cancel
+                </AlertDialogCancel>
+                <AlertDialogAction onClick={handleDeleteConfirm}>
+                  {isDeleting[deleteId || ''] ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Deleting...
+                    </>
+                  ) : (
+                    'Delete'
+                  )}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+
+          {/* Rename dialog */}
+          {renderRenameDialog()}
+      </div>
+      );
 };
 
-// Export memoized version for better performance
-export const SidebarHistory = React.memo(PureSidebarHistory);
-export default SidebarHistory;
+      // Export memoized version for better performance
+      export const SidebarHistory = React.memo(PureSidebarHistory);
+      export default SidebarHistory;

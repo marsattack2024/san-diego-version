@@ -1,118 +1,149 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import { createClient } from '@/utils/supabase/client';
 import { useAuthStore } from '@/stores/auth-store';
+import { Loader2 } from 'lucide-react';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
-// Create context for user and profile data with defaults
+// Create context for Supabase client and loading state
 const AuthContext = createContext({
-  user: null as any,
-  profile: null as any,
   isLoading: true,
-  isAuthenticated: false,
-  isAdmin: false,
-  refreshAdminStatus: async (): Promise<boolean> => false,
+  supabase: null as ReturnType<typeof createClient> | null,
 });
 
-// Export hook for accessing auth data
+// Export hook for accessing auth client
 export const useAuth = () => useContext(AuthContext);
 
 // Provider component to wrap app with
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
+  const [supabase] = useState(() => createClient());
   const {
-    user,
-    profile,
     isAuthenticated,
-    isAdmin,
-    checkAuth,
-    shouldRefreshAuth,
-    checkAdminRole,
+    setUser,
+    logout,
+    loadUserProfile
   } = useAuthStore();
 
-  // Function to explicitly refresh admin status - memoized to avoid recreating function
-  const refreshAdminStatus = useCallback(async () => {
-    console.log('Explicitly refreshing admin status');
-    try {
-      const result = await checkAdminRole();
-      console.log('Admin status refresh result:', result);
-      return result;
-    } catch (error) {
-      console.error('Error refreshing admin status:', error);
-      return false;
-    }
-  }, [checkAdminRole]);
-
-  // Check authentication on component mount
+  // Setup auth state change listener
   useEffect(() => {
     let mounted = true;
 
+    // Initial auth check during mount
     const initAuth = async () => {
       try {
-        console.log('Initializing authentication...');
-        if (shouldRefreshAuth()) {
-          await checkAuth();
+        edgeLogger.debug('Initializing authentication...', {
+          category: LOG_CATEGORIES.AUTH
+        });
 
-          // Ensure admin status is always checked during initial auth
-          // but don't wait for it to complete rendering
-          checkAdminRole().then(adminStatus => {
-            if (mounted) {
-              console.log('Initial auth complete, admin status:', adminStatus);
-            }
+        // Get user from supabase
+        const { data: { user }, error } = await supabase.auth.getUser();
+
+        if (error) {
+          edgeLogger.error('Authentication initialization error', {
+            category: LOG_CATEGORIES.AUTH,
+            error: error.message
+          });
+
+          // Clear user state on error
+          setUser(null);
+        } else if (user) {
+          edgeLogger.debug('User authenticated during initialization', {
+            category: LOG_CATEGORIES.AUTH,
+            userId: user.id.substring(0, 8) + '...'
+          });
+
+          // Set user in store
+          setUser(user);
+
+          // Load profile in background
+          loadUserProfile().catch(err => {
+            edgeLogger.error('Error loading user profile during auth init', {
+              category: LOG_CATEGORIES.AUTH,
+              error: err instanceof Error ? err.message : String(err)
+            });
           });
         } else {
-          console.log('Using cached auth state, admin status:', isAdmin);
+          edgeLogger.debug('No user authenticated during initialization', {
+            category: LOG_CATEGORIES.AUTH
+          });
+
+          // Ensure user state is clear
+          setUser(null);
         }
       } catch (error) {
-        console.error('Error during auth initialization:', error);
+        edgeLogger.error('Error during auth initialization', {
+          category: LOG_CATEGORIES.AUTH,
+          error: error instanceof Error ? error.message : String(error)
+        });
       } finally {
+        // Always update loading state when done
         if (mounted) {
           setIsLoading(false);
         }
       }
     };
 
+    // Subscribe to auth state changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        edgeLogger.debug('Auth state change event', {
+          category: LOG_CATEGORIES.AUTH,
+          event,
+          hasSession: !!session
+        });
+
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+          if (session?.user) {
+            setUser(session.user);
+
+            // Load profile in background
+            loadUserProfile().catch(err => {
+              edgeLogger.error('Error loading profile after auth change', {
+                category: LOG_CATEGORIES.AUTH,
+                error: err instanceof Error ? err.message : String(err)
+              });
+            });
+          }
+        } else if (event === 'SIGNED_OUT') {
+          logout();
+        }
+
+        // Update loading state on auth events
+        if (mounted) {
+          setIsLoading(false);
+        }
+      }
+    );
+
+    // Run initial auth check
     initAuth();
 
+    // Cleanup on unmount
     return () => {
       mounted = false;
+      subscription.unsubscribe();
     };
-  }, [checkAuth, shouldRefreshAuth, checkAdminRole, isAdmin]);
+  }, [supabase, setUser, logout, loadUserProfile]);
 
-  // Re-check auth periodically if necessary
-  useEffect(() => {
-    // Only set up interval if the user is authenticated
-    if (!isAuthenticated) return;
+  // Show loading state while initial auth check completes
+  if (isLoading) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        <span className="ml-2 text-lg">Loading authentication...</span>
+      </div>
+    );
+  }
 
-    // Check auth every 15 minutes (reduced from 30 for better responsiveness)
-    const intervalId = setInterval(() => {
-      if (shouldRefreshAuth()) {
-        console.log('Performing periodic auth check');
-        // Don't wait for admin check to complete
-        checkAuth().then(() => {
-          checkAdminRole().catch(err => {
-            console.error('Periodic admin check error:', err);
-          });
-        });
-      }
-    }, 15 * 60 * 1000);
-
-    return () => clearInterval(intervalId);
-  }, [isAuthenticated, checkAuth, shouldRefreshAuth, checkAdminRole]);
-
-  // Debug changes to admin status
-  useEffect(() => {
-    console.log('Auth context: Admin status updated to', isAdmin);
-  }, [isAdmin]);
-
+  // Provide Supabase client and loading state to children
   return (
     <AuthContext.Provider
       value={{
-        user,
-        profile,
         isLoading,
-        isAuthenticated,
-        isAdmin,
-        refreshAdminStatus,
+        supabase,
       }}
     >
       {children}

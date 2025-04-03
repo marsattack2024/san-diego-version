@@ -10,8 +10,11 @@ import { Overview } from './overview';
 import { virtuosoConfig, BOTTOM_THRESHOLD } from '@/lib/virtualization-config'; // Import the virtuoso config
 import { styles } from '@/lib/tokens'; // Import styles from token system
 import { CustomScrollArea } from './ui/custom-scroll-area'; // Import custom scroll area
-import { Loader } from 'lucide-react';
+import { Loader, Shield } from 'lucide-react';
 import equal from 'fast-deep-equal';
+import { useAuth } from '@/utils/supabase/auth-provider';
+import { Button } from './ui/button';
+import Link from 'next/link';
 
 export interface VirtualizedChatProps {
   chatId: string;
@@ -40,6 +43,31 @@ export function VirtualizedChat({
   isReadonly,
   isArtifactVisible
 }: VirtualizedChatProps) {
+  // Get auth state from the auth provider
+  const { isLoading: isAuthLoading, supabase } = useAuth();
+
+  // Check if user is authenticated (we need to use the auth check)
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
+
+  // Check authentication status when component mounts
+  useEffect(() => {
+    const checkAuth = async () => {
+      if (!supabase) return;
+
+      try {
+        const { data } = await supabase.auth.getSession();
+        setIsAuthenticated(!!data.session);
+      } catch (error) {
+        console.error('Error checking auth:', error);
+        setIsAuthenticated(false);
+      }
+    };
+
+    if (!isAuthLoading) {
+      checkAuth();
+    }
+  }, [isAuthLoading, supabase]);
+
   const virtuosoRef = useRef<VirtuosoHandle>(null);
 
   // Deep search state
@@ -241,6 +269,30 @@ export function VirtualizedChat({
 
     return null;
   };
+
+  // Render auth check placeholder if not authenticated
+  if (isAuthLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-8 text-center">
+        <Loader className="h-8 w-8 animate-spin mb-4 text-primary" />
+        <h3 className="text-lg font-medium mb-2">Checking authentication...</h3>
+        <p className="text-muted-foreground">Please wait while we verify your access.</p>
+      </div>
+    );
+  }
+
+  if (isAuthenticated === false) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-8 text-center">
+        <Shield className="h-12 w-12 mb-4 text-amber-500" />
+        <h3 className="text-lg font-medium mb-2">Authentication Required</h3>
+        <p className="text-muted-foreground mb-6">You need to be logged in to view this chat.</p>
+        <Link href="/login" passHref>
+          <Button>Sign In</Button>
+        </Link>
+      </div>
+    );
+  }
 
   // ** Revert to using Virtuoso **
   return (
