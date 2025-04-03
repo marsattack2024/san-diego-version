@@ -13,29 +13,28 @@ import { errorResponse, validationError, successResponse } from '@/lib/utils/rou
 // 2. Mocks (Define mocks using factories BEFORE importing)
 setupLoggerMock();
 
+const mockPrepareConfig = vi.fn();
 vi.mock('@/lib/chat-engine/chat-setup.service', () => ({
-    ChatSetupService: vi.fn().mockImplementation(() => ({ prepareConfig: vi.fn() }))
+    ChatSetupService: vi.fn(() => ({ prepareConfig: mockPrepareConfig }))
 }));
 
+const mockHandleRequest = vi.fn();
 vi.mock('@/lib/chat-engine/chat-engine.facade', () => ({
-    createChatEngine: vi.fn().mockImplementation(() => ({ handleRequest: vi.fn() }))
+    createChatEngine: vi.fn(() => ({ handleRequest: mockHandleRequest }))
 }));
 
+const mockErrorResponse = vi.fn((msg, _, status) => new Response(JSON.stringify({ error: msg }), { status: status || 500 }));
+const mockSuccessResponse = vi.fn((data) => new Response(JSON.stringify(data), { status: 200 }));
+const mockValidationError = vi.fn((msg) => new Response(JSON.stringify({ error: msg }), { status: 400 }));
 vi.mock('@/lib/utils/route-handler', async (importOriginal) => {
     const actual = await importOriginal() as any;
-    return {
-        ...actual,
-        errorResponse: vi.fn((msg, _, status) => new Response(JSON.stringify({ error: msg }), { status: status || 500 })),
-        successResponse: vi.fn((data) => new Response(JSON.stringify(data), { status: 200 })),
-        validationError: vi.fn((msg) => new Response(JSON.stringify({ error: msg }), { status: 400 }))
-    };
+    return { ...actual, errorResponse: mockErrorResponse, successResponse: mockSuccessResponse, validationError: mockValidationError };
 });
 
-vi.mock('@/lib/utils/http-utils', () => ({
-    handleCors: vi.fn((res) => res)
-}));
+const mockHandleCors = vi.fn((res) => res);
+vi.mock('@/lib/utils/http-utils', () => ({ handleCors: mockHandleCors }));
 
-vi.mock('@/utils/supabase/server', () => ({ createClient: vi.fn() }));
+vi.mock('@/utils/supabase/server', () => ({ createClient: vi.fn() })); // Prevent cache error
 
 // 3. Import modules AFTER mocks are defined
 import { ChatSetupService } from '@/lib/chat-engine/chat-setup.service';
@@ -45,31 +44,24 @@ import { errorResponse, validationError, successResponse } from '@/lib/utils/rou
 import type { ChatEngineConfig } from '@/lib/chat-engine/chat-engine.config';
 
 // 4. Test Suite
-describe('Integration Test: /api/widget-chat Route Handler', () => {
+describe('Shallow Integration Test: /api/widget-chat Route Handler Logic', () => {
 
     const mockEngineConfig: Partial<ChatEngineConfig> = { agentType: 'default', useDeepSearch: false, tools: {}, corsEnabled: true }; // Sample widget config
-    const mockSuccessResponse = new Response(JSON.stringify({ success: true }), { status: 200 });
+    const mockSuccessRespObj = new Response(JSON.stringify({ success: true }), { status: 200 });
     const mockErrorPayload = { error: true, message: expect.any(String), success: false, id: expect.any(String), role: 'assistant', content: expect.any(String), createdAt: expect.any(String) };
 
     beforeEach(() => {
         vi.resetAllMocks();
         mockLogger.reset();
 
-        // Set default mock implementations using vi.mocked()
-        vi.mocked(ChatSetupService).mockImplementation(() => ({
-            prepareConfig: vi.fn().mockResolvedValue(mockEngineConfig)
-        }) as any);
-
-        vi.mocked(createChatEngine).mockImplementation(() => ({
-            handleRequest: vi.fn().mockResolvedValue(mockSuccessResponse)
-        }) as any);
-
-        // Reset route utils if needed
-        vi.mocked(errorResponse).mockClear();
-        vi.mocked(successResponse).mockClear();
-        vi.mocked(validationError).mockClear();
-        vi.mocked(handleCors).mockClear();
-
+        // Set default mock implementations
+        mockPrepareConfig.mockResolvedValue(mockEngineConfig);
+        mockHandleRequest.mockResolvedValue(mockSuccessRespObj);
+        // Reset util mocks if needed (resetAllMocks should cover vi.fn)
+        mockErrorResponse.mockImplementation((msg, _, status) => new Response(JSON.stringify({ error: msg }), { status: status || 500 }));
+        mockSuccessResponse.mockImplementation((data) => new Response(JSON.stringify(data), { status: 200 }));
+        mockValidationError.mockImplementation((msg) => new Response(JSON.stringify({ error: msg }), { status: 400 }));
+        mockHandleCors.mockImplementation((res) => res);
     });
 
     const createMockRequest = (method: 'POST' | 'GET' | 'OPTIONS', body?: any, headers?: HeadersInit): Request => {
@@ -81,94 +73,82 @@ describe('Integration Test: /api/widget-chat Route Handler', () => {
     };
 
     // --- POST Tests ---
-    it('POST should handle a successful request', async () => {
+    it('POST should call dependencies and handle success correctly', async () => {
         const requestBody = { sessionId: 'widget-session-456', message: 'Hello Widget' };
         const request = createMockRequest('POST', requestBody);
 
         const response = await POST(request);
 
-        // Get mock instances/results for assertions
-        const setupServiceInstance = vi.mocked(ChatSetupService).mock.instances[0];
-        const engineInstance = vi.mocked(createChatEngine).mock.results[0].value;
-
         expect(ChatSetupService).toHaveBeenCalledTimes(1);
-        expect(setupServiceInstance.prepareConfig).toHaveBeenCalledTimes(1);
-        expect(setupServiceInstance.prepareConfig).toHaveBeenCalledWith({
+        expect(mockPrepareConfig).toHaveBeenCalledWith({
             requestBody: requestBody,
             userId: undefined,
             isWidget: true
         });
         expect(createChatEngine).toHaveBeenCalledWith(mockEngineConfig);
-        expect(engineInstance.handleRequest).toHaveBeenCalledTimes(1);
-        expect(engineInstance.handleRequest.mock.calls[0][0]).toBeInstanceOf(Request);
-        expect(engineInstance.handleRequest.mock.calls[0][1]).toEqual({ parsedBody: requestBody, additionalContext: { isWidgetRequest: true, operationId: expect.any(String) } });
+        expect(mockHandleRequest).toHaveBeenCalledTimes(1);
+        expect(mockHandleRequest.mock.calls[0][0]).toBeInstanceOf(Request);
+        expect(mockHandleRequest.mock.calls[0][1]).toEqual({ parsedBody: requestBody, additionalContext: { isWidgetRequest: true, operationId: expect.any(String) } });
 
         expect(response.status).toBe(200);
         const responseData = await response.json();
         expect(responseData).toEqual({ success: true });
-        expect(handleCors).toHaveBeenCalledWith(mockSuccessResponse, request, true);
+        expect(mockHandleCors).toHaveBeenCalledWith(mockSuccessRespObj, request, true);
     });
 
-    it('POST should return 400 Validation Error for invalid body (Zod fail)', async () => {
+    it('POST should call validationError for invalid body (Zod fail)', async () => {
         const invalidBody = { sessionId: 'invalid-uuid', message: 'test' };
         const request = createMockRequest('POST', invalidBody);
         const response = await POST(request);
 
         expect(response.status).toBe(400);
-        expect(validationError).toHaveBeenCalled();
-        const setupServiceInstance = vi.mocked(ChatSetupService).mock.instances[0];
-        expect(setupServiceInstance?.prepareConfig).not.toHaveBeenCalled();
-        expect(handleCors).toHaveBeenCalled();
+        expect(mockValidationError).toHaveBeenCalled();
+        expect(mockPrepareConfig).not.toHaveBeenCalled();
+        expect(mockHandleCors).toHaveBeenCalled();
     });
 
-    it('POST should return 400 Validation Error if message/messages missing', async () => {
+    it('POST should call validationError if message/messages missing', async () => {
         const invalidBody = { sessionId: '123e4567-e89b-12d3-a456-426614174000' };
         const request = createMockRequest('POST', invalidBody);
         const response = await POST(request);
 
         expect(response.status).toBe(400);
-        expect(validationError).toHaveBeenCalled();
+        expect(mockValidationError).toHaveBeenCalled();
     });
 
-    it('POST should return 500 (but 200 status for UI) if prepareConfig fails', async () => {
+    it('POST should handle prepareConfig failure', async () => {
         const configError = new Error('Failed to prep widget config');
-        // Override mock
-        vi.mocked(ChatSetupService).mockImplementation(() => ({
-            prepareConfig: vi.fn().mockRejectedValue(configError)
-        }) as any);
+        mockPrepareConfig.mockRejectedValue(configError);
 
         const request = createMockRequest('POST', { sessionId: 'widget-session-789', message: 'test' });
         const response = await POST(request);
         const responseData = await response.json();
 
-        expect(response.status).toBe(200);
+        expect(response.status).toBe(200); // Widget specific error handling
         expect(responseData).toEqual(mockErrorPayload);
         expect(createChatEngine).not.toHaveBeenCalled();
         expect(mockLogger.error).toHaveBeenCalledWith(
             expect.stringContaining('Unhandled error in widget chat route'),
             expect.objectContaining({ error: configError.message })
         );
-        expect(handleCors).toHaveBeenCalled();
+        expect(mockHandleCors).toHaveBeenCalled();
     });
 
-    it('POST should return 500 (but 200 status for UI) if engine.handleRequest fails', async () => {
+    it('POST should handle engine.handleRequest failure', async () => {
         const handleRequestError = new Error('Widget engine failed');
-        // Override mock
-        vi.mocked(createChatEngine).mockImplementation(() => ({
-            handleRequest: vi.fn().mockRejectedValue(handleRequestError)
-        }) as any);
+        mockHandleRequest.mockRejectedValue(handleRequestError);
 
         const request = createMockRequest('POST', { sessionId: 'widget-session-abc', message: 'test' });
         const response = await POST(request);
         const responseData = await response.json();
 
-        expect(response.status).toBe(200);
+        expect(response.status).toBe(200); // Widget specific error handling
         expect(responseData).toEqual(mockErrorPayload);
         expect(mockLogger.error).toHaveBeenCalledWith(
             expect.stringContaining('Unhandled error in widget chat route'),
             expect.objectContaining({ error: handleRequestError.message })
         );
-        expect(handleCors).toHaveBeenCalled();
+        expect(mockHandleCors).toHaveBeenCalled();
     });
 
     // --- GET Tests ---
@@ -178,18 +158,18 @@ describe('Integration Test: /api/widget-chat Route Handler', () => {
         const responseData = await response.json();
 
         expect(response.status).toBe(200);
-        expect(successResponse).toHaveBeenCalledWith({ status: 'online', timestamp: expect.any(String) });
+        expect(mockSuccessResponse).toHaveBeenCalledWith({ status: 'online', timestamp: expect.any(String) });
         expect(responseData.status).toBe('online');
-        expect(handleCors).toHaveBeenCalled();
+        expect(mockHandleCors).toHaveBeenCalled();
     });
 
-    it('GET should return 405 for other requests', async () => {
+    it('GET should call errorResponse for other requests', async () => {
         const request = createMockRequest('GET');
         const response = await GET(request);
 
         expect(response.status).toBe(405);
-        expect(errorResponse).toHaveBeenCalledWith('Method not allowed', expect.any(String), 405);
-        expect(handleCors).toHaveBeenCalled();
+        expect(mockErrorResponse).toHaveBeenCalledWith('Method not allowed', expect.any(String), 405);
+        expect(mockHandleCors).toHaveBeenCalled();
     });
 
     // --- OPTIONS Test ---
@@ -199,6 +179,6 @@ describe('Integration Test: /api/widget-chat Route Handler', () => {
 
         expect(response.status).toBe(204);
         expect(response.body).toBeNull();
-        expect(handleCors).toHaveBeenCalledWith(expect.any(Response), request, true);
+        expect(mockHandleCors).toHaveBeenCalledWith(expect.any(Response), request, true);
     });
 }); 
