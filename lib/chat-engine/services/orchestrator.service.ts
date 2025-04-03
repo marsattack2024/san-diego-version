@@ -87,11 +87,12 @@ Analyze this request and generate the appropriate workflow plan (either single-s
             if (!plan.steps || plan.steps.length === 0) {
                 throw new Error('Generated workflow plan is empty.');
             }
-            if (plan.steps.some(step => !AVAILABLE_AGENT_TYPES.includes(step.agent))) {
-                const invalidAgent = plan.steps.find(step => !AVAILABLE_AGENT_TYPES.includes(step.agent))?.agent;
+            // Cast step.agent for includes check
+            if (plan.steps.some(step => !AVAILABLE_AGENT_TYPES.includes(step.agent as AgentType))) {
+                // Cast step.agent for find check
+                const invalidAgent = plan.steps.find(step => !AVAILABLE_AGENT_TYPES.includes(step.agent as AgentType))?.agent;
                 throw new Error(`Generated plan uses invalid agent type: ${invalidAgent}`);
             }
-
 
             return plan;
         } catch (error) {
@@ -129,7 +130,9 @@ Analyze this request and generate the appropriate workflow plan (either single-s
         while (iteration < currentPlan.maxIterations) {
             const iterStartTime = Date.now();
             this.logger.info(`Starting execution iteration ${iteration + 1}/${currentPlan.maxIterations}`, {
-                category: LOG_CATEGORIES.ORCHESTRATOR, operationId, iteration: iteration + 1
+                category: LOG_CATEGORIES.ORCHESTRATOR,
+                operationId,
+                iteration: iteration + 1
                 // ... other relevant iter log data
             });
 
@@ -226,7 +229,7 @@ Analyze this request and generate the appropriate workflow plan (either single-s
                             });
 
                             // Validate new plan
-                            if (!revisedPlanData.steps || revisedPlanData.steps.length === 0 || revisedPlanData.steps.some(step => !AVAILABLE_AGENT_TYPES.includes(step.agent))) {
+                            if (!revisedPlanData.steps || revisedPlanData.steps.length === 0 || revisedPlanData.steps.some(step => !AVAILABLE_AGENT_TYPES.includes(step.agent as AgentType))) {
                                 throw new Error("Re-planning generated an invalid or empty plan.");
                             }
 
@@ -240,8 +243,17 @@ Analyze this request and generate the appropriate workflow plan (either single-s
                             this.logger.warn('Workflow plan updated. Resetting context and restarting iteration.', { category: LOG_CATEGORIES.ORCHESTRATOR, operationId });
 
                         } catch (replanError) {
-                            this.logger.error('Re-planning failed', { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, error: replanError, important: true });
-                            allStepsComplete = false;
+                            const replanDurationMs = Date.now() - replanStartTime;
+                            this.logger.error('Re-planning failed', {
+                                category: LOG_CATEGORIES.ORCHESTRATOR,
+                                operationId,
+                                stepTriggeringReplan: i,
+                                durationMs: replanDurationMs,
+                                // Add type check for error before logging
+                                error: replanError instanceof Error ? replanError.message : String(replanError),
+                                important: true
+                            });
+                            allStepsComplete = false; // Prevent premature termination if re-plan fails
                         }
                     }
                 } catch (error) {
