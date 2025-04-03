@@ -1,6 +1,8 @@
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { withAuth } from '@/lib/auth/with-auth';
+import type { User } from '@supabase/supabase-js';
 
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
@@ -40,157 +42,33 @@ function setCachedHistory(userId: string, data: any) {
   });
 }
 
-export async function GET(request: Request): Promise<Response> {
-  // Generate a unique request ID for tracing
+// Wrap the core logic in withAuth
+export const GET = withAuth(async (user: User, request: Request): Promise<Response> => {
   const operationId = `hist_${Math.random().toString(36).substring(2, 10)}`;
 
   try {
-    // Get auth headers from request with explicit logging
-    const headersList = request.headers;
-    const userId = headersList.get('x-supabase-auth');
-    const isAuthValid = headersList.get('x-auth-valid') === 'true';
-    const hasAuthCookies = headersList.get('x-has-auth-cookies') === 'true';
+    // User is already authenticated by the wrapper
+    const userId = user.id;
 
-    // Sample logging for debugging (reduced to 2% of requests to minimize noise)
-    if (Math.random() < 0.02) {
-      edgeLogger.debug('History API received auth headers', {
-        userId: userId || 'missing',
-        isAuthValid: isAuthValid ? 'true' : 'false',
-        authTime: headersList.get('x-auth-time') || 'missing',
-        hasProfile: headersList.get('x-has-profile') || 'missing',
-        hasAuthCookies: hasAuthCookies ? 'true' : 'false',
-        headersSample: Array.from(headersList.entries())
-          .filter(([key]) => key.startsWith('x-'))
-          .map(([key, value]) => `${key}:${value.substring(0, 20)}`)
-          .join(', '),
-        operationId
-      });
-    }
+    edgeLogger.debug('History API request received', {
+      userId: userId.substring(0, 8) + '...',
+      operationId
+    });
 
-    // Check for timestamp in URL parameters
-    // Many 401 errors happen when clients don't include a timestamp
-    const { searchParams } = new URL(request.url);
-    const timestampParam = searchParams.get('t');
-    const hasTimestamp = !!timestampParam;
+    // Use helper function to get history
+    return await getHistoryForUser(userId, operationId);
 
-    // Approach 1: Try auth from middleware headers first if they're valid
-    if (userId && userId !== 'anonymous' && isAuthValid) {
-      // Log this case for debugging at low frequency
-      if (Math.random() < 0.05) {
-        edgeLogger.debug('History API using middleware auth headers', {
-          userId: userId.substring(0, 8) + '...',
-          operationId
-        });
-      }
-
-      // Use the user ID from headers to fetch history
-      return await getHistoryForUser(userId, operationId);
-    }
-
-    // Approach 2: Fall back to direct Supabase auth if headers aren't valid
-    const supabase = await createRouteHandlerClient();
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-    if (authError) {
-      edgeLogger.error('Error authenticating user', {
-        error: authError.message,
-        operationId
-      });
-    }
-
-    if (user) {
-      // Log when header auth failed but direct auth succeeded (important for debugging)
-      edgeLogger.info('History API using direct auth - headers not working', {
-        userId: user.id.substring(0, 8) + '...',
-        hadHeaders: !!userId,
-        headerValue: userId || 'none',
-        operationId
-      });
-
-      return await getHistoryForUser(user.id, operationId);
-    }
-
-    // Both auth methods failed - user is not authenticated
-
-    // Special case: If request has auth cookies but failed auth, it's likely a timing issue
-    // In this case, we return a special error code (409 Conflict) to signal client retry
-    if (hasAuthCookies && hasTimestamp) {
-      const response = errorResponse(
-        'Authentication pending - cookies present but authentication incomplete',
-        {
-          error: 'AuthenticationPending',
-          retryAfter: '1'
-        },
-        409
-      );
-
-      // Add special headers to help client detect authentication in progress
-      response.headers.set('Retry-After', '1'); // Suggest 1 second retry
-      response.headers.set('x-auth-pending', 'true');
-
-      if (Math.random() < 0.1) { // Log only 10% of these
-        edgeLogger.info('Authentication pending - cookies present but auth incomplete', {
-          operationId,
-          hasTimestamp
-        });
-      }
-
-      return response;
-    }
-
-    // For standard 401 cases, add response tracking headers
-    // Avoid logging every unauthorized request to reduce noise
-    // Only log if we're not seeing a burst of unauthorized requests
-    // We use the request count header to track bursts
-    const unauthorizedRequestCount = parseInt(
-      request.headers.get('x-unauthorized-count') || '0'
-    );
-
-    // Count this in the response headers to help client track them
-    const newUnauthorizedCount = unauthorizedRequestCount + 1;
-
-    // Only log if this isn't part of a burst of unauthorized requests
-    if (newUnauthorizedCount <= 3 || newUnauthorizedCount % 10 === 0) {
-      if (newUnauthorizedCount > 5) {
-        edgeLogger.warn(`User not authenticated when fetching history (repeated ${newUnauthorizedCount} times)`, {
-          operationId,
-          hasTimestamp,
-          hasAuthCookies
-        });
-      } else {
-        edgeLogger.warn('User not authenticated when fetching history', {
-          operationId,
-          hasTimestamp,
-          hasAuthCookies
-        });
-      }
-    }
-
-    // Return 401 with special headers to help client detect bursts
-    const message = hasAuthCookies
-      ? 'Auth cookies present but validation failed'
-      : 'No valid authentication';
-
-    const response = unauthorizedError(message);
-
-    // Add headers to help client track unauthorized request bursts
-    response.headers.set('x-unauthorized-count', newUnauthorizedCount.toString());
-    response.headers.set('x-unauthorized-timestamp', Date.now().toString());
-
-    return response;
   } catch (error) {
-    // Get auth headers for debugging
-    const headers = request.headers;
-    edgeLogger.error('Error in history API', {
+    // This catch block handles errors *outside* the getHistoryForUser helper
+    edgeLogger.error('Error in history API GET wrapper', {
       error: error instanceof Error ? error.message : String(error),
-      userId: headers.get('x-supabase-auth') || 'unknown',
       operationId,
       errorObject: error instanceof Error ? error.stack : null
     });
 
     return errorResponse('An error occurred', error, 500);
   }
-}
+});
 
 // Helper function to get history for a valid user
 async function getHistoryForUser(userId: string, operationId: string): Promise<Response> {
@@ -213,10 +91,10 @@ async function getHistoryForUser(userId: string, operationId: string): Promise<R
 
     const supabase = await createRouteHandlerClient();
 
-    // Fetch user's chat sessions with Supabase query
+    // Fetch user's chat sessions with Supabase query (RLS handles authorization)
     const { data: sessions, error } = await supabase
       .from('sd_chat_sessions')
-      .select('id, title, created_at, updated_at, agent_id')
+      .select('id, title, created_at, updated_at, agent_id') // Removed user_id from select
       .eq('user_id', userId)
       .order('updated_at', { ascending: false })
       .limit(50);
@@ -237,7 +115,7 @@ async function getHistoryForUser(userId: string, operationId: string): Promise<R
       title: session.title || 'New Chat',
       createdAt: session.created_at,
       updatedAt: session.updated_at,
-      userId: userId,
+      userId: userId, // Already have the userId
       agentId: session.agent_id
     }));
 
@@ -269,41 +147,36 @@ async function getHistoryForUser(userId: string, operationId: string): Promise<R
 }
 
 // Handle chat deletion
-export async function DELETE(request: Request): Promise<Response> {
+export const DELETE = withAuth(async (user: User, request: Request): Promise<Response> => {
   const operationId = `del_${Math.random().toString(36).substring(2, 10)}`;
 
   try {
-    // Direct authentication using Supabase
-    const supabase = await createRouteHandlerClient();
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-    if (authError) {
-      edgeLogger.error('Error authenticating user', {
-        error: authError.message,
-        operationId
-      });
-    }
-
-    if (!user) {
-      edgeLogger.warn('User not authenticated when deleting chat', { operationId });
-      return unauthorizedError('Authentication required to delete chat');
-    }
-
     // Get the chat ID from the URL
     const url = new URL(request.url);
     const id = url.searchParams.get('id');
 
     if (!id) {
-      edgeLogger.warn('No chat ID provided for deletion', { operationId });
+      edgeLogger.warn('No chat ID provided for deletion', {
+        operationId,
+        userId: user.id.substring(0, 8)
+      });
       return errorResponse('Chat ID is required', null, 400);
     }
 
-    // Delete the chat session
+    edgeLogger.info('Deleting chat', {
+      category: 'chat',
+      operationId,
+      chatId: id,
+      userId: user.id.substring(0, 8) + '...'
+    });
+
+    // Delete the chat session - RLS enforces ownership
+    const supabase = await createRouteHandlerClient();
     const { error } = await supabase
       .from('sd_chat_sessions')
       .delete()
       .eq('id', id)
-      .eq('user_id', user.id); // Ensure user can only delete their own chats
+      .eq('user_id', user.id); // Double check user_id for safety
 
     if (error) {
       edgeLogger.error('Error deleting chat', {
@@ -336,4 +209,4 @@ export async function DELETE(request: Request): Promise<Response> {
 
     return errorResponse('An error occurred while deleting the chat', error, 500);
   }
-}
+});

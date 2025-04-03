@@ -2,6 +2,8 @@ import { createClient } from '@/utils/supabase/server';
 import { logger } from '@/lib/logger';
 import { generateWebsiteSummary } from '@/lib/agents/tools/website-summarizer';
 import { successResponse, errorResponse, notFoundError } from '@/lib/utils/route-handler';
+import { withAuth } from '@/lib/auth/with-auth';
+import type { User } from '@supabase/supabase-js';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,10 +31,23 @@ export async function POST(request: Request): Promise<Response> {
 
   try {
     // Get request data
-    const { url, userId } = await request.json();
+    const { url } = await request.json();
 
-    if (!userId || !url) {
-      return errorResponse('User ID and URL are required', null, 400);
+    // Manual Authentication using server client
+    const supabaseServerClient = await createClient();
+    const { data: { user }, error: authError } = await supabaseServerClient.auth.getUser();
+
+    if (authError || !user) {
+      logger.warn('Authentication failed for update-summary', {
+        operation,
+        error: authError?.message
+      });
+      return notFoundError('Authentication required'); // Using notFoundError to align with potential RLS behavior
+    }
+    const userId = user.id;
+
+    if (!url) {
+      return errorResponse('URL is required', null, 400);
     }
 
     // Validate URL starts with https://
@@ -41,40 +56,16 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     logger.info('Starting website summary generation and profile update', {
-      userId,
+      userId: userId.substring(0, 8) + '...',
       urlDomain: new URL(url).hostname,
       operation
     });
 
-    // Get authenticated Supabase client
-    const supabase = await createClient();
-
-    // Verify user exists
-    const { data: user, error: userError } = await supabase
-      .from('sd_user_profiles')
-      .select('user_id')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (userError) {
-      logger.error('Error checking user profile', {
-        userId,
-        error: userError.message,
-        operation
-      });
-
-      return errorResponse('Error checking user profile', userError.message, 500);
-    }
-
-    if (!user) {
-      logger.warn('User profile not found', { userId, operation });
-      return notFoundError('User profile not found');
-    }
-
+    // Verify user profile exists (check is implicitly done by the update)
     // Generate the summary and update the profile with timeout safety
     try {
       logger.info('Starting website summary generation', {
-        userId,
+        userId: userId.substring(0, 8) + '...',
         urlDomain: new URL(url).hostname,
         operation
       });
@@ -86,7 +77,7 @@ export async function POST(request: Request): Promise<Response> {
 
         if (!summaryResult || summaryResult.error) {
           logger.error('Failed to generate website summary', {
-            userId,
+            userId: userId.substring(0, 8) + '...',
             url,
             error: summaryResult?.error,
             operation
@@ -98,18 +89,15 @@ export async function POST(request: Request): Promise<Response> {
         }
 
         logger.info('Website summary generated successfully', {
-          userId,
+          userId: userId.substring(0, 8) + '...',
           summaryLength: summaryResult.summary.length,
           wordCount: summaryResult.wordCount,
           title: summaryResult.title,
           operation
         });
 
-        // Get a fresh Supabase client for the update
-        const updateSupabase = await createClient();
-
-        // Update the profile with the generated summary
-        const { error } = await updateSupabase
+        // Update the profile with the generated summary using the same server client
+        const { error } = await supabaseServerClient
           .from('sd_user_profiles')
           .update({
             website_summary: summaryResult.summary,
@@ -119,7 +107,7 @@ export async function POST(request: Request): Promise<Response> {
 
         if (error) {
           logger.error('Error updating website summary in profile', {
-            userId,
+            userId: userId.substring(0, 8) + '...',
             error: error.message,
             operation
           });
@@ -130,7 +118,7 @@ export async function POST(request: Request): Promise<Response> {
         }
 
         logger.info('Profile updated with website summary', {
-          userId,
+          userId: userId.substring(0, 8) + '...',
           processingTimeMs: Date.now() - startTime,
           operation
         });
@@ -148,7 +136,7 @@ export async function POST(request: Request): Promise<Response> {
       // Check if timeout was reached
       if (result.timeoutReached) {
         logger.warn('Website summary generation timed out', {
-          userId,
+          userId: userId.substring(0, 8) + '...',
           url,
           timeoutMs: SAFETY_TIMEOUT_MS,
           operation
@@ -169,7 +157,7 @@ export async function POST(request: Request): Promise<Response> {
       const errorMessage = error instanceof Error ? error.message : String(error);
 
       logger.error('Error in website summary generation', {
-        userId,
+        userId: userId.substring(0, 8) + '...',
         url,
         error: errorMessage,
         stack: error instanceof Error ? error.stack : 'No stack trace',

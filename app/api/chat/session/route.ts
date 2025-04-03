@@ -3,6 +3,8 @@ import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { z } from 'zod';
 import { successResponse, errorResponse, unauthorizedError, validationError } from '@/lib/utils/route-handler';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
+import { withAuth } from '@/lib/auth/with-auth';
+import type { User } from '@supabase/supabase-js';
 
 // Declare edge runtime
 export const runtime = 'edge';
@@ -17,13 +19,14 @@ const sessionSchema = z.object({
 /**
  * POST handler to create a new chat session
  */
-export async function POST(request: Request): Promise<Response> {
+export const POST = withAuth(async (user: User, request: Request): Promise<Response> => {
     const operationId = `create_session_${Math.random().toString(36).substring(2, 10)}`;
 
     edgeLogger.debug('Creating new chat session', {
         category: LOG_CATEGORIES.CHAT,
         operation: 'session_create',
-        operationId
+        operationId,
+        userId: user.id.substring(0, 8) + '...'
     });
 
     try {
@@ -57,20 +60,8 @@ export async function POST(request: Request): Promise<Response> {
             return validationError('Missing session ID');
         }
 
-        // Authenticate user
+        // Create the Supabase client
         const supabase = await createRouteHandlerClient();
-        const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-        if (authError || !user) {
-            edgeLogger.warn('Authentication failed creating session', {
-                category: LOG_CATEGORIES.AUTH,
-                operation: 'session_create_error',
-                operationId,
-                error: authError?.message || 'No user found'
-            });
-
-            return unauthorizedError('Authentication required');
-        }
 
         // Create the session
         const { data: sessionData, error: sessionError } = await supabase
@@ -123,18 +114,19 @@ export async function POST(request: Request): Promise<Response> {
             500
         );
     }
-}
+});
 
 /**
  * GET handler to retrieve all sessions for the authenticated user
  */
-export async function GET(request: Request): Promise<Response> {
+export const GET = withAuth(async (user: User, request: Request): Promise<Response> => {
     const operationId = `get_sessions_${Math.random().toString(36).substring(2, 10)}`;
 
     edgeLogger.debug('Retrieving chat sessions', {
         category: LOG_CATEGORIES.CHAT,
         operation: 'sessions_get',
-        operationId
+        operationId,
+        userId: user.id.substring(0, 8) + '...'
     });
 
     try {
@@ -146,28 +138,7 @@ export async function GET(request: Request): Promise<Response> {
             operationId
         });
 
-        // Verify the user is authenticated
-        const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-        edgeLogger.debug('Auth check for sessions', {
-            category: LOG_CATEGORIES.CHAT,
-            operation: 'sessions_get',
-            operationId,
-            hasUser: !!user,
-            hasError: !!authError,
-            errorMessage: authError?.message
-        });
-
-        if (!user) {
-            edgeLogger.warn('User not authenticated for sessions', {
-                category: LOG_CATEGORIES.CHAT,
-                operation: 'sessions_get',
-                operationId
-            });
-            return unauthorizedError('Authentication required');
-        }
-
-        // Get the user's chat sessions
+        // Get the user's chat sessions (RLS handles authorization)
         edgeLogger.debug('Fetching sessions from database', {
             category: LOG_CATEGORIES.CHAT,
             operation: 'sessions_get',
@@ -228,4 +199,4 @@ export async function GET(request: Request): Promise<Response> {
             500
         );
     }
-} 
+}); 

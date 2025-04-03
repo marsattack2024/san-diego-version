@@ -3,6 +3,8 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
 import type { IdParam } from '@/lib/types/route-handlers';
 import { handleCors } from '@/lib/utils/http-utils';
+import { withAuth } from '@/lib/auth/with-auth';
+import type { User } from '@supabase/supabase-js';
 
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
@@ -10,15 +12,14 @@ export const dynamic = 'force-dynamic';
 /**
  * GET handler to count total messages for a specific chat
  */
-export async function GET(
-    request: Request,
-    { params }: IdParam
-): Promise<Response> {
+export const GET = withAuth(async (user: User, request: Request): Promise<Response> => {
     const operationId = `count_${Math.random().toString(36).substring(2, 10)}`;
 
     try {
-        // Extract params safely by awaiting the Promise
-        const { id: chatId } = await params;
+        // Retrieve chat ID from URL
+        const url = new URL(request.url);
+        const pathnameSegments = url.pathname.split('/');
+        const chatId = pathnameSegments[pathnameSegments.length - 3]; // ID is third to last segment (api/chat/[id]/messages/count)
 
         // Basic validation
         if (!chatId) {
@@ -28,26 +29,14 @@ export async function GET(
         edgeLogger.info('Counting chat messages', {
             operation: 'count_chat_messages',
             operationId,
-            chatId: chatId.slice(0, 8) // Only log partial ID for privacy
+            chatId: chatId.slice(0, 8), // Only log partial ID for privacy
+            userId: user.id.substring(0, 8)
         });
 
         // Create Supabase client
         const supabase = await createRouteHandlerClient();
 
-        // Get the current user from auth
-        const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-        if (authError || !user) {
-            edgeLogger.warn('Authentication failed counting messages', {
-                operation: 'count_chat_messages',
-                operationId,
-                error: authError?.message || 'No user found'
-            });
-
-            return handleCors(unauthorizedError(), request, true);
-        }
-
-        // Count the total messages for this chat
+        // Count the total messages for this chat (RLS handles auth)
         const { count, error } = await supabase
             .from('sd_chat_histories')
             .select('*', { count: 'exact', head: true })
@@ -85,4 +74,4 @@ export async function GET(
         const response = errorResponse('Unexpected error counting chat messages', error, 500);
         return handleCors(response, request, true);
     }
-} 
+}); 
