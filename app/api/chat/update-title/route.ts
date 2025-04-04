@@ -6,8 +6,12 @@ import { cleanTitle, updateTitleInDatabase } from '@/lib/chat/title-utils';
 import { openai } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 import { titleLogger } from '@/lib/logger/title-logger';
+import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
+import type { User } from '@supabase/supabase-js';
+import { z } from 'zod';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
 /**
  * Update the title of a chat session using AI generation based on content.

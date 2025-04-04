@@ -3,6 +3,7 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
 // Define validation schema for login
 const LoginSchema = z.object({

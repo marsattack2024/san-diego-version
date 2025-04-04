@@ -13,9 +13,10 @@ All route handlers MUST adhere to the following:
 5.  **Supabase Client**:
     *   For routes **requiring authentication**, use the `withAuth` or `withAdminAuth` wrappers. The Supabase client should still be created within the handler using `createRouteHandlerClient()` for database operations.
     *   For **unauthenticated** routes or routes with optional authentication, create the client manually using `createRouteHandlerClient()` from `@/lib/supabase/route-client`.
-6.  **Authentication Wrappers**: Use `withAuth` or `withAdminAuth` from `@/lib/auth/with-auth` for routes requiring user authentication. The wrapped handler MUST follow the `AuthenticatedRouteHandler` signature: `async (request: Request, context: RouteContext, user: User) => ...`.
+6.  **Authentication Wrappers**: Use `withAuth` or `withAdminAuth` from `@/lib/auth/with-auth` for routes requiring user authentication. The wrapped handler MUST follow the `AuthenticatedRouteHandler` signature: `async (request: Request, context: { params?: Promise<Record<string, string>>; user: User }) => ...`.
 7.  **Dynamic Parameters**:
-    *   When using `withAuth`, access dynamic parameters via the `context` object (e.g., `context.params?.id`). **The `withAuth` wrapper resolves the `params` object, so you do NOT need to `await` it inside your handler.**
+    *   In Next.js 15, dynamic route parameters are a **Promise** that must be awaited before use.
+    *   When using `withAuth`, params are passed through the context object but remain a Promise. You MUST await `context.params` before accessing properties: `const { id } = await context.params;`
     *   For unauthenticated routes, use the standard Next.js signature (`request: Request, { params }: IdParam`) and `await params` before use (`const { id } = await params;`).
     *   Use standardized parameter types (e.g., `IdParam`, `SlugParam`) from `@/lib/types/route-handlers`.
 8.  **Logging**: Utilize `edgeLogger` for structured logging, including `operationId` for traceability.
@@ -33,25 +34,30 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { successResponse, errorResponse, validationError, notFoundError } from '@/lib/utils/route-handler';
 import { handleCors } from '@/lib/utils/http-utils';
-import { withAuth, type AuthenticatedRouteHandler, type RouteContext } from '@/lib/auth/with-auth';
-import type { IdParam } from '@/lib/types/route-handlers'; // If dynamic params are used
+import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
 import type { User } from '@supabase/supabase-js';
-import { z } from 'zod'; // Example validation
 
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
 // Define the core logic handler matching the AuthenticatedRouteHandler signature
-const GET_Handler: AuthenticatedRouteHandler = async (request, context, user) => {
-    // context contains { params?: { id?: string, ... }, searchParams?: URLSearchParams }
+const GET_Handler: AuthenticatedRouteHandler = async (request, context) => {
+    // Extract user from context
+    const { user } = context;
     const operationId = `auth_get_${Math.random().toString(36).substring(2, 10)}`;
-    const chatId = context.params?.id; // Access dynamic params via context (NO await)
+    
+    // Important: For routes with dynamic params, you MUST await the params
+    let chatId;
+    if (context.params) {
+        const resolvedParams = await context.params;
+        chatId = resolvedParams.id;
+    }
 
     edgeLogger.info('Authenticated GET request started', {
-        category: LOG_CATEGORIES.CHAT, // Example category
+        category: LOG_CATEGORIES.CHAT,
         operationId,
         userId: user.id,
-        chatId // Log dynamic params if used
+        chatId
     });
 
     if (!chatId) { // Example validation for dynamic route
@@ -121,7 +127,7 @@ const GET_Handler: AuthenticatedRouteHandler = async (request, context, user) =>
 export const GET = withAuth(GET_Handler);
 
 // Similarly for POST, PUT, DELETE etc. using withAuth or withAdminAuth
-// const POST_Handler: AuthenticatedRouteHandler = async (request, context, user) => { ... };
+// const POST_Handler: AuthenticatedRouteHandler = async (request, context) => { ... };
 // export const POST = withAuth(POST_Handler);
 ```
 
@@ -217,9 +223,10 @@ export async function GET(
 ## Migration Notes
 
 *   **`NextRequest` / `NextResponse`**: Actively migrate any remaining usages to standard `Request` / `Promise<Response>`.
-*   **Dynamic Params**: Ensure dynamic params are accessed correctly (`context.params` in `withAuth`, `await params` otherwise).
+*   **Dynamic Params**: In Next.js 15, dynamic route parameters MUST be awaited before use. In `withAuth` handlers, await `context.params` before accessing properties.
 *   **CORS**: Ensure `handleCors` wraps every response.
 *   **Authentication**: Prefer the `withAuth` wrapper over manual `getUser()` checks where authentication is mandatory.
+*   **Dynamic Directive**: All route handlers need `export const dynamic = 'force-dynamic';` in addition to `export const runtime = 'edge';`.
 
 ## Serverless Routes
 

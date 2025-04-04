@@ -5,15 +5,18 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 import { successResponse, errorResponse, validationError } from '@/lib/utils/route-handler';
 import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { handleCors } from '@/lib/utils/http-utils';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
 /**
  * Endpoint to send client-side notifications for long-running processes
  * This is designed to notify users when async processes like website summarization complete
  * Requires authentication.
  */
-const POST_Handler: AuthenticatedRouteHandler = async (request, context, user) => {
+const POST_Handler: AuthenticatedRouteHandler = async (request, context) => {
+  const { user } = context;
   const operation = 'profile_notification';
 
   try {

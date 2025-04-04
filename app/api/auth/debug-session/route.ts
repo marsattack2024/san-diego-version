@@ -2,8 +2,11 @@ import { NextResponse } from 'next/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { cookies } from 'next/headers';
+import { createServerClient } from '@supabase/ssr';
+import { successResponse, errorResponse } from '@/lib/utils/route-handler';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
 /**
  * Debug endpoint for checking authentication state

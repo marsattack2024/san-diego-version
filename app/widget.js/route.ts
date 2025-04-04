@@ -2,6 +2,7 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
 // Get allowed origins from environment or use default with more permissive fallback
 const getAllowedOrigins = () => {

@@ -5,6 +5,7 @@ import { cookies } from 'next/headers';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
 /**
  * Logout endpoint that will clear auth cookies and force re-authentication

@@ -1,18 +1,18 @@
-import { cookies } from 'next/headers';
-import { createServerClient } from '@supabase/ssr';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { successResponse, errorResponse } from '@/lib/utils/route-handler';
+import { handleCors } from '@/lib/utils/http-utils';
 import { withAdminAuth, type AdminAuthenticatedRouteHandler } from '@/lib/auth/with-auth';
-import type { User } from '@supabase/supabase-js';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
 /**
  * GET route to check if the current user has admin status
  * Uses withAdminAuth which verifies the user is authenticated and has the is_admin JWT claim.
  */
-const GET_Handler: AdminAuthenticatedRouteHandler = async (request, context, user) => {
+const GET_Handler: AdminAuthenticatedRouteHandler = async (request, context) => {
+    const { user } = context;
     const operationId = `admin_check_${Date.now().toString(36).substring(2, 7)}`;
 
     try {
@@ -33,13 +33,12 @@ const GET_Handler: AdminAuthenticatedRouteHandler = async (request, context, use
         });
 
         // Set a cookie to cache the admin status on the client
-        // Note: The main middleware likely sets this already, but setting it here provides robustness.
         response.headers.set('Set-Cookie', `x-is-admin=true; Path=/; Max-Age=3600; HttpOnly; SameSite=Lax`);
 
         // Cache for 30 minutes (1800 seconds)
         response.headers.set('Cache-Control', 'private, max-age=1800');
 
-        return response;
+        return handleCors(response, request, true);
 
     } catch (error) {
         edgeLogger.error('Unexpected error in admin status check', {
@@ -49,13 +48,14 @@ const GET_Handler: AdminAuthenticatedRouteHandler = async (request, context, use
             stack: error instanceof Error ? error.stack : undefined
         });
 
-        return errorResponse(
+        const errResponse = errorResponse(
             'Internal server error',
             error instanceof Error ? error.message : String(error),
             500
         );
+        return handleCors(errResponse, request, true);
     }
 };
 
-// Wrap with withAdminAuth
+// Export the wrapped handler
 export const GET = withAdminAuth(GET_Handler); 

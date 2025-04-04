@@ -7,6 +7,14 @@ import type { IdParam } from '@/lib/types/route-handlers'; // Import IdParam for
 import { historyService } from '@/lib/api/history-service'; // <-- Import historyService
 import { LOG_CATEGORIES } from '@/lib/logger/constants'; // Import LOG_CATEGORIES if not already present
 
+/**
+ * History API Route
+ * 
+ * This route handler manages operations for the history sidebar:
+ * - GET: Retrieves chat history for the authenticated user
+ * - DELETE: Removes a specific chat from history
+ */
+
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
@@ -45,8 +53,9 @@ function setCachedHistory(userId: string, data: any) {
   });
 }
 
-// Wrap the core logic in withAuth
-const GET_Handler: AuthenticatedRouteHandler = async (request, context, user) => {
+// Define GET handler for retrieving user's chat history
+const GET_Handler: AuthenticatedRouteHandler = async (request, context) => {
+  const { user } = context;
   const operationId = `get_history_${Math.random().toString(36).substring(2, 10)}`;
 
   try {
@@ -67,10 +76,10 @@ const GET_Handler: AuthenticatedRouteHandler = async (request, context, user) =>
     return errorResponse('Failed to fetch chat history', error instanceof Error ? error : String(error), 500); // Ensure error type
   }
 };
-export const GET = withAuth(GET_Handler);
 
-// Handle chat deletion
-const DELETE_Handler: AuthenticatedRouteHandler = async (request, context, user) => {
+// Define DELETE handler for removing a chat from history
+const DELETE_Handler: AuthenticatedRouteHandler = async (request, context) => {
+  const { user } = context;
   const url = new URL(request.url);
   const chatId = url.searchParams.get('id');
   const operationId = `delete_history_${Math.random().toString(36).substring(2, 10)}`;
@@ -103,4 +112,7 @@ const DELETE_Handler: AuthenticatedRouteHandler = async (request, context, user)
     return errorResponse('Failed to delete chat history', error instanceof Error ? error : String(error), 500); // Ensure error type
   }
 };
+
+// Export handlers with auth wrapper
+export const GET = withAuth(GET_Handler);
 export const DELETE = withAuth(DELETE_Handler);

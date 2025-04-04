@@ -2,8 +2,11 @@ import { createClient } from '@/utils/supabase/server';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { successResponse, errorResponse } from '@/lib/utils/route-handler';
+import { cookies } from 'next/headers';
+import { createServerClient } from '@supabase/ssr';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
 /**
  * Debug endpoint for troubleshooting authentication issues

@@ -60,7 +60,8 @@ export const maxDuration = 120;
 export const dynamic = 'force-dynamic'; // Ensure dynamic behavior
 
 // Define the core handler logic separately using the correct signature
-const POST_Handler: AuthenticatedRouteHandler = async (request, context, user) => {
+const POST_Handler: AuthenticatedRouteHandler = async (request, context) => {
+  const { user } = context;
   const operationId = `chat_${Math.random().toString(36).substring(2, 10)}`;
   const startTime = Date.now();
 

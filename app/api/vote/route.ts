@@ -1,3 +1,9 @@
+/**
+ * Vote API Route
+ * 
+ * Handles user votes on chat messages
+ */
+
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { cookies } from 'next/headers';
@@ -6,8 +12,10 @@ import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/r
 import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
 import type { User } from '@supabase/supabase-js';
 import { type NextRequest } from 'next/server';
+import { handleCors } from '@/lib/utils/http-utils';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
 // Votes are now stored directly in the sd_chat_histories table as a column,
 // so this endpoint now handles voting on messages
@@ -21,8 +29,11 @@ function formatError(error: unknown): Error {
 // We've removed the GET method as vote data is now included with chat messages
 // This eliminates redundant API calls
 
-// Update signature
-const POST_Handler: AuthenticatedRouteHandler = async (request, context, user) => {
+/**
+ * POST handler to submit a vote on a message
+ */
+const POST_Handler: AuthenticatedRouteHandler = async (request, context) => {
+  const { user } = context;
   const operationId = `vote_${Math.random().toString(36).substring(2, 10)}`;
   const userId = user.id; // Get userId from user parameter
 

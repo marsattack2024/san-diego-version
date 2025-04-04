@@ -20,12 +20,18 @@ export const maxDuration = 15;
 export const dynamic = 'force-dynamic';
 
 // GET handler to retrieve a specific chat and its messages
-const GET_Handler: AuthenticatedRouteHandler = async (request: Request, context, user) => {
-    const { params } = context;
-    const chatId = params?.id;
+const GET_Handler: AuthenticatedRouteHandler = async (request: Request, context) => {
+    const { user } = context;
+    let chatId;
+
+    if (context.params) {
+        // Must await params in Next.js 15
+        const resolvedParams = await context.params;
+        chatId = resolvedParams.id;
+    }
 
     if (!chatId) {
-        return errorResponse('Chat ID is required', null, 400);
+        return handleCors(errorResponse('Chat ID is required', null, 400), request, true);
     }
 
     const operationId = `get_chat_${Math.random().toString(36).substring(2, 10)}`;
@@ -158,9 +164,16 @@ const GET_Handler: AuthenticatedRouteHandler = async (request: Request, context,
 export const GET = withAuth(GET_Handler);
 
 // PATCH handler to update chat metadata
-const PATCH_Handler: AuthenticatedRouteHandler = async (request: Request, context, user) => {
-    const { params } = context;
-    const chatId = params?.id;
+const PATCH_Handler: AuthenticatedRouteHandler = async (request: Request, context) => {
+    const { user } = context;
+    let chatId;
+
+    if (context.params) {
+        // Must await params in Next.js 15
+        const resolvedParams = await context.params;
+        chatId = resolvedParams.id;
+    }
+
     const operationId = `patch_chat_${Math.random().toString(36).substring(2, 10)}`;
 
     if (!chatId) {
@@ -267,9 +280,16 @@ const PATCH_Handler: AuthenticatedRouteHandler = async (request: Request, contex
 export const PATCH = withAuth(PATCH_Handler);
 
 // --- DELETE Handler --- 
-const DELETE_Handler: AuthenticatedRouteHandler = async (request: Request, context, user) => {
-    const { params } = context;
-    const chatId = params?.id;
+const DELETE_Handler: AuthenticatedRouteHandler = async (request: Request, context) => {
+    const { user } = context;
+    let chatId;
+
+    if (context.params) {
+        // Must await params in Next.js 15
+        const resolvedParams = await context.params;
+        chatId = resolvedParams.id;
+    }
+
     const operationId = `delete_chat_${Math.random().toString(36).substring(2, 10)}`;
 
     if (!chatId) {

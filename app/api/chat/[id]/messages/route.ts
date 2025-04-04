@@ -14,12 +14,18 @@ export const dynamic = 'force-dynamic';
 /**
  * GET handler to retrieve paginated messages for a specific chat
  */
-const GET_Handler: AuthenticatedRouteHandler = async (request: Request, context, user) => {
-    const { params } = context;
-    const chatId = params?.id;
+const GET_Handler: AuthenticatedRouteHandler = async (request: Request, context) => {
+    const { user } = context;
+    let chatId;
+
+    if (context.params) {
+        // Must await params in Next.js 15
+        const resolvedParams = await context.params;
+        chatId = resolvedParams.id;
+    }
 
     if (!chatId) {
-        return errorResponse('Chat ID is required', null, 400);
+        return handleCors(errorResponse('Chat ID is required', null, 400), request, true);
     }
 
     const operationId = `messages_${Math.random().toString(36).substring(2, 10)}`;
@@ -41,11 +47,11 @@ const GET_Handler: AuthenticatedRouteHandler = async (request: Request, context,
         });
 
         if (isNaN(page) || page < 1) {
-            return errorResponse('Invalid page number', null, 400);
+            return handleCors(errorResponse('Invalid page number', null, 400), request, true);
         }
 
         if (isNaN(pageSize) || pageSize < 1 || pageSize > 100) {
-            return errorResponse('Invalid page size', null, 400);
+            return handleCors(errorResponse('Invalid page size', null, 400), request, true);
         }
 
         // Create Supabase client
@@ -72,7 +78,7 @@ const GET_Handler: AuthenticatedRouteHandler = async (request: Request, context,
                 pageSize
             });
 
-            return errorResponse('Failed to fetch messages', error);
+            return handleCors(errorResponse('Failed to fetch messages', error), request, true);
         }
 
         // Transform database records to Message format

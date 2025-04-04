@@ -3,17 +3,22 @@ import { type User } from '@supabase/supabase-js';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { clientCache } from '@/lib/cache/client-cache';
 import { successResponse, errorResponse } from '@/lib/utils/route-handler';
+import { handleCors } from '@/lib/utils/http-utils';
 import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
 // History cache is defined in the history route.ts file
 // This is a reference to the same cache mechanism
 const historyCache = new Map<string, { data: any, timestamp: number }>();
 
-// Update signature
-const POST_Handler: AuthenticatedRouteHandler = async (request, context, user) => {
+/**
+ * POST handler to invalidate cached chat history for a user
+ */
+const POST_Handler: AuthenticatedRouteHandler = async (request, context) => {
+    const { user } = context;
     const operationId = `invalidate_${Math.random().toString(36).substring(2, 10)}`;
 
     try {

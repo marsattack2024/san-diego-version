@@ -13,12 +13,18 @@ export const dynamic = 'force-dynamic';
 /**
  * GET handler to count total messages for a specific chat
  */
-const GET_Handler: AuthenticatedRouteHandler = async (request: Request, context, user) => {
-    const { params } = context;
-    const chatId = params?.id;
+const GET_Handler: AuthenticatedRouteHandler = async (request: Request, context) => {
+    const { user } = context;
+    let chatId;
+
+    if (context.params) {
+        // Must await params in Next.js 15
+        const resolvedParams = await context.params;
+        chatId = resolvedParams.id;
+    }
 
     if (!chatId) {
-        return errorResponse('Chat ID is required', null, 400);
+        return handleCors(errorResponse('Chat ID is required', null, 400), request, true);
     }
 
     const operationId = `count_${Math.random().toString(36).substring(2, 10)}`;
@@ -46,7 +52,7 @@ const GET_Handler: AuthenticatedRouteHandler = async (request: Request, context,
                 chatId: chatId.slice(0, 8)
             });
 
-            return errorResponse('Failed to count messages', error);
+            return handleCors(errorResponse('Failed to count messages', error), request, true);
         }
 
         edgeLogger.info('Successfully counted chat messages', {
