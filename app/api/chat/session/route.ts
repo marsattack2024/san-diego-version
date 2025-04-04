@@ -1,220 +1,216 @@
-import { edgeLogger } from '@/lib/logger/edge-logger';
-import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { z } from 'zod';
-import { successResponse, errorResponse, unauthorizedError, validationError } from '@/lib/utils/route-handler';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
-import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { successResponse, errorResponse, validationError, unauthorizedError } from '@/lib/utils/route-handler';
 import { handleCors } from '@/lib/utils/http-utils';
-import type { User } from '@supabase/supabase-js';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import type { User } from '@supabase/supabase-js'; // Keep for manual auth check
+import { type Session } from '@supabase/supabase-js'; // Keep
+import { z } from 'zod'; // Keep for validation
 
 // Declare edge runtime
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
-const sessionSchema = z.object({
-    id: z.string().uuid(),
+// Zod schema for POST request body validation
+const CreateSessionSchema = z.object({
     title: z.string().optional(),
-    agentId: z.string().optional(),
-    deepSearchEnabled: z.boolean().optional()
+    agent_id: z.string().optional(),
+    deep_search_enabled: z.boolean().optional()
 });
 
-/**
- * POST handler to create a new chat session
- */
-const POST_Handler: AuthenticatedRouteHandler = async (request, context) => {
-    const { user } = context;
-    const operationId = `create_session_${Math.random().toString(36).substring(2, 10)}`;
-
-    edgeLogger.debug('Creating new chat session', {
-        category: LOG_CATEGORIES.CHAT,
-        operation: 'session_create',
-        operationId,
-        userId: user.id.substring(0, 8) + '...'
-    });
+// --- POST Handler (Pattern B - Direct Export) ---
+export async function POST(request: Request): Promise<Response> { // Direct export
+    const operationId = `post_session_${Math.random().toString(36).substring(2, 10)}`;
 
     try {
-        const body = await request.json();
-        edgeLogger.debug('Request body', {
+        // Manual Auth Check
+        const supabase = await createRouteHandlerClient();
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+        if (authError || !user) {
+            edgeLogger.warn('Authentication required for POST session', {
+                category: LOG_CATEGORIES.AUTH,
+                operationId,
+                error: authError?.message
+            });
+            const errRes = unauthorizedError('Authentication required');
+            return handleCors(errRes, request, true);
+        }
+        const userId = user.id;
+
+        // Validate Request Body
+        let body;
+        try {
+            body = await request.json();
+        } catch (e) {
+            const errRes = validationError('Invalid JSON body');
+            return handleCors(errRes, request, true);
+        }
+        const validationResult = CreateSessionSchema.safeParse(body);
+        if (!validationResult.success) {
+            const errRes = validationError('Invalid request body', validationResult.error.format());
+            return handleCors(errRes, request, true);
+        }
+        const { title, agent_id, deep_search_enabled } = validationResult.data;
+
+        edgeLogger.info('Creating new chat session', {
             category: LOG_CATEGORIES.CHAT,
-            operation: 'session_create',
             operationId,
-            body
+            userId: userId.substring(0, 8),
+            title: title,
+            agent_id: agent_id
         });
 
-        const result = sessionSchema.safeParse(body);
-        if (!result.success) {
-            edgeLogger.error('Invalid request body', {
-                category: LOG_CATEGORIES.CHAT,
-                operation: 'session_create_error',
-                operationId,
-                errors: result.error.format()
-            });
-            return handleCors(validationError('Invalid request body', result.error.format()), request, true);
-        }
-
-        const { id, title, agentId, deepSearchEnabled } = result.data;
-
-        if (!id) {
-            edgeLogger.error('Missing session ID', {
-                category: LOG_CATEGORIES.CHAT,
-                operation: 'session_create_error',
-                operationId
-            });
-            return handleCors(validationError('Missing session ID'), request, true);
-        }
-
-        // Create the Supabase client
-        const supabase = await createRouteHandlerClient();
-
-        // Create the session
-        const { data: sessionData, error: sessionError } = await supabase
-            .from('sd_chat_sessions')
+        // Insert new session into the database
+        // Generate session_id if 'id' wasn't provided in schema (adjusting schema might be better)
+        // For now, assume sd_sessions auto-generates session_id or use UUID
+        const { data: newSession, error: insertError } = await supabase
+            .from('sd_sessions')
             .insert({
-                id,
-                title: title || 'Untitled Conversation',
-                user_id: user.id,
-                agent_id: agentId,
-                deep_search_enabled: deepSearchEnabled || false,
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
+                user_id: userId,
+                title: title || 'New Chat',
+                agent_id: agent_id,
+                deep_search_enabled: deep_search_enabled || false
+                // created_at, updated_at usually handled by DB default
+                // session_id might be auto-generated by DB trigger or default
             })
-            .select()
+            .select() // Select the newly inserted row
             .single();
 
-        if (sessionError) {
+        if (insertError) {
             edgeLogger.error('Error creating chat session', {
-                category: LOG_CATEGORIES.CHAT,
-                operation: 'session_create_error',
+                category: LOG_CATEGORIES.DB,
                 operationId,
-                sessionId: id,
-                error: sessionError.message,
-                important: true
+                userId: userId.substring(0, 8),
+                error: insertError.message
             });
-
-            return handleCors(errorResponse('Error creating chat session', sessionError.message, 500), request, true);
+            const errRes = errorResponse('Failed to create chat session', insertError);
+            return handleCors(errRes, request, true);
         }
 
-        edgeLogger.info('Chat session created successfully', {
+        if (!newSession) {
+            edgeLogger.error('Session data unexpectedly null after insert', { operationId, userId: userId.substring(0, 8) });
+            const errRes = errorResponse('Failed to retrieve session after creation', null, 500);
+            return handleCors(errRes, request, true);
+        }
+
+        edgeLogger.info('Successfully created chat session', {
             category: LOG_CATEGORIES.CHAT,
-            operation: 'session_create_success',
             operationId,
-            sessionId: id
+            userId: userId.substring(0, 8),
+            sessionId: newSession.session_id // Use actual column name
         });
 
-        return handleCors(successResponse(sessionData), request, true);
+        // Return the newly created session data
+        const response = successResponse(newSession);
+        return handleCors(response, request, true);
+
     } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
         edgeLogger.error('Unexpected error creating chat session', {
-            category: LOG_CATEGORIES.CHAT,
-            operation: 'session_create_error',
+            category: LOG_CATEGORIES.SYSTEM,
             operationId,
-            error: error instanceof Error ? error.message : String(error),
-            important: true
+            error: errorMsg
         });
-
-        return handleCors(
-            errorResponse(
-                'Unexpected error creating chat session',
-                error instanceof Error ? error.message : String(error),
-                500
-            ),
-            request,
-            true
-        );
+        const errRes = errorResponse('Unexpected error creating session', error, 500);
+        return handleCors(errRes, request, true);
     }
-};
-export const POST = withAuth(POST_Handler);
+}
 
-/**
- * GET handler to retrieve all sessions for the authenticated user
- */
-const GET_Handler: AuthenticatedRouteHandler = async (request, context) => {
-    const { user } = context;
+// --- GET Handler (Pattern B - Direct Export) ---
+export async function GET(request: Request): Promise<Response> { // Direct export
     const operationId = `get_sessions_${Math.random().toString(36).substring(2, 10)}`;
 
-    edgeLogger.debug('Retrieving chat sessions', {
-        category: LOG_CATEGORIES.CHAT,
-        operation: 'sessions_get',
-        operationId,
-        userId: user.id.substring(0, 8) + '...'
-    });
-
     try {
-        // Get Supabase client with the standardized utility
+        // Manual Auth Check
         const supabase = await createRouteHandlerClient();
-        edgeLogger.debug('Created Supabase client for session fetch', {
-            category: LOG_CATEGORIES.CHAT,
-            operation: 'sessions_get',
-            operationId
-        });
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
 
-        // Get the user's chat sessions (RLS handles authorization)
-        edgeLogger.debug('Fetching sessions from database', {
-            category: LOG_CATEGORIES.CHAT,
-            operation: 'sessions_get',
-            operationId,
-            userId: user.id
-        });
-
-        const { data: sessions, error } = await supabase
-            .from('sd_chat_sessions')
-            .select('id, title, created_at, updated_at, agent_id, user_id, deep_search_enabled')
-            .eq('user_id', user.id)
-            .order('updated_at', { ascending: false });
-
-        if (error) {
-            edgeLogger.error('Error fetching chat sessions', {
-                category: LOG_CATEGORIES.CHAT,
-                operation: 'sessions_get',
+        if (authError || !user) {
+            edgeLogger.warn('Authentication required for GET sessions', {
+                category: LOG_CATEGORIES.AUTH,
                 operationId,
-                userId: user.id,
-                error: error.message,
-                important: true
+                error: authError?.message
             });
+            const errRes = unauthorizedError('Authentication required');
+            return handleCors(errRes, request, true);
+        }
+        const userId = user.id;
 
-            return handleCors(errorResponse('Failed to fetch chat sessions', error.message, 500), request, true);
+        // Extract pagination params from URL
+        const url = new URL(request.url);
+        const pageParam = url.searchParams.get('page');
+        const pageSizeParam = url.searchParams.get('pageSize');
+
+        const page = pageParam ? parseInt(pageParam, 10) : 1;
+        const pageSize = pageSizeParam ? parseInt(pageSizeParam, 10) : 20; // Default page size
+        const offset = (page - 1) * pageSize;
+
+        // Validate pagination params
+        if (isNaN(page) || page < 1) {
+            const errRes = validationError('Invalid page number');
+            return handleCors(errRes, request, true);
+        }
+        if (isNaN(pageSize) || pageSize < 1 || pageSize > 100) { // Add upper limit
+            const errRes = validationError(`Invalid page size (must be 1-100)`);
+            return handleCors(errRes, request, true);
         }
 
-        edgeLogger.info('Chat sessions retrieved successfully', {
+        edgeLogger.info('Fetching user chat sessions', {
             category: LOG_CATEGORIES.CHAT,
-            operation: 'sessions_get',
             operationId,
-            userId: user.id,
+            userId: userId.substring(0, 8),
+            page,
+            pageSize
+        });
+
+        // Fetch sessions for the user (RLS enforced)
+        const { data: sessions, error: fetchError } = await supabase
+            .from('sd_sessions')
+            .select('session_id, title, created_at, updated_at, agent_id, deep_search_enabled') // Select actual columns
+            .eq('user_id', userId)
+            .order('updated_at', { ascending: false }) // Most recent first
+            .range(offset, offset + pageSize - 1);
+
+        if (fetchError) {
+            edgeLogger.error('Error fetching chat sessions', {
+                category: LOG_CATEGORIES.DB,
+                operationId,
+                userId: userId.substring(0, 8),
+                error: fetchError.message
+            });
+            const errRes = errorResponse('Failed to fetch chat sessions', fetchError);
+            return handleCors(errRes, request, true);
+        }
+
+        edgeLogger.info('Successfully fetched chat sessions', {
+            category: LOG_CATEGORIES.CHAT,
+            operationId,
+            userId: userId.substring(0, 8),
             count: sessions?.length || 0,
-            sessionIds: sessions?.slice(0, 3).map(s => s.id.substring(0, 8)) || []
+            page,
+            pageSize
         });
 
-        // Return sessions with proper metadata
-        return handleCors(
-            successResponse({
-                sessions: sessions || [],
-                meta: {
-                    count: sessions?.length || 0,
-                    userId: user.id.substring(0, 8), // Only return partial ID for privacy
-                    timestamp: new Date().toISOString()
-                }
-            }),
-            request,
-            true
-        );
+        // Return sessions wrapped in a standard structure if desired, or just the array
+        const response = successResponse({
+            sessions: sessions || [],
+            meta: { count: sessions?.length || 0 } // Example metadata
+        });
+        return handleCors(response, request, true);
+
     } catch (error) {
-        edgeLogger.error('Exception in chat sessions API', {
-            category: LOG_CATEGORIES.CHAT,
-            operation: 'sessions_get',
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        edgeLogger.error('Unexpected error fetching chat sessions', {
+            category: LOG_CATEGORIES.SYSTEM,
             operationId,
-            error: error instanceof Error ? error.message : String(error),
-            stack: error instanceof Error ? error.stack : undefined,
-            important: true
+            error: errorMsg
         });
-
-        return handleCors(
-            errorResponse(
-                'Failed to fetch chat sessions',
-                error instanceof Error ? error.message : String(error),
-                500
-            ),
-            request,
-            true
-        );
+        const errRes = errorResponse('Unexpected error fetching sessions', error, 500);
+        return handleCors(errRes, request, true);
     }
-};
-export const GET = withAuth(GET_Handler); 
+}
+
+// Remove exports that used withAuth
+// export const POST = withAuth(POST_Handler);
+// export const GET = withAuth(GET_Handler); 

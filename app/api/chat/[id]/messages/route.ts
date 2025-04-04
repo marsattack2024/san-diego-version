@@ -1,130 +1,148 @@
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import type { Message } from 'ai';
-import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { successResponse, errorResponse, validationError, unauthorizedError } from '@/lib/utils/route-handler';
 import type { IdParam } from '@/lib/types/route-handlers';
 import { handleCors } from '@/lib/utils/http-utils';
-import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
-import type { User } from '@supabase/supabase-js';
-import { type NextRequest } from 'next/server';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { type User } from '@supabase/supabase-js';
 
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
+const DEFAULT_PAGE_SIZE = 20;
+
 /**
- * GET handler to retrieve paginated messages for a specific chat
+ * GET handler to retrieve paginated messages for a specific chat (Using Pattern B - Direct Export)
  */
-const GET_Handler: AuthenticatedRouteHandler = async (request: Request, context) => {
-    const { user } = context;
-    let chatId;
-
-    if (context.params) {
-        // Must await params in Next.js 15
-        const resolvedParams = await context.params;
-        chatId = resolvedParams.id;
-    }
-
-    if (!chatId) {
-        return handleCors(errorResponse('Chat ID is required', null, 400), request, true);
-    }
-
-    const operationId = `messages_${Math.random().toString(36).substring(2, 10)}`;
+export async function GET(
+    request: Request,
+    { params }: IdParam // Use specific type and destructure params promise
+): Promise<Response> {
+    const operationId = `get_msgs_${Math.random().toString(36).substring(2, 10)}`;
 
     try {
-        // Get pagination params
-        const url = new URL(request.url);
-        const { searchParams } = url;
-        const page = parseInt(searchParams.get('page') || '1');
-        const pageSize = parseInt(searchParams.get('pageSize') || '100'); // Default to larger page size
+        // Manually create client and check auth
+        const supabase = await createRouteHandlerClient();
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
 
-        edgeLogger.info('Fetching messages', {
-            operation: 'fetch_messages',
+        if (authError || !user) {
+            edgeLogger.warn('Authentication required for getting messages', {
+                category: LOG_CATEGORIES.AUTH,
+                operationId,
+                error: authError?.message || 'No authenticated user',
+            });
+            const errRes = unauthorizedError('Authentication required');
+            return handleCors(errRes, request, true);
+        }
+
+        // Await params *after* auth check
+        const resolvedParams = await params; // Await the destructured params promise
+        const chatId = resolvedParams.id;
+
+        // Validate chatId after resolution
+        if (!chatId) {
+            const errRes = validationError('Chat ID is required');
+            return handleCors(errRes, request, true);
+        }
+
+        // Extract pagination params from URL
+        const url = new URL(request.url);
+        const pageParam = url.searchParams.get('page');
+        const pageSizeParam = url.searchParams.get('pageSize');
+
+        const page = pageParam ? parseInt(pageParam, 10) : 1;
+        const pageSize = pageSizeParam ? parseInt(pageSizeParam, 10) : DEFAULT_PAGE_SIZE;
+        const offset = (page - 1) * pageSize;
+
+        // Validate pagination params
+        if (isNaN(page) || page < 1) {
+            return handleCors(validationError('Invalid page number'), request, true);
+        }
+        if (isNaN(pageSize) || pageSize < 1 || pageSize > 100) { // Add upper limit
+            return handleCors(validationError(`Invalid page size (must be 1-${DEFAULT_PAGE_SIZE * 5})`), request, true);
+        }
+
+        edgeLogger.info('Fetching chat messages', {
+            category: LOG_CATEGORIES.CHAT,
             operationId,
-            chatId: chatId.slice(0, 8), // Only log partial ID for privacy
+            chatId: chatId.slice(0, 8),
             userId: user.id.substring(0, 8),
+            page,
+            pageSize,
+            offset
+        });
+
+        // Fetch messages (assuming RLS)
+        const { data: messages, error } = await supabase
+            .from('sd_chat_histories')
+            .select('role, content')
+            .eq('session_id', chatId)
+            .order('created_at', { ascending: true })
+            .range(offset, offset + pageSize - 1);
+
+        if (error) {
+            edgeLogger.error('Error fetching chat messages', {
+                category: LOG_CATEGORIES.DB,
+                operationId,
+                error: error.message,
+                chatId: chatId.slice(0, 8)
+            });
+            const errRes = errorResponse('Failed to fetch messages', error);
+            return handleCors(errRes, request, true);
+        }
+
+        edgeLogger.info('Successfully fetched chat messages', {
+            category: LOG_CATEGORIES.CHAT,
+            operationId,
+            chatId: chatId.slice(0, 8),
+            count: messages?.length || 0,
             page,
             pageSize
         });
 
-        if (isNaN(page) || page < 1) {
-            return handleCors(errorResponse('Invalid page number', null, 400), request, true);
-        }
+        // Format messages for Vercel AI SDK, handling role mismatches
+        const formattedMessages: Message[] = messages?.map(msg => {
+            let role: Message['role'];
+            switch (msg.role) {
+                case 'user':
+                case 'assistant':
+                case 'system':
+                case 'data': // Assuming 'data' is supported by your Message type variant
+                    role = msg.role;
+                    break;
+                case 'function': // Map 'function' if necessary, e.g., to 'tool' or omit
+                    // For simplicity, let's map function/tool to assistant for now
+                    // or filter them out if they shouldn't reach the AI SDK client
+                    role = 'assistant'; // Or potentially filter: return null;
+                    break;
+                case 'tool':
+                    role = 'assistant'; // Map 'tool' to assistant if not directly supported
+                    break;
+                default:
+                    // Handle unexpected roles, maybe default or log an error
+                    edgeLogger.warn('Unsupported message role encountered', { operationId, role: msg.role });
+                    role = 'assistant'; // Defaulting unknown roles
+            }
 
-        if (isNaN(pageSize) || pageSize < 1 || pageSize > 100) {
-            return handleCors(errorResponse('Invalid page size', null, 400), request, true);
-        }
+            return {
+                id: Math.random().toString(36).substring(2, 15), // AI SDK might need IDs
+                role: role, // Use the validated/mapped role
+                content: msg.content
+            };
+        }).filter(msg => msg !== null) as Message[] || []; // Filter out nulls if you chose to filter roles
 
-        // Create Supabase client
-        const supabase = await createRouteHandlerClient();
-
-        // Calculate offset for pagination
-        const offset = (page - 1) * pageSize;
-
-        // Query the database for the messages - RLS handles user auth
-        const { data, error } = await supabase
-            .from('sd_chat_histories')
-            .select('*')
-            .eq('session_id', chatId)
-            .order('created_at', { ascending: true }) // Oldest first
-            .range(offset, offset + pageSize - 1);
-
-        if (error) {
-            edgeLogger.error('Error fetching messages', {
-                operation: 'fetch_messages',
-                operationId,
-                error: error.message,
-                chatId: chatId.slice(0, 8),
-                page,
-                pageSize
-            });
-
-            return handleCors(errorResponse('Failed to fetch messages', error), request, true);
-        }
-
-        // Transform database records to Message format
-        const messages: Message[] = data.map((record: any) => ({
-            id: record.id,
-            role: record.role,
-            content: record.content,
-            createdAt: record.created_at,
-            toolsUsed: record.tools_used
-        }));
-
-        // Log the result
-        edgeLogger.info('Successfully fetched messages', {
-            operation: 'fetch_messages',
-            operationId,
-            chatId: chatId.slice(0, 8),
-            page,
-            pageSize,
-            count: messages.length
-        });
-
-        // Add DEBUG logging to check message content
-        if (messages.length > 0) {
-            edgeLogger.debug('Message sample', {
-                operation: 'fetch_messages',
-                operationId,
-                firstMessageId: messages[0].id,
-                messageCount: messages.length,
-                firstMessageContent: messages[0].content.substring(0, 100) + '...'
-            });
-        }
-
-        // Return success response with CORS headers
-        const response = successResponse(messages);
+        const response = successResponse({ messages: formattedMessages });
         return handleCors(response, request, true);
+
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        edgeLogger.error('Unexpected error fetching messages', {
-            operation: 'fetch_messages',
+        edgeLogger.error('Unexpected error fetching chat messages', {
+            category: LOG_CATEGORIES.SYSTEM,
+            operationId,
             error: errorMsg
         });
-        // Return error response with CORS headers
-        const response = errorResponse('Unexpected error fetching messages', error, 500);
-        return handleCors(response, request, true);
+        const errRes = errorResponse('Unexpected error fetching chat messages', error, 500);
+        return handleCors(errRes, request, true);
     }
-};
-
-// Apply withAuth wrapper
-export const GET = withAuth(GET_Handler); 
+} 

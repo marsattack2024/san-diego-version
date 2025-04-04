@@ -1,11 +1,10 @@
-import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
-import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
-import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
-import type { User } from '@supabase/supabase-js';
-import type { IdParam } from '@/lib/types/route-handlers'; // Import IdParam for DELETE
-import { historyService } from '@/lib/api/history-service'; // <-- Import historyService
-import { LOG_CATEGORIES } from '@/lib/logger/constants'; // Import LOG_CATEGORIES if not already present
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { successResponse, errorResponse, validationError, unauthorizedError } from '@/lib/utils/route-handler';
+import { handleCors } from '@/lib/utils/http-utils';
+import { type User } from '@supabase/supabase-js';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { clientCache } from '@/lib/cache/client-cache';
 
 /**
  * History API Route
@@ -18,101 +17,190 @@ import { LOG_CATEGORIES } from '@/lib/logger/constants'; // Import LOG_CATEGORIE
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
-// LRU Cache for server-side history caching across requests
-const historyCache = new Map<string, { data: any, timestamp: number }>();
-const CACHE_TTL = 30 * 1000; // 30 seconds in milliseconds
-const MAX_CACHE_ITEMS = 1000;
+// Simple in-memory cache for the edge runtime
+// Consider a more robust distributed cache (like Upstash/Redis) for production scale
+const historyCache = new Map<string, { data: any; timestamp: number }>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-function getCachedHistory(userId: string) {
-  const cacheKey = `history:${userId}`;
-  const cachedItem = historyCache.get(cacheKey);
-
-  if (cachedItem && (Date.now() - cachedItem.timestamp) < CACHE_TTL) {
-    return cachedItem.data;
-  }
-
-  return null;
-}
-
-function setCachedHistory(userId: string, data: any) {
-  const cacheKey = `history:${userId}`;
-
-  // If cache is getting too large, remove oldest entries
-  if (historyCache.size >= MAX_CACHE_ITEMS) {
-    const entries = Array.from(historyCache.entries());
-    // Sort by timestamp (oldest first)
-    entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
-    // Remove oldest 10% of entries
-    const deleteCount = Math.ceil(MAX_CACHE_ITEMS * 0.1);
-    entries.slice(0, deleteCount).forEach(([key]) => historyCache.delete(key));
-  }
-
-  historyCache.set(cacheKey, {
-    data,
-    timestamp: Date.now()
-  });
-}
-
-// Define GET handler for retrieving user's chat history
-const GET_Handler: AuthenticatedRouteHandler = async (request, context) => {
-  const { user } = context;
-  const operationId = `get_history_${Math.random().toString(36).substring(2, 10)}`;
+// --- GET Handler (Pattern B - Direct Export) ---
+export async function GET(request: Request): Promise<Response> {
+  const operationId = `get_hist_${Math.random().toString(36).substring(2, 10)}`;
 
   try {
-    edgeLogger.info('Fetching chat history', { category: LOG_CATEGORIES.CHAT, userId: user.id.substring(0, 8), operationId });
+    // Manual Auth Check
     const supabase = await createRouteHandlerClient();
-    // Use fetchHistory method
-    const data = await historyService.fetchHistory(supabase);
-    edgeLogger.info('Successfully fetched chat history', { category: LOG_CATEGORIES.CHAT, userId: user.id.substring(0, 8), operationId, count: data.length });
-    return successResponse(data);
-  } catch (error) {
-    edgeLogger.error('Error fetching chat history', {
-      category: LOG_CATEGORIES.CHAT,
-      operationId,
-      userId: user.id.substring(0, 8),
-      error: error instanceof Error ? error.message : String(error),
-      important: true
-    });
-    return errorResponse('Failed to fetch chat history', error instanceof Error ? error : String(error), 500); // Ensure error type
-  }
-};
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
 
-// Define DELETE handler for removing a chat from history
-const DELETE_Handler: AuthenticatedRouteHandler = async (request, context) => {
-  const { user } = context;
-  const url = new URL(request.url);
-  const chatId = url.searchParams.get('id');
-  const operationId = `delete_history_${Math.random().toString(36).substring(2, 10)}`;
-
-  if (!chatId) {
-    return errorResponse('Chat ID query parameter is required', null, 400);
-  }
-
-  try {
-    edgeLogger.info('Deleting chat history item', { category: LOG_CATEGORIES.CHAT, userId: user.id.substring(0, 8), chatId, operationId });
-    const supabase = await createRouteHandlerClient();
-    const success = await historyService.deleteChat(supabase, chatId);
-
-    if (success) {
-      edgeLogger.info('Successfully deleted chat history item', { category: LOG_CATEGORIES.CHAT, userId: user.id.substring(0, 8), chatId, operationId });
-      return successResponse({ message: 'Chat deleted successfully' });
-    } else {
-      edgeLogger.error('History service failed to delete chat', { category: LOG_CATEGORIES.CHAT, userId: user.id.substring(0, 8), chatId, operationId, important: true });
-      return errorResponse('Failed to delete chat via service', null, 500);
+    if (authError || !user) {
+      edgeLogger.warn('Authentication required for GET history', {
+        category: LOG_CATEGORIES.AUTH,
+        operationId,
+        error: authError?.message
+      });
+      const errRes = unauthorizedError('Authentication required');
+      return handleCors(errRes, request, true);
     }
-  } catch (error) { // <-- Add catch block
-    edgeLogger.error('Error deleting chat history item', {
+    const userId = user.id;
+
+    edgeLogger.info('Fetching chat history for user', {
       category: LOG_CATEGORIES.CHAT,
       operationId,
-      userId: user.id.substring(0, 8),
-      chatId,
-      error: error instanceof Error ? error.message : String(error),
+      userId: userId.substring(0, 8)
+    });
+
+    // Check cache first
+    const cached = historyCache.get(userId);
+    if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+      edgeLogger.info('Returning cached history', {
+        category: LOG_CATEGORIES.CACHE,
+        operationId,
+        userId: userId.substring(0, 8)
+      });
+      return handleCors(successResponse(cached.data), request, true);
+    }
+
+    // Fetch history from DB if not cached or expired
+    const { data: history, error: dbError } = await supabase
+      .from('sd_sessions')
+      .select('session_id, title, updated_at') // Fetch only necessary fields
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false })
+      .limit(50); // Limit history entries
+
+    if (dbError) {
+      edgeLogger.error('Error fetching history from DB', {
+        category: LOG_CATEGORIES.DB,
+        operationId,
+        userId: userId.substring(0, 8),
+        error: dbError.message
+      });
+      const errRes = errorResponse('Failed to fetch history', dbError);
+      return handleCors(errRes, request, true);
+    }
+
+    // Format data (optional, depends on frontend needs)
+    const formattedHistory = history?.map(h => ({
+      id: h.session_id,
+      title: h.title || 'Untitled Chat',
+      lastUpdated: h.updated_at
+    })) || [];
+
+    // Update cache
+    historyCache.set(userId, { data: formattedHistory, timestamp: Date.now() });
+
+    edgeLogger.info('Successfully fetched and cached history', {
+      category: LOG_CATEGORIES.CHAT,
+      operationId,
+      userId: userId.substring(0, 8),
+      count: formattedHistory.length
+    });
+
+    const response = successResponse(formattedHistory);
+    return handleCors(response, request, true);
+
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    edgeLogger.error('Unexpected error fetching history', {
+      category: LOG_CATEGORIES.SYSTEM,
+      operationId,
+      error: errorMsg,
       important: true
     });
-    return errorResponse('Failed to delete chat history', error instanceof Error ? error : String(error), 500); // Ensure error type
+    const errRes = errorResponse('Unexpected error fetching history', error, 500);
+    return handleCors(errRes, request, true);
   }
-};
+}
 
-// Export handlers with auth wrapper
-export const GET = withAuth(GET_Handler);
-export const DELETE = withAuth(DELETE_Handler);
+// --- DELETE Handler (Pattern B - Direct Export) ---
+export async function DELETE(request: Request): Promise<Response> {
+  const operationId = `delete_hist_${Math.random().toString(36).substring(2, 10)}`;
+
+  try {
+    // Manual Auth Check
+    const supabase = await createRouteHandlerClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      edgeLogger.warn('Authentication required for DELETE history item', {
+        category: LOG_CATEGORIES.AUTH,
+        operationId,
+        error: authError?.message
+      });
+      const errRes = unauthorizedError('Authentication required');
+      return handleCors(errRes, request, true);
+    }
+    const userId = user.id;
+
+    // Extract chatId from query parameters
+    const url = new URL(request.url);
+    const chatId = url.searchParams.get('id');
+
+    if (!chatId) {
+      const errRes = validationError('Chat ID (id) query parameter is required for deletion');
+      return handleCors(errRes, request, true);
+    }
+
+    edgeLogger.info('Attempting to delete chat session from history', {
+      category: LOG_CATEGORIES.CHAT,
+      operationId,
+      userId: userId.substring(0, 8),
+      chatId: chatId.slice(0, 8)
+    });
+
+    // Delete the specific session (RLS enforced by user_id check)
+    // Consider deleting related messages if necessary
+    const { error: messagesError } = await supabase
+      .from('sd_chat_histories')
+      .delete()
+      .eq('session_id', chatId)
+      .eq('user_id', user.id);
+
+    if (messagesError) {
+      edgeLogger.error('Error deleting chat messages before session', { operationId, chatId: chatId.slice(0, 8), error: messagesError.message });
+      return handleCors(errorResponse('Failed to delete associated messages', messagesError), request, true);
+    }
+
+    const { error: sessionError } = await supabase
+      .from('sd_sessions')
+      .delete()
+      .eq('session_id', chatId)
+      .eq('user_id', userId);
+
+    if (sessionError) {
+      edgeLogger.error('Error deleting session from DB', {
+        category: LOG_CATEGORIES.DB,
+        operationId,
+        userId: userId.substring(0, 8),
+        chatId: chatId.slice(0, 8),
+        error: sessionError.message
+      });
+      const errRes = errorResponse('Failed to delete chat session', sessionError);
+      return handleCors(errRes, request, true);
+    }
+
+    // Invalidate cache after successful deletion
+    historyCache.delete(userId);
+    clientCache.remove(`history_${userId}`); // Also invalidate client-side cache if used
+
+    edgeLogger.info('Successfully deleted chat session and invalidated cache', {
+      category: LOG_CATEGORIES.CHAT,
+      operationId,
+      userId: userId.substring(0, 8),
+      chatId: chatId.slice(0, 8)
+    });
+
+    const response = successResponse({ deleted: true, id: chatId });
+    return handleCors(response, request, true);
+
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    edgeLogger.error('Unexpected error deleting history item', {
+      category: LOG_CATEGORIES.SYSTEM,
+      operationId,
+      error: errorMsg,
+      important: true
+    });
+    const errRes = errorResponse('Unexpected error deleting history item', error, 500);
+    return handleCors(errRes, request, true);
+  }
+}

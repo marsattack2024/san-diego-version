@@ -2,54 +2,72 @@ import { type NextRequest } from 'next/server';
 import { type User } from '@supabase/supabase-js';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { clientCache } from '@/lib/cache/client-cache';
-import { successResponse, errorResponse } from '@/lib/utils/route-handler';
+import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
 import { handleCors } from '@/lib/utils/http-utils';
-import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
-// History cache is defined in the history route.ts file
-// This is a reference to the same cache mechanism
+// History cache (simple in-memory for edge)
+// Consider moving to a shared cache module if used elsewhere
 const historyCache = new Map<string, { data: any, timestamp: number }>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 /**
- * POST handler to invalidate cached chat history for a user
+ * POST handler to invalidate cached chat history for a user (Pattern B - Direct Export)
  */
-const POST_Handler: AuthenticatedRouteHandler = async (request, context) => {
-    const { user } = context;
-    const operationId = `invalidate_${Math.random().toString(36).substring(2, 10)}`;
+export async function POST(request: Request): Promise<Response> {
+    const operationId = `invalidate_hist_${Math.random().toString(36).substring(2, 10)}`;
 
     try {
-        // Clear cache for this specific user
-        const cacheKey = `history:${user.id}`;
-        const hadCache = historyCache.has(cacheKey);
-        historyCache.delete(cacheKey);
+        // Manual Auth Check
+        const supabase = await createRouteHandlerClient();
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
 
-        edgeLogger.info('History cache invalidated for user', {
-            category: LOG_CATEGORIES.SYSTEM,
-            userId: user.id.substring(0, 8) + '...',
-            hadCache,
-            operationId
+        if (authError || !user) {
+            edgeLogger.warn('Authentication required for history invalidation', {
+                category: LOG_CATEGORIES.AUTH,
+                operationId,
+                error: authError?.message
+            });
+            const errRes = unauthorizedError('Authentication required');
+            return handleCors(errRes, request, true);
+        }
+        const userId = user.id;
+
+        edgeLogger.info('Invalidating history cache for user', {
+            category: LOG_CATEGORIES.CACHE,
+            operationId,
+            userId: userId.substring(0, 8)
         });
 
-        return successResponse({
-            success: true,
-            message: 'Cache invalidated'
+        // Invalidate the cache for the specific user
+        // This uses the simplified clientCache - adapt if using a different mechanism
+        clientCache.remove(`history_${userId}`);
+        // Also clear the local map cache used in history/route.ts if necessary
+        // (This implies potential inconsistency if not using a shared cache store like Redis/Upstash)
+        historyCache.delete(userId);
+
+        edgeLogger.info('History cache invalidated successfully', {
+            category: LOG_CATEGORIES.CACHE,
+            operationId,
+            userId: userId.substring(0, 8)
         });
+
+        const response = successResponse({ message: 'History cache invalidated' });
+        return handleCors(response, request, true);
 
     } catch (error) {
-        edgeLogger.error('Error in history invalidation', {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        edgeLogger.error('Unexpected error invalidating history cache', {
             category: LOG_CATEGORIES.SYSTEM,
-            error: error instanceof Error ? error.message : String(error),
-            operationId
+            operationId,
+            error: errorMsg,
+            important: true
         });
-
-        // Return error response
-        return errorResponse('Server error during cache invalidation', error, 500);
+        const errRes = errorResponse('Unexpected error invalidating cache', error, 500);
+        return handleCors(errRes, request, true);
     }
-};
-
-// Apply withAuth wrapper
-export const POST = withAuth(POST_Handler); 
+} 
