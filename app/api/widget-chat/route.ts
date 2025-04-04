@@ -19,7 +19,7 @@ export const runtime = 'edge';
 export const maxDuration = 30; // 30 seconds max duration for widget requests
 
 // Define request schema for validation
-const widgetRequestSchema = z.object({
+export const widgetRequestSchema = z.object({
   message: z.string().optional(),
   messages: z.array(z.object({
     role: z.enum(['user', 'assistant', 'system', 'tool', 'function']),

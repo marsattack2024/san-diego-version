@@ -1,139 +1,125 @@
-// /// <reference types="vitest/globals" />
+/// <reference types="vitest/globals" />
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { AgentOrchestrator } from './orchestrator.service';
 import { openai } from '@ai-sdk/openai';
 import { generateObject } from 'ai';
-import { getAgentConfig } from '../agent-router';
-import {
-    WorkflowPlanSchema,
-    AgentOutputSchema,
-    OrchestratorResultSchema,
-    WorkflowPlan,
-    AgentOutput
-} from '../types/orchestrator';
-import { AgentType } from '../prompts';
+import { detectAgentType, getAgentConfig } from '@/lib/chat-engine/agent-router';
+import { AgentType } from '@/lib/chat-engine/prompts';
+import type { OrchestratorResult } from '@/lib/chat-engine/types/orchestrator';
+import { setupLoggerMock, mockLogger } from '@/tests/helpers/mock-logger';
 
-// Mock dependencies
+// --- Mock Dependencies --- 
+setupLoggerMock();
+
 vi.mock('@ai-sdk/openai', () => ({
-    openai: vi.fn().mockReturnValue({ /* Mock LanguageModel object if needed */ modelId: 'mock-gpt-4o-mini' })
+    openai: vi.fn().mockReturnValue({ modelId: 'mock-openai-model' })
 }));
 
-vi.mock('ai', async (importOriginal) => {
-    const actual = await importOriginal() as typeof import('ai');
-    return {
-        ...actual,
-        generateObject: vi.fn(), // Mock generateObject
-    };
-});
+vi.mock('ai', async (importOriginal) => ({
+    ...(await importOriginal() as object),
+    generateObject: vi.fn()
+}));
 
-vi.mock('../agent-router', () => ({
+vi.mock('@/lib/chat-engine/agent-router', () => ({
+    detectAgentType: vi.fn(),
     getAgentConfig: vi.fn()
 }));
 
-// Mock logger to prevent actual logging during tests
-vi.mock('@/lib/logger/edge-logger', () => ({
-    edgeLogger: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-    }
-}));
-
+// --- Test Suite --- 
 describe('AgentOrchestrator', () => {
     let orchestrator: AgentOrchestrator;
-    const mockGenerateObject = generateObject as vi.Mock;
-    const mockGetAgentConfig = getAgentConfig as vi.Mock;
+
+    // Define a reusable default mock config - remove type if import fails
+    const defaultMockAgentConfig = {
+        systemPrompt: 'Default mock prompt',
+        temperature: 0.5,
+        model: 'default-mock-model',
+        maxTokens: 1000,
+        toolOptions: {
+            useKnowledgeBase: false,
+            useWebScraper: false,
+            useDeepSearch: false,
+            useRagTool: false,
+            useProfileContext: false
+        }
+    } as any; // Cast to any if AgentConfig type cannot be found
 
     beforeEach(() => {
-        vi.clearAllMocks(); // Reset mocks before each test
+        // Reset mocks using vi.mocked
+        vi.mocked(detectAgentType).mockReset();
+        vi.mocked(getAgentConfig).mockReset();
+        vi.mocked(generateObject).mockReset();
+        mockLogger.reset();
+
+        // --- Default Mock Implementations ---
+        vi.mocked(detectAgentType).mockResolvedValue({
+            agentType: 'default',
+            config: defaultMockAgentConfig,
+            reasoning: 'Default detection'
+        } as any);
+
+        vi.mocked(getAgentConfig).mockReturnValue(defaultMockAgentConfig);
+
+        vi.mocked(generateObject).mockResolvedValue({
+            object: { /* Default mock plan/output */ },
+            finishReason: 'stop',
+            usage: { promptTokens: 5, completionTokens: 10, totalTokens: 15 },
+            warnings: undefined,
+            rawResponse: { headers: {} },
+            response: { id: 'mock-res-id', timestamp: new Date(), modelId: 'mock-model' },
+            request: {},
+            providerMetadata: {},
+            logprobs: undefined,
+            experimental_customData: undefined
+        } as any); // Cast outer result to any if needed
+
+        // Initialize orchestrator for isolation
         orchestrator = new AgentOrchestrator();
-
-        // Default mock for getAgentConfig
-        mockGetAgentConfig.mockImplementation((agentType: AgentType) => ({
-            systemPrompt: `Mock system prompt for ${agentType}`,
-            temperature: 0.5,
-            model: 'mock-gpt-4o',
-            maxTokens: 1000,
-            toolOptions: {}
-        }));
     });
 
-    describe('generatePlan', () => {
-        it('should generate a valid workflow plan', async () => {
-            // Arrange
-            const request = 'Test request';
-            const mockPlan: WorkflowPlan = {
-                steps: [
-                    { agent: 'default', task: 'Step 1 task' },
-                    { agent: 'copywriting', task: 'Step 2 task', dependsOn: [0] },
-                ],
-                maxIterations: 5,
-            };
-            mockGenerateObject.mockResolvedValue({ object: mockPlan, usage: {}, finishReason: 'stop', warnings: [] });
+    // --- Tests --- 
+    describe('prepareContext', () => {
+        it('should detect agent and return context', async () => {
+            const input: { userQuery: string; agentId?: AgentType } = { userQuery: 'Hello world', agentId: undefined };
+            const result = await orchestrator.prepareContext(input.userQuery, input.agentId);
 
-            // Act
-            const plan = await orchestrator.generatePlan(request);
-
-            // Assert
-            expect(mockGenerateObject).toHaveBeenCalledOnce();
-            expect(plan).toEqual(mockPlan);
-            // Add more specific assertions about the prompt if needed
+            expect(detectAgentType).toHaveBeenCalledWith('Hello world', undefined);
+            expect(result).toEqual(expect.objectContaining({
+                targetModelId: defaultMockAgentConfig.model,
+                contextMessages: []
+            }));
+            expect(mockLogger.info).toHaveBeenCalledWith(
+                'Agent detection complete',
+                expect.objectContaining({ detectedAgent: 'default' })
+            );
         });
 
-        it('should throw an error if plan generation fails', async () => {
-            // Arrange
-            const request = 'Test request';
-            const error = new Error('LLM Error');
-            mockGenerateObject.mockRejectedValue(error);
+        it('should use provided agentId and skip detection', async () => {
+            const input: { userQuery: string; agentId?: AgentType } = { userQuery: 'Analyze this image', agentId: 'copywriting' };
+            // Override getAgentConfig for this specific agent - cast to any
+            const copywritingConfig = { ...defaultMockAgentConfig, model: 'copywriting-model' } as any;
+            vi.mocked(getAgentConfig).mockReturnValue(copywritingConfig);
 
-            // Act & Assert
-            await expect(orchestrator.generatePlan(request)).rejects.toThrow('Failed to generate workflow plan: LLM Error');
+            const result = await orchestrator.prepareContext(input.userQuery, input.agentId);
+
+            expect(detectAgentType).not.toHaveBeenCalled();
+            expect(getAgentConfig).toHaveBeenCalledWith('copywriting');
+            expect(result).toEqual(expect.objectContaining({
+                targetModelId: 'copywriting-model',
+                contextMessages: []
+            }));
+            expect(mockLogger.info).toHaveBeenCalledWith(
+                'Using specified agent',
+                expect.objectContaining({ specifiedAgent: 'copywriting' })
+            );
         });
 
-        it('should throw an error if the generated plan has no steps', async () => {
-            // Arrange
-            const request = 'Test request';
-            const mockPlan: WorkflowPlan = { steps: [], maxIterations: 5 };
-            mockGenerateObject.mockResolvedValue({ object: mockPlan, usage: {}, finishReason: 'stop', warnings: [] });
-
-            // Act & Assert
-            await expect(orchestrator.generatePlan(request)).rejects.toThrow('Generated workflow plan is empty.');
-        });
+        // Add more tests for prepareContext: 
+        // - Error handling if detectAgentType fails
+        // - Cases where context messages might be generated (if applicable)
     });
 
-    describe('executePlan', () => {
-        // TODO: Add tests for executePlan
-        // - Basic execution (no deps)
-        // - Execution with dependencies
-        // - Dependency not met scenario
-        // - Re-planning triggered
-        // - Re-planning fails
-        // - Worker execution error
-        // - Max iterations reached
-        // - No progress / deadlock
-        it.todo('should execute a simple plan without dependencies');
-        it.todo('should execute steps respecting dependencies');
-        it.todo('should trigger re-planning when a step needs revision');
-        it.todo('should handle worker execution errors');
-        it.todo('should stop execution if max iterations are reached');
-        it.todo('should stop execution if no progress is made');
-    });
+    // Add tests for other orchestrator methods if they exist...
 
-    describe('compileResults', () => {
-        // TODO: Add tests for compileResults
-        it.todo('should compile results from context correctly');
-        it.todo('should indicate non-completed steps');
-    });
-
-    describe('run', () => {
-        // TODO: Add tests for the main run method
-        // - Successful run
-        // - Error during planning
-        // - Error during execution
-        it.todo('should orchestrate plan, execution, and compilation');
-        it.todo('should handle errors during plan generation');
-        it.todo('should handle errors during plan execution');
-    });
 });

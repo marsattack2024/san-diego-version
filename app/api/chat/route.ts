@@ -30,7 +30,7 @@ import type { User } from '@supabase/supabase-js'; // Import User type
 
 // Define request schema for validation
 // Based on useChat hook and experimental_prepareRequestBody in components/chat.tsx
-const chatRequestSchema = z.object({
+export const chatRequestSchema = z.object({
   id: z.string().uuid(), // Session ID
   message: z.object({ // Assuming only last message is sent
     id: z.string(),
@@ -48,11 +48,8 @@ export const runtime = 'edge';
 export const maxDuration = 120;
 export const dynamic = 'force-dynamic'; // Ensure dynamic behavior
 
-/**
- * POST handler for the chat route
- * Handles creation of new chat messages and streaming responses following Vercel AI SDK standard pattern.
- */
-export const POST = withAuth(async (user: User, request: Request): Promise<Response> => {
+// Define the core handler logic separately
+const POST_Handler = async (user: User, request: Request): Promise<Response> => {
   const operationId = `chat_${Math.random().toString(36).substring(2, 10)}`;
   const startTime = Date.now();
 
@@ -64,8 +61,13 @@ export const POST = withAuth(async (user: User, request: Request): Promise<Respo
 
   try {
     // 1. Parse and Validate Request Body
+    edgeLogger.debug('Attempting to parse request body', { operationId });
     const body = await request.json();
+    edgeLogger.debug('Successfully parsed request body', { operationId, body });
+
+    edgeLogger.debug('Attempting to validate schema', { operationId });
     const validationResult = chatRequestSchema.safeParse(body);
+    edgeLogger.debug('Schema validation result', { operationId, success: validationResult.success });
 
     if (!validationResult.success) {
       edgeLogger.warn('Invalid chat request body', {
@@ -75,6 +77,7 @@ export const POST = withAuth(async (user: User, request: Request): Promise<Respo
       });
       return validationError('Invalid request body', validationResult.error.format());
     }
+    edgeLogger.debug('Schema validation successful', { operationId });
 
     const {
       id: sessionId,
@@ -96,15 +99,23 @@ export const POST = withAuth(async (user: User, request: Request): Promise<Respo
     const persistenceService = new MessagePersistenceService();
 
     // 4. Load Message History (Needed for context)
+    edgeLogger.debug('Loading previous messages', { operationId, sessionId });
     const previousMessages = await persistenceService.loadMessages(sessionId, userId);
+    edgeLogger.debug('Loaded previous messages count:', { operationId, count: previousMessages.length });
 
     // Convert createdAt string to Date for userMessage before appending
+    edgeLogger.debug('Converting user message createdAt', { operationId, createdAt: userMessage.createdAt });
+    // Add safety check for undefined createdAt before calling new Date()
+    const createdAtDate = userMessage.createdAt ? new Date(userMessage.createdAt) : undefined;
     const userMessageForAppend = {
       ...userMessage,
-      createdAt: userMessage.createdAt ? new Date(userMessage.createdAt) : undefined
+      createdAt: createdAtDate
     };
+    edgeLogger.debug('Converted user message', { operationId, userMessageForAppend });
 
+    edgeLogger.debug('Appending client message to history', { operationId });
     const currentMessages = appendClientMessage({ messages: previousMessages, message: userMessageForAppend });
+    edgeLogger.debug('Appended message, current history length:', { operationId, length: currentMessages.length });
 
     // 5. Prepare Orchestration Context
     edgeLogger.info('Preparing orchestration context...', { operationId, sessionId, agentId });
@@ -226,7 +237,6 @@ export const POST = withAuth(async (user: User, request: Request): Promise<Respo
 
     // 7. Return Streaming Response
     return result.toDataStreamResponse();
-
   } catch (error) {
     edgeLogger.error('Unhandled error in main chat API', {
       category: LOG_CATEGORIES.CHAT,
@@ -243,4 +253,10 @@ export const POST = withAuth(async (user: User, request: Request): Promise<Respo
       500
     );
   }
-}); 
+};
+
+// Export the wrapped handler as the default POST endpoint
+export const POST = withAuth(POST_Handler);
+
+// Also export the unwrapped handler for testing
+export { POST_Handler }; 
