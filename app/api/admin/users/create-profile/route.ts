@@ -1,185 +1,149 @@
 import { cookies } from 'next/headers';
-import { createServerClient } from '@supabase/ssr';
+// import { createServerClient } from '@supabase/ssr'; // REMOVE
+import { createRouteHandlerClient, createRouteHandlerAdminClient } from '@/lib/supabase/route-client'; // ADD/Ensure both
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { successResponse, errorResponse, unauthorizedError, validationError } from '@/lib/utils/route-handler'; // Ensure validationError
+import { handleCors } from '@/lib/utils/http-utils'; // ADD
 import { SupabaseClient } from '@supabase/supabase-js';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic'; // ADD
 
 // Helper to check if a user is an admin
 async function isAdmin(supabase: SupabaseClient, userId: string): Promise<boolean> {
-  edgeLogger.debug('Checking admin status for user', {
-    category: LOG_CATEGORIES.AUTH,
-    userId
-  });
-
-  // Hard-code known admin users for now as a fallback
+  // Replace console logs with edgeLogger
+  edgeLogger.debug('Checking admin status for user', { category: LOG_CATEGORIES.AUTH, userId });
   const knownAdminIds = ['5c80df74-1e2b-4435-89eb-b61b740120e9'];
-
   try {
-    // Use the RPC function that checks sd_user_roles
     const { data, error } = await supabase.rpc('is_admin', { uid: userId });
-
     if (error) {
-      edgeLogger.error('Error checking admin status', {
-        category: LOG_CATEGORIES.AUTH,
-        error: error.message,
-        userId
-      });
-      // Fall back to hard-coded admin check
+      edgeLogger.error('Error checking admin status via RPC', { category: LOG_CATEGORIES.AUTH, error: error.message, userId });
       return knownAdminIds.includes(userId);
     }
-
-    edgeLogger.debug('Admin role check result', {
-      category: LOG_CATEGORIES.AUTH,
-      result: data
-    });
+    edgeLogger.debug('Admin role check result', { category: LOG_CATEGORIES.AUTH, result: data });
     return !!data;
   } catch (err) {
-    edgeLogger.error('Exception checking admin status', {
-      category: LOG_CATEGORIES.AUTH,
-      error: err instanceof Error ? err.message : String(err)
-    });
-    // Fall back to hard-coded admin check
+    edgeLogger.error('Exception checking admin status', { category: LOG_CATEGORIES.AUTH, error: err instanceof Error ? err.message : String(err) });
     return knownAdminIds.includes(userId);
   }
 }
 
 // POST /api/admin/users/create-profile - Create a profile for an existing auth user
 export async function POST(request: Request): Promise<Response> {
-  // Get cookies with proper handler
-  const cookieStore = await cookies();
-
-  // Try to use service role key if available
-  const apiKey = process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    apiKey,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll();
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            );
-          } catch {
-            // This can be ignored if you have middleware refreshing
-            // user sessions.
-          }
-        },
-      },
-    }
-  );
-
-  // Verify the requester is authenticated and an admin
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) {
-    return unauthorizedError('Authentication required');
-  }
-
-  // Check if requester is an admin
-  const admin = await isAdmin(supabase, user.id);
-  if (!admin) {
-    return errorResponse('Forbidden - You do not have admin privileges', null, 403);
-  }
+  const operationId = `admin_create_profile_${Math.random().toString(36).substring(2, 8)}`;
+  let targetUserId = 'unknown'; // For logging
 
   try {
-    // Get the user_id from request body
-    const body = await request.json();
-    const { user_id } = body;
-
-    if (!user_id) {
-      return errorResponse('User ID is required', null, 400);
+    // Use standard client for checking the *requester's* auth/admin status
+    const supabase = await createRouteHandlerClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (!user) {
+      const errRes = unauthorizedError('Authentication required');
+      return handleCors(errRes, request, true); // Wrap with CORS
     }
 
-    edgeLogger.info('Creating profile for user', {
+    const isAdminRequester = await isAdmin(supabase, user.id);
+    if (!isAdminRequester) {
+      const errRes = errorResponse('Forbidden - You do not have admin privileges', null, 403);
+      return handleCors(errRes, request, true); // Wrap with CORS
+    }
+
+    // Get the user_id from request body
+    let body;
+    try {
+      body = await request.json();
+    } catch (e) {
+      const errRes = validationError('Invalid JSON body');
+      return handleCors(errRes, request, true); // Wrap with CORS
+    }
+    const { user_id } = body;
+    targetUserId = user_id; // Assign for logging
+
+    if (!user_id) {
+      const errRes = validationError('User ID is required in request body');
+      return handleCors(errRes, request, true); // Wrap with CORS
+    }
+
+    edgeLogger.info('Admin creating profile for user', {
       category: LOG_CATEGORIES.AUTH,
+      operationId,
       adminId: user.id,
-      targetUserId: user_id
+      targetUserId: targetUserId
     });
 
-    // Get user details from auth
-    const { data: userData, error: userError } = await supabase.auth.admin.getUserById(user_id);
+    // --- Use Admin Client for target user operations --- 
+    const supabaseAdmin = await createRouteHandlerAdminClient();
+
+    // Get target user details from auth
+    const { data: userData, error: userError } = await supabaseAdmin.auth.admin.getUserById(user_id);
 
     if (userError || !userData?.user) {
-      edgeLogger.error('Error getting auth user', {
-        category: LOG_CATEGORIES.AUTH,
-        error: userError ? userError.message : 'No user data found',
-        targetUserId: user_id
-      });
-      return errorResponse(
-        'User not found',
-        userError ? userError.message : 'No user data found',
-        404
-      );
+      // ... (logging)
+      const errRes = errorResponse('Target user not found in auth', userError ? userError.message : 'No user data found', 404);
+      return handleCors(errRes, request, true); // Wrap with CORS
     }
 
     // Extract name and email from auth user
     const email = userData.user.email || '';
     const name = userData.user.user_metadata?.name || email.split('@')[0] || 'Unknown';
 
-    // Check if profile already exists
-    const { data: existingProfile } = await supabase
+    // Check if profile already exists using admin client
+    const { data: existingProfile, error: checkError } = await supabaseAdmin
       .from('sd_user_profiles')
       .select('user_id')
       .eq('user_id', user_id)
-      .single();
+      .maybeSingle(); // Use maybeSingle to not error if not found
 
-    if (existingProfile) {
-      edgeLogger.info('Profile already exists for user', {
-        category: LOG_CATEGORIES.AUTH,
-        targetUserId: user_id
-      });
-
-      return successResponse({
-        message: 'Profile already exists for this user',
-        user_id: user_id
-      });
+    if (checkError) {
+      edgeLogger.error('Error checking for existing profile', { operationId, targetUserId, error: checkError.message });
+      const errRes = errorResponse('Database error checking profile', checkError, 500);
+      return handleCors(errRes, request, true); // Wrap with CORS
     }
 
-    // Create placeholder profile
-    const { data: profile, error: profileError } = await supabase
+    if (existingProfile) {
+      // ... (logging)
+      const response = successResponse({ message: 'Profile already exists for this user', user_id: user_id });
+      return handleCors(response, request, true); // Wrap with CORS
+    }
+
+    // Create placeholder profile using admin client
+    const { data: profile, error: profileError } = await supabaseAdmin
       .from('sd_user_profiles')
       .insert([{
         user_id: user_id,
         full_name: name,
         company_name: 'Pending Setup',
         company_description: 'Pending profile completion',
-        location: '',
-        website_url: '',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
+        // ... other fields ...
       }])
-      .select();
+      .select()
+      .single(); // Expect one row back
 
     if (profileError) {
-      edgeLogger.error('Error creating profile', {
-        category: LOG_CATEGORIES.AUTH,
-        error: profileError,
-        targetUserId: user_id
-      });
-      return errorResponse('Failed to create profile', profileError, 500);
+      // ... (logging)
+      const errRes = errorResponse('Failed to create profile', profileError, 500);
+      return handleCors(errRes, request, true); // Wrap with CORS
     }
 
-    edgeLogger.info('Profile created successfully', {
-      category: LOG_CATEGORIES.AUTH,
-      targetUserId: user_id
-    });
+    if (!profile) {
+      const errRes = errorResponse('Profile data null after insert', null, 500);
+      return handleCors(errRes, request, true); // Wrap with CORS
+    }
 
-    return successResponse({
-      message: 'Profile created successfully',
-      profile: profile[0]
-    });
+    // ... (logging success)
+
+    const response = successResponse({ message: 'Profile created successfully', profile });
+    return handleCors(response, request, true); // Wrap with CORS
+
   } catch (error) {
-    edgeLogger.error('Error in profile creation', {
-      category: LOG_CATEGORIES.AUTH,
-      error: error instanceof Error ? error.message : String(error)
-    });
-    return errorResponse('Internal Server Error', error instanceof Error ? error.message : String(error), 500);
+    // ... (logging)
+    // Determine if it was a JSON parsing error already handled or other
+    if (error instanceof SyntaxError) {
+      const errRes = validationError('Invalid JSON body', error.message);
+      return handleCors(errRes, request, true);
+    }
+    const errRes = errorResponse('Internal Server Error', error instanceof Error ? error.message : String(error), 500);
+    return handleCors(errRes, request, true); // Wrap with CORS
   }
 }

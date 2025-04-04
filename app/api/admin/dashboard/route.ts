@@ -1,9 +1,12 @@
 import { cookies } from 'next/headers';
-import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { handleCors } from '@/lib/utils/http-utils';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
 // Performance thresholds for admin dashboard operations
 const THRESHOLDS = {
@@ -85,7 +88,7 @@ async function isAdmin(supabase: any, userId: string) {
 }
 
 // GET /api/admin/dashboard - Get dashboard statistics
-export async function GET(_request: Request): Promise<Response> {
+export async function GET(request: Request): Promise<Response> {
   const requestId = `dashboard-${Date.now().toString(36)}`;
   const startTime = performance.now();
 
@@ -96,39 +99,13 @@ export async function GET(_request: Request): Promise<Response> {
     method: 'GET'
   });
 
-  const cookieStore = await cookies();
-
-  const apiKey = process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-  const isServiceRole = !!process.env.SUPABASE_KEY;
-
-  edgeLogger.debug('Creating Supabase client', {
+  edgeLogger.debug('Creating Supabase client via utility', {
     category: 'system',
-    requestId,
-    useServiceRole: isServiceRole
+    requestId
   });
 
-  const supabase = createSupabaseServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    apiKey,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll();
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            );
-          } catch {
-            // The `setAll` method was called from a Server Component.
-            // This can be ignored if you have middleware refreshing
-            // user sessions.
-          }
-        },
-      },
-    }
-  );
+  // Use the standard utility
+  const supabase = await createRouteHandlerClient();
 
   // Verify the user is authenticated and an admin
   try {
@@ -144,7 +121,8 @@ export async function GET(_request: Request): Promise<Response> {
         important: true,
         status: 401
       });
-      return errorResponse('Authentication error', userError, 401);
+      const errRes = errorResponse('Authentication error', userError, 401);
+      return handleCors(errRes, request, true);
     }
 
     const user = userData.user;
@@ -156,7 +134,8 @@ export async function GET(_request: Request): Promise<Response> {
         durationMs,
         status: 401
       });
-      return unauthorizedError();
+      const errRes = unauthorizedError('Authentication required');
+      return handleCors(errRes, request, true);
     }
 
     const maskedUserId = user.id.substring(0, 8) + '...';
@@ -177,7 +156,8 @@ export async function GET(_request: Request): Promise<Response> {
         durationMs,
         status: 403
       });
-      return errorResponse('Forbidden - Admin access required', null, 403);
+      const errRes = errorResponse('Forbidden - Admin access required', null, 403);
+      return handleCors(errRes, request, true);
     }
 
     edgeLogger.info('Admin access confirmed for dashboard', {
@@ -201,7 +181,7 @@ export async function GET(_request: Request): Promise<Response> {
 
     // Get chat count
     const { count: chatCount, error: chatError } = await supabase
-      .from('sd_chat_histories')
+      .from('sd_chat_sessions')
       .select('*', { count: 'exact', head: true });
 
     if (chatError) {
@@ -309,13 +289,14 @@ export async function GET(_request: Request): Promise<Response> {
       });
     }
 
-    // Return dashboard stats directly
-    return successResponse({
+    // Wrap final success response with handleCors
+    const response = successResponse({
       userCount: userCount || 0,
       chatCount: chatCount || 0,
       adminCount: adminProfilesCount || 0,
       recentActivity: recentActivity || []
     });
+    return handleCors(response, request, true);
   } catch (error) {
     const durationMs = Math.round(performance.now() - startTime);
     edgeLogger.error('Error in dashboard API', {
@@ -326,6 +307,7 @@ export async function GET(_request: Request): Promise<Response> {
       status: 500,
       important: true
     });
-    return errorResponse('Internal Server Error', error, 500);
+    const errRes = errorResponse('Internal Server Error', error, 500);
+    return handleCors(errRes, request, true);
   }
 }

@@ -3,6 +3,8 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { cookies } from 'next/headers';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { successResponse, errorResponse } from '@/lib/utils/route-handler';
+import { handleCors } from '@/lib/utils/http-utils';
 
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
@@ -11,7 +13,8 @@ export const dynamic = 'force-dynamic';
  * Logout endpoint that will clear auth cookies and force re-authentication
  * This will fix issues where cookies aren't being recognized properly
  */
-export async function POST(request: Request) {
+export async function POST(request: Request): Promise<Response> {
+    const operationId = `logout_${Date.now()}`;
     try {
         // Get the supabase client
         const supabase = await createRouteHandlerClient();
@@ -35,26 +38,13 @@ export async function POST(request: Request) {
                 important: true
             });
 
-            return NextResponse.json(
-                { error: 'Failed to sign out' },
-                { status: 500 }
-            );
+            const errRes = errorResponse('Failed to sign out', error.message, 500);
+            return handleCors(errRes, request, true);
         }
 
-        // Create a response with no-cache headers
-        const response = NextResponse.json(
-            { success: true, message: 'Signed out successfully' },
-            {
-                status: 200,
-                headers: {
-                    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-                    'Pragma': 'no-cache',
-                    'Expires': '0'
-                }
-            }
-        );
-
-        return response;
+        // Return standard success response + CORS
+        const response = successResponse({ success: true, message: 'Signed out successfully' });
+        return handleCors(response, request, true);
     } catch (error) {
         edgeLogger.error('Error in logout route', {
             category: LOG_CATEGORIES.AUTH,
@@ -62,9 +52,7 @@ export async function POST(request: Request) {
             important: true
         });
 
-        return NextResponse.json(
-            { error: 'Internal server error' },
-            { status: 500 }
-        );
+        const errRes = errorResponse('Internal server error', error instanceof Error ? error.message : String(error), 500);
+        return handleCors(errRes, request, true);
     }
 } 

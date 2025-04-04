@@ -65,7 +65,7 @@ export async function POST(request: Request): Promise<Response> { // Direct expo
         // Generate session_id if 'id' wasn't provided in schema (adjusting schema might be better)
         // For now, assume sd_sessions auto-generates session_id or use UUID
         const { data: newSession, error: insertError } = await supabase
-            .from('sd_sessions')
+            .from('sd_chat_sessions')
             .insert({
                 user_id: userId,
                 title: title || 'New Chat',
@@ -98,7 +98,7 @@ export async function POST(request: Request): Promise<Response> { // Direct expo
             category: LOG_CATEGORIES.CHAT,
             operationId,
             userId: userId.substring(0, 8),
-            sessionId: newSession.session_id // Use actual column name
+            sessionId: newSession.id
         });
 
         // Return the newly created session data
@@ -166,10 +166,10 @@ export async function GET(request: Request): Promise<Response> { // Direct expor
 
         // Fetch sessions for the user (RLS enforced)
         const { data: sessions, error: fetchError } = await supabase
-            .from('sd_sessions')
-            .select('session_id, title, created_at, updated_at, agent_id, deep_search_enabled') // Select actual columns
+            .from('sd_chat_sessions')
+            .select('id, title, created_at, updated_at, agent_id, deep_search_enabled')
             .eq('user_id', userId)
-            .order('updated_at', { ascending: false }) // Most recent first
+            .order('updated_at', { ascending: false })
             .range(offset, offset + pageSize - 1);
 
         if (fetchError) {

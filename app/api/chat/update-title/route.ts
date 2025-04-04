@@ -6,9 +6,9 @@ import { cleanTitle, updateTitleInDatabase } from '@/lib/chat/title-utils';
 import { openai } from '@ai-sdk/openai';
 import { generateText } from 'ai';
 import { titleLogger } from '@/lib/logger/title-logger';
-import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
 import type { User } from '@supabase/supabase-js';
 import { z } from 'zod';
+import { handleCors } from '@/lib/utils/http-utils';
 
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
@@ -31,13 +31,18 @@ export async function POST(request: Request): Promise<Response> {
         chatId = sessionId;
         userIdFromRequest = userId;
 
-        if (!sessionId) return validationError('Session ID is required');
+        if (!sessionId) {
+            const errRes = validationError('Session ID is required');
+            return handleCors(errRes, request, true);
+        }
         if (!content || typeof content !== 'string' || content.trim().length === 0) {
-            return validationError('Valid content is required for title generation');
+            const errRes = validationError('Valid content is required for title generation');
+            return handleCors(errRes, request, true);
         }
         // Note: userId from body is now required for the internal call logic
         if (!userId) {
-            return validationError('User ID is required in the request body');
+            const errRes = validationError('User ID is required in the request body');
+            return handleCors(errRes, request, true);
         }
 
         // --- Authentication Check --- 
@@ -78,7 +83,8 @@ export async function POST(request: Request): Promise<Response> {
 
         if (!isAuthenticated) {
             edgeLogger.warn('Authentication failed for title update', { category: LOG_CATEGORIES.AUTH, operationId, sessionId, userId: userIdFromRequest, authMethod });
-            return unauthorizedError('Authentication required');
+            const errRes = unauthorizedError('Authentication required');
+            return handleCors(errRes, request, true);
         }
         // --- End Authentication --- 
 
@@ -133,7 +139,8 @@ export async function POST(request: Request): Promise<Response> {
 
             if (!dbUpdateSuccess) {
                 // Error already logged within updateTitleInDatabase via titleLogger
-                return errorResponse('Failed to update title in database', null, 500);
+                const errRes = errorResponse('Failed to update title in database', null, 500);
+                return handleCors(errRes, request, true);
             }
 
             edgeLogger.info('Title update successful', {
@@ -144,7 +151,8 @@ export async function POST(request: Request): Promise<Response> {
                 totalDurationMs: Date.now() - operationStartTime
             });
 
-            return successResponse({ chatId: sessionId, title: generatedTitle });
+            const response = successResponse({ chatId: sessionId, title: generatedTitle });
+            return handleCors(response, request, true);
 
         } catch (genError) {
             titleLogger.titleGenerationFailed({
@@ -152,7 +160,8 @@ export async function POST(request: Request): Promise<Response> {
                 error: `AI title generation failed: ${genError instanceof Error ? genError.message : String(genError)}`,
                 durationMs: Date.now() - llmStartTime
             });
-            return errorResponse('Failed during AI title generation', genError, 500);
+            const errRes = errorResponse('Failed during AI title generation', genError, 500);
+            return handleCors(errRes, request, true);
         }
 
     } catch (error) {
@@ -171,9 +180,11 @@ export async function POST(request: Request): Promise<Response> {
 
         // Determine if it was a validation error or other server error
         if (error instanceof SyntaxError || error instanceof TypeError) {
-            return validationError('Invalid request', error);
+            const errRes = validationError('Invalid request', error);
+            return handleCors(errRes, request, true);
         }
         // Removed Response check as we don't expect it from internal calls
-        return errorResponse('Internal server error processing title update', error, 500);
+        const errRes = errorResponse('Internal server error processing title update', error, 500);
+        return handleCors(errRes, request, true);
     }
 } 

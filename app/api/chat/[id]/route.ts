@@ -33,48 +33,111 @@ export async function GET(
     { params }: IdParam
 ): Promise<Response> {
     const operationId = `get_chat_${Math.random().toString(36).substring(2, 10)}`;
+    let userId = 'unknown';
+    let chatId = 'unknown';
 
     try {
+        // 1. Manual Auth Check
         const supabase = await createRouteHandlerClient();
         const { data: { user }, error: authError } = await supabase.auth.getUser();
 
+        // **Log Auth Result**
+        edgeLogger.debug(`[${operationId}] Auth check result`, { authError: authError?.message || null, hasUser: !!user });
+
         if (authError || !user) {
             edgeLogger.warn('Authentication required for GET chat', { operationId, error: authError?.message });
-            return handleCors(unauthorizedError('Authentication required'), request, true);
+            const errRes = unauthorizedError('Authentication required');
+            return handleCors(errRes, request, true);
         }
+        userId = user.id; // Assign userId
 
+        // 2. Await and Validate Params
+        edgeLogger.debug(`[${operationId}] Awaiting params...`);
         const resolvedParams = await params;
-        const chatId = resolvedParams.id;
+        chatId = resolvedParams.id; // This ID from the URL IS the primary key 'id'
+        edgeLogger.debug(`[${operationId}] Resolved params`, { chatId });
 
         if (!chatId) {
-            return handleCors(validationError('Chat ID is required'), request, true);
+            edgeLogger.warn(`[${operationId}] Chat ID missing from params`, { resolvedParams });
+            const errRes = validationError('Chat ID is required');
+            return handleCors(errRes, request, true);
         }
 
-        edgeLogger.info('Fetching chat details', { operationId, chatId: chatId.slice(0, 8), userId: user.id.substring(0, 8) });
+        edgeLogger.info('Fetching chat details', { operationId, chatId: chatId.slice(0, 8), userId: userId.substring(0, 8) });
 
-        const { data: chat, error } = await supabase
-            .from('sd_sessions')
+        // 3. Main Logic (DB Query with RLS)
+        const { data: chat, error: dbError } = await supabase
+            .from('sd_chat_sessions')
             .select('*')
-            .eq('session_id', chatId)
-            .eq('user_id', user.id) // RLS should enforce this, but explicit check is good
+            .eq('id', chatId) // CORRECT: Filter by primary key 'id'
+            .eq('user_id', userId)
             .maybeSingle();
 
-        if (error) {
-            edgeLogger.error('Error fetching chat', { operationId, chatId: chatId.slice(0, 8), error: error.message });
-            return handleCors(errorResponse('Failed to fetch chat', error), request, true);
+        // **Log DB Result**
+        edgeLogger.debug(`[${operationId}] DB query result`, { dbError: dbError || null, chatFound: !!chat });
+
+        if (dbError) {
+            edgeLogger.error('Error fetching chat session', {
+                operationId,
+                chatId: chatId.slice(0, 8),
+                error: dbError.message,
+                code: dbError.code, // Log DB error code
+                details: dbError.details, // Log DB error details
+                hint: dbError.hint // Log DB error hint
+            });
+            const errRes = errorResponse('Failed to fetch chat session', dbError);
+            return handleCors(errRes, request, true);
         }
 
         if (!chat) {
-            edgeLogger.warn('Chat not found or unauthorized', { operationId, chatId: chatId.slice(0, 8), userId: user.id.substring(0, 8) });
-            return handleCors(notFoundError('Chat not found'), request, true);
+            edgeLogger.warn('Chat session not found or unauthorized', { operationId, chatId: chatId.slice(0, 8), userId: userId.substring(0, 8) });
+            const errRes = notFoundError('Chat not found');
+            return handleCors(errRes, request, true);
         }
 
-        edgeLogger.info('Successfully fetched chat details', { operationId, chatId: chatId.slice(0, 8) });
-        return handleCors(successResponse(chat), request, true);
+        // ADDED: Fetch messages associated with the chat session
+        const { data: messages, error: messagesError } = await supabase
+            .from('sd_chat_histories')
+            .select('*') // Select all message fields
+            .eq('session_id', chat.id) // Filter by the session's primary key
+            .eq('user_id', userId) // Ensure RLS is enforced (belt-and-suspenders)
+            .order('created_at', { ascending: true }); // Order messages chronologically
+
+        if (messagesError) {
+            edgeLogger.error('Error fetching chat messages', {
+                operationId,
+                chatId: chatId.slice(0, 8),
+                userId: userId.substring(0, 8),
+                error: messagesError.message
+            });
+            // Consider if this should be fatal. For now, return session without messages maybe?
+            // Let's make it fatal for consistency.
+            const errRes = errorResponse('Failed to fetch chat messages', messagesError);
+            return handleCors(errRes, request, true);
+        }
+
+        edgeLogger.info('Successfully fetched chat session and messages', { operationId, chatId: chatId.slice(0, 8), messageCount: messages?.length || 0 });
+
+        // 4. Combine session details and messages, then Return Success Response (wrapped with CORS)
+        const responsePayload = {
+            ...chat,
+            messages: messages || [] // Ensure messages is always an array
+        };
+        const response = successResponse(responsePayload);
+        return handleCors(response, request, true);
 
     } catch (error) {
-        edgeLogger.error('Unexpected error in GET chat handler', { operationId, error: error instanceof Error ? error.message : String(error) });
-        return handleCors(errorResponse('Unexpected error fetching chat', error, 500), request, true);
+        // 5. Catch Unexpected Errors (wrapped with CORS)
+        edgeLogger.error('Unexpected error in GET chat handler', {
+            operationId,
+            chatId: chatId, // Log potentially known chatId
+            userId: userId, // Log potentially known userId
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+            important: true
+        });
+        const errRes = errorResponse('Unexpected error fetching chat', error, 500);
+        return handleCors(errRes, request, true);
     }
 }
 
@@ -95,7 +158,7 @@ export async function PATCH(
         }
 
         const resolvedParams = await params;
-        const chatId = resolvedParams.id;
+        const chatId = resolvedParams.id; // This ID from the URL IS the primary key 'id'
 
         if (!chatId) {
             return handleCors(validationError('Chat ID is required'), request, true);
@@ -130,12 +193,12 @@ export async function PATCH(
 
         // Update chat session in database (RLS enforced)
         const { data, error } = await supabase
-            .from('sd_sessions')
+            .from('sd_chat_sessions')
             .update(updateData)
-            .eq('session_id', chatId)
+            .eq('id', chatId) // CORRECT: Filter by primary key 'id'
             .eq('user_id', user.id)
             .select()
-            .single(); // Ensure only one record is updated and return it
+            .single();
 
         if (error) {
             edgeLogger.error('Error updating chat', { operationId, chatId: chatId.slice(0, 8), error: error.message });
@@ -159,7 +222,7 @@ export async function PATCH(
     }
 }
 
-// --- DELETE Handler --- 
+// --- DELETE Handler (Pattern B) ---
 export async function DELETE(
     request: Request,
     { params }: IdParam
@@ -176,7 +239,7 @@ export async function DELETE(
         }
 
         const resolvedParams = await params;
-        const chatId = resolvedParams.id;
+        const chatId = resolvedParams.id; // This ID from the URL IS the primary key 'id' for sd_sessions
 
         if (!chatId) {
             return handleCors(validationError('Chat ID is required'), request, true);
@@ -188,12 +251,11 @@ export async function DELETE(
             userId: user.id.substring(0, 8)
         });
 
-        // Delete chat session (RLS enforced)
-        // Consider deleting related messages first if FK constraints aren't set to CASCADE
+        // Delete related messages first (using session_id foreign key - this is correct)
         const { error: messagesError } = await supabase
             .from('sd_chat_histories')
             .delete()
-            .eq('session_id', chatId)
+            .eq('session_id', chatId) // History table uses session_id FK, matching the session's PK ('id')
             .eq('user_id', user.id);
 
         if (messagesError) {
@@ -202,10 +264,11 @@ export async function DELETE(
             return handleCors(errorResponse('Failed to delete associated messages', messagesError), request, true);
         }
 
+        // Delete the session (using primary key 'id')
         const { error: sessionError } = await supabase
-            .from('sd_sessions')
+            .from('sd_chat_sessions')
             .delete()
-            .eq('session_id', chatId)
+            .eq('id', chatId) // CORRECT: Filter by primary key 'id'
             .eq('user_id', user.id);
 
         if (sessionError) {

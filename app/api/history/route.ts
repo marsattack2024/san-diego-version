@@ -61,11 +61,11 @@ export async function GET(request: Request): Promise<Response> {
 
     // Fetch history from DB if not cached or expired
     const { data: history, error: dbError } = await supabase
-      .from('sd_sessions')
-      .select('session_id, title, updated_at') // Fetch only necessary fields
+      .from('sd_chat_sessions')
+      .select('id, title, updated_at')
       .eq('user_id', userId)
       .order('updated_at', { ascending: false })
-      .limit(50); // Limit history entries
+      .limit(50);
 
     if (dbError) {
       edgeLogger.error('Error fetching history from DB', {
@@ -80,7 +80,7 @@ export async function GET(request: Request): Promise<Response> {
 
     // Format data (optional, depends on frontend needs)
     const formattedHistory = history?.map(h => ({
-      id: h.session_id,
+      id: h.id,
       title: h.title || 'Untitled Chat',
       lastUpdated: h.updated_at
     })) || [];
@@ -161,9 +161,9 @@ export async function DELETE(request: Request): Promise<Response> {
     }
 
     const { error: sessionError } = await supabase
-      .from('sd_sessions')
+      .from('sd_chat_sessions')
       .delete()
-      .eq('session_id', chatId)
+      .eq('id', chatId)
       .eq('user_id', userId);
 
     if (sessionError) {

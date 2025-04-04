@@ -1,75 +1,65 @@
 import { cookies } from 'next/headers';
-import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { handleCors } from '@/lib/utils/http-utils';
 import { SupabaseClient } from '@supabase/supabase-js';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
 // Helper to check if a user is an admin
 async function isAdmin(supabase: SupabaseClient, userId: string): Promise<boolean> {
-  const { data, error } = await supabase.rpc('is_admin', { uid: userId });
-
-  if (error) {
-    edgeLogger.error('Error checking admin status', {
-      category: LOG_CATEGORIES.AUTH,
-      userId,
-      error: error.message
-    });
+  edgeLogger.debug('Checking admin status for user', { category: LOG_CATEGORIES.AUTH, userId });
+  try {
+    const { data, error } = await supabase.rpc('is_admin', { uid: userId });
+    if (error) {
+      edgeLogger.error('Error checking admin status via RPC', { category: LOG_CATEGORIES.AUTH, error: error.message, userId });
+      // Fallback or further checks might be needed depending on requirements
+      return false;
+    }
+    return !!data;
+  } catch (err) {
+    edgeLogger.error('Exception checking admin status', { category: LOG_CATEGORIES.AUTH, error: err instanceof Error ? err.message : String(err) });
     return false;
   }
-
-  return !!data;
 }
 
 // POST /api/admin/users/revoke-admin - Revoke admin privileges
 export async function POST(request: Request): Promise<Response> {
-  // Get cookies with pre-fetching (best practice for Next.js)
-  const cookieStore = await cookies();
-  const cookieList = cookieStore.getAll();
-
-  const supabase = createSupabaseServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieList;
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            );
-          } catch {
-            // The `setAll` method was called from a Server Component.
-            // This can be ignored if you have middleware refreshing
-            // user sessions.
-          }
-        },
-      },
-    }
-  );
-
-  // Verify the user is authenticated and an admin
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) {
-    return unauthorizedError('Authentication required');
-  }
-
-  // Check if user is an admin
-  const admin = await isAdmin(supabase, user.id);
-  if (!admin) {
-    return errorResponse('Forbidden - You do not have admin privileges', null, 403);
-  }
+  const operationId = `revoke_admin_${Math.random().toString(36).substring(2, 7)}`;
 
   try {
-    const body = await request.json();
+    // Use standard client
+    const supabase = await createRouteHandlerClient();
+
+    // Verify the user is authenticated and an admin
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (!user) {
+      const errRes = unauthorizedError('Authentication required');
+      return handleCors(errRes, request, true);
+    }
+
+    const isAdminCaller = await isAdmin(supabase, user.id);
+    if (!isAdminCaller) {
+      const errRes = errorResponse('Forbidden - You do not have admin privileges', null, 403);
+      return handleCors(errRes, request, true);
+    }
+
+    // Parse body
+    let body;
+    try {
+      body = await request.json();
+    } catch (e) {
+      const errRes = errorResponse('Invalid JSON body', null, 400);
+      return handleCors(errRes, request, true);
+    }
     const { email } = body;
 
     if (!email) {
-      return errorResponse('Email is required', null, 400);
+      const errRes = errorResponse('Email is required', null, 400);
+      return handleCors(errRes, request, true);
     }
 
     edgeLogger.info('Attempting to revoke admin privileges', {
@@ -89,7 +79,8 @@ export async function POST(request: Request): Promise<Response> {
           email
         });
 
-        return errorResponse('Error revoking admin privileges', error.message, 500);
+        const errRes = errorResponse('Error revoking admin privileges', error.message, 500);
+        return handleCors(errRes, request, true);
       }
 
       // Check the returned success flag
@@ -99,7 +90,8 @@ export async function POST(request: Request): Promise<Response> {
           email
         });
 
-        return errorResponse('User not found or is not an admin', null, 404);
+        const errRes = errorResponse('User not found or is not an admin', null, 404);
+        return handleCors(errRes, request, true);
       }
 
       edgeLogger.info('Admin privileges revoked successfully', {
@@ -107,10 +99,11 @@ export async function POST(request: Request): Promise<Response> {
         email
       });
 
-      return successResponse({
+      const response = successResponse({
         message: 'Admin privileges revoked successfully',
         success: true
       });
+      return handleCors(response, request, true);
     } catch (error) {
       edgeLogger.error('Exception while revoking admin privileges', {
         category: LOG_CATEGORIES.AUTH,
@@ -118,11 +111,12 @@ export async function POST(request: Request): Promise<Response> {
         email
       });
 
-      return errorResponse(
+      const errRes = errorResponse(
         'Exception while revoking admin privileges',
         error instanceof Error ? error.message : String(error),
         500
       );
+      return handleCors(errRes, request, true);
     }
   } catch (error) {
     edgeLogger.error('Error processing request', {
@@ -130,10 +124,11 @@ export async function POST(request: Request): Promise<Response> {
       error: error instanceof Error ? error.message : String(error)
     });
 
-    return errorResponse(
+    const errRes = errorResponse(
       'Internal Server Error',
       error instanceof Error ? error.message : String(error),
       500
     );
+    return handleCors(errRes, request, true);
   }
 }

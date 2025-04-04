@@ -4,6 +4,7 @@ import { generateWebsiteSummary } from '@/lib/agents/tools/website-summarizer';
 import { successResponse, errorResponse, notFoundError } from '@/lib/utils/route-handler';
 import { withAuth } from '@/lib/auth/with-auth';
 import type { User } from '@supabase/supabase-js';
+import { handleCors } from '@/lib/utils/http-utils';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,17 +43,20 @@ export async function POST(request: Request): Promise<Response> {
         operation,
         error: authError?.message
       });
-      return notFoundError('Authentication required'); // Using notFoundError to align with potential RLS behavior
+      const errRes = notFoundError('Authentication required'); // Using notFoundError to align with potential RLS behavior
+      return handleCors(errRes, request, true); // Wrap with CORS
     }
     const userId = user.id;
 
     if (!url) {
-      return errorResponse('URL is required', null, 400);
+      const errRes = errorResponse('URL is required', null, 400);
+      return handleCors(errRes, request, true); // Wrap with CORS
     }
 
     // Validate URL starts with https://
     if (!url.startsWith('https://')) {
-      return errorResponse('URL must start with https://', null, 400);
+      const errRes = errorResponse('URL must start with https://', null, 400);
+      return handleCors(errRes, request, true); // Wrap with CORS
     }
 
     logger.info('Starting website summary generation and profile update', {
@@ -142,17 +146,19 @@ export async function POST(request: Request): Promise<Response> {
           operation
         });
 
-        return errorResponse(
+        const errRes = errorResponse(
           'Processing is taking longer than expected. Please try again later.',
           { timedOut: true },
           408
         );
+        return handleCors(errRes, request, true); // Wrap with CORS
       }
 
       // Return the result from processing
-      return result.success
+      const response = result.success
         ? successResponse(result)
         : errorResponse(result.message, null, 500);
+      return handleCors(response, request, true); // Wrap with CORS
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
 
@@ -164,7 +170,8 @@ export async function POST(request: Request): Promise<Response> {
         operation
       });
 
-      return errorResponse('Error generating website summary', error, 500);
+      const errRes = errorResponse('Error generating website summary', error, 500);
+      return handleCors(errRes, request, true); // Wrap with CORS
     }
 
   } catch (error) {
@@ -176,6 +183,7 @@ export async function POST(request: Request): Promise<Response> {
       operation
     });
 
-    return errorResponse('Internal server error', error, 500);
+    const errRes = errorResponse('Internal server error', error, 500);
+    return handleCors(errRes, request, true); // Wrap with CORS
   }
 }

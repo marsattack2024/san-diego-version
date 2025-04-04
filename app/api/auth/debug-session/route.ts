@@ -4,6 +4,7 @@ import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { cookies } from 'next/headers';
 import { createServerClient } from '@supabase/ssr';
 import { successResponse, errorResponse } from '@/lib/utils/route-handler';
+import { handleCors } from '@/lib/utils/http-utils';
 
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
@@ -12,7 +13,10 @@ export const dynamic = 'force-dynamic';
  * Debug endpoint for checking authentication state
  * This route will help debug authentication issues by examining cookies and headers
  */
-export async function GET(request: Request) {
+export async function GET(request: Request): Promise<Response> {
+    const operationId = `debug_session_${Date.now()}`;
+    console.log(`[${operationId}] Debug session endpoint called`);
+
     try {
         // Get the cookie store
         const cookieStore = await cookies();
@@ -39,7 +43,7 @@ export async function GET(request: Request) {
             }, {} as Record<string, string>);
 
         // Build response with detailed debug info
-        const response = {
+        const responsePayload = {
             authenticated: !!user,
             userId: user?.id || null,
             email: user?.email || null,
@@ -58,16 +62,15 @@ export async function GET(request: Request) {
             authCookieCount: authCookies.length,
         });
 
-        return NextResponse.json(response);
+        const response = successResponse(responsePayload);
+        return handleCors(response, request, true);
     } catch (error) {
         edgeLogger.error('Error in debug session endpoint', {
             category: 'auth',
             error: error instanceof Error ? error.message : String(error)
         });
 
-        return NextResponse.json(
-            { error: 'Failed to check session' },
-            { status: 500 }
-        );
+        const errRes = errorResponse('Failed to check session', error instanceof Error ? error.message : String(error), 500);
+        return handleCors(errRes, request, true);
     }
 } 

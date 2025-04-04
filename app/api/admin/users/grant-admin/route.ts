@@ -1,11 +1,13 @@
 import { cookies } from 'next/headers';
-import { createServerClient } from '@supabase/ssr';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { handleCors } from '@/lib/utils/http-utils';
 import { SupabaseClient } from '@supabase/supabase-js';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
 /**
  * Grant admin privileges to a user
@@ -57,35 +59,15 @@ export async function POST(request: Request): Promise<Response> {
     const operationId = `grant_admin_${Date.now().toString(36).substring(2, 7)}`;
 
     try {
-        // Create Supabase client
-        const cookieStore = await cookies();
-        const supabase = createServerClient(
-            process.env.NEXT_PUBLIC_SUPABASE_URL!,
-            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-            {
-                cookies: {
-                    getAll() {
-                        return cookieStore.getAll();
-                    },
-                    setAll(cookiesToSet) {
-                        try {
-                            cookiesToSet.forEach(({ name, value, options }) =>
-                                cookieStore.set(name, value, options)
-                            );
-                        } catch {
-                            // The `setAll` method was called from a Server Component.
-                            // This can be safely ignored.
-                        }
-                    },
-                },
-            }
-        );
+        // Use standard client
+        const supabase = await createRouteHandlerClient();
 
         // Verify the current user is authenticated
         const { data: { user }, error: authError } = await supabase.auth.getUser();
 
         if (authError || !user) {
-            return unauthorizedError('Authentication required');
+            const errRes = unauthorizedError('Authentication required');
+            return handleCors(errRes, request, true);
         }
 
         // Check if current user is an admin
@@ -97,15 +79,23 @@ export async function POST(request: Request): Promise<Response> {
                 userId: user.id.substring(0, 8) + '...'
             });
 
-            return errorResponse('Forbidden - Admin privileges required', null, 403);
+            const errRes = errorResponse('Forbidden - Admin privileges required', null, 403);
+            return handleCors(errRes, request, true);
         }
 
         // Parse request body
-        const body = await request.json();
+        let body;
+        try {
+            body = await request.json();
+        } catch (e) {
+            const errRes = errorResponse('Invalid JSON body', null, 400);
+            return handleCors(errRes, request, true);
+        }
         const { userId, email } = body;
 
         if (!userId && !email) {
-            return errorResponse('Either userId or email is required', null, 400);
+            const errRes = errorResponse('Either userId or email is required', null, 400);
+            return handleCors(errRes, request, true);
         }
 
         edgeLogger.info('Attempting to grant admin privileges', {
@@ -134,10 +124,16 @@ export async function POST(request: Request): Promise<Response> {
                     error: userError?.message || 'User not found'
                 });
 
-                return errorResponse('User not found with provided email', null, 404);
+                const errRes = errorResponse('User not found with provided email', null, 404);
+                return handleCors(errRes, request, true);
             }
 
             targetUserId = userData.id;
+        }
+
+        if (!targetUserId) {
+            const errRes = errorResponse('Target User ID could not be determined', null, 400);
+            return handleCors(errRes, request, true);
         }
 
         // Check if user has a profile
@@ -155,7 +151,8 @@ export async function POST(request: Request): Promise<Response> {
                 error: profileError.message
             });
 
-            return errorResponse('User profile not found', null, 404);
+            const errRes = errorResponse('User profile not found', null, 404);
+            return handleCors(errRes, request, true);
         }
 
         // If user is already an admin, return success without changes
@@ -166,15 +163,17 @@ export async function POST(request: Request): Promise<Response> {
                 targetUserId: targetUserId.substring(0, 8) + '...'
             });
 
-            return successResponse({
+            const response = successResponse({
                 message: 'User already has admin privileges',
                 alreadyAdmin: true,
                 success: true
             });
+            return handleCors(response, request, true);
         }
 
         // Update the profile to set is_admin=true
-        // The database trigger will handle updating the JWT claims
+        // This update *might* require admin privileges depending on RLS
+        // If it fails, consider using createRouteHandlerAdminClient for the update.
         const { error: updateError } = await supabase
             .from('sd_user_profiles')
             .update({ is_admin: true })
@@ -188,11 +187,8 @@ export async function POST(request: Request): Promise<Response> {
                 error: updateError.message
             });
 
-            return errorResponse(
-                'Failed to grant admin privileges',
-                updateError.message,
-                500
-            );
+            const errRes = errorResponse('Failed to grant admin privileges', updateError.message, 500);
+            return handleCors(errRes, request, true);
         }
 
         edgeLogger.info('Admin privileges granted successfully', {
@@ -202,10 +198,11 @@ export async function POST(request: Request): Promise<Response> {
             grantedBy: user.id.substring(0, 8) + '...'
         });
 
-        return successResponse({
+        const response = successResponse({
             message: 'Admin privileges granted successfully',
             success: true
         });
+        return handleCors(response, request, true);
     } catch (error) {
         edgeLogger.error('Unexpected error granting admin privileges', {
             category: LOG_CATEGORIES.AUTH,
@@ -214,10 +211,7 @@ export async function POST(request: Request): Promise<Response> {
             stack: error instanceof Error ? error.stack : undefined
         });
 
-        return errorResponse(
-            'Internal server error',
-            error instanceof Error ? error.message : String(error),
-            500
-        );
+        const errRes = errorResponse('Internal server error', error instanceof Error ? error.message : String(error), 500);
+        return handleCors(errRes, request, true);
     }
 } 

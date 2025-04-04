@@ -1,69 +1,63 @@
 import { cookies } from 'next/headers';
-import { createServerClient as createSupabaseServerClient } from '@supabase/ssr';
+// import { createServerClient as createSupabaseServerClient } from '@supabase/ssr'; // REMOVE
+import { createRouteHandlerClient, createRouteHandlerAdminClient } from '@/lib/supabase/route-client'; // ADD/Ensure both
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { successResponse, errorResponse, unauthorizedError, validationError } from '@/lib/utils/route-handler'; // Ensure validationError
+import { handleCors } from '@/lib/utils/http-utils'; // ADD
 import { SupabaseClient } from '@supabase/supabase-js';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic'; // ADD
 
 // Helper to check if a user is an admin
 async function isAdmin(supabase: SupabaseClient, userId: string): Promise<boolean> {
-  const { data, error } = await supabase.rpc('is_admin', { uid: userId });
-  if (error) return false;
-  return !!data;
+  edgeLogger.debug('Checking admin status for user', { category: LOG_CATEGORIES.AUTH, userId });
+  try {
+    const { data, error } = await supabase.rpc('is_admin', { uid: userId });
+    if (error) {
+      edgeLogger.error('Error checking admin status via RPC', { category: LOG_CATEGORIES.AUTH, error: error.message, userId });
+      return false;
+    }
+    return !!data;
+  } catch (err) {
+    edgeLogger.error('Exception checking admin status', { category: LOG_CATEGORIES.AUTH, error: err instanceof Error ? err.message : String(err) });
+    return false;
+  }
 }
 
 // POST /api/admin/users/invite - Invite a new user
 export async function POST(request: Request): Promise<Response> {
-  // Get cookies with pre-fetching (best practice for NextJS)
-  const cookieStore = await cookies();
-  const cookieList = cookieStore.getAll();
-
-  // Try to use service role key if available
-  const apiKey = process.env.SUPABASE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
-  const supabase = createSupabaseServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    apiKey,
-    {
-      cookies: {
-        getAll() {
-          return cookieList;
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            );
-          } catch {
-            // The `setAll` method was called from a Server Component.
-            // This can be ignored if you have middleware refreshing
-            // user sessions.
-          }
-        },
-      },
-    }
-  );
-
-  // Verify the user is authenticated and an admin
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) {
-    return unauthorizedError('Authentication required');
-  }
-
-  // Check if user is an admin
-  const admin = await isAdmin(supabase, user.id);
-  if (!admin) {
-    return errorResponse('Forbidden - You do not have admin privileges', null, 403);
-  }
+  const operationId = `admin_invite_${Math.random().toString(36).substring(2, 8)}`;
 
   try {
-    const body = await request.json();
+    // Use standard client for checking the *requester's* auth/admin status
+    const supabase = await createRouteHandlerClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (!user) {
+      const errRes = unauthorizedError('Authentication required');
+      return handleCors(errRes, request, true); // Wrap with CORS
+    }
+
+    const isAdminCaller = await isAdmin(supabase, user.id);
+    if (!isAdminCaller) {
+      const errRes = errorResponse('Forbidden - You do not have admin privileges', null, 403);
+      return handleCors(errRes, request, true); // Wrap with CORS
+    }
+
+    // Parse body
+    let body;
+    try {
+      body = await request.json();
+    } catch (e) {
+      const errRes = validationError('Invalid JSON body');
+      return handleCors(errRes, request, true); // Wrap with CORS
+    }
     const { email } = body;
 
     if (!email) {
-      return errorResponse('Email is required', null, 400);
+      const errRes = errorResponse('Email is required', null, 400);
+      return handleCors(errRes, request, true); // Wrap with CORS
     }
 
     edgeLogger.info('Attempting to invite user', {
@@ -72,123 +66,79 @@ export async function POST(request: Request): Promise<Response> {
       email: email
     });
 
+    // --- Use Admin Client for invite and profile creation --- 
+    edgeLogger.debug('Using Admin Client for user invitation', { operationId, targetEmail: email });
+    const supabaseAdmin = await createRouteHandlerAdminClient();
+
     // Invite the user using the admin API
-    if (!process.env.SUPABASE_KEY) {
-      return errorResponse('Service role key is required for user invitations', null, 500);
-    }
+    const { data: inviteData, error: inviteError } = await supabaseAdmin.auth.admin.inviteUserByEmail(email);
 
-    try {
-      // Use the inviteUserByEmail method which:
-      // 1. Creates the user record in auth.users
-      // 2. Generates a magic link token
-      // 3. Sends an invitation email with the link
-      // 4. Handles verification when the user clicks the link
-      const { data, error } = await supabase.auth.admin.inviteUserByEmail(email);
-
-      if (error) {
-        // If the user already exists, return a friendly message
-        if (error.message?.includes('already been registered') ||
-          error.message?.includes('already exists')) {
-
-          edgeLogger.info('User already exists', {
-            category: LOG_CATEGORIES.AUTH,
-            email: email
-          });
-
-          return successResponse({
-            message: 'User with this email already exists',
-            status: 'exists'
-          });
-        }
-
-        edgeLogger.error('Error inviting user', {
+    if (inviteError) {
+      if (inviteError.message?.includes('already been registered') || inviteError.message?.includes('already exists')) {
+        edgeLogger.info('User already exists', {
           category: LOG_CATEGORIES.AUTH,
-          error: error.message,
           email: email
         });
-
-        return errorResponse(error.message, null, 500);
+        const response = successResponse({ message: 'User with this email already exists', status: 'exists' });
+        return handleCors(response, request, true); // Wrap with CORS
       }
-
-      // Verify we have user data
-      if (!data?.user) {
-        return errorResponse('Invitation succeeded but no user data returned', null, 500);
-      }
-
-      edgeLogger.info('User invited successfully', {
+      edgeLogger.error('Error inviting user', {
         category: LOG_CATEGORIES.AUTH,
-        userId: data.user.id,
+        error: inviteError.message,
         email: email
       });
-
-      // Create a minimal profile record so the user appears in the admin dashboard
-      try {
-        // Extract name from email for initial profile (e.g., john from john@example.com)
-        const emailName = email.split('@')[0];
-        const userName = emailName.charAt(0).toUpperCase() + emailName.slice(1);
-
-        // Create minimal placeholder profile for the user
-        const { error: profileError } = await supabase
-          .from('sd_user_profiles')
-          .insert([{
-            user_id: data.user.id,
-            full_name: userName,
-            company_name: 'Pending Setup',
-            company_description: 'Pending profile completion',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          }]);
-
-        if (profileError) {
-          edgeLogger.warn('Created user but failed to create profile', {
-            category: LOG_CATEGORIES.AUTH,
-            error: profileError,
-            userId: data.user.id
-          });
-          // Don't fail the request, just log the warning
-        } else {
-          edgeLogger.info('Created placeholder profile for user', {
-            category: LOG_CATEGORIES.AUTH,
-            userId: data.user.id
-          });
-        }
-      } catch (profileErr) {
-        edgeLogger.warn('Error creating placeholder profile', {
-          category: LOG_CATEGORIES.AUTH,
-          error: profileErr instanceof Error ? profileErr.message : String(profileErr),
-          userId: data.user.id
-        });
-        // Don't fail the request, just log the warning
-      }
-
-      // Return success response with the user data
-      return successResponse({
-        message: 'User invitation email sent successfully',
-        user: data.user
-      });
-    } catch (error) {
-      edgeLogger.error('Exception during user invitation', {
-        category: LOG_CATEGORIES.AUTH,
-        error: error instanceof Error ? error.message : String(error),
-        email: email
-      });
-
-      return errorResponse(
-        'Exception during user invitation',
-        error instanceof Error ? error.message : String(error),
-        500
-      );
+      const errRes = errorResponse(inviteError.message, null, 500);
+      return handleCors(errRes, request, true); // Wrap with CORS
     }
+
+    if (!inviteData?.user) {
+      const errRes = errorResponse('Invitation succeeded but no user data returned', null, 500);
+      return handleCors(errRes, request, true); // Wrap with CORS
+    }
+
+    edgeLogger.info('User invited successfully', {
+      category: LOG_CATEGORIES.AUTH,
+      userId: inviteData.user.id,
+      email: email
+    });
+
+    // Create placeholder profile using admin client
+    try {
+      const emailName = email.split('@')[0];
+      const userName = emailName.charAt(0).toUpperCase() + emailName.slice(1);
+      const { error: profileError } = await supabaseAdmin
+        .from('sd_user_profiles')
+        .insert({ user_id: inviteData.user.id, full_name: userName, company_name: 'Pending Setup', company_description: 'Pending profile completion', created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+
+      if (profileError) {
+        edgeLogger.warn('Created user but failed to create profile', {
+          category: LOG_CATEGORIES.AUTH,
+          error: profileError,
+          userId: inviteData.user.id
+        });
+      } else {
+        edgeLogger.info('Created placeholder profile for invited user', {
+          category: LOG_CATEGORIES.AUTH,
+          userId: inviteData.user.id
+        });
+      }
+    } catch (profileErr) {
+      edgeLogger.warn('Exception creating placeholder profile', {
+        category: LOG_CATEGORIES.AUTH,
+        error: profileErr instanceof Error ? profileErr.message : String(profileErr),
+        userId: inviteData.user.id
+      });
+    }
+
+    // Return success response with the user data
+    const response = successResponse({ message: 'User invitation email sent successfully', user: inviteData.user });
+    return handleCors(response, request, true); // Wrap with CORS
   } catch (error) {
     edgeLogger.error('Error in invite user API', {
       category: LOG_CATEGORIES.AUTH,
       error: error instanceof Error ? error.message : String(error)
     });
-
-    return errorResponse(
-      'Internal Server Error',
-      error instanceof Error ? error.message : String(error),
-      500
-    );
+    const errRes = errorResponse('Internal Server Error', error instanceof Error ? error.message : String(error), 500);
+    return handleCors(errRes, request, true); // Wrap with CORS
   }
 }

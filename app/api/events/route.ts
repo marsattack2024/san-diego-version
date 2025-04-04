@@ -9,260 +9,225 @@ import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { cookies } from 'next/headers';
 import { createServerClient } from '@supabase/ssr';
 import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { NextResponse } from 'next/server';
+import { handleCors } from '@/lib/utils/http-utils';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
-// Connect to the event stream
-export async function GET(req: Request): Promise<Response> {
-  // Extract query parameters
-  const url = new URL(req.url);
-  const authToken = url.searchParams.get('auth');
-  const connectionId = Math.random().toString(36).substring(2, 10);
+const clients = new Set<Client>();
+const MAX_CONNECTIONS = 100;
 
-  // TEMPORARY FIX: In development, use a stub response to avoid authentication issues and UI freezing
-  if (process.env.NODE_ENV === 'development') {
-    edgeLogger.info('Using stubbed SSE response for events in development mode', {
-      connectionId
+interface Client {
+  id: string;
+  responseController: ReadableStreamDefaultController<any>;
+  userId: string;
+  lastPong: number;
+  isAdmin?: boolean;
+}
+
+function addClient(client: Client): boolean {
+  if (clients.size >= MAX_CONNECTIONS) {
+    edgeLogger.warn('Max SSE connections reached', {
+      category: LOG_CATEGORIES.SYSTEM,
+      currentCount: clients.size,
+      maxCount: MAX_CONNECTIONS
     });
-
-    // Create a simple ReadableStream that just sends ping events
-    const stream = new ReadableStream({
-      start(controller) {
-        // Send initial connection event
-        const connectionEvent = `data: {"type":"connected","connectionId":"${connectionId}","userId":"development-mode"}\n\n`;
-        controller.enqueue(new TextEncoder().encode(connectionEvent));
-
-        // Send a ping event every 30 seconds to keep the connection alive
-        const pingInterval = setInterval(() => {
-          try {
-            const pingData = `data: {"type":"ping"}\n\n`;
-            controller.enqueue(new TextEncoder().encode(pingData));
-          } catch (err: unknown) {
-            // If there's an error, the client is probably disconnected
-            clearInterval(pingInterval);
-            edgeLogger.info('Client disconnected during ping', {
-              connectionId,
-              error: err instanceof Error ? err.message : String(err)
-            });
-          }
-        }, 30000);
-
-        // Handle cleanup when the connection is closed
-        req.signal.addEventListener('abort', () => {
-          clearInterval(pingInterval);
-          edgeLogger.info('Client disconnected', {
-            connectionId
-          });
-        });
-      }
-    });
-
-    // Return the stream with appropriate headers for SSE
-    return new Response(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      },
-    });
+    return false;
   }
+  clients.add(client);
+  edgeLogger.info('SSE client connected', {
+    category: LOG_CATEGORIES.SYSTEM,
+    clientId: client.id,
+    userId: client.userId ? client.userId.substring(0, 8) + '...' : 'anon',
+    currentCount: clients.size
+  });
+  return true;
+}
 
-  // PRODUCTION CODE BELOW - Only used in production environment
-  try {
-    // Create a Supabase client (different auth approaches)
-    let userId: string;
-
-    // 1. First try cookie-based auth (our preferred standard approach)
-    try {
-      const supabase = await createRouteHandlerClient();
-      const { data: { user }, error } = await supabase.auth.getUser();
-
-      if (user && !error) {
-        userId = user.id;
-
-        edgeLogger.info('New cookie-authenticated event stream connection', {
-          connectionId,
-          userId: userId.substring(0, 8) + '...',
-          authMethod: 'cookie'
-        });
-      } else if (!authToken) {
-        // No auth token provided and cookie auth failed
-        edgeLogger.warn('Unauthorized events connection attempt', {
-          noToken: true,
-          cookieAuthFailed: true
-        });
-        return unauthorizedError('Authentication required');
-      } else {
-        // Cookie auth failed but we have a token to try next
-        throw new Error('Cookie auth failed, trying token auth');
-      }
-    } catch (cookieError) {
-      // 2. Fall back to token-based auth (for compatibility)
-      if (!authToken) {
-        edgeLogger.warn('Unauthorized events connection attempt', {
-          noToken: true,
-          cookieError: cookieError instanceof Error ? cookieError.message : String(cookieError)
-        });
-        return unauthorizedError('No authentication token provided');
-      }
-
-      // Create a Supabase client with the provided token
-      const supabase = createServerClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        {
-          cookies: {
-            getAll() {
-              return [];
-            },
-            setAll() {
-              // No-op since we're using token auth
-            }
-          },
-          global: {
-            headers: {
-              Authorization: `Bearer ${authToken}`,
-            },
-          },
-        }
-      );
-
-      // Verify token by getting user info
-      const { data, error } = await supabase.auth.getUser();
-
-      if (error || !data.user) {
-        edgeLogger.warn('Invalid token for events connection', {
-          error: error?.message || 'No user found',
-        });
-        return unauthorizedError('Invalid authentication token');
-      }
-
-      userId = data.user.id;
-
-      edgeLogger.info('New token-authenticated event stream connection', {
-        connectionId,
-        userId: userId.substring(0, 8) + '...',
-        authMethod: 'token'
+function removeClient(clientId: string): void {
+  let removed = false;
+  clients.forEach(client => {
+    if (client.id === clientId) {
+      clients.delete(client);
+      removed = true;
+      edgeLogger.info('SSE client disconnected', {
+        category: LOG_CATEGORIES.SYSTEM,
+        clientId: client.id,
+        userId: client.userId ? client.userId.substring(0, 8) + '...' : 'anon',
+        currentCount: clients.size
       });
     }
-
-    // Performance optimization: Set a maximum client limit to prevent memory issues
-    if (getClientCount() >= 100) {
-      edgeLogger.warn('Too many event stream connections', { connectionCount: getClientCount() });
-      return errorResponse('Too many connections', { connectionCount: getClientCount() }, 503);
-    }
-
-    // Create a new readable stream
-    const stream = new ReadableStream({
-      start(controller) {
-        // Store the controller for later use with user context
-        addEventClient(controller, userId);
-
-        // Send initial connection event
-        const connectionEvent = `data: {"type":"connected","connectionId":"${connectionId}","userId":"${userId.substring(0, 8)}..."}\n\n`;
-        controller.enqueue(new TextEncoder().encode(connectionEvent));
-
-        // Send a ping event every 30 seconds to keep the connection alive
-        const pingInterval = setInterval(() => {
-          try {
-            const pingData = `data: {"type":"ping"}\n\n`;
-            controller.enqueue(new TextEncoder().encode(pingData));
-          } catch (err: unknown) {
-            // If there's an error, the client is probably disconnected
-            clearInterval(pingInterval);
-            removeEventClient(controller);
-            edgeLogger.info('Client disconnected during ping', {
-              connectionId,
-              userId: userId.substring(0, 8) + '...',
-              error: err instanceof Error ? err.message : String(err)
-            });
-          }
-        }, 30000);
-
-        // Handle cleanup when the connection is closed
-        req.signal.addEventListener('abort', () => {
-          clearInterval(pingInterval);
-          removeEventClient(controller);
-          edgeLogger.info('Client disconnected', {
-            connectionId,
-            userId: userId.substring(0, 8) + '...'
-          });
-        });
-      }
-    });
-
-    // Return the stream with appropriate headers for SSE
-    return new Response(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      },
-    });
-  } catch (err) {
-    // Handle unexpected errors
-    edgeLogger.error('Error in events endpoint', {
-      error: err instanceof Error ? err.message : String(err)
-    });
-    return errorResponse('Internal Server Error', err, 500);
+  });
+  if (!removed) {
+    edgeLogger.warn('Attempted to remove non-existent SSE client', { category: LOG_CATEGORIES.SYSTEM, clientId });
   }
 }
 
-// POST handler to trigger events from other parts of the application
-export async function POST(req: Request): Promise<Response> {
-  // TEMPORARY FIX: In development, accept all event posts without authentication
-  if (process.env.NODE_ENV === 'development') {
-    try {
-      const { type, status, details } = await req.json();
-
-      if (!type || !status) {
-        return errorResponse('Type and status are required', null, 400);
+function broadcast(message: any, targetUserId?: string | null, requireAdmin?: boolean): void {
+  const messageString = `data: ${JSON.stringify(message)}\n\n`;
+  clients.forEach(client => {
+    if (targetUserId && client.userId === targetUserId) {
+      if (!requireAdmin || client.isAdmin) {
+        client.responseController.enqueue(new TextEncoder().encode(messageString));
       }
-
-      // Send the event to all connected clients
-      sendEventToClients({ type, status, details });
-
-      return successResponse({ success: true });
-    } catch (err) {
-      edgeLogger.error('Error processing event POST in development mode', {
-        error: err instanceof Error ? err.message : String(err)
-      });
-      return errorResponse('Error processing request', err, 500);
     }
-  }
+    else if (!targetUserId && requireAdmin && client.isAdmin) {
+      client.responseController.enqueue(new TextEncoder().encode(messageString));
+    }
+    else if (!targetUserId && !requireAdmin) {
+      client.responseController.enqueue(new TextEncoder().encode(messageString));
+    }
+  });
+}
 
-  // PRODUCTION CODE BELOW
+setInterval(() => {
+  const now = Date.now();
+  clients.forEach(client => {
+    if (now - client.lastPong > 60000) {
+      edgeLogger.warn('SSE client appears stale, removing', {
+        category: LOG_CATEGORIES.SYSTEM,
+        clientId: client.id,
+        userId: client.userId ? client.userId.substring(0, 8) + '...' : 'anon',
+        lastPongDelta: now - client.lastPong
+      });
+      client.responseController.close();
+      removeClient(client.id);
+    } else {
+      const pingMessage = `event: ping\ndata: ${JSON.stringify({ timestamp: now })}\n\n`;
+      client.responseController.enqueue(new TextEncoder().encode(pingMessage));
+    }
+  });
+}, 25000);
+
+export async function GET(request: Request): Promise<Response> {
+  const operationId = `sse_connect_${crypto.randomUUID().substring(0, 8)}`;
+  let currentUserId: string | null = null;
+  let isAdminUser = false;
+
   try {
-    // First authenticate the request
-    try {
-      const supabase = await createRouteHandlerClient();
-      const { data: { user }, error } = await supabase.auth.getUser();
+    const supabase = await createRouteHandlerClient();
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
 
-      if (!user || error) {
-        return unauthorizedError('Not authenticated');
+    if (authError) {
+      edgeLogger.error('SSE Auth Error', { operationId, error: authError.message });
+    } else if (user) {
+      currentUserId = user.id;
+      isAdminUser = user.app_metadata?.is_admin === true;
+      edgeLogger.info('SSE Auth Success', { operationId, userId: currentUserId.substring(0, 8) + '...', isAdmin: isAdminUser });
+    } else {
+      edgeLogger.info('SSE No User Session', { operationId });
+    }
+
+    const stream = new ReadableStream({
+      start(controller) {
+        const clientId = crypto.randomUUID();
+        const client: Client = {
+          id: clientId,
+          responseController: controller,
+          userId: currentUserId || 'anonymous',
+          lastPong: Date.now(),
+          isAdmin: isAdminUser
+        };
+
+        if (!addClient(client)) {
+          const errRes = errorResponse('Too many connections', { connectionCount: getClientCount() }, 503);
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(errRes.body)}\n\n`));
+          controller.close();
+          return;
+        }
+
+        const connectMsg = { type: 'connected', clientId: clientId, userId: client.userId, isAdmin: client.isAdmin };
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(connectMsg)}\n\n`));
+      },
+      cancel(reason) {
+        edgeLogger.warn('SSE stream cancelled (might be client closing connection)', {
+          operationId: `sse_cancel_${crypto.randomUUID().substring(0, 8)}`,
+          reason: reason ? (reason instanceof Error ? reason.message : String(reason)) : 'No reason provided'
+        });
       }
-    } catch (authError) {
-      edgeLogger.error('Auth error in events POST', {
-        error: authError instanceof Error ? authError.message : String(authError)
-      });
-      return unauthorizedError('Authentication error');
-    }
-
-    const { type, status, details } = await req.json();
-
-    if (!type || !status) {
-      return errorResponse('Type and status are required', null, 400);
-    }
-
-    // Send the event to all connected clients
-    sendEventToClients({ type, status, details });
-
-    return successResponse({ success: true });
-  } catch (err) {
-    edgeLogger.error('Error processing event POST', {
-      error: err instanceof Error ? err.message : String(err)
     });
 
-    return errorResponse('Error processing request', err, 500);
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Supabase-Auth'
+      }
+    });
+
+  } catch (err) {
+    edgeLogger.error('Error establishing SSE connection', { operationId, error: err instanceof Error ? err.message : String(err) });
+    return new Response(JSON.stringify({ error: 'Internal Server Error' }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
   }
+}
+
+export async function POST(request: Request): Promise<Response> {
+  const operationId = `sse_broadcast_${crypto.randomUUID().substring(0, 8)}`;
+  try {
+    let isAuthorized = false;
+    const internalSecret = request.headers.get('X-Internal-Secret');
+    if (internalSecret && internalSecret === process.env.INTERNAL_API_SECRET) {
+      isAuthorized = true;
+      edgeLogger.debug('SSE Broadcast authorized via Internal Secret', { operationId });
+    } else {
+      try {
+        const supabase = await createRouteHandlerClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user?.app_metadata?.is_admin === true) {
+          isAuthorized = true;
+          edgeLogger.debug('SSE Broadcast authorized via Admin Cookie', { operationId, userId: user.id });
+        }
+      } catch (authError) {
+        edgeLogger.warn('SSE Broadcast cookie auth check failed', { operationId, error: authError instanceof Error ? authError.message : String(authError) });
+      }
+    }
+
+    if (!isAuthorized) {
+      edgeLogger.warn('Unauthorized SSE broadcast attempt', { operationId });
+      const errRes = unauthorizedError('Not authorized to broadcast events');
+      return handleCors(errRes, request, true);
+    }
+
+    const { type, payload, targetUserId, targetAdminOnly } = await request.json();
+
+    if (!type || !payload) {
+      const errRes = errorResponse('Type and payload are required', null, 400);
+      return handleCors(errRes, request, true);
+    }
+
+    edgeLogger.info('Broadcasting SSE event', {
+      operationId,
+      type,
+      targetUserId,
+      targetAdminOnly,
+      clientCount: getClientCount()
+    });
+
+    broadcast({ type, ...payload }, targetUserId, targetAdminOnly);
+
+    const response = successResponse({ success: true });
+    return handleCors(response, request, true);
+
+  } catch (err) {
+    edgeLogger.error('Error processing broadcast request', { operationId, error: err instanceof Error ? err.message : String(err) });
+    const errRes = errorResponse('Error processing request', err, 500);
+    return handleCors(errRes, request, true);
+  }
+}
+
+export async function OPTIONS(request: Request): Promise<Response> {
+  const response = new Response(null, { status: 204 });
+  response.headers.set('Access-Control-Allow-Origin', '*');
+  response.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  response.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Internal-Secret, X-Supabase-Auth');
+  response.headers.set('Access-Control-Max-Age', '86400');
+  return response;
 }

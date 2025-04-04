@@ -86,20 +86,22 @@ export const ChatHistoryItem = React.memo<ChatHistoryItemProps>(({
     }, [chat.id, onDelete]);
 
     return (
-        <SidebarMenuItem className="px-1 py-0.5 group/menu-item"> {/* Ensure group class for hover effects */}
-            {/* Use Link for proper client-side navigation */}
+        <SidebarMenuItem className="px-1 py-0.5 group/menu-item">
+            {/* Remove legacyBehavior, move onClick to child */}
             <Link
                 href={`/chat/${chat.id}`}
-                onClick={handleLinkClick}
-                passHref // Recommended for custom components inside Link
-                legacyBehavior // Often needed with custom components like SidebarMenuButton
+                passHref
+            // legacyBehavior removed
             >
                 <SidebarMenuButton
+                    onClick={handleLinkClick} // onClick moved here
                     isActive={isActive}
                     className={cn(
                         "flex items-center group rounded-md px-3 py-2 hover:bg-sidebar-item-hover transition-colors w-full",
                         isActive && "bg-gray-300 dark:bg-gray-700 text-gray-900 dark:text-white font-medium"
                     )}
+                    role="button"
+                    tabIndex={0} // Ensure it's keyboard focusable
                 >
                     <div className="flex items-center gap-2 flex-1 min-w-0">
                         <span className="truncate text-base">{chat.title || "New Chat"}</span>
