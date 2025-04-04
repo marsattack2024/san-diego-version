@@ -358,7 +358,7 @@ export async function POST(request: Request) { // No context needed if no params
     const streamResponse = await aiStreamService.process(
       serviceContext as ChatEngineContext, // Cast needed if using partial context
       serviceConfig as ChatEngineConfig, // Cast needed if using partial config
-      { onFinish: onFinishForService }
+      { onStreamFinish: onFinishForService }
     );
     edgeLogger.debug('AIStreamService process returned', { operationId, sessionId });
 

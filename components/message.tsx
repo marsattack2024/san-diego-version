@@ -135,11 +135,11 @@ const PurePreviewMessage = ({
                   {hasParts ? (
                     <div>
                       {message.parts?.map((part, idx) => {
-                        // Handle text part type
-                        if (part.type === 'text' && 'text' in part) {
+                        // Handle text part type - RENDER THIS
+                        if (part.type === 'text' && typeof part.text === 'string') {
                           return (
                             <Markdown
-                              key={idx}
+                              key={`${message.id}-part-${idx}`}
                               className={cn({
                                 'text-foreground': message.role === 'assistant',
                                 'text-white': message.role === 'user',
@@ -150,26 +150,17 @@ const PurePreviewMessage = ({
                             </Markdown>
                           );
                         }
-
-                        // Handle tool calls more generically to avoid type issues
-                        // This will catch any part that appears to be a tool call regardless of specific format
+                        // Handle tool call parts - DO NOT RENDER (removed the old "Tool Call:" div)
                         if ('tool_call_id' in part || 'name' in part || part.type?.toString().includes('tool')) {
-                          // Get the tool name from whatever property might contain it
-                          const toolName =
-                            ('name' in part && typeof part.name === 'string') ? part.name :
-                              'unknown tool';
-
-                          return (
-                            <div key={idx} className="text-xs text-muted-foreground my-1 p-1 bg-muted/30 rounded">
-                              <span className="font-medium">Tool Call:</span> {toolName}
-                            </div>
-                          );
+                          return null; // Explicitly render nothing for tool call parts
                         }
 
+                        // Fallback for unknown part types (render nothing for now)
                         return null;
                       })}
                     </div>
                   ) : (
+                    // Fallback: Render message.content if no parts exist
                     <Markdown
                       className={cn({
                         'text-foreground': message.role === 'assistant',

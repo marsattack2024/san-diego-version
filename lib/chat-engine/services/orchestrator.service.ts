@@ -46,7 +46,7 @@ export class AgentOrchestrator {
      */
     async generatePlan(request: string, initialAgentType?: AgentType): Promise<WorkflowPlan> {
         const operationId = `plan_${Date.now().toString(36)}`;
-        const startTime = Date.now();
+        const planGenStartTime = Date.now(); // Start timing for plan generation
         const availableSpecializedAgents = AVAILABLE_AGENT_TYPES.filter(a => a !== 'default').join(', ');
 
         this.logger.info('Generating workflow plan (incl. complexity assessment)', {
@@ -71,6 +71,15 @@ User Agent Hint: ${initialAgentType || 'default'}
 
 Analyze this request and generate the appropriate workflow plan (either single-step simple or multi-step complex) based on your system instructions. Ensure the plan achieves the user's goal.`;
 
+            // Log the prompt at debug level
+            this.logger.debug('generatePlan: Prompt sent to model', {
+                category: LOG_CATEGORIES.ORCHESTRATOR,
+                operationId,
+                systemPrompt,
+                prompt
+            });
+
+            const generateObjectStartTime = Date.now(); // Time the generateObject call
             const { object: plan, usage, finishReason, warnings } = await generateObject({
                 model: this.orchestratorModel,
                 schema: WorkflowPlanSchema,
@@ -78,38 +87,52 @@ Analyze this request and generate the appropriate workflow plan (either single-s
                 prompt: prompt,
                 maxRetries: 2,
             });
+            const generateObjectDurationMs = Date.now() - generateObjectStartTime;
 
-            const durationMs = Date.now() - startTime;
-            const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
-            const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
-            // Use warn if slow or important, otherwise info
-            const planLogMethod = isSlow || isImportant ? this.logger.warn : this.logger.info;
-            planLogMethod.call(this.logger, 'Workflow plan generated successfully', {
+            // Calculate slow/important flags for the generateObject call
+            const isGenObjSlow = generateObjectDurationMs > THRESHOLDS.SLOW_OPERATION;
+            const isGenObjImportant = generateObjectDurationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
+            // Use specific logger level method
+            (isGenObjSlow ? this.logger.warn : this.logger.info).call(this.logger, 'generatePlan: generateObject call completed', {
                 category: LOG_CATEGORIES.ORCHESTRATOR,
-                operation: 'generate_plan_success',
+                operation: 'generate_plan_llm_call',
                 operationId,
-                durationMs,
-                stepCount: plan.steps.length,
-                planPreview: JSON.stringify(plan.steps.map(s => s.agent)),
+                durationMs: generateObjectDurationMs,
+                slow: isGenObjSlow,
+                important: isGenObjImportant,
                 usage,
                 finishReason,
                 warnings,
+            });
+
+            const totalPlanGenDurationMs = Date.now() - planGenStartTime;
+            const isTotalPlanSlow = totalPlanGenDurationMs > THRESHOLDS.SLOW_OPERATION;
+            const isTotalPlanImportant = totalPlanGenDurationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
+            // Use specific logger level method
+            (isTotalPlanSlow ? this.logger.warn : this.logger.info).call(this.logger, 'Workflow plan generation completed', {
+                category: LOG_CATEGORIES.ORCHESTRATOR,
+                operation: 'generate_plan_success',
+                operationId,
+                durationMs: totalPlanGenDurationMs, // Log total duration
+                stepCount: plan.steps.length,
+                planPreview: JSON.stringify(plan.steps.map(s => s.agent)),
+                slow: isTotalPlanSlow, // Add flags for total duration
+                important: isTotalPlanImportant,
+                llmDurationMs: generateObjectDurationMs // Include specific LLM call time
             });
 
             // Validate plan structure
             if (!plan.steps || plan.steps.length === 0) {
                 throw new Error('Generated workflow plan is empty.');
             }
-            // Cast step.agent for includes check
             if (plan.steps.some(step => !AVAILABLE_AGENT_TYPES.includes(step.agent as AgentType))) {
-                // Cast step.agent for find check
                 const invalidAgent = plan.steps.find(step => !AVAILABLE_AGENT_TYPES.includes(step.agent as AgentType))?.agent;
                 throw new Error(`Generated plan uses invalid agent type: ${invalidAgent}`);
             }
 
             return plan;
         } catch (error) {
-            const durationMs = Date.now() - startTime;
+            const durationMs = Date.now() - planGenStartTime;
             this.logger.error('Error generating workflow plan', {
                 category: LOG_CATEGORIES.ORCHESTRATOR,
                 operation: 'generate_plan_error',
@@ -206,9 +229,21 @@ Analyze this request and generate the appropriate workflow plan (either single-s
                             }
                         });
                     }
-                    const workerPrompt = `${workerContextInput}\nYour Task: ${step.task}`;
+                    const workerPrompt = `${workerContextInput}\n\nYour Task: ${step.task}`;
 
-                    // Execute Worker Agent
+                    // Log the prompt for this specific step at debug level
+                    this.logger.debug(`executePlan Step ${i}: Prompt sent to agent`, {
+                        category: LOG_CATEGORIES.ORCHESTRATOR,
+                        operationId,
+                        step: i,
+                        stepLogId,
+                        agent: step.agent,
+                        systemPrompt: agentConfig.systemPrompt,
+                        workerPrompt
+                    });
+
+                    // Execute Worker Agent - Time this specific call
+                    const generateObjectStepStartTime = Date.now();
                     const { object: output, usage: agentUsage, finishReason: agentFinishReason } = await generateObject({
                         model: openai(agentConfig.model || 'gpt-4o'),
                         schema: AgentOutputSchema,
@@ -218,19 +253,45 @@ Analyze this request and generate the appropriate workflow plan (either single-s
                         maxTokens: agentConfig.maxTokens,
                         maxRetries: 1,
                     });
+                    const generateObjectStepDurationMs = Date.now() - generateObjectStepStartTime;
 
+                    // Calculate slow/important for this specific agent call
+                    const isGenObjStepSlow = generateObjectStepDurationMs > THRESHOLDS.SLOW_OPERATION;
+                    const isGenObjStepImportant = generateObjectStepDurationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
+                    // Use specific logger level method
+                    (isGenObjStepSlow ? this.logger.warn : this.logger.info).call(this.logger, `executePlan Step ${i}: generateObject call completed`, {
+                        category: LOG_CATEGORIES.ORCHESTRATOR,
+                        operation: 'execute_step_llm_call',
+                        operationId,
+                        step: i,
+                        stepLogId,
+                        agent: step.agent,
+                        durationMs: generateObjectStepDurationMs,
+                        slow: isGenObjStepSlow,
+                        important: isGenObjStepImportant,
+                        usage: agentUsage,
+                        finishReason: agentFinishReason
+                    });
+
+                    // Calculate timing for the overall step (including overhead)
                     const stepDurationMs = Date.now() - stepStartTime;
-                    const isSlow = stepDurationMs > THRESHOLDS.SLOW_OPERATION;
-                    const isImportant = stepDurationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
-                    // Use warn if slow or important, otherwise info
-                    const stepLogMethod = isSlow || isImportant ? this.logger.warn : this.logger.info;
-                    stepLogMethod.call(this.logger, `Step ${i} (${step.agent}) context gathered successfully`, {
-                        category: LOG_CATEGORIES.ORCHESTRATOR, operation: 'execute_step_context_success',
-                        operationId, step: i, agent: step.agent, stepLogId, durationMs: stepDurationMs,
-                        usage: agentUsage, finishReason: agentFinishReason,
+                    const isStepSlow = stepDurationMs > THRESHOLDS.SLOW_OPERATION;
+                    const isStepImportant = stepDurationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
+                    // Use specific logger level method
+                    (isStepSlow ? this.logger.warn : this.logger.info).call(this.logger, `Step ${i} (${step.agent}) context gathered successfully`, {
+                        category: LOG_CATEGORIES.ORCHESTRATOR,
+                        operation: 'execute_step_context_success',
+                        operationId,
+                        step: i,
+                        agent: step.agent,
+                        stepLogId,
+                        durationMs: stepDurationMs, // Total step duration
+                        llmDurationMs: generateObjectStepDurationMs, // Specific LLM call duration
+                        usage: agentUsage,
+                        finishReason: agentFinishReason,
                         needsRevision: output.metadata.needsRevision,
-                        slow: isSlow,
-                        important: isImportant,
+                        slow: isStepSlow, // Flags for total step duration
+                        important: isStepImportant,
                     });
 
                     // Store output for dependency tracking

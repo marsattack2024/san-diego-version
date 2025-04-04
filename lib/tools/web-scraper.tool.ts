@@ -12,6 +12,7 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { extractUrls } from '@/lib/utils/url-utils';
 import { puppeteerService } from '@/lib/services/puppeteer.service';
+import { THRESHOLDS } from '@/lib/logger/edge-logger';
 
 // Simplified schema - just one parameter like DeepSearch uses
 // This matches the pattern of the working DeepSearch tool
@@ -43,6 +44,8 @@ export function createWebScraperTool(options: WebScraperToolOptions = {}) {
         description: 'Extracts and analyzes content from web pages. Use this tool whenever you encounter a URL in the user message or when asked to summarize a webpage. Simply provide the URL or text containing URLs, and the tool will extract the content for analysis.',
         parameters: webScraperSchema,
         execute: async ({ url }, { toolCallId }) => {
+            const startTime = Date.now();
+
             try {
                 // Enhanced debug logging at tool execution start
                 edgeLogger.debug('Web scraper tool execute called', {
@@ -60,13 +63,10 @@ export function createWebScraperTool(options: WebScraperToolOptions = {}) {
                     url
                 });
 
-                const startTime = Date.now();
-
-                // Extract URLs from the text or use directly if it's a valid URL
                 const extractedUrls = extractUrls(url);
-                const urls = extractedUrls.length > 0 ? extractedUrls : [url];
+                const urlsToProcess = extractedUrls.length > 0 ? extractedUrls : [url];
 
-                if (!urls || urls.length === 0) {
+                if (!urlsToProcess || urlsToProcess.length === 0) {
                     edgeLogger.info('No URLs found to scrape', {
                         category: LOG_CATEGORIES.TOOLS,
                         operation: operationName,
@@ -78,20 +78,20 @@ export function createWebScraperTool(options: WebScraperToolOptions = {}) {
                 }
 
                 // Limit the number of URLs to process
-                const urlsToProcess = urls.slice(0, maxUrlsToProcess);
+                const urlsToProcessLimited = urlsToProcess.slice(0, maxUrlsToProcess);
 
                 // Log URLs being processed
                 edgeLogger.info('Processing URLs', {
                     category: LOG_CATEGORIES.TOOLS,
                     operation: operationName,
                     toolCallId,
-                    urlCount: urlsToProcess.length,
-                    urls: urlsToProcess
+                    urlCount: urlsToProcessLimited.length,
+                    urls: urlsToProcessLimited
                 });
 
                 // Process each URL using the puppeteerService
                 const scrapedResults = await Promise.all(
-                    urlsToProcess.map(async (url) => {
+                    urlsToProcessLimited.map(async (url) => {
                         try {
                             // Use the puppeteerService to scrape the URL
                             const result = await puppeteerService.scrapeUrl(url);
@@ -132,23 +132,27 @@ export function createWebScraperTool(options: WebScraperToolOptions = {}) {
                     })
                     .join('\n\n---\n\n');
 
-                // Log completion
-                edgeLogger.info('Web scraping completed', {
+                // Calculate slow/important flags
+                const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
+                const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
+
+                // Log completion using appropriate level and flags
+                (isSlow ? edgeLogger.warn : edgeLogger.info).call(edgeLogger, 'Web scraping completed', {
                     category: LOG_CATEGORIES.TOOLS,
                     operation: operationName,
                     toolCallId,
-                    urlCount: urlsToProcess.length,
+                    urlCount: urlsToProcessLimited.length,
                     successCount: scrapedResults.filter(r => r.success).length,
                     failureCount: scrapedResults.filter(r => !r.success).length,
                     durationMs,
+                    slow: isSlow,
+                    important: isImportant,
                     url
                 });
 
-                // Return formatted content directly as a string to simplify the return type
-                // This matches the pattern of the working DeepSearch tool which returns a string
                 return formattedContent;
             } catch (error) {
-                // Handle any errors during scraping
+                const durationMs = Date.now() - startTime;
                 const errorMessage = error instanceof Error ? error.message : String(error);
 
                 edgeLogger.error('Web scraping failed', {
@@ -156,10 +160,11 @@ export function createWebScraperTool(options: WebScraperToolOptions = {}) {
                     operation: operationName,
                     toolCallId,
                     url,
-                    error: errorMessage
+                    durationMs,
+                    error: errorMessage,
+                    important: true
                 });
 
-                // Return error message as a string
                 return `Error scraping web content: ${errorMessage}`;
             }
         }
