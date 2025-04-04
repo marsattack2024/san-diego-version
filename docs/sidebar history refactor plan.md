@@ -215,10 +215,10 @@ We should also be following our logging standardization.
 *   Linter Errors Fixed. ✅ (Except for integration tests)
 *   Runtime infinite loop debugged and fixed (using individual selectors in `useChatHistoryData`). ✅
 *   Post-refactor bugs (Message Rendering, Title Generation) fixed. ✅
-*   API Routes updated for `withAuth` signature change. ✅
-*   Route Handler Documentation Updated. ✅
+*   API Routes confirmed/updated to use Pattern B (manual auth checks). ✅
+*   Route Handler Documentation Updated (Pattern B confirmed as standard). ✅
 *   **Post-Delete Navigation Implemented:** Logic added to `SidebarHistoryContent` to navigate to the next newest chat upon deleting the active one. ✅
-*   **Note:** Integration tests (e.g., `tests/integration/api/chat-route.test.ts`) still need updating to reflect the new `withAuth` signature and handler structure. <= TO DO
+*   **Note:** Integration tests (e.g., `tests/integration/api/chat-route.test.ts`) still need updating to reflect the Pattern B (manual auth check) handler structure. <= TO DO
 
 ## 7. Troubleshooting Guide for Future Developers
 
