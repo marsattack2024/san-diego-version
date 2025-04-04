@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useLayoutEffect } from 'react';
 import type { ChatRequestOptions, Message } from 'ai';
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
 import { PreviewMessage, ThinkingMessage } from './message';
@@ -81,6 +81,7 @@ export function VirtualizedChat({
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [totalMessageCount, setTotalMessageCount] = useState<number | null>(null);
   const pageSize = 20; // Number of messages to load per batch
+  const [initialScrollComplete, setInitialScrollComplete] = useState(false); // Track if initial scroll happened
 
   // Update allMessages when messages prop changes, BUT ONLY if content differs
   useEffect(() => {
@@ -138,6 +139,22 @@ export function VirtualizedChat({
       return () => clearTimeout(timeout);
     }
   }, [isLoading]);
+
+  // Effect for initial scroll to bottom
+  useLayoutEffect(() => {
+    // Only run once after initial messages are loaded and scroll hasn't happened
+    if (virtuosoRef.current && allMessages.length > 0 && !initialScrollComplete) {
+      console.log('[VirtualizedChat] Attempting initial scroll to bottom.');
+      virtuosoRef.current?.scrollToIndex({
+        index: allMessages.length - 1,
+        align: 'end',
+        behavior: 'smooth' // Use 'smooth' for potentially better results
+      });
+      setInitialScrollComplete(true); // Mark initial scroll as done
+      console.log('[VirtualizedChat] Initial scroll executed.');
+    }
+    // Add initialScrollComplete to dependency array
+  }, [allMessages, initialScrollComplete]);
 
   // Handle scroll position changes
   const handleScrollPositionChange = (isAtBottom: boolean) => {
@@ -317,7 +334,6 @@ export function VirtualizedChat({
           } as React.CSSProperties}
           data={allMessages}
           className={styles.virtualizedChat} // Ensure this class handles height/flex correctly
-          initialTopMostItemIndex={allMessages.length - 1}
           alignToBottom={true}
           defaultItemHeight={virtuosoConfig.defaultItemHeight}
           followOutput={shouldAutoScroll ? 'auto' : false}

@@ -92,19 +92,19 @@ export default function ChatPage() {
     ? conversations[currentConversationId]
     : null;
 
-  if (historyLoading || !isHydrated || !isInitialized || (!currentConversationId && !currentConversation)) {
+  if (historyLoading || !isHydrated || !isInitialized || !currentConversationId || !currentConversation) {
     return <div className="h-screen flex items-center justify-center">Loading...</div>;
   }
 
   log.debug('Rendering chat with conversation', {
     id: currentConversationId,
-    messageCount: currentConversation?.messages?.length || 0
+    messageCount: currentConversation.messages?.length || 0
   });
 
   return (
     <Chat
       id={currentConversationId!}
-      initialMessages={currentConversation?.messages || []}
+      initialMessages={currentConversation.messages || []}
       isReadonly={false}
     />
   );
