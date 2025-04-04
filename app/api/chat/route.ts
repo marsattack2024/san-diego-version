@@ -85,18 +85,16 @@ const POST_Handler = async (user: User, request: Request): Promise<Response> => 
       deepSearchEnabled,
       agentId
     } = validationResult.data;
+    // Log after extraction
+    edgeLogger.debug('Extracted data from body', { operationId, sessionId, agentId });
 
-    // 2. Authentication (handled by withAuth wrapper)
-    const userId = user.id; // User object is passed from withAuth
-    edgeLogger.info('User authenticated (via withAuth)', {
-      category: LOG_CATEGORIES.AUTH,
-      operationId,
-      sessionId,
-      userId: userId.substring(0, 8)
-    });
+    const userId = user.id;
+    edgeLogger.debug('User ID available', { operationId, userId: userId?.substring(0, 5) });
 
     // 3. Initialize Persistence Service
+    edgeLogger.debug('Initializing Persistence Service', { operationId });
     const persistenceService = new MessagePersistenceService();
+    edgeLogger.debug('Persistence Service Initialized', { operationId });
 
     // 4. Load Message History (Needed for context)
     edgeLogger.debug('Loading previous messages', { operationId, sessionId });
@@ -104,14 +102,13 @@ const POST_Handler = async (user: User, request: Request): Promise<Response> => 
     edgeLogger.debug('Loaded previous messages count:', { operationId, count: previousMessages.length });
 
     // Convert createdAt string to Date for userMessage before appending
-    edgeLogger.debug('Converting user message createdAt', { operationId, createdAt: userMessage.createdAt });
-    // Add safety check for undefined createdAt before calling new Date()
+    edgeLogger.debug('Preparing user message for append', { operationId, userMessageId: userMessage.id });
     const createdAtDate = userMessage.createdAt ? new Date(userMessage.createdAt) : undefined;
     const userMessageForAppend = {
       ...userMessage,
       createdAt: createdAtDate
     };
-    edgeLogger.debug('Converted user message', { operationId, userMessageForAppend });
+    edgeLogger.debug('Prepared user message', { operationId, hasDate: !!createdAtDate });
 
     edgeLogger.debug('Appending client message to history', { operationId });
     const currentMessages = appendClientMessage({ messages: previousMessages, message: userMessageForAppend });
@@ -119,12 +116,15 @@ const POST_Handler = async (user: User, request: Request): Promise<Response> => 
 
     // 5. Prepare Orchestration Context
     edgeLogger.info('Preparing orchestration context...', { operationId, sessionId, agentId });
+    edgeLogger.debug('Initializing Agent Orchestrator', { operationId });
     const orchestrator = new AgentOrchestrator();
+    edgeLogger.debug('Agent Orchestrator Initialized, calling prepareContext', { operationId });
     // Call the new method
     const {
       targetModelId,
       contextMessages = [] // Default to empty array if none provided
     } = await orchestrator.prepareContext(userMessage.content, agentId as AgentType | undefined);
+    edgeLogger.debug('prepareContext finished', { operationId });
 
     // Determine effective agent ID
     const effectiveAgentId = (agentId || 'default') as AgentType;

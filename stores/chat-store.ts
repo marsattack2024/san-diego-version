@@ -84,7 +84,7 @@ interface ChatState {
   // New synchronization methods
   fetchHistory: (forceRefresh?: boolean) => Promise<void>;
   syncConversationsFromHistory: (historyData: Chat[]) => void;
-  updateConversationTitle: (id: string, title: string) => void;
+  updateConversationTitle: (id: string, title: string) => Promise<boolean>;
   removeConversationOptimistic: (id: string) => void;
 
   // Refresh history data without changing current conversation ID
@@ -459,28 +459,113 @@ export const useChatStore = create<ChatState>()(
         }
       },
 
-      // Update a conversation's title
-      updateConversationTitle: (id: string, title: string) => {
-        set((state) => {
-          // Skip if conversation doesn't exist
-          if (!state.conversations[id]) {
-            console.warn(`[ChatStore] Attempted to update title for non-existent conversation: ${id}`);
-            return {};
+      // Update a conversation's title (Refactored for API call)
+      updateConversationTitle: async (id: string, title: string): Promise<boolean> => {
+        const trimmedTitle = title.trim();
+        if (!trimmedTitle) {
+          edgeLogger.warn(`[ChatStore] Attempted to rename chat ${id} with empty title`);
+          return false; // Don't allow empty titles
+        }
+
+        const state = get();
+        const originalTitle = state.conversationsIndex[id]?.title;
+
+        // 1. Optimistic UI Update (Index, Loaded, Legacy)
+        set((currentState) => {
+          const updatedConversations = { ...currentState.conversations };
+          const updatedIndex = { ...currentState.conversationsIndex };
+          const updatedLoaded = { ...currentState.loadedConversations };
+          const timestamp = new Date().toISOString();
+
+          if (updatedConversations[id]) {
+            updatedConversations[id] = {
+              ...updatedConversations[id],
+              title: trimmedTitle,
+              updatedAt: timestamp
+            };
+          }
+          if (updatedIndex[id]) {
+            updatedIndex[id] = {
+              ...updatedIndex[id],
+              title: trimmedTitle,
+              updatedAt: timestamp
+            };
+          }
+          if (updatedLoaded[id]) {
+            updatedLoaded[id] = {
+              ...updatedLoaded[id],
+              title: trimmedTitle,
+              updatedAt: timestamp
+            };
           }
 
-          console.debug(`[ChatStore] Updating title for chat ${id}: "${title}"`);
+          edgeLogger.debug(`[ChatStore] Optimistically updated title for chat ${id} to "${trimmedTitle}"`);
 
           return {
-            conversations: {
-              ...state.conversations,
-              [id]: {
-                ...state.conversations[id],
-                title,
-                updatedAt: new Date().toISOString()
-              }
-            }
+            conversations: updatedConversations,
+            conversationsIndex: updatedIndex,
+            loadedConversations: updatedLoaded,
           };
         });
+
+        // 2. Call API to persist change
+        try {
+          const supabase = createClient(); // Get client-side Supabase instance
+          const success = await historyService.renameChat(supabase, id, trimmedTitle);
+
+          if (!success) {
+            throw new Error('API call to renameChat returned false');
+          }
+
+          edgeLogger.info(`[ChatStore] Successfully persisted title update for chat ${id}`);
+          // Optional: Force refresh history if needed, though optimistic update might suffice
+          // setTimeout(() => get().fetchHistory(true), 500); 
+          return true;
+        } catch (error) {
+          edgeLogger.error(`[ChatStore] Failed to persist title update for chat ${id}`, {
+            error: error instanceof Error ? error.message : String(error),
+            originalTitle: originalTitle,
+            newTitle: trimmedTitle
+          });
+
+          // 3. Revert optimistic update on failure
+          set((currentState) => {
+            const revertedConversations = { ...currentState.conversations };
+            const revertedIndex = { ...currentState.conversationsIndex };
+            const revertedLoaded = { ...currentState.loadedConversations };
+            const timestamp = new Date().toISOString(); // Use a new timestamp for revert?
+
+            if (revertedConversations[id] && originalTitle !== undefined) {
+              revertedConversations[id] = {
+                ...revertedConversations[id],
+                title: originalTitle,
+                updatedAt: timestamp // Revert timestamp?
+              };
+            }
+            if (revertedIndex[id] && originalTitle !== undefined) {
+              revertedIndex[id] = {
+                ...revertedIndex[id],
+                title: originalTitle,
+                updatedAt: timestamp
+              };
+            }
+            if (revertedLoaded[id] && originalTitle !== undefined) {
+              revertedLoaded[id] = {
+                ...revertedLoaded[id],
+                title: originalTitle,
+                updatedAt: timestamp
+              };
+            }
+
+            return {
+              conversations: revertedConversations,
+              conversationsIndex: revertedIndex,
+              loadedConversations: revertedLoaded,
+            };
+          });
+
+          return false; // Indicate failure
+        }
       },
 
       // Remove a conversation that failed to save to the database

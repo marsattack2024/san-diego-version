@@ -38,19 +38,16 @@ vi.mock('@/lib/chat-engine/agent-router', () => ({
 }));
 
 // Mock Persistence Service Constructor
-vi.mock('@/lib/chat-engine/message-persistence', () => {
-    // Define method mocks directly inside the constructor mock
-    const mockLoad = vi.fn().mockResolvedValue([]);
-    const mockSaveUser = vi.fn().mockResolvedValue({ success: true });
-    const mockSaveAssistant = vi.fn().mockResolvedValue({ success: true });
-    return {
-        MessagePersistenceService: vi.fn().mockImplementation(() => ({
-            loadMessages: mockLoad,
-            saveUserMessage: mockSaveUser,
-            saveAssistantMessage: mockSaveAssistant
-        }))
-    };
-});
+const mockPersistenceLoadMessages = vi.fn();
+const mockPersistenceSaveUser = vi.fn();
+const mockPersistenceSaveAssistant = vi.fn();
+vi.mock('@/lib/chat-engine/message-persistence', () => ({
+    MessagePersistenceService: vi.fn().mockImplementation(() => ({
+        loadMessages: mockPersistenceLoadMessages,
+        saveUserMessage: mockPersistenceSaveUser,
+        saveAssistantMessage: mockPersistenceSaveAssistant
+    }))
+}));
 
 // --- Mock AI SDK / Provider ---
 vi.mock('ai', async (importOriginal) => {
@@ -73,14 +70,12 @@ vi.mock('ai', async (importOriginal) => {
         providerMetadata: {},
         logprobs: undefined,
         experimental_customData: undefined,
-        toDataStreamResponse: vi.fn(() => new Response('dummy stream', { status: 200 }))
+        toDataStreamResponse: vi.fn(() => new Response(JSON.stringify({ stream: 'dummy' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     };
     return {
         ...actual,
         streamText: vi.fn().mockReturnValue(mockStreamTextResult),
-        appendClientMessage: vi.fn(({ messages, message }) => {
-            return [...(messages || []), message];
-        })
+        appendClientMessage: vi.fn(() => [{ id: 'mock-append-id', role: 'user', content: 'mock message' }])
     };
 });
 vi.mock('@ai-sdk/openai', () => ({ openai: vi.fn().mockReturnValue('mock-openai-model') }));
@@ -103,8 +98,9 @@ vi.mock('@/lib/utils/route-handler', async (importOriginal) => {
     const actual = await importOriginal() as any;
     return {
         ...actual,
-        errorResponse: vi.fn((msg, _, status) => new Response(JSON.stringify({ error: msg }), { status: status || 500 })),
-        unauthorizedError: vi.fn((msg = 'Authentication required') => new Response(JSON.stringify({ error: msg }), { status: 401 })),
+        // Simplify mocks to return minimal Response
+        errorResponse: vi.fn((msg) => new Response(JSON.stringify({ error: msg }), { status: 500 })),
+        unauthorizedError: vi.fn(() => new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })),
         validationError: vi.fn((msg) => new Response(JSON.stringify({ error: msg }), { status: 400 }))
     };
 });
@@ -128,16 +124,15 @@ import { streamText, appendClientMessage } from 'ai'; // Import the mocked strea
 // 4. Test Suite
 describe('Shallow Integration Test: /api/chat Route Handler Logic', () => {
 
-    // Define valid data structure based on chatRequestSchema
+    // Define valid data structure based on chatRequestSchema - ONLY REQUIRED FIELDS
     const mockValidRequestBody = {
         id: '123e4567-e89b-12d3-a456-426614174000',
         message: {
             id: 'msg-abc-123',
             role: 'user' as const,
             content: 'This is valid content.'
-        },
-        deepSearchEnabled: false,
-        agentId: 'default'
+        }
+        // Omit optional: deepSearchEnabled, agentId, message.createdAt
     };
     const mockTool: Tool<any, any> = { description: "Mock Tool", parameters: z.object({}), execute: vi.fn() };
 
@@ -170,14 +165,9 @@ describe('Shallow Integration Test: /api/chat Route Handler Logic', () => {
         vi.mocked(createAgentToolSet).mockReturnValue({ mockTool });
         mockPrepareContext.mockResolvedValue({ targetModelId: 'gpt-4o-mini', contextMessages: [] });
         vi.mocked(MessagePersistenceService).mockClear();
-        // Access mocked methods via the instance for reset/assertions if needed
-        // e.g., vi.mocked(new MessagePersistenceService().loadMessages).mockClear();
-        // Ensure default implementations are set if not relying solely on factory
-        vi.mocked(MessagePersistenceService).mockImplementation(() => ({
-            loadMessages: vi.fn().mockResolvedValue([]),
-            saveUserMessage: vi.fn().mockResolvedValue({ success: true }),
-            saveAssistantMessage: vi.fn().mockResolvedValue({ success: true })
-        }));
+        mockPersistenceLoadMessages.mockClear().mockResolvedValue([]);
+        mockPersistenceSaveUser.mockClear().mockResolvedValue({ success: true });
+        mockPersistenceSaveAssistant.mockClear().mockResolvedValue({ success: true });
 
         // Restore streamText mock setup
         const mockStreamTextResult = {
@@ -193,19 +183,19 @@ describe('Shallow Integration Test: /api/chat Route Handler Logic', () => {
             providerMetadata: {},
             logprobs: undefined,
             experimental_customData: undefined,
-            toDataStreamResponse: vi.fn(() => new Response('dummy stream', { status: 200 }))
+            toDataStreamResponse: vi.fn(() => new Response(JSON.stringify({ stream: 'dummy' }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
         };
         vi.mocked(streamText).mockClear().mockReturnValue(mockStreamTextResult as any);
 
         // Reset appendClientMessage mock
-        vi.mocked(appendClientMessage).mockClear().mockImplementation(({ messages, message }) => {
-            return [...(messages || []), message];
-        });
+        vi.mocked(appendClientMessage).mockClear().mockImplementation(() => [{ id: 'mock-append-id', role: 'user', content: 'mock message' }]);
 
         // Reset route-handler utils
         vi.mocked(errorResponse).mockClear().mockImplementation((msg, _, status) => new Response(JSON.stringify({ error: msg }), { status: status || 500 }));
         vi.mocked(unauthorizedError).mockClear().mockImplementation((msg = 'Authentication required') => new Response(JSON.stringify({ error: msg }), { status: 401 }));
-        vi.mocked(validationError).mockClear().mockImplementation((msg) => new Response(JSON.stringify({ error: msg }), { status: 400 }));
+        vi.mocked(validationError).mockClear().mockImplementation((msg, details) => {
+            return new Response(JSON.stringify({ error: msg, details }), { status: 400 });
+        });
     });
 
     afterEach(() => {
@@ -239,7 +229,7 @@ describe('Shallow Integration Test: /api/chat Route Handler Logic', () => {
         expect(vi.mocked(streamText).mock.calls[0][0].tools).toHaveProperty('mockTool');
         expect(errorResponse).not.toHaveBeenCalled();
         expect(MessagePersistenceService).toHaveBeenCalledTimes(1);
-        // Cannot easily assert method calls with this style, focus on outcome
+        expect(mockPersistenceLoadMessages).toHaveBeenCalledTimes(1);
         expect(response.status).toBe(200);
     });
 
@@ -253,7 +243,8 @@ describe('Shallow Integration Test: /api/chat Route Handler Logic', () => {
         // Assert
         expect(response.status).toBe(400);
         expect(validationError).toHaveBeenCalledWith('Invalid request body', expect.any(Object));
-        // Cannot easily assert withAuth was not called internally anymore
+        const responseData = await response.json();
+        expect(responseData.error).toBe('Invalid request body'); // Check specific error message
     });
 
     // Auth failure test needs rethinking - cannot easily test withAuth failure without complex mocking

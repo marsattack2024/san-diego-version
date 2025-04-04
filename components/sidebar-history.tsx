@@ -671,16 +671,6 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
   return (
     <>
       <div className="flex flex-col gap-2 mb-4 px-2">
-        <Button
-          onClick={createNewChat}
-          className="w-full mb-4"
-        >
-          <div className="flex items-center gap-2">
-            <PlusCircle className="h-4 w-4" />
-            <span>New Chat</span>
-          </div>
-        </Button>
-
         <div className="flex justify-between items-center mb-4 px-2">
           <SidebarMenuButton
             onClick={refreshHistory}

@@ -25,8 +25,17 @@ describe('Deep Search Tool', () => {
   // Mock runOptions for tool execution
   const mockRunOptions = {
     toolCallId: 'tool-call-123',
-    body: { deepSearchEnabled: true },
-    messages: []
+    // Add a system message with the context needed by the tool
+    messages: [
+      {
+        role: 'system' as const,
+        content: JSON.stringify({
+          // Add other context properties if the tool uses them
+          deepSearchEnabled: true
+        })
+      }
+      // Add other user/assistant messages if needed for specific tests
+    ]
   };
 
   beforeEach(() => {
