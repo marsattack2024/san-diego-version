@@ -216,7 +216,8 @@ We should also be following our logging standardization.
 *   Runtime infinite loop debugged and fixed (using individual selectors in `useChatHistoryData`). ✅
 *   Post-refactor bugs (Message Rendering, Title Generation) fixed. ✅
 *   API Routes updated for `withAuth` signature change. ✅
-*   **Route Handler Documentation Updated.** ✅
+*   Route Handler Documentation Updated. ✅
+*   **Post-Delete Navigation Implemented:** Logic added to `SidebarHistoryContent` to navigate to the next newest chat upon deleting the active one. ✅
 *   **Note:** Integration tests (e.g., `tests/integration/api/chat-route.test.ts`) still need updating to reflect the new `withAuth` signature and handler structure. <= TO DO
 
 ## 7. Troubleshooting Guide for Future Developers

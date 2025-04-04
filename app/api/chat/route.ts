@@ -34,16 +34,19 @@ import { cleanTitle, updateTitleInDatabase } from '@/lib/chat/title-utils';
 import { shouldGenerateTitle } from '@/lib/chat/title-service'; // Import shouldGenerateTitle
 
 // Define request schema for validation
-// Based on useChat hook and experimental_prepareRequestBody in components/chat.tsx
+// Updated to match experimental_prepareRequestBody in components/chat.tsx
 export const ChatRequestSchema = z.object({
-  id: z.string().uuid().optional(), // Make session ID optional for new chats
-  messages: z.array(z.object({ // Expect an array of messages
+  id: z.string().uuid(), // Chat ID is required in this flow
+  message: z.object({ // Expect a single message object
     id: z.string(),
-    role: z.enum(['user', 'assistant', 'system', 'tool', 'function']), // Allow valid roles
+    role: z.enum(['user']), // Should always be 'user' from client prepareRequestBody
     content: z.string(),
     createdAt: z.string().datetime().optional(),
-    // Add other fields from Message type if necessary
-  })).min(1), // Ensure at least one message is present
+    // Ensure all fields used later (like attachments if needed) are included or optional
+    experimental_attachments: z.any().optional(), // Add if attachments are sent
+    toolInvocations: z.any().optional(), // Add if tool invocations are relevant
+    // Include other relevant fields from 'ai' Message type if necessary
+  }).nullable(), // Allow null if messages array was empty client-side (edge case)
   deepSearchEnabled: z.boolean().optional(),
   agentId: z.string().optional()
 });
@@ -64,11 +67,17 @@ const POST_Handler: AuthenticatedRouteHandler = async (request, context, user) =
   // 1. Validate Request Body
   let body: ChatRequestBody;
   try {
+    // Use the raw request for logging if parsing fails
+    const rawBody = await request.clone().text(); // Clone request to read body multiple times if needed
+    edgeLogger.debug('Received raw request body', { operationId, rawBody });
+
     const validationResult = ChatRequestSchema.safeParse(await request.json());
     if (!validationResult.success) {
+      edgeLogger.warn('Zod validation failed', { operationId, errors: validationResult.error.errors });
       throw validationResult.error; // Throw ZodError on failure
     }
     body = validationResult.data;
+    edgeLogger.debug('Validated request body', { operationId, body });
   } catch (error) {
     if (error instanceof z.ZodError) {
       // Format error first
@@ -90,51 +99,79 @@ const POST_Handler: AuthenticatedRouteHandler = async (request, context, user) =
     return errorResponse('Error parsing request body', 'Could not parse request data', 400);
   }
 
-  const { messages, id: sessionIdFromBody, agentId, deepSearchEnabled } = body;
+  // Extract data based on the UPDATED schema
+  const { message: userMessageFromClient, id: sessionId, agentId, deepSearchEnabled } = body;
   const userId = user.id; // Use user from context
-  const sessionId = sessionIdFromBody || generateUUID(); // Use provided ID or generate new one
+  // const sessionId = sessionIdFromBody || generateUUID(); // ID is now required from client
+
+  // Handle case where client might send null message (e.g., initial load with empty messages)
+  if (!userMessageFromClient) {
+    edgeLogger.warn('Received null message from client', { operationId, sessionId });
+    return errorResponse('Invalid request: No message provided', null, 400);
+  }
+
+  // Ensure the message is from the user as expected by client logic
+  if (userMessageFromClient.role !== 'user') {
+    edgeLogger.warn('Received message with incorrect role', { operationId, sessionId, role: userMessageFromClient.role });
+    return errorResponse('Invalid request: Message must be from user', null, 400);
+  }
+
 
   // Initialize Persistence Service
   const persistenceService = new MessagePersistenceService({ operationName: operationId });
 
-  // Prepare message (assuming last message is user input)
-  const userMessage = messages[messages.length - 1];
-  if (!userMessage || userMessage.role !== 'user') {
-    return errorResponse('Invalid request: Last message must be from user', null, 400);
-  }
+  // Prepare message (using the single message received from client)
+  // const userMessage = messages[messages.length - 1]; // Old logic
+  // if (!userMessage || userMessage.role !== 'user') { // Old logic
+  //   return errorResponse('Invalid request: Last message must be from user', null, 400); // Old logic
+  // } // Old logic
 
   // Load previous messages
+  edgeLogger.debug('Loading previous messages', { operationId, sessionId, userId });
   const previousMessages = await persistenceService.loadMessages(sessionId, userId);
+  edgeLogger.debug(`Loaded ${previousMessages.length} previous messages`, { operationId, sessionId });
 
-  // Convert createdAt string to Date and ensure role is explicitly 'user'
-  const createdAtDate = userMessage.createdAt ? new Date(userMessage.createdAt) : new Date();
+
+  // Convert createdAt string to Date and ensure correct type for appending
+  // Using userMessageFromClient directly now
+  const createdAtDate = userMessageFromClient.createdAt ? new Date(userMessageFromClient.createdAt) : new Date();
   const userMessageForAppend: Message = { // Explicitly type as Message
-    id: userMessage.id,
+    id: userMessageFromClient.id,
     role: 'user', // Explicitly set role to 'user'
-    content: userMessage.content,
+    content: userMessageFromClient.content,
     createdAt: createdAtDate,
+    // Pass through any other relevant fields if needed by persistence or display
+    experimental_attachments: userMessageFromClient.experimental_attachments,
+    toolInvocations: userMessageFromClient.toolInvocations,
   };
+
 
   // Append user message to history for context (do not save yet)
   const currentMessages = appendClientMessage({ messages: previousMessages, message: userMessageForAppend });
+  edgeLogger.debug(`Appended client message. Total messages for context: ${currentMessages.length}`, { operationId, sessionId });
 
   // Prepare Orchestration Context (simplified example)
   const orchestrator = new AgentOrchestrator();
-  const { targetModelId, contextMessages = [] } = await orchestrator.prepareContext(userMessage.content, agentId as AgentType | undefined);
+  // Use content from the received message
+  const { targetModelId, contextMessages = [] } = await orchestrator.prepareContext(userMessageFromClient.content, agentId as AgentType | undefined);
   const effectiveAgentId = (agentId || 'default') as AgentType;
   const agentConfig = getAgentConfig(effectiveAgentId);
   const finalSystemPrompt = agentConfig.systemPrompt;
   const agentToolSet = createAgentToolSet(effectiveAgentId);
 
   // Save user message asynchronously (fire and forget before streaming)
+  // Use data from userMessageFromClient
+  edgeLogger.debug('Saving user message asynchronously', { operationId, sessionId, userId, messageId: userMessageFromClient.id });
   persistenceService.saveUserMessage(
     sessionId,
-    userMessage.content,
+    userMessageFromClient.content,
     userId, // Use user.id from context
-    userMessage.id // ID generated by useChat client
+    userMessageFromClient.id // ID generated by useChat client
   ).catch(err => edgeLogger.error('Async user message save failed', { operationId, sessionId, error: err instanceof Error ? err.message : String(err) }));
 
+
   // Call the Vercel AI SDK streamText function
+  edgeLogger.info('Calling streamText', { operationId, sessionId, model: targetModelId || 'gpt-4o', messageCount: currentMessages.length });
   const result = streamText({
     model: openai(targetModelId || 'gpt-4o'), // Use determined model
     messages: [...contextMessages, ...currentMessages], // Pass combined history
@@ -189,7 +226,8 @@ const POST_Handler: AuthenticatedRouteHandler = async (request, context, user) =
               model: openai('gpt-3.5-turbo'), // Use a cheaper/faster model for titles
               messages: [
                 { role: 'system', content: 'Create a title that summarizes the main topic or intent of the user message in 2-6 words. Do not use quotes. Keep it concise and relevant.' },
-                { role: 'user', content: String(userMessage.content).substring(0, 1000) } // Ensure content is string
+                // Use content from the received message
+                { role: 'user', content: String(userMessageFromClient.content).substring(0, 1000) } // Ensure content is string
               ],
               maxTokens: 30,
               temperature: 0.6
