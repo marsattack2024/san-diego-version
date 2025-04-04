@@ -10,10 +10,20 @@ import { Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { SidebarMenuSkeleton } from '@/components/ui/sidebar'; // Use existing skeleton
 
-// Define the props if needed, although this component might not need external props
-// interface ChatHistoryListProps {}
+// Define props for ChatHistoryList
+interface ChatHistoryListProps {
+    onRenameClick: (chatId: string, currentTitle: string) => void;
+    onDeleteClick: (chatId: string) => void;
+    renamingStates: Record<string, boolean>;
+    deletingStates: Record<string, boolean>;
+}
 
-export function ChatHistoryList(/* props: ChatHistoryListProps */) {
+export function ChatHistoryList({
+    onRenameClick,
+    onDeleteClick,
+    renamingStates,
+    deletingStates
+}: ChatHistoryListProps) { // <-- Accept props
     const { groupedChats, isLoading, error, refreshHistory } = useChatHistoryData();
     const {
         isDeleting,
@@ -86,43 +96,43 @@ export function ChatHistoryList(/* props: ChatHistoryListProps */) {
                 title="Today"
                 chats={groupedChats.today}
                 activeChatId={activeChatId}
-                onRename={handleRenameClick} // Pass action handler
-                onDelete={handleDeleteClick} // Pass action handler
-                renamingStates={isRenaming}
-                deletingStates={isDeleting}
+                onRename={onRenameClick} // <-- Pass down prop
+                onDelete={onDeleteClick} // <-- Pass down prop
+                renamingStates={renamingStates} // <-- Pass down prop
+                deletingStates={deletingStates} // <-- Pass down prop
                 setOpenMobile={setOpenMobile}
             />
             <ChatHistorySection
                 title="Yesterday"
                 chats={groupedChats.yesterday}
                 activeChatId={activeChatId}
-                onRename={handleRenameClick}
-                onDelete={handleDeleteClick}
-                renamingStates={isRenaming}
-                deletingStates={isDeleting}
+                onRename={onRenameClick} // <-- Pass down prop
+                onDelete={onDeleteClick} // <-- Pass down prop
+                renamingStates={renamingStates} // <-- Pass down prop
+                deletingStates={deletingStates} // <-- Pass down prop
                 setOpenMobile={setOpenMobile}
             />
             <ChatHistorySection
                 title="Past Week"
                 chats={groupedChats.pastWeek}
                 activeChatId={activeChatId}
-                onRename={handleRenameClick}
-                onDelete={handleDeleteClick}
-                renamingStates={isRenaming}
-                deletingStates={isDeleting}
+                onRename={onRenameClick} // <-- Pass down prop
+                onDelete={onDeleteClick} // <-- Pass down prop
+                renamingStates={renamingStates} // <-- Pass down prop
+                deletingStates={deletingStates} // <-- Pass down prop
                 setOpenMobile={setOpenMobile}
             />
             <ChatHistorySection
                 title="Older"
                 chats={groupedChats.older}
                 activeChatId={activeChatId}
-                onRename={handleRenameClick}
-                onDelete={handleDeleteClick}
-                renamingStates={isRenaming}
-                deletingStates={isDeleting}
+                onRename={onRenameClick} // <-- Pass down prop
+                onDelete={onDeleteClick} // <-- Pass down prop
+                renamingStates={renamingStates} // <-- Pass down prop
+                deletingStates={deletingStates} // <-- Pass down prop
                 setOpenMobile={setOpenMobile}
-                showAll={showAllOlder} // Control visibility
-                onShowMore={() => setShowAllOlder(true)} // Provide callback
+                showAll={showAllOlder}
+                onShowMore={() => setShowAllOlder(true)}
             />
         </div>
     );

@@ -25,7 +25,7 @@ export function useChatHistoryData() {
     const isComponentMounted = useRef(true);
     const initialFetchAttempted = useRef(false);
 
-    // Revert back to individual selectors
+    // Select state individually
     const conversationsIndex = useChatStore((state: ChatState) => state.conversationsIndex);
     const isLoadingHistory = useChatStore((state: ChatState) => state.isLoadingHistory);
     const historyError = useChatStore((state: ChatState) => state.historyError);
@@ -210,5 +210,6 @@ export function useChatHistoryData() {
         isLoading: isLoadingHistory,
         error: historyError,
         refreshHistory,
+        conversationsIndex,
     };
 } 

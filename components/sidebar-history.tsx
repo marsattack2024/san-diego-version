@@ -1,19 +1,21 @@
 'use client';
 
-import React, { Suspense, useState } from 'react';
-import { SidebarMenu, SidebarMenuButton } from '@/components/ui/sidebar';
-import { Button } from '@/components/ui/button'; // Keep for potential future use? Maybe New Chat button?
-import { RefreshCw, PlusCircle } from 'lucide-react'; // Added PlusCircle
+import React, { Suspense, useState, useEffect } from 'react';
+import { useParams, useRouter } from 'next/navigation';
+// Restore imports
+import { SidebarMenu } from '@/components/ui/sidebar';
 import { useChatHistoryData } from '@/hooks/chat/useChatHistoryData';
+import { ChatHistoryList } from './sidebar/history/ChatHistoryList';
+import { ChatHistoryErrorBoundary } from './sidebar/history/ErrorBoundary';
+import { SidebarMenuSkeleton } from '@/components/ui/sidebar';
+import { Button } from '@/components/ui/button';
 import { useChatActions } from '@/hooks/chat/useChatActions';
+import { DeleteChatDialog } from './sidebar/history/DeleteChatDialog';
+import { RenameChatDialog } from './sidebar/history/RenameChatDialog';
+import { PlusCircle, RefreshCw } from 'lucide-react';
 import { useCreateChat } from '@/hooks/chat/useCreateChat';
-import { ChatHistoryList } from '@/components/sidebar/history/ChatHistoryList'; // Use alias
-import { DeleteChatDialog } from '@/components/sidebar/history/DeleteChatDialog'; // Use alias
-import { RenameChatDialog } from '@/components/sidebar/history/RenameChatDialog'; // Use alias
-import { ChatHistoryErrorBoundary } from '@/components/sidebar/history/ErrorBoundary'; // Use alias
-import { SidebarMenuSkeleton } from '@/components/ui/sidebar'; // Import Skeleton for Suspense
+import type { ConversationMetadata } from '@/stores/chat-store';
 
-// Define a simple skeleton loader for suspense fallback
 const HistoryLoadingSkeleton = () => (
   <div className="px-2 space-y-4 py-4" data-testid="history-suspense-skeleton">
     <SidebarMenuSkeleton showIcon={false} />
@@ -22,125 +24,102 @@ const HistoryLoadingSkeleton = () => (
   </div>
 );
 
-// Main component using hooks and decomposed components
 const SidebarHistoryContent = () => {
-  // Use hooks to get data and actions
-  const { refreshHistory } = useChatHistoryData(); // Only need refresh fn here
+  const { refreshHistory, conversationsIndex } = useChatHistoryData();
   const { createNewChat } = useCreateChat();
   const {
-    // Delete state/handlers for Delete Dialog
     showDeleteDialog,
-    // Use original handlers from hook
-    handleDeleteCancel: originalHandleDeleteCancel,
-    handleDeleteConfirm: originalHandleDeleteConfirm,
-    isDeleting: isDeletingMap, // Renamed to avoid conflict
+    handleDeleteCancel,
+    handleDeleteConfirm,
+    isDeleting: isDeletingMap,
     deleteId,
-    // Rename state/handlers for Rename Dialog
     showRenameDialog,
     renameTitle,
-    handleRenameCancel: originalHandleRenameCancel,
-    handleRenameConfirm: originalHandleRenameConfirm,
-    isRenaming: isRenamingMap, // Renamed to avoid conflict
+    handleRenameCancel,
+    handleRenameConfirm,
+    isRenaming: isRenamingMap,
     renameId,
     handleRenameTitleChange,
-    // Get the setter for debugging
-    _setActionState_DEBUG
+    handleDeleteClick,
+    handleRenameClick
   } = useChatActions();
 
-  // Dummy state for forcing updates
-  const [, forceUpdate] = useState(0);
+  const params = useParams();
+  const router = useRouter();
+  const activeChatId = params?.id as string | undefined;
 
-  // Create wrapper functions that force update
-  const handleDeleteCancel = () => {
-    originalHandleDeleteCancel();
-    forceUpdate(c => c + 1);
-  };
-  const handleDeleteConfirm = async () => {
-    await originalHandleDeleteConfirm();
-    forceUpdate(c => c + 1);
-  };
-  const handleRenameCancel = () => {
-    originalHandleRenameCancel();
-    forceUpdate(c => c + 1);
-  };
-  const handleRenameConfirm = async () => {
-    await originalHandleRenameConfirm();
-    forceUpdate(c => c + 1);
-  };
-  const handleRenameTitleChange_Forced = (value: string) => {
-    handleRenameTitleChange(value);
-    // Optionally force update on title change too if needed for debugging
-    // forceUpdate(c => c + 1);
-  };
+  useEffect(() => {
+    if (activeChatId) {
+      const isActiveChatDeleted = !conversationsIndex[activeChatId];
 
-  // Determine single deleting/renaming state for dialogs
+      if (isActiveChatDeleted) {
+        console.log(`[SidebarHistory] Active chat ${activeChatId} deleted. Finding next chat...`);
+        const remainingChats = Object.values(conversationsIndex) as ConversationMetadata[];
+
+        if (remainingChats.length > 0) {
+          remainingChats.sort((a, b) =>
+            new Date(b.updatedAt || b.createdAt).getTime() -
+            new Date(a.updatedAt || a.createdAt).getTime()
+          );
+          const nextChatId = remainingChats[0].id;
+          console.log(`[SidebarHistory] Navigating to next chat: ${nextChatId}`);
+          router.push(`/chat/${nextChatId}`);
+        } else {
+          console.log(`[SidebarHistory] No chats remaining, navigating to /chat`);
+          router.push('/chat');
+        }
+      }
+    }
+  }, [conversationsIndex, activeChatId, router]);
+
   const isCurrentlyDeleting = deleteId ? !!isDeletingMap[deleteId] : false;
   const isCurrentlyRenaming = renameId ? !!isRenamingMap[renameId] : false;
 
   return (
     <>
       <div className="flex flex-col gap-2 mb-4 px-2">
-        {/* Header Buttons - Consider moving to a dedicated Header component? */}
         <div className="flex items-center justify-between px-2">
-          <span className="font-semibold text-lg">Chats</span> { /* Example Title */}
+          <span className="font-semibold text-lg">Chats</span>
           <div className="flex gap-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={createNewChat}
-              aria-label="New Chat"
-            >
-              <PlusCircle size={18} />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={refreshHistory}
-              aria-label="Refresh History"
-            >
-              <RefreshCw size={18} />
-            </Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={createNewChat} aria-label="New Chat"><PlusCircle size={18} /></Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={refreshHistory} aria-label="Refresh History"><RefreshCw size={18} /></Button>
           </div>
         </div>
       </div>
 
-      {/* Chat history list section */}
-      <SidebarMenu className="px-2 pb-20 flex-1 overflow-y-auto"> { /* Added flex-1 and overflow */}
+      <SidebarMenu className="px-2 pb-20 flex-1 overflow-y-auto">
         <ChatHistoryErrorBoundary>
           <Suspense fallback={<HistoryLoadingSkeleton />}>
-            {/* ChatHistoryList now fetches data via its hooks */}
-            <ChatHistoryList />
+            <ChatHistoryList
+              onRenameClick={handleRenameClick}
+              onDeleteClick={handleDeleteClick}
+              renamingStates={isRenamingMap}
+              deletingStates={isDeletingMap}
+            />
           </Suspense>
         </ChatHistoryErrorBoundary>
       </SidebarMenu>
 
-      {/* Dialogs use the NEW wrapper handlers */}
       <DeleteChatDialog
         open={showDeleteDialog}
-        // Pass wrapper handler for onOpenChange
         onOpenChange={(open) => { if (!open) handleDeleteCancel(); }}
-        onConfirm={handleDeleteConfirm} // Pass wrapper handler
-        onCancel={handleDeleteCancel} // Pass wrapper handler
+        onConfirm={handleDeleteConfirm}
+        onCancel={handleDeleteCancel}
         isDeleting={isCurrentlyDeleting}
       />
 
       <RenameChatDialog
         open={showRenameDialog}
-        // Pass wrapper handler for onOpenChange
         onOpenChange={(open) => { if (!open) handleRenameCancel(); }}
-        onConfirm={handleRenameConfirm} // Pass wrapper handler
-        onCancel={handleRenameCancel} // Pass wrapper handler
+        onConfirm={handleRenameConfirm}
+        onCancel={handleRenameCancel}
         isRenaming={isCurrentlyRenaming}
         value={renameTitle}
-        // Pass the original handler OR a forced wrapper if needed
         onValueChange={handleRenameTitleChange}
       />
     </>
   );
 };
 
-// Export the main refactored component
 export const SidebarHistory = SidebarHistoryContent;
 export default SidebarHistory;
