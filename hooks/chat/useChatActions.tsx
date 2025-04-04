@@ -15,7 +15,20 @@ interface ChatActionsState {
     renameTitle: string;
 }
 
-export function useChatActions() {
+// Add return type for the hook
+interface UseChatActionsReturn extends ChatActionsState {
+    handleDeleteClick: (chatId: string) => void;
+    handleDeleteConfirm: () => Promise<void>;
+    handleDeleteCancel: () => void;
+    handleRenameClick: (chatId: string, currentTitle: string) => void;
+    handleRenameConfirm: () => Promise<void>;
+    handleRenameCancel: () => void;
+    handleRenameTitleChange: (newTitle: string) => void;
+    // Add setActionState to the return type
+    _setActionState_DEBUG: React.Dispatch<React.SetStateAction<ChatActionsState>>;
+}
+
+export function useChatActions(): UseChatActionsReturn {
     // Zustand store actions
     const deleteConversationAction = useChatStore((state) => state.deleteConversation);
     // Assuming renameConversation action exists and returns a Promise<boolean>
@@ -157,22 +170,17 @@ export function useChatActions() {
 
     // --- Return Value ---
     return {
-        // Delete state and handlers
-        isDeleting: actionState.isDeleting,
-        deleteId: actionState.deleteId,
-        showDeleteDialog: actionState.showDeleteDialog,
+        // Spread state
+        ...actionState,
+        // Handlers
         handleDeleteClick,
         handleDeleteConfirm,
         handleDeleteCancel,
-
-        // Rename state and handlers
-        isRenaming: actionState.isRenaming,
-        renameId: actionState.renameId,
-        showRenameDialog: actionState.showRenameDialog,
-        renameTitle: actionState.renameTitle,
         handleRenameClick,
         handleRenameConfirm,
         handleRenameCancel,
         handleRenameTitleChange,
+        // Return setter for debugging
+        _setActionState_DEBUG: setActionState,
     };
 } 

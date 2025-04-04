@@ -1,6 +1,6 @@
 'use client';
 
-import React, { Suspense } from 'react';
+import React, { Suspense, useState } from 'react';
 import { SidebarMenu, SidebarMenuButton } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button'; // Keep for potential future use? Maybe New Chat button?
 import { RefreshCw, PlusCircle } from 'lucide-react'; // Added PlusCircle
@@ -30,21 +30,48 @@ const SidebarHistoryContent = () => {
   const {
     // Delete state/handlers for Delete Dialog
     showDeleteDialog,
-    handleDeleteCancel,
-    handleDeleteConfirm,
+    // Use original handlers from hook
+    handleDeleteCancel: originalHandleDeleteCancel,
+    handleDeleteConfirm: originalHandleDeleteConfirm,
     isDeleting: isDeletingMap, // Renamed to avoid conflict
     deleteId,
     // Rename state/handlers for Rename Dialog
     showRenameDialog,
     renameTitle,
-    handleRenameCancel,
-    handleRenameConfirm,
+    handleRenameCancel: originalHandleRenameCancel,
+    handleRenameConfirm: originalHandleRenameConfirm,
     isRenaming: isRenamingMap, // Renamed to avoid conflict
     renameId,
     handleRenameTitleChange,
-    // Click handlers are passed down through ChatHistoryList -> Section -> Item
-    // We don't need handleDeleteClick or handleRenameClick directly here
+    // Get the setter for debugging
+    _setActionState_DEBUG
   } = useChatActions();
+
+  // Dummy state for forcing updates
+  const [, forceUpdate] = useState(0);
+
+  // Create wrapper functions that force update
+  const handleDeleteCancel = () => {
+    originalHandleDeleteCancel();
+    forceUpdate(c => c + 1);
+  };
+  const handleDeleteConfirm = async () => {
+    await originalHandleDeleteConfirm();
+    forceUpdate(c => c + 1);
+  };
+  const handleRenameCancel = () => {
+    originalHandleRenameCancel();
+    forceUpdate(c => c + 1);
+  };
+  const handleRenameConfirm = async () => {
+    await originalHandleRenameConfirm();
+    forceUpdate(c => c + 1);
+  };
+  const handleRenameTitleChange_Forced = (value: string) => {
+    handleRenameTitleChange(value);
+    // Optionally force update on title change too if needed for debugging
+    // forceUpdate(c => c + 1);
+  };
 
   // Determine single deleting/renaming state for dialogs
   const isCurrentlyDeleting = deleteId ? !!isDeletingMap[deleteId] : false;
@@ -89,23 +116,26 @@ const SidebarHistoryContent = () => {
         </ChatHistoryErrorBoundary>
       </SidebarMenu>
 
-      {/* Dialogs are rendered here, controlled by useChatActions state */}
+      {/* Dialogs use the NEW wrapper handlers */}
       <DeleteChatDialog
         open={showDeleteDialog}
+        // Pass wrapper handler for onOpenChange
         onOpenChange={(open) => { if (!open) handleDeleteCancel(); }}
-        onConfirm={handleDeleteConfirm}
-        onCancel={handleDeleteCancel}
+        onConfirm={handleDeleteConfirm} // Pass wrapper handler
+        onCancel={handleDeleteCancel} // Pass wrapper handler
         isDeleting={isCurrentlyDeleting}
       />
 
       <RenameChatDialog
         open={showRenameDialog}
+        // Pass wrapper handler for onOpenChange
         onOpenChange={(open) => { if (!open) handleRenameCancel(); }}
-        onConfirm={handleRenameConfirm}
-        onCancel={handleRenameCancel}
+        onConfirm={handleRenameConfirm} // Pass wrapper handler
+        onCancel={handleRenameCancel} // Pass wrapper handler
         isRenaming={isCurrentlyRenaming}
-        value={renameTitle} // Pass current title value from state
-        onValueChange={handleRenameTitleChange} // Pass update handler
+        value={renameTitle}
+        // Pass the original handler OR a forced wrapper if needed
+        onValueChange={handleRenameTitleChange}
       />
     </>
   );

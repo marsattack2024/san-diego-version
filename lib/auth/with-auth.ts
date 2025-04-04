@@ -55,8 +55,34 @@ export function withAuth(handler: AuthenticatedRouteHandler): (req: Request, con
                 userId: user.id.substring(0, 8) + '...',
             });
 
-            // Call the handler with the adjusted signature (request, context, user)
-            return await handler(req, context, user);
+            // Resolve params BEFORE passing to the handler
+            let resolvedContext = context;
+            if (context.params) {
+                try {
+                    // Await the params promise from Next.js context
+                    const resolvedParams = await context.params;
+                    resolvedContext = { ...context, params: resolvedParams };
+                } catch (paramsError) {
+                    edgeLogger.error('Error resolving route params in auth wrapper', {
+                        category: LOG_CATEGORIES.SYSTEM,
+                        operationId,
+                        path: new URL(req.url).pathname,
+                        error: paramsError instanceof Error ? paramsError.message : String(paramsError),
+                        important: true
+                    });
+                    // Return a generic server error if params fail to resolve
+                    // Use standard response utilities and handleCors if available/imported, otherwise use NextResponse
+                    // Assuming handleCors and errorResponse are not standard here, use NextResponse
+                    // TODO: Consider importing and using standardized response utils here if possible
+                    return NextResponse.json(
+                        { error: 'Internal server error processing request parameters' },
+                        { status: 500 }
+                    );
+                }
+            }
+
+            // Call the handler with the potentially resolved context
+            return await handler(req, resolvedContext, user);
         } catch (error) {
             // Log unexpected errors
             edgeLogger.error('Unexpected error in auth wrapper', {

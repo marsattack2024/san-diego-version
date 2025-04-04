@@ -15,7 +15,7 @@ All route handlers MUST adhere to the following:
     *   For **unauthenticated** routes or routes with optional authentication, create the client manually using `createRouteHandlerClient()` from `@/lib/supabase/route-client`.
 6.  **Authentication Wrappers**: Use `withAuth` or `withAdminAuth` from `@/lib/auth/with-auth` for routes requiring user authentication. The wrapped handler MUST follow the `AuthenticatedRouteHandler` signature: `async (request: Request, context: RouteContext, user: User) => ...`.
 7.  **Dynamic Parameters**:
-    *   When using `withAuth`, access dynamic parameters via the `context` object (e.g., `context.params?.id`). **Do not `await params` inside the handler.**
+    *   When using `withAuth`, access dynamic parameters via the `context` object (e.g., `context.params?.id`). **The `withAuth` wrapper resolves the `params` object, so you do NOT need to `await` it inside your handler.**
     *   For unauthenticated routes, use the standard Next.js signature (`request: Request, { params }: IdParam`) and `await params` before use (`const { id } = await params;`).
     *   Use standardized parameter types (e.g., `IdParam`, `SlugParam`) from `@/lib/types/route-handlers`.
 8.  **Logging**: Utilize `edgeLogger` for structured logging, including `operationId` for traceability.
