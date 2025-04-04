@@ -1,0 +1,116 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+Okay, let's draft a new "Cursor rules file" or documentation summary focusing specifically on the Middleware and Authentication patterns as they stand now, after the project completion and the decision to standardize on Pattern B for API routes.
+
+This will guide developers/agents on how the system works and how to interact with it correctly.
+
+Project Authentication Architecture & Usage Guide (Effective: April 4, 2025)
+
+1. Overview
+This document outlines the finalized authentication architecture for the application, following the "Authentication Middleware Streamlining" project. It details how server-side middleware, client-side state management, and API route authentication work together. Adherence to these patterns is mandatory.
+
+Key Components:
+
+middleware.ts: Handles server-side session validation and refresh using @supabase/ssr.
+utils/supabase/auth-provider.tsx: Manages client-side Supabase listener and initial loading state.
+stores/auth-store.ts: Zustand store; the primary source for auth state in client components.
+API Route Pattern B: Manual authentication/authorization checks within API route handlers.
+DEPRECATED: The withAuth/withAdminAuth wrappers (lib/auth/with-auth.ts) are deprecated due to Next.js 15 build issues and MUST NOT be used.
+
+2. Server-Side: middleware.ts
+Purpose: Intercepts requests to protected routes (defined by config.matcher) to validate and refresh the user's Supabase session cookie.
+Mechanism: Uses createServerClient from @supabase/ssr and supabase.auth.getUser() to interact with Supabase securely.
+Outcome: Ensures that requests reaching protected Server Components or API Routes have a potentially refreshed session cookie. Redirects unauthenticated users accessing protected frontend routes to /login.
+Headers: May set headers like x-is-admin based on JWT claims for informational purposes, but API routes MUST re-verify admin status using JWT claims directly.
+3. Client-Side State: AuthProvider & AuthStore
+This is the primary way UI components interact with authentication state.
+
+utils/supabase/auth-provider.tsx:
+
+Wraps the root layout (app/layout.tsx).
+Creates the Supabase browser client instance.
+Provides an initial isLoading state while the first client-side auth check completes.
+Listens to Supabase's onAuthStateChange events.
+Updates the AuthStore when auth events occur (SIGNED_IN, SIGNED_OUT, TOKEN_REFRESHED).
+Hook: useAuth() exposes { isLoading: boolean, supabase: SupabaseClient | null }. Use isLoading for global loading indicators; use supabase ONLY if direct client access is needed (rare).
+stores/auth-store.ts:
+
+The single source of truth for auth state in client components.
+Holds derived state: user: User | null, profile: Profile | null, isAuthenticated: boolean, isAdmin: boolean.
+State is updated by AuthProvider based on onAuthStateChange.
+Calculates isAdmin primarily by checking user.app_metadata?.is_admin === true (JWT claim).
+May contain actions like logout() if client-side logout initiation is needed.
+Hook: useAuthStore() exposes the state (user, profile, isAuthenticated, isAdmin, etc.). Use this hook for ALL auth state access in components.
+Client Component Usage:
+
+TypeScript
+
+'use client';
+import { useAuth } from '@/utils/supabase/auth-provider';
+import { useAuthStore } from '@/stores/auth-store';
+import { createClient } from '@/utils/supabase/client'; // Correct client import
+import { historyService } from '@/lib/api/history-service';
+import { useEffect } from 'react';
+import { SomeLoadingComponent } from '@/components/ui/loading'; // Example
+
+function MyAuthenticatedComponent() {
+    const { isLoading: isAuthLoading } = useAuth(); // Use for initial load state ONLY
+    const { isAuthenticated, user, isAdmin, profile } = useAuthStore(); // Use for ALL auth state
+
+    useEffect(() => {
+        // Example: Fetching data requiring auth via a DI service
+        if (isAuthenticated && !isAuthLoading) {
+            const loadData = async () => {
+                const supabase = createClient(); // Create client instance
+                try {
+                    const history = await historyService.getUserHistory(supabase); // Pass client
+                    // ... process history
+                } catch (error) {
+                    // Handle error
+                }
+            };
+            loadData();
+        }
+    }, [isAuthenticated, isAuthLoading]); // Depend on store state and context loading state
+
+    if (isAuthLoading) {
+        return <SomeLoadingComponent />; // Show global loading
+    }
+
+    if (!isAuthenticated) {
+        // Redirect or show login prompt (handled by middleware for pages,
+        // but components might need specific UI)
+        return <p>Please log in.</p>;
+    }
+
+    // Render authenticated content using user, isAdmin, profile etc.
+    return (
+        <div>
+            <p>Welcome, {profile?.display_name || user?.email}!</p>
+            {isAdmin && <p>Admin controls visible.</p>}
+            {/* ... other component logic ... */}
+        </div>
+    );
+}
+4. API Route Authentication (Pattern B - Mandatory Standard)
+All API routes requiring authentication MUST implement checks manually using Pattern B.
+
+Refer to: docs/README next-js-15-route-handlers.md for the detailed standard.
+Key Steps within Handler:
+Import & call createRouteHandlerClient from @/utils/supabase/route-client.
+Call await supabase.auth.getUser().
+Check for authError || !user and return handleCors(unauthorizedError(...), request, true) if needed.
+If admin privileges required, check user.app_metadata?.is_admin === true and return handleCors(errorResponse(..., 403), request, true) if needed.
+Proceed with core logic using the user object.
+Apply all Core Requirements (runtime, dynamic, CORS, response utils, logging).
+5. Admin Status Determination
+Primary Source: JWT Claim (user.app_metadata.is_admin === true).
+Implementation: Checked manually in Pattern B API routes and derived within the AuthStore for client components.
+Updates: Handled via the database trigger (utils/supabase/db/admin-claims.sql) when sd_user_profiles.is_admin changes.
+6. Dependency Injection
+Services like historyService require a SupabaseClient instance to be injected.
+Client Components should create the browser client (import { createClient } from '@/utils/supabase/client';) and pass it.
+Server Components / API Routes should create the appropriate server client (import { createClient } from '@/utils/supabase/server'; or import { createRouteHandlerClient } from '@/utils/supabase/route-client';) and pass it.

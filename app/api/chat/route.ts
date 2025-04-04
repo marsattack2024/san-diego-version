@@ -7,14 +7,15 @@
  */
 
 // Vercel AI SDK Core
-import { Message, streamText, appendClientMessage, appendResponseMessages, generateText } from 'ai';
+import { Message, streamText, appendClientMessage, appendResponseMessages, generateText, ToolCall, ToolResult, CoreMessage } from 'ai';
 // Supabase & Auth
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { createRouteHandlerAdminClient } from '@/lib/supabase/route-client';
 // Logging
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { titleLogger } from '@/lib/logger/title-logger';
+// Remove titleLogger import if not used elsewhere or properly defined
+// import { titleLogger } from '@/lib/logger/title-logger'; 
 // Utilities & Route Handling
 import { errorResponse, unauthorizedError, validationError } from '@/lib/utils/route-handler';
 import { handleCors } from '@/lib/utils/http-utils';
@@ -28,11 +29,15 @@ import { z } from 'zod'; // For request validation
 // Import AgentType
 import { AgentType } from '@/lib/chat-engine/prompts';
 import { createAgentToolSet, getAgentConfig } from '@/lib/chat-engine/agent-router';
+import { buildSystemPromptWithDeepSearch } from '@/lib/chat-engine/prompts'; // Import the prompt builder
 // Removed withAuth import
 import type { User } from '@supabase/supabase-js'; // Import User type
 // Import necessary functions for direct title generation
 import { cleanTitle, updateTitleInDatabase } from '@/lib/chat/title-utils';
 import { shouldGenerateTitle } from '@/lib/chat/title-service'; // Import shouldGenerateTitle
+import { AIStreamService } from '@/lib/chat-engine/services/ai-stream.service'; // Import AIStreamService
+import { ChatEngineContext } from '@/lib/chat-engine/types'; // Import ChatEngineContext
+import { ChatEngineConfig } from '@/lib/chat-engine/chat-engine.config'; // Import ChatEngineConfig
 
 // Define request schema for validation
 // Updated to match experimental_prepareRequestBody in components/chat.tsx
@@ -151,39 +156,214 @@ export async function POST(request: Request) { // No context needed if no params
     const { targetModelId, contextMessages = [] } = await orchestrator.prepareContext(userMessageFromClient.content!, agentId as AgentType | undefined);
     const effectiveAgentId = (agentId || 'default') as AgentType;
     const agentConfig = getAgentConfig(effectiveAgentId);
-    const finalSystemPrompt = agentConfig.systemPrompt;
+    const finalSystemPrompt = buildSystemPromptWithDeepSearch(effectiveAgentId, deepSearchEnabled);
     const agentToolSet = createAgentToolSet(effectiveAgentId);
+
+    // Log final messages, system prompt, and tools before streaming
+    edgeLogger.debug('Preparing to call streamText', {
+      operationId,
+      sessionId,
+      userId: user.id ? user.id.substring(0, 5) + '...' : 'unknown', // Mask userId
+      targetModelId,
+      contextMessageCount: contextMessages.length,
+      historyMessageCount: previousMessages.length,
+      systemPromptLength: finalSystemPrompt?.length || 0,
+      toolCount: Object.keys(agentToolSet || {}).length,
+      toolNames: Object.keys(agentToolSet || {})
+    });
 
     persistenceService.saveUserMessage(
       sessionId,
       userMessageFromClient.content!, // Assert non-null
       userId, // Ensure user.id is passed
       userMessageFromClient.id! // Assert non-null
-    ).catch(/* ... */);
-
-    const result = streamText({
-      model: openai(targetModelId || 'gpt-4o'),
-      messages: [...contextMessages, ...currentMessages],
-      system: finalSystemPrompt,
-      tools: agentToolSet,
-      experimental_generateMessageId: generateUUID,
-
-      async onFinish({ response, usage, finishReason, text }) {
-        // ... (inside onFinish) ...
-        const titleResult = await generateText({
-          model: openai('gpt-3.5-turbo'),
-          messages: [
-            { role: 'system', content: 'Create a title that summarizes the main topic or intent of the user message in 2-6 words. Do not use quotes. Keep it concise and relevant.' },
-            { role: 'user', content: String(userMessageFromClient!.content!).substring(0, 1000) } // Assert non-null on both
-          ],
-          maxTokens: 30,
-          temperature: 0.6
-        });
-        // ... (rest of onFinish)
-      },
+    ).catch(error => {
+      // Log errors from async user message save
+      edgeLogger.error('Async error saving user message', {
+        operationId,
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+        important: true // Add important flag
+      });
     });
 
-    return result.toDataStreamResponse();
+    // Initialize collected tool calls array with generic types
+    const collectedToolCalls: ToolCall<any, any>[] = [];
+
+    // --- Prepare Arguments for AIStreamService ---
+    const aiStreamService = new AIStreamService();
+
+    // Combine messages for the service context
+    const allMessagesForContext = [...contextMessages, ...currentMessages];
+
+    // Prepare context object for the service
+    const serviceContext: Partial<ChatEngineContext> = {
+      requestId: operationId,
+      sessionId,
+      userId,
+      startTime,
+      messages: allMessagesForContext, // Pass combined messages
+      previousMessages: previousMessages // Keep for title generation check in callback
+    };
+
+    // Prepare config object for the service
+    const serviceConfig: ChatEngineConfig = {
+      model: targetModelId || 'gpt-4o',
+      systemPrompt: finalSystemPrompt,
+      tools: agentToolSet,
+      temperature: agentConfig.temperature,
+      maxTokens: agentConfig.maxTokens || 4096, // Ensure default if not set
+      // Pass the original request body for context injection (deepSearchEnabled, etc.)
+      body: { ...body, userId },
+      operationName: operationId,
+      // Add other relevant config flags if needed by the service
+      requiresAuth: false, // Auth already handled
+      messagePersistenceDisabled: false // Assuming persistence handled via callback
+    };
+
+    // Define the onFinish callback function for the service
+    const onFinishForService = async ({ text, toolCalls, usage, response }: {
+      text: string;
+      toolCalls?: ToolCall<any, any>[];
+      usage: { completionTokens: number; promptTokens: number; totalTokens: number; };
+      response?: any;
+    }) => {
+      edgeLogger.info('AIStreamService: onFinish callback started', {
+        category: LOG_CATEGORIES.LLM,
+        operationId,
+        sessionId,
+        finishReason: 'callback_invoked', // Indicate callback source
+        textLength: text?.length || 0,
+        usage,
+        toolCallCount: toolCalls?.length || 0
+      });
+
+      // --- Format Tool Calls for Persistence ---
+      let toolsUsedForPersistence: ToolsUsedData | undefined = undefined;
+      if (toolCalls && toolCalls.length > 0) {
+        toolsUsedForPersistence = {
+          api_tool_calls: toolCalls.map(call => ({
+            name: call.toolName,
+            id: call.toolCallId, // Use toolCallId
+            // Optionally include args if needed and safe: args: call.args,
+            type: 'function' // Assuming Vercel SDK uses 'function' type
+          }))
+          // TODO: Add logic here if tools are also extracted from text content
+        };
+        edgeLogger.info('Formatted tool calls for persistence (in Service Callback)', {
+          operationId,
+          sessionId,
+          toolCount: toolCalls.length,
+          toolNames: toolCalls.map(c => c.toolName)
+        });
+      }
+      // -------------------------------------------
+
+      // Title Generation Logic (needs access to outer scope vars)
+      let generatedTitle = 'New Chat';
+      try {
+        // Check if previousMessages exists in the outer scope
+        if (await shouldGenerateTitle(sessionId, userId)) {
+          const titleStartTime = Date.now();
+          // Use CHAT category for title logs
+          edgeLogger.info('Generating title (in Service Callback)', { category: LOG_CATEGORIES.CHAT, operationId, sessionId, inputLength: userMessageFromClient.content!.length });
+          const titleResult = await generateText({
+            model: openai('gpt-3.5-turbo'), // Use a faster model for titles
+            messages: [
+              { role: 'system', content: 'Create a title that summarizes the main topic or intent of the user message in 2-6 words. Do not use quotes. Keep it concise and relevant.' },
+              { role: 'user', content: String(userMessageFromClient!.content!).substring(0, 1000) } // Assert non-null on both
+            ],
+            maxTokens: 30,
+            temperature: 0.6
+          });
+          generatedTitle = cleanTitle(titleResult.text);
+          // Use CHAT category for title logs
+          edgeLogger.info('Title generated successfully (in Service Callback)', {
+            category: LOG_CATEGORIES.CHAT,
+            operationId,
+            sessionId,
+            title: generatedTitle,
+            durationMs: Date.now() - titleStartTime
+          });
+        } else {
+          edgeLogger.info('Skipping title generation (in Service Callback)', { category: LOG_CATEGORIES.CHAT, operationId, sessionId });
+        }
+      } catch (titleError) {
+        edgeLogger.error('Error generating title (in Service Callback)', {
+          category: LOG_CATEGORIES.CHAT,
+          operationId,
+          sessionId,
+          error: titleError instanceof Error ? titleError.message : String(titleError)
+        });
+      }
+
+      // Assistant Message Persistence Logic (needs access to outer scope vars)
+      try {
+        const persistenceStartTime = Date.now();
+        const assistantContent = text || '';
+        await persistenceService.saveAssistantMessage(
+          sessionId,
+          assistantContent,
+          userId,
+          toolsUsedForPersistence
+        );
+        edgeLogger.info('Assistant message saved successfully (in Service Callback)', {
+          operationId,
+          sessionId,
+          durationMs: Date.now() - persistenceStartTime,
+          contentLength: assistantContent.length
+        });
+      } catch (persistenceError) {
+        edgeLogger.error('Error saving assistant message (in Service Callback)', {
+          operationId,
+          sessionId,
+          error: persistenceError instanceof Error ? persistenceError.message : String(persistenceError),
+          important: true // Add important flag
+        });
+      }
+
+      // Update Title in DB Logic (needs access to outer scope vars)
+      try {
+        if (generatedTitle !== 'New Chat') {
+          const updateStartTime = Date.now();
+          await updateTitleInDatabase(supabase, sessionId, generatedTitle, userId);
+          edgeLogger.info('Title updated in database (in Service Callback)', {
+            category: LOG_CATEGORIES.CHAT,
+            operationId,
+            sessionId,
+            title: generatedTitle,
+            durationMs: Date.now() - updateStartTime
+          });
+        }
+      } catch (updateError) {
+        edgeLogger.error('Error updating title in database (in Service Callback)', {
+          category: LOG_CATEGORIES.CHAT,
+          operationId,
+          sessionId,
+          title: generatedTitle,
+          error: updateError instanceof Error ? updateError.message : String(updateError),
+          important: true // Add important flag
+        });
+      }
+
+      edgeLogger.info('AIStreamService: onFinish callback completed', {
+        category: LOG_CATEGORIES.LLM,
+        operationId,
+        sessionId
+      });
+    };
+
+    // --- Call AIStreamService --- 
+    edgeLogger.debug('Calling AIStreamService process', { operationId, sessionId });
+    const streamResponse = await aiStreamService.process(
+      serviceContext as ChatEngineContext, // Cast needed if using partial context
+      serviceConfig as ChatEngineConfig, // Cast needed if using partial config
+      { onFinish: onFinishForService }
+    );
+    edgeLogger.debug('AIStreamService process returned', { operationId, sessionId });
+
+    // Return the response from the service
+    return streamResponse;
 
   } catch (error) {
     // Top-level catch block for the direct export function

@@ -3,213 +3,107 @@ description:
 globs: 
 alwaysApply: true
 ---
-Okay, let's generate a revised and corrected version of the Next.js 15 Route Handler Standards documentation. This version incorporates our final understanding: the withAuth wrapper handles awaiting params internally, and the handler receives resolved params and user within the context object.
+Okay, acknowledging the pragmatic decision to standardize on Pattern B (Direct Export) due to persistent build issues with the withAuth wrappers in Next.js 15, here are the refined rules for Cursor based on the latest documentation you provided.
 
-This output should serve as the definitive guide for developers or AI agents working on API routes.
+Cursor Agent Rules: Next.js 15 API Route Handler Implementation (Standard: Pattern B - Direct Export)
 
-Next.js 15 API Route Handler Standards & Patterns (Corrected: April 4, 2025)
-1. Goal
-This document outlines the mandatory standardized patterns for creating API route handlers (app/api/.../route.ts) in our Next.js 15 application. Adhering to these patterns ensures consistency, maintainability, security, proper logging, error handling, and compliance with Next.js 15 requirements.
+(Effective: April 4, 2025)
 
-2. Core Requirements (Apply to MOST Routes)
-Unless explicitly noted (e.g., specific Node.js runtime exceptions), all API route handlers MUST:
+Objective: Ensure all new and modified API route handlers (app/api/.../route.ts) strictly adhere to the project's standardized Pattern B (Direct Export) for compatibility with Next.js 15 builds, consistency, and maintainability.
 
-Runtime & Dynamic Behavior: Declare export const runtime = 'edge'; AND export const dynamic = 'force-dynamic'; at the top of the file.
-Standard Types: Use standard Web API types: Request for the incoming request and Promise<Response> for the return type. Avoid NextRequest and NextResponse.
-CORS Handling: Wrap every returned Response object (success or error) using handleCors(response, request, true) from @/lib/utils/http-utils.
-Response Utilities: Use the standardized response functions (successResponse, errorResponse, unauthorizedError, validationError, notFoundError) from @/lib/utils/route-handler instead of creating responses manually.
-Logging: Utilize edgeLogger from @/lib/logger/edge-logger for all logging (info, debug, warn, error), including an operationId and relevant context, following logging-rules.mdc. Remove console.log.
-Error Handling: Implement try...catch blocks for main logic, log errors comprehensively using edgeLogger (including stack trace for unexpected errors), and return standardized error responses using the response utilities and handleCors.
-3. Choosing the Right Pattern
-The primary pattern depends on whether user authentication is required for the route.
+Core Mandate: Pattern A (withAuth/withAdminAuth wrappers) is DEPRECATED due to build issues and MUST NOT be used. All route handlers MUST use Pattern B (Direct Export).
 
-Pattern A: Required Authentication (Use withAuth / withAdminAuth)
-Use this pattern for all API routes that mandate a user to be logged in (or logged in as an admin).
+Rules:
 
-Key Features:
+File Structure & Exports:
 
-Uses the withAuth or withAdminAuth wrappers from lib/auth/with-auth.ts.
-The wrapper handles the initial supabase.auth.getUser() check and validation.
-The wrapper handles checking the is_admin JWT claim (for withAdminAuth).
-The wrapper handles awaiting dynamic route parameters (params) internally.
-The wrapper provides the validated user object and resolved params together within the context argument passed to your handler.
-Handler Signature:
+Each route handler MUST be in its own route.ts file (e.g., app/api/users/route.ts, app/api/items/[id]/route.ts).
+Handlers MUST use direct named exports for HTTP methods: export async function GET(...), export async function POST(...), etc.
+The file MUST include export const runtime = 'edge'; at the top (unless it's one of the documented Node.js exceptions: /api/perplexity, /api/profile/update-summary).
+The file MUST include export const dynamic = 'force-dynamic'; at the top.
+Function Signature & Types:
 
-Your handler function MUST match the AuthenticatedRouteHandler (or AdminAuthenticatedRouteHandler) type signature:
-
+Use standard Web API Request type for the request parameter.
+Use Promise<Response> for the return type.
+For dynamic routes, the second argument MUST be the context containing the params promise. Use specific types from @/lib/types/route-handlers (e.g., IdParam, SlugParam).
 TypeScript
 
-import type { User } from '@supabase/supabase-js';
+// Non-dynamic route signature
+export async function POST(request: Request): Promise<Response> { ... }
 
-// Type definition (may be imported from with-auth.ts or a shared types file)
-export type AuthenticatedContext = {
-  params?: Record<string, string>; // Params are RESOLVED by the wrapper
-  user: User;
-};
-
-export type AuthenticatedRouteHandler = (
-  request: Request,
-  context: AuthenticatedContext
-) => Promise<Response>;
-
-// Admin version uses the same signature
-export type AdminAuthenticatedRouteHandler = AuthenticatedRouteHandler;
-Example (withAuth):
-
-TypeScript
-
-// app/api/some-protected-route/[id]/route.ts
-import { createRouteHandlerClient } from '@/utils/supabase/route-client'; // Use EXISTING utility
-import { edgeLogger } from '@/lib/logger/edge-logger';
-import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { successResponse, errorResponse, validationError } from '@/lib/utils/route-handler';
-import { handleCors } from '@/lib/utils/http-utils';
-import { withAuth, type AuthenticatedRouteHandler, type AuthenticatedContext } from '@/lib/auth/with-auth';
-// Route Parameter types are primarily for documentation/clarity here,
-// as the wrapper provides the resolved params object.
+// Dynamic route signature (using IdParam as example)
 import type { IdParam } from '@/lib/types/route-handlers';
+export async function GET(request: Request, { params }: IdParam): Promise<Response> { ... }
+AVOID using NextRequest or NextResponse.
+Parameter Handling (Dynamic Routes):
 
-export const runtime = 'edge';
-export const dynamic = 'force-dynamic';
-
-// Define handler matching AuthenticatedRouteHandler
-const GET_Handler: AuthenticatedRouteHandler = async (request, context) => {
-    // Destructure user and resolved params from context
-    const { user, params } = context;
-    const resourceId = params?.id; // Access resolved params DIRECTLY (NO await needed here)
-
-    const operationId = `auth_get_${Math.random().toString(36).substring(2, 8)}`;
-    edgeLogger.info('Handling authenticated GET request', { category: LOG_CATEGORIES.SYSTEM, operationId, userId: user.id, resourceId });
-
-    if (!resourceId) { // Example validation
-        const errRes = validationError('Resource ID is required');
-        return handleCors(errRes, request, true);
-    }
-
-    try {
-        // Client needed only for DB operations AFTER auth check
-        const supabase = await createRouteHandlerClient();
-
-        // Your logic here, using user.id and resourceId
-        // RLS policies enforced automatically by Supabase client based on user
-        const { data, error } = await supabase.from('some_table').select('*').eq('id', resourceId).eq('user_id', user.id);
-
-        if (error) {
-            edgeLogger.error('DB error', { category: LOG_CATEGORIES.DB, operationId, error: error.message });
-            const errRes = errorResponse('Database error', error.message);
-            return handleCors(errRes, request, true);
-        }
-
-        const successRes = successResponse({ data });
-        return handleCors(successRes, request, true);
-
-    } catch (error) {
-        edgeLogger.error('Unexpected error', { category: LOG_CATEGORIES.SYSTEM, operationId, error, important: true });
-        const errRes = errorResponse('Server error', error);
-        return handleCors(errRes, request, true);
-    }
-};
-
-// Wrap the handler
-export const GET = withAuth(GET_Handler);
-
-// For admin routes, use: export const POST = withAdminAuth(POST_Handler);
-// The AdminAuthenticatedRouteHandler uses the SAME signature as AuthenticatedRouteHandler
-Pattern B: No Authentication / Optional / Custom Auth
-Use this pattern for public endpoints, debug routes, or routes where authentication is checked conditionally within the handler logic, or uses a non-standard method (e.g., API Key).
-
-Key Features:
-
-Uses standard Next.js direct function export signature.
-Handles params manually using await.
-Creates Supabase client manually using the existing utility createRouteHandlerClient from utils/supabase/route-client.ts.
-Performs supabase.auth.getUser() check manually if needed.
-Handler Signature:
-
+Inside handlers for dynamic routes, you MUST await the params object before accessing its properties.
 TypeScript
 
-async function METHOD(
-  request: Request,
-  context?: { params?: Promise<Record<string, string>> } // Params are a Promise here
-): Promise<Response>
-(Use specific types like IdParam from @/lib/types/route-handlers for context where applicable)
+// Inside async function GET(request: Request, { params }: IdParam): Promise<Response>
+const resolvedParams = await params;
+const itemId = resolvedParams.id; // Access properties AFTER await
+Supabase Client:
 
-Example:
+Always create the Supabase client instance manually within the handler where needed.
+Use the standardized utility: import { createRouteHandlerClient } from '@/lib/supabase/route-client';
+Call const supabase = await createRouteHandlerClient(); within the try block.
+Use createRouteHandlerAdminClient() only if service role privileges are explicitly required and documented for the route.
+Authentication Checks (Manual - If Required):
 
+If a route requires user authentication, perform the check near the beginning of the try block:
 TypeScript
 
-// app/api/some-public-route/[id]/route.ts
-import { createRouteHandlerClient } from '@/utils/supabase/route-client'; // Use EXISTING utility
-import { edgeLogger } from '@/lib/logger/edge-logger';
-import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { successResponse, errorResponse, notFoundError } from '@/lib/utils/route-handler';
-import { handleCors } from '@/lib/utils/http-utils';
-import type { IdParam } from '@/lib/types/route-handlers';
+const supabase = await createRouteHandlerClient();
+const { data: { user }, error: authError } = await supabase.auth.getUser();
 
-export const runtime = 'edge';
-export const dynamic = 'force-dynamic';
-
-export async function GET(
-    request: Request,
-    { params }: IdParam // Use standard context type for dynamic routes
-): Promise<Response> {
-    const operationId = `public_get_${Math.random().toString(36).substring(2, 8)}`;
-
-    try {
-        // MUST await params before use when not using withAuth
-        const { id: resourceId } = await params;
-
-        edgeLogger.info('Handling public GET request', { category: LOG_CATEGORIES.SYSTEM, operationId, resourceId });
-
-        const supabase = await createRouteHandlerClient(); // Create client manually
-
-        // Optional: Check if a user happens to be logged in
-        // const { data: { user } } = await supabase.auth.getUser();
-        // if (user) { /* Modify query/response based on user */ }
-
-        // Your logic here...
-        const { data, error } = await supabase.from('public_table').select('*').eq('id', resourceId).maybeSingle();
-
-        if (error) {
-             edgeLogger.error('DB error', { category: LOG_CATEGORIES.DB, operationId, error: error.message });
-            const errRes = errorResponse('Database error', error.message);
-            return handleCors(errRes, request, true);
-        }
-        if (!data) {
-            const errRes = notFoundError('Resource not found');
-            return handleCors(errRes, request, true);
-        }
-
-        const successRes = successResponse({ data });
-        return handleCors(successRes, request, true);
-
-    } catch (error) {
-        edgeLogger.error('Unexpected error', { category: LOG_CATEGORIES.SYSTEM, operationId, error, important: true });
-        const errRes = errorResponse('Server error', error);
-        return handleCors(errRes, request, true);
-    }
+if (authError || !user) {
+    edgeLogger.warn(/* ...log details... */);
+    const errRes = unauthorizedError('Authentication required'); // Use standard util
+    return handleCors(errRes, request, true); // Wrap in CORS
 }
-4. Common Utilities Checklist
-Ensure you are using the correct, existing standardized utilities:
+// Proceed using the 'user' object
+const userId = user.id;
+Admin Privilege Checks (Manual - If Required):
 
-Authentication Wrappers: withAuth, withAdminAuth (@/lib/auth/with-auth) - Use for required auth (Pattern A).
-Supabase Client Utility: createRouteHandlerClient (@/utils/supabase/route-client) - Use inside Pattern A handlers (after auth) or manually in Pattern B.
-Response Utilities: successResponse, errorResponse, etc. (@/lib/utils/route-handler).
-CORS Utility: handleCors (@/lib/utils/http-utils).
-Logging Utility: edgeLogger (@/lib/logger/edge-logger).
-Type Definitions: IdParam, etc. (@/lib/types/route-handlers), AuthenticatedRouteHandler, AuthenticatedContext (defined with withAuth or shared).
-5. Serverless Runtime Exceptions
-These routes use export const runtime = 'nodejs'; for specific reasons and do not follow the edge standard fully, but should still use standard types, response utils, logging, and CORS handling where possible:
+If a route requires admin privileges, perform this check after successfully authenticating the user:
+TypeScript
 
-app/api/perplexity/route.ts
-app/api/profile/update-summary/route.ts
-app/api/agent-chat/route.ts (If exists and requires Node.js)
-6. Instructions for Developers / Agents
-Identify Auth Requirement: Determine if the route strictly requires user authentication/admin status.
-Choose Pattern:
-If auth is required, use Pattern A (withAuth / withAdminAuth).
-If auth is not required, optional, or uses custom logic (API key, etc.), use Pattern B.
-Apply Core Requirements: Ensure runtime = 'edge', dynamic = 'force-dynamic', standard Request/Promise<Response> types, handleCors on all returns, and standard logging/error handling are implemented.
-Use Utilities: Leverage the correct response utilities and the existing Supabase client utility (utils/supabase/route-client.ts). Do NOT create new client utilities.
-Handle Params Correctly: Access resolved context.params synchronously within withAuth handlers; use await params in Pattern B handlers.
-Refactor Non-Compliant Routes: Systematically update any remaining routes that do not adhere to these standards.
+// Requires 'user' object from successful getUser() call above
+const isAdmin = user.app_metadata?.is_admin === true;
+if (!isAdmin) {
+    edgeLogger.warn(/* ...log details... */);
+    const errRes = errorResponse('Admin access required', 'Forbidden', 403); // Use standard util
+    return handleCors(errRes, request, true); // Wrap in CORS
+}
+// Proceed with admin-only logic
+Response Handling:
+
+Use the standardized response utilities from @/lib/utils/route-handler (successResponse, errorResponse, validationError, etc.) to create the response body/status.
+Crucially: Wrap every single return statement that returns a Response object with the CORS utility: return handleCors(responseObject, request, true);.
+Error Handling:
+
+Wrap the main handler logic within a try...catch block.
+In the catch block, log the error comprehensively using edgeLogger.
+Return a standardized error response using errorResponse(...) wrapped in handleCors(...).
+Logging:
+
+Use edgeLogger for all logs (debug, info, warn, error).
+Include a unique operationId per request for traceability.
+Include relevant context (category, userId, dynamic params, etc.).
+DO NOT use console.log.
+Summary Checklist for Creating/Modifying Routes:
+
+[ ] Use Direct Export (export async function METHOD...)?
+[ ] Include export const runtime = 'edge'; (unless Node.js needed)?
+[ ] Include export const dynamic = 'force-dynamic';?
+[ ] Use standard Request / Promise<Response> types?
+[ ] Use correct signature for dynamic params (e.g., { params }: IdParam)?
+[ ] Await params before use (if dynamic)?
+[ ] Manually create client using createRouteHandlerClient from @/lib/supabase/route-client?
+[ ] Manually check auth using supabase.auth.getUser() (if auth required)?
+[ ] Manually check admin using user.app_metadata.is_admin (if admin required)?
+[ ] Use standard response utilities (successResponse, errorResponse, etc.)?
+[ ] Wrap ALL returned responses in handleCors(...)?
+[ ] Use edgeLogger with operationId for all logging?
+[ ] Implement try...catch for main logic?

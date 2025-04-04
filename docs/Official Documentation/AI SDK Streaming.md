@@ -1,43 +1,586 @@
-Streaming
-Streaming conversational text UIs (like ChatGPT) have gained massive popularity over the past few months. This section explores the benefits and drawbacks of streaming and blocking interfaces.
+Goal: Create a user experience where complex AI tasks involving planning, external data fetching (like web search), and internal analysis are displayed incrementally within an expandable section, providing transparency and managing user expectations during potentially long operations.
 
-Large language models (LLMs) are extremely powerful. However, when generating long outputs, they can be very slow compared to the latency you're likely used to. If you try to build a traditional blocking UI, your users might easily find themselves staring at loading spinners for 5, 10, even up to 40s waiting for the entire LLM response to be generated. This can lead to a poor user experience, especially in conversational applications like chatbots. Streaming UIs can help mitigate this issue by displaying parts of the response as they become available.
+Core Pattern: Plan -> Execute -> Report Stream
 
-Blocking UI
+Planning: The AI first receives the user's request and uses a dedicated tool (createResearchPlan) to outline the steps it intends to take (e.g., which searches to run, what analysis to perform). This plan is immediately streamed back.
+Execution & Reporting: The AI executes the plan step-by-step. For each step:
+It calls the appropriate tool (executeWebSearch, performAnalysis, etc.).
+The backend starts executing the tool (e.g., makes an API call to Tavily or Exa).
+The frontend immediately shows this step as "running" (e.g., "Searching web...") within a collapsible view.
+When the tool execution finishes (API call returns), the backend streams the result (search snippets, analysis text, etc.).
+The frontend updates the corresponding step to "completed" and displays the received result within that step's section.
+Final Answer: Once all planned steps (and potentially dynamically added ones) are complete, the AI generates and streams the final synthesized answer as plain text, displayed outside the collapsible reasoning section.
+Implementation Guide & Documentation
 
-Blocking responses wait until the full response is available before displaying it.
+1. Backend Setup (app/api/chat/route.ts)
 
-Streaming UI
+Dependencies: @ai-sdk/openai, ai, zod, @tavily/core (or exa-js, etc.).
 
-Streaming responses can transmit parts of the response as they become available.
+Schemas (lib/schema.ts): Define the structure for communication.
 
-Real-world Examples
-Here are 2 examples that illustrate how streaming UIs can improve user experiences in a real-world setting – the first uses a blocking UI, while the second uses a streaming UI.
+TypeScript
 
-Blocking UI
-Come up with the first 200 characters of the first book in the Harry Potter series.
-Generate
-...
-Streaming UI
-Come up with the first 200 characters of the first book in the Harry Potter series.
-Generate
-...
-As you can see, the streaming UI is able to start displaying the response much faster than the blocking UI. This is because the blocking UI has to wait for the entire response to be generated before it can display anything, while the streaming UI can display parts of the response as they become available.
+// lib/schema.ts
+import { z } from "zod";
 
-While streaming interfaces can greatly enhance user experiences, especially with larger language models, they aren't always necessary or beneficial. If you can achieve your desired functionality using a smaller, faster model without resorting to streaming, this route can often lead to simpler and more manageable development processes.
+// Define possible step types
+export const stepTypeSchema = z.enum([
+  "web_search",
+  "academic_search",
+  "x_search",
+  "analyze_results",
+  "generate_summary",
+  // Add other specific tool types if needed (e.g., 'get_stock_data')
+]);
 
-However, regardless of the speed of your model, the AI SDK is designed to make implementing streaming UIs as simple as possible. In the example below, we stream text generation from OpenAI's gpt-4-turbo in under 10 lines of code using the SDK's streamText function:
-
-
-import { openai } from '@ai-sdk/openai';
-import { streamText } from 'ai';
-
-const { textStream } = streamText({
-  model: openai('gpt-4-turbo'),
-  prompt: 'Write a poem about embedding models.',
+// Schema for a single step within the research plan
+export const planStepSchema = z.object({
+  step: z.number().describe("Sequential number of the step"),
+  type: stepTypeSchema,
+  description: z.string().describe("What this step aims to achieve"),
+  query: z.string().optional().describe("Search query, if applicable"),
+  analysis_focus: z.string().optional().describe("Focus for analysis steps"),
 });
+export type PlanStep = z.infer<typeof planStepSchema>;
 
-for await (const textPart of textStream) {
-  console.log(textPart);
+// Schema for the overall plan generated by the AI
+export const researchPlanSchema = z.object({
+  title: z.string().describe("Overall title for the research task (e.g., 'Research Plan for AI Impact 2035')"),
+  steps: z.array(planStepSchema).describe("Sequence of steps"),
+  estimated_steps: z.number().describe("Total number of steps initially planned"),
+});
+export type ResearchPlan = z.infer<typeof researchPlanSchema>;
+
+// Schema for individual search result items (can be reused for web/academic/x)
+export const searchResultItemSchema = z.object({
+  title: z.string().describe("Title of the result/paper/post"),
+  url: z.string().url().describe("URL of the source"),
+  snippet: z.string().optional().describe("A brief snippet or summary"),
+  source: z.enum(["web", "academic", "x"]).describe("Origin of the result"),
+  tweetId: z.string().optional().describe("Tweet ID if source is 'x'"),
+  publishedDate: z.string().optional().describe("Publication date if available"),
+});
+export type SearchResultItem = z.infer<typeof searchResultItemSchema>;
+
+// Schema for the results of a search tool execution
+export const searchToolResultsSchema = z.object({
+  query_used: z.string().describe("The actual search query executed"),
+  results: z.array(searchResultItemSchema).describe("List of found results"),
+  results_count: z.number().describe("Number of results returned"),
+  source_type: z.enum(["web", "academic", "x"]), // Track which search was run
+});
+export type SearchToolResults = z.infer<typeof searchToolResultsSchema>;
+
+// Schema for reporting an analysis/reasoning step's output
+export const analysisResultSchema = z.object({
+  title: z.string().describe("Title for this analysis/reasoning step"),
+  content: z.string().describe("The detailed analysis or reasoning content (Markdown format)"),
+});
+export type AnalysisResult = z.infer<typeof analysisResultSchema>;
+API Route Logic (app/(preview)/api/chat/route.ts):
+
+TypeScript
+
+import { openai } from "@ai-sdk/openai";
+import { streamText, tool } from "ai";
+import { z } from "zod";
+import { TavilyClient } from '@tavily/core'; // Example: Using Tavily
+import {
+  researchPlanSchema,
+  searchResultsSchema,
+  analysisResultSchema,
+  planStepSchema, // Import PlanStep for execute function type hints
+  // ... other schemas
+} from "@/lib/schema"; // Adjust path
+
+// Ensure API keys are loaded (use process.env)
+const tavily = process.env.TAVILY_API_KEY ? new TavilyClient({ apiKey: process.env.TAVILY_API_KEY }) : null;
+// const exa = process.env.EXA_API_KEY ? new Exa(process.env.EXA_API_KEY) : null; // If using Exa
+
+// --- Tool Execution Functions (Replace Mocks) ---
+async function executeWebSearchToolImpl(query: string, maxResults = 5): Promise<any> {
+  console.log(`Executing Web Search: ${query}`);
+  if (!tavily) throw new Error("Tavily API key not configured.");
+  try {
+    const response = await tavily.search(query, { maxResults });
+    console.log("Tavily Response:", response); // Log the response
+    return {
+      query_used: query,
+      results: response.results.map(r => ({
+        title: r.title,
+        url: r.url,
+        snippet: r.content, // Use 'content' from Tavily as snippet
+        source: "web",
+        publishedDate: r.metadata?.publish_date || undefined,
+      })),
+      results_count: response.results.length,
+      source_type: "web",
+    };
+  } catch (error) {
+    console.error("Tavily Search Error:", error);
+    return { query_used: query, results: [], results_count: 0, source_type: "web", error: "Failed to fetch web results." };
+  }
 }
-For an introduction to streaming UIs and the AI SDK, check out our Getting Started guides.
+// Add similar functions for executeAcademicSearchToolImpl, executeXSearchToolImpl using Exa or other services
+
+export async function POST(request: Request) {
+  const { messages } = await request.json();
+
+  const systemPrompt = `You are a meticulous multi-step AI research assistant. Your goal is to fully answer the user's query.
+  1.  **Plan:** First, create a concise research plan using the 'createResearchPlan' tool. Outline distinct steps involving searching different sources (web, academic, X/Twitter) and analyzing information. Keep the plan focused.
+  2.  **Execute & Report:** Execute the plan step-by-step. FOR EACH STEP:
+      * If it's a search: Call the *single* appropriate tool ('executeWebSearch', 'executeAcademicSearch', or 'executeXSearch').
+      * If it's analysis: Call the 'performAnalysis' tool, providing your reasoning/synthesis as content. Use a clear title.
+      * Wait for one step's tool result before calling the next tool.
+  3.  **Synthesize:** After all planned steps are complete and results are gathered, provide a final, comprehensive answer as plain text. DO NOT use a tool for this final answer.
+
+  Guidelines:
+  * Be thorough but efficient. Adapt the plan if initial results are poor (though you don't have a tool to explicitly *modify* the plan, you can reason about needing more info and call search tools again if necessary before the final answer).
+  * Combine information from different sources in your analysis steps.
+  * Cite sources implicitly within your final answer text if possible, or explicitly list key source URLs at the end.`;
+
+  const result = streamText({
+    model: openai("gpt-4o"), // Use a powerful model
+    system: systemPrompt,
+    messages,
+    // maxSteps: 15, // Allow enough steps for planning, execution, and analysis
+    experimental_toolCallStreaming: true,
+    tools: {
+      createResearchPlan: tool({
+        description: "Creates the initial research plan.",
+        parameters: researchPlanSchema,
+        execute: async (plan) => plan, // Pass through
+      }),
+      executeWebSearch: tool({
+        description: "Executes a web search.",
+        parameters: z.object({ query: z.string() }),
+        execute: async ({ query }) => executeWebSearchToolImpl(query),
+      }),
+      executeAcademicSearch: tool({
+        description: "Executes an academic paper search.",
+        parameters: z.object({ query: z.string() }),
+        // execute: async ({ query }) => executeAcademicSearchToolImpl(query), // Add actual implementation
+        execute: async ({query}) => ({ query_used: query, results: [], results_count: 0, source_type: "academic", error: "Academic search not implemented yet."}) // Placeholder
+      }),
+      executeXSearch: tool({
+         description: "Executes an X/Twitter search.",
+         parameters: z.object({ query: z.string() }),
+         // execute: async ({ query }) => executeXSearchToolImpl(query), // Add actual implementation
+         execute: async ({query}) => ({ query_used: query, results: [], results_count: 0, source_type: "x", error: "X search not implemented yet."}) // Placeholder
+      }),
+      performAnalysis: tool({
+        description: "Performs analysis, synthesis, or reasoning based on gathered information.",
+        parameters: analysisResultSchema,
+        execute: async (analysisArgs) => analysisArgs, // Pass through AI-generated analysis
+      }),
+    },
+  });
+
+  return result.toDataStreamResponse();
+}
+3. Frontend Implementation (page.tsx, message.tsx, new components)
+
+page.tsx: Remains largely the same, using useChat and mapping messages to the Message component.
+
+Message Component (components/message.tsx):
+
+TypeScript
+
+// components/message.tsx
+"use client";
+
+import { motion } from "framer-motion";
+import { BotIcon, UserIcon } from "./icons";
+import { Markdown } from "./markdown";
+import { Message as TMessage, ToolInvocation } from "ai";
+import { ResearchProcessAccordion } from "./research-process-accordion"; // Import the accordion
+
+export const Message = ({
+  role,
+  content,
+  toolInvocations,
+}: {
+  role: string;
+  content: string;
+  toolInvocations?: ToolInvocation[];
+}) => {
+  const isAssistant = role === "assistant";
+  const isMultiStep = toolInvocations && toolInvocations.length > 0;
+
+  // Render user messages normally
+  if (role === 'user') {
+    return (
+       <motion.div /* Standard user message styling */ >
+          <div /* User icon */ > <UserIcon /> </div>
+          <div /* Content */ > <Markdown>{content}</Markdown> </div>
+       </motion.div>
+    );
+  }
+
+  // Render assistant messages
+  if (isAssistant) {
+    // If it contains tool calls, render the accordion
+    if (isMultiStep) {
+      return <ResearchProcessAccordion toolInvocations={toolInvocations} />;
+    }
+    // Otherwise, render the final text answer
+    else if (content) {
+       return (
+          <motion.div /* Standard assistant message styling */ >
+              <div /* Bot icon */ > <BotIcon /> </div>
+              <div /* Final Content */ > <Markdown>{content}</Markdown> </div>
+          </motion.div>
+       );
+    }
+  }
+
+  return null; // Should not happen
+};
+ResearchProcessAccordion Component (components/research-process-accordion.tsx):
+
+TypeScript
+
+// components/research-process-accordion.tsx
+"use client";
+
+import React, { useState, useMemo, useEffect } from 'react';
+import { ToolInvocation } from "ai";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"; // Using Shadcn UI Accordion
+import { ToolStepDisplay } from "./tool-step-display";
+import { Progress } from "@/components/ui/progress";
+import { CheckCircle, Loader2, BotIcon } from 'lucide-react'; // Assuming BotIcon is defined
+import { cn } from '@/lib/utils';
+import { ResearchPlan } from '@/lib/schema';
+
+interface ResearchProcessAccordionProps {
+    toolInvocations: ToolInvocation[];
+}
+
+export const ResearchProcessAccordion: React.FC<ResearchProcessAccordionProps> = ({ toolInvocations }) => {
+    const [isExpanded, setIsExpanded] = useState(true); // Default to expanded during processing
+
+    // Extract plan details and calculate progress
+    const { plan, completedSteps, totalSteps, progress, isComplete, currentStepInfo } = useMemo(() => {
+        const planInvocation = toolInvocations.find(ti => ti.toolName === 'createResearchPlan');
+        const planResult = planInvocation?.result as ResearchPlan | undefined;
+        const expectedTotal = planResult?.estimated_steps || 0; // Estimate from plan
+
+        let completed = 0;
+        let runningToolName: string | null = null;
+        let runningToolArgs: any = null;
+
+        toolInvocations.forEach(ti => {
+            if (ti.state === 'result' || ti.state === 'error') {
+                completed++;
+            } else if (ti.state === 'running') {
+                runningToolName = ti.toolName;
+                runningToolArgs = ti.args;
+            }
+        });
+
+        // Use expectedTotal if available, otherwise fallback (can be inaccurate)
+        const total = expectedTotal > 0 ? expectedTotal : Math.max(toolInvocations.length, completed);
+        const calculatedProgress = total === 0 ? 0 : (completed / total) * 100;
+
+        // Consider complete if the last invocation is 'result' or 'error' and no tool is 'running'
+        const done = toolInvocations.length > 0 && !runningToolName && toolInvocations[toolInvocations.length - 1]?.state !== 'running';
+
+         // Determine current step description
+        let stepInfo = "Processing...";
+        if(runningToolName) {
+            const toolNameMap: { [key: string]: string } = {
+                 executeWebSearch: "Searching Web",
+                 executeAcademicSearch: "Searching Academic",
+                 executeXSearch: "Searching X",
+                 performAnalysis: `Analyzing (${(runningToolArgs as any)?.title || '...' })`,
+                 createResearchPlan: "Planning Research",
+             }
+             stepInfo = toolNameMap[runningToolName] || `Working on ${runningToolName}`;
+        } else if (planResult && !done) {
+             stepInfo = "Starting research..."
+        } else if (done) {
+             stepInfo = "Research Complete";
+        }
+
+
+        return {
+            plan: planResult,
+            completedSteps: completed,
+            totalSteps: total,
+            progress: calculatedProgress,
+            isComplete: done,
+            currentStepInfo: stepInfo,
+        };
+    }, [toolInvocations]);
+
+     // Collapse when complete
+    useEffect(() => {
+        if (isComplete) {
+            // Delay collapsing slightly to allow final updates to render
+            const timer = setTimeout(() => setIsExpanded(false), 500);
+            return () => clearTimeout(timer);
+        } else {
+            // Keep expanded while processing
+            setIsExpanded(true);
+        }
+    }, [isComplete]);
+
+    // Unique ID for the accordion item
+    const accordionValue = useMemo(() => `research-steps-${toolInvocations[0]?.toolCallId || Math.random()}`, [toolInvocations]);
+
+    return (
+        <div className="flex flex-row gap-4 px-4 w-full md:w-[500px] md:px-0">
+             <div className="size-[24px] flex flex-col justify-start items-center flex-shrink-0 text-zinc-400 pt-2">
+                 <BotIcon />
+             </div>
+            <div className="w-full">
+                <Accordion
+                    type="single"
+                    collapsible
+                    value={isExpanded ? accordionValue : ""}
+                    onValueChange={(value) => setIsExpanded(value === accordionValue)}
+                >
+                    <AccordionItem value={accordionValue} className="border-none">
+                        <AccordionTrigger
+                            className={cn(
+                                "flex items-center justify-between w-full p-3 rounded-lg transition-colors duration-200 text-left", // Ensure text aligns left
+                                "bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700",
+                                "data-[state=open]:rounded-b-none hover:no-underline", // Remove underline on hover
+                                "group" // Add group class for chevron styling
+                            )}
+                        >
+                            <div className="flex items-center gap-2 text-sm font-medium">
+                                {isComplete ? (
+                                    <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />
+                                ) : (
+                                    <Loader2 className="w-4 h-4 text-blue-500 animate-spin flex-shrink-0" />
+                                )}
+                                <span className="truncate">{currentStepInfo}</span>
+                                {!isComplete && totalSteps > 0 && (
+                                  <span className="text-xs text-neutral-500 dark:text-neutral-400 whitespace-nowrap">({completedSteps}/{totalSteps})</span>
+                                )}
+                            </div>
+                            {/* Chevron is automatically added by Shadcn AccordionTrigger */}
+                        </AccordionTrigger>
+                        <AccordionContent className="pt-0 mt-0 border-0 overflow-hidden">
+                           <div className="border border-t-0 border-neutral-200 dark:border-neutral-700 rounded-b-lg p-3 space-y-3 bg-white dark:bg-neutral-900">
+                                {toolInvocations.map((invocation) => (
+                                    <ToolStepDisplay
+                                        key={invocation.toolCallId}
+                                        invocation={invocation}
+                                    />
+                                ))}
+                            </div>
+                        </AccordionContent>
+                    </AccordionItem>
+                </Accordion>
+                 {!isComplete && (
+                    <Progress value={progress} className="h-0.5 w-full mt-1 bg-neutral-200 dark:bg-neutral-700 [&>div]:bg-blue-500" />
+                 )}
+            </div>
+        </div>
+    );
+};
+Self-correction: Made the accordion expanded by default while processing and collapse automatically on completion. Improved the trigger text logic.
+
+ToolStepDisplay Component (components/tool-step-display.tsx):
+
+TypeScript
+
+// components/tool-step-display.tsx
+import React from 'react';
+import { ToolInvocation } from "ai";
+import { CheckCircle, Loader2, AlertCircle, Search, FileText, BookA, Sparkles } from 'lucide-react';
+import { Markdown } from './markdown';
+import { motion, AnimatePresence } from 'framer-motion';
+import { cn } from '@/lib/utils';
+import { XLogo } from '@phosphor-icons/react';
+import { Tweet } from "react-tweet";
+import { ResearchPlan, SearchResults, AnalysisResult, SearchResultItem } from '@/lib/schema'; // Import types
+
+interface ToolStepDisplayProps {
+    invocation: ToolInvocation;
+}
+
+// --- Result Display Components ---
+
+const PlanDisplay = ({ plan }: { plan: ResearchPlan }) => (
+    <div className="mt-2 space-y-1 pl-1">
+         <p className="text-xs font-medium text-neutral-600 dark:text-neutral-400 mb-1">Research Plan:</p>
+         {plan.steps.map((step) => (
+             <div key={step.step} className="flex items-start gap-1.5 text-xs text-neutral-500 dark:text-neutral-400">
+                 <span className="font-mono">{step.step}.</span>
+                 <span className='flex-1'>{step.description} {step.query && <span className='italic text-neutral-400 dark:text-neutral-500'>({step.query})</span>}</span>
+                 <Badge variant="outline" className="text-[10px] px-1 py-0 flex-shrink-0">{step.type.replace('_',' ')}</Badge>
+             </div>
+         ))}
+    </div>
+);
+
+const SearchResultsDisplay = ({ resultsData }: { resultsData: SearchToolResults }) => {
+    const { results, query_used, source_type } = resultsData;
+    const displayLimit = 3;
+    const [showAll, setShowAll] = React.useState(false);
+    const displayedResults = showAll ? results : results.slice(0, displayLimit);
+
+    if (!results || results.length === 0) {
+         return <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400 italic">No results found for: "{query_used}"</p>
+    }
+
+    return (
+        <div className="mt-2 space-y-2">
+             {displayedResults.map((res, idx) => (
+                 res.source === 'x' && res.tweetId ? (
+                      <div key={`<span class="math-inline">\{res\.url\}\-</span>{idx}`} className="w-full max-w-sm tweet-container overflow-hidden rounded-lg border border-neutral-200 dark:border-neutral-700">
+                          <Tweet id={res.tweetId} />
+                      </div>
+                 ) : (
+                      <a
+                          key={`<span class="math-inline">\{res\.url\}\-</span>{idx}`} // Use URL and index for key
+                          href={res.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="block p-2 rounded-md bg-neutral-50 dark:bg-neutral-700/30 hover:bg-neutral-100 dark:hover:bg-neutral-700/60 transition-colors border border-transparent hover:border-neutral-200 dark:hover:border-neutral-700"
+                      >
+                          <h5 className="text-xs font-medium text-primary dark:text-blue-400 line-clamp-1">{res.title}</h5>
+                          {res.snippet && <p className="text-[11px] text-neutral-600 dark:text-neutral-400 line-clamp-2 mt-0.5">{res.snippet}</p>}
+                          <p className="text-[10px] text-neutral-400 dark:text-neutral-500 mt-1 truncate">{res.url}</p>
+                      </a>
+                 )
+             ))}
+             {results.length > displayLimit && !showAll && (
+                 <button
+                      onClick={(e) => {e.stopPropagation(); setShowAll(true);}}
+                      className="text-xs text-blue-600 dark:text-blue-400 hover:underline mt-1"
+                 >
+                      Show {results.length - displayLimit} more results...
+                 </button>
+             )}
+        </div>
+    );
+};
+
+ const AnalysisDisplay = ({ analysis }: { analysis: AnalysisResult }) => (
+    <div className="mt-2 text-sm prose prose-sm dark:prose-invert max-w-none prose-p:my-1">
+         <Markdown>{analysis.content}</Markdown>
+    </div>
+ );
+
+// --- Main Component ---
+
+export const ToolStepDisplay: React.FC<ToolStepDisplayProps> = ({ invocation }) => {
+    const { toolName, state, result, error, args } = invocation;
+
+    const icons = {
+        createResearchPlan: Search,
+        executeWebSearch: FileText,
+        executeAcademicSearch: BookA,
+        executeXSearch: XLogo,
+        performAnalysis: Sparkles,
+    } as const;
+
+    const Icon = icons[toolName as keyof typeof icons] || Sparkles;
+
+    let title = toolName.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
+    let content: React.ReactNode = null;
+    let statusIcon = <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-500 flex-shrink-0" />;
+    let statusColor = "text-blue-600 dark:text-blue-400";
+    let shortMessage = "Running...";
+
+    // Add query/topic to title if applicable
+    if (toolName.includes('Search') && args?.query) {
+        title = `<span class="math-inline">\{title\}\: "</span>{args.query}"`;
+    } else if (toolName === 'performAnalysis' && args?.title) {
+         title = `${args.title}`; // Use the title from analysis args
+    } else if (toolName === 'createResearchPlan') {
+         title = 'Creating Research Plan';
+    }
+
+
+    if (state === 'running') {
+        shortMessage = "Working on it...";
+    } else if (state === 'result') {
+         statusIcon = <CheckCircle className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />;
+         statusColor = "text-green-600 dark:text-green-400";
+         shortMessage = "Completed"; // Keep title clean on completion
+
+         try {
+            if (toolName === 'createResearchPlan') {
+                content = <PlanDisplay plan={result as ResearchPlan} />;
+            } else if (toolName.startsWith('execute') && toolName.endsWith('Search')) {
+                content = <SearchResultsDisplay resultsData={result as SearchToolResults} />;
+            } else if (toolName === 'performAnalysis') {
+                const analysis = result as AnalysisResult;
+                title = analysis.title; // Update title with the one from result
+                content = <AnalysisDisplay analysis={analysis} />;
+            } else {
+                // Fallback display for unknown successful tools
+                content = <pre className="text-xs bg-neutral-100 dark:bg-neutral-900 p-2 rounded overflow-auto max-h-40">{JSON.stringify(result, null, 2)}</pre>;
+            }
+         } catch (e) {
+             console.error("Error rendering tool result:", e);
+             content = <p className="text-xs text-red-500">Error displaying result data.</p>;
+         }
+
+    } else if (state === 'error') {
+         statusIcon = <AlertCircle className="w-3.5 h-3.5 text-red-500 flex-shrink-0" />;
+         statusColor = "text-red-600 dark:text-red-400";
+         title = `Error: ${title}`;
+         shortMessage = "Failed";
+         content = <p className="text-xs text-red-500 mt-1">{error?.message || 'An unknown error occurred'}</p>;
+    }
+
+    return (
+        <motion.div
+            layout
+            initial={{ opacity: 0, y: 5 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="pl-4 border-l-2 border-neutral-200 dark:border-neutral-700"
+        >
+            <div className="flex items-center gap-2">
+                {statusIcon}
+                <span className={cn("text-xs font-medium", statusColor)}>
+                     {title}
+                </span>
+                <Icon className={cn("w-3 h-3 ml-auto", statusColor)} />
+            </div>
+            <AnimatePresence>
+                {content && (
+                    <motion.div
+                        initial={{ height: 0, opacity: 0, marginTop: 0 }}
+                        animate={{ height: "auto", opacity: 1, marginTop: '0.5rem' }}
+                        exit={{ height: 0, opacity: 0, marginTop: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className="overflow-hidden"
+                    >
+                         {content}
+                    </motion.div>
+                )}
+            </AnimatePresence>
+        </motion.div>
+    );
+};
+Self-correction: Added specific result display components (PlanDisplay, SearchResultsDisplay, AnalysisDisplay) called conditionally within ToolStepDisplay. Made titles more informative by including the search query or analysis title.
+
+6. Styling (globals.css and Tailwind classes):
+
+Use Tailwind utilities as shown in the examples for layout, colors, borders, rounded corners.
+Style the ResearchProcessAccordion trigger to clearly indicate status (icon, text color).
+Style the ToolStepDisplay component: use borders, background colors, and icons to visually separate steps. Use padding and margins for readability.
+Style the result components (SearchResultsDisplay, etc.) for clarity (e.g., cards for search results).
+Leverage framer-motion for smooth animations (accordion open/close, step appearance).
+Putting it Together:
+
+This setup creates a robust system where:
+
+The AI plans its work (createResearchPlan).
+The plan and subsequent steps are streamed to the UI.
+The frontend displays an accordion (ResearchProcessAccordion).
+Each tool call appears as a step (ToolStepDisplay) inside the accordion, initially showing a "running" state.
+When a tool finishes (e.g., web search completes), its result is streamed, and the corresponding ToolStepDisplay updates to "completed" and renders the results using a specific component like SearchResultsDisplay.
+The accordion trigger updates to reflect overall progress.
+Once all tool calls defined in the plan (or dynamically added by the AI) are finished, the final plain text answer is streamed and displayed by the main Message component outside the accordion.
+The accordion automatically collapses upon completion (optional, based on useEffect in the accordion component).
+This provides the desired detailed, collapsible preview of the AI's multi-step process, including both internal reasoning (performAnalysis) and external actions (execute...Search).

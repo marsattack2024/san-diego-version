@@ -263,11 +263,20 @@ export async function findSimilarDocumentsOptimized(
         const retrievalTimeMs = Math.round(performance.now() - startTime);
         const isTimeout = retrievalTimeMs > THRESHOLDS.RAG_TIMEOUT;
 
+        // Attempt to get more specific error details
+        let errorDetails = error instanceof Error ? error.message : String(error);
+        if (typeof error === 'object' && error !== null && 'code' in error) {
+            errorDetails += ` (Code: ${error.code})`;
+        }
+        if (typeof error === 'object' && error !== null && 'status' in error) {
+            errorDetails += ` (Status: ${error.status})`;
+        }
+
         edgeLogger.error('RAG search failed', {
             category: LOG_CATEGORIES.TOOLS,
             operation: OPERATION_TYPES.RAG_SEARCH,
             ragOperationId,
-            error: error instanceof Error ? error.message : String(error),
+            error: errorDetails, // Log more specific details
             queryLength: queryText.length,
             queryPreview: queryText.substring(0, 50) + (queryText.length > 50 ? '...' : ''),
             retrievalTimeMs,

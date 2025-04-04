@@ -191,9 +191,10 @@ export function createKnowledgeBaseTool(options: KnowledgeBaseToolOptions = {}) 
                 // Handle any errors that occur during search
                 const errorMessage = error instanceof Error ? error.message : String(error);
 
-                edgeLogger.error('Knowledge base search failed', {
+                // Log the specific error encountered
+                edgeLogger.error('Knowledge base tool execution failed internally', {
                     category: LOG_CATEGORIES.TOOLS,
-                    operation: OPERATION_TYPES.RAG_SEARCH,
+                    operation: OPERATION_TYPES.RAG_SEARCH, // Keep RAG context if appropriate
                     toolCallId,
                     queryLength: query.length,
                     queryPreview: query.substring(0, 50) + (query.length > 50 ? '...' : ''),
@@ -201,9 +202,9 @@ export function createKnowledgeBaseTool(options: KnowledgeBaseToolOptions = {}) 
                     important: true
                 });
 
-                // Return error information
+                // Return standardized *string* content for error
                 return {
-                    content: `Error searching the knowledge base: ${errorMessage}`,
+                    content: `Error: Failed to search knowledge base. Please try again later or rephrase your query. (Details: ${errorMessage.substring(0, 100)})`,
                     error: errorMessage,
                     documents: []
                 };
