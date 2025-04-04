@@ -134,11 +134,11 @@ While this refactor primarily targets the frontend component, interactions with 
 
 *Follow this bottom-up approach to validate each piece:* 
 
-1.  **Phase 1: Store Update & Utilities:**
-    *   Verify/add `renameConversation` action in `chat-store.ts`.
-    *   Move `groupChatsByDate` to utils.
+1.  **Phase 1: Store Update & Utilities: ✅ COMPLETED**
+    *   Verify/add `renameConversation` action in `chat-store.ts`. ✅
+    *   Move `groupChatsByDate` to utils. ✅
     *   Write/update tests for store action and utility.
-2.  **Phase 2: Hook Extraction & Testing:**
+2.  **Phase 2: Hook Extraction & Testing: <= IN PROGRESS**
     *   Create `useChatHistoryData`, `useChatActions`, `useCreateChat`.
     *   Write unit tests for hooks.
 3.  **Phase 3: Component Decomposition & Testing:**

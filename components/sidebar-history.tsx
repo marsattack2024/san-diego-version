@@ -61,46 +61,6 @@ import { useAuthStore } from '@/stores/auth-store';
 
 const log = edgeLogger; // Create a local reference for cleaner code
 
-// Consistent type definition for grouped chats
-type GroupedChats = {
-  today: Chat[];
-  yesterday: Chat[];
-  pastWeek: Chat[];
-  older: Chat[];
-};
-
-// Simplified and standardized groupChatsByDate function
-const groupChatsByDate = (chats: Array<Chat>): GroupedChats => {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-
-  const lastWeekDate = new Date(today);
-  lastWeekDate.setDate(lastWeekDate.getDate() - 7);
-
-  return {
-    today: chats.filter((chat) => {
-      const chatDate = new Date(chat.updatedAt || chat.createdAt);
-      return chatDate >= today;
-    }),
-    yesterday: chats.filter((chat) => {
-      const chatDate = new Date(chat.updatedAt || chat.createdAt);
-      const chatDay = new Date(chatDate.getFullYear(), chatDate.getMonth(), chatDate.getDate());
-      return chatDay.getTime() === yesterday.getTime();
-    }),
-    pastWeek: chats.filter((chat) => {
-      const chatDate = new Date(chat.updatedAt || chat.createdAt);
-      return chatDate < yesterday && chatDate >= lastWeekDate;
-    }),
-    older: chats.filter((chat) => {
-      const chatDate = new Date(chat.updatedAt || chat.createdAt);
-      return chatDate < lastWeekDate;
-    }),
-  };
-};
-
 // Chat item component with proper typing
 const PureChatItem = ({
   chat,
@@ -443,19 +403,6 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
     }
   }, [renameId, renameTitle]);
 
-  // Group chats by date
-  const groupedChats = useMemo(() => {
-    const hasChats = historyArray.length > 0;
-    console.debug('[SidebarHistory] Grouping chats:', {
-      count: historyArray.length,
-      isAuthenticated,
-      hasChats
-    });
-
-    // Return grouped chats if we have them, regardless of auth state
-    return groupChatsByDate(historyArray);
-  }, [historyArray, isAuthenticated]);
-
   // Render chat sections - simple divs, no overflow control here
   const renderChatSection = useCallback(
     (title: string, chats: Chat[], showAll = true) => {
@@ -495,19 +442,21 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
     [id, isDeleting, setOpenMobile, handleDeleteClick, handleRenameClick]
   );
 
-  // Check if we have content to display
-  const hasHistory =
-    groupedChats.today.length > 0 ||
-    groupedChats.yesterday.length > 0 ||
-    groupedChats.pastWeek.length > 0 ||
-    groupedChats.older.length > 0;
+  // Check if we have content to display - This logic will move to the hook/consuming component
+  // const hasHistory =
+  //   groupedChats.today.length > 0 ||
+  //   groupedChats.yesterday.length > 0 ||
+  //   groupedChats.pastWeek.length > 0 ||
+  //   groupedChats.older.length > 0;
+
+  const hasHistory = historyArray.length > 0; // Temporary check
 
   console.debug('[SidebarHistory] History availability check:', {
     hasHistory,
-    todayCount: groupedChats.today.length,
-    yesterdayCount: groupedChats.yesterday.length,
-    pastWeekCount: groupedChats.pastWeek.length,
-    olderCount: groupedChats.older.length,
+    // todayCount: groupedChats.today.length,
+    // yesterdayCount: groupedChats.yesterday.length,
+    // pastWeekCount: groupedChats.pastWeek.length,
+    // olderCount: groupedChats.older.length,
     totalCount: Object.keys(conversationsIndex).length
   });
 
@@ -531,7 +480,7 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
           <Button
             variant="outline"
             size="sm"
-            onClick={() => fetchHistory(true)}
+            onClick={() => fetchHistory(true)} // Keep retry logic
             className="flex items-center gap-1"
           >
             <RefreshCw className="h-3 w-3" /> Retry
@@ -541,7 +490,7 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
     }
 
     // Skip the auth check here - render if we have data, regardless of auth state
-    if (!hasHistory) {
+    if (!hasHistory) { // Use temporary check
       return (
         <div className="p-4 text-center">
           <p className="text-sm text-muted-foreground">No chat history found.</p>
@@ -550,12 +499,14 @@ const PureSidebarHistory = ({ user: serverUser }: { user: User | undefined }) =>
       );
     }
 
+    // Rendering logic based on grouped chats will be replaced
     return (
       <>
-        {renderChatSection('Today', groupedChats.today)}
-        {renderChatSection('Yesterday', groupedChats.yesterday)}
-        {renderChatSection('Past Week', groupedChats.pastWeek)}
-        {renderChatSection('Older', groupedChats.older, showAllOlder)}
+        {/* {renderChatSection('Today', groupedChats.today)} */}
+        {/* {renderChatSection('Yesterday', groupedChats.yesterday)} */}
+        {/* {renderChatSection('Past Week', groupedChats.pastWeek)} */}
+        {/* {renderChatSection('Older', groupedChats.older, showAllOlder)} */}
+        <p className="p-4 text-sm text-muted-foreground">(History rendering temporarily disabled during refactor)</p>
       </>
     );
   };

@@ -6,6 +6,7 @@ import { type AgentType } from '@/lib/chat-engine/prompts';
 import { historyService } from '@/lib/api/history-service';
 import { Chat } from '@/lib/db/schema';
 import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { shallow } from 'zustand/shallow';
 import { createClient } from '@/utils/supabase/client';
 import { type User } from '@supabase/supabase-js';
@@ -463,69 +464,98 @@ export const useChatStore = create<ChatState>()(
       updateConversationTitle: async (id: string, title: string): Promise<boolean> => {
         const trimmedTitle = title.trim();
         if (!trimmedTitle) {
-          edgeLogger.warn(`[ChatStore] Attempted to rename chat ${id} with empty title`);
+          edgeLogger.warn(`[ChatStore] Attempted to rename chat ${id} with empty title`, {
+            category: LOG_CATEGORIES.CHAT,
+            chatId: id
+          });
           return false; // Don't allow empty titles
         }
 
         const state = get();
-        const originalTitle = state.conversationsIndex[id]?.title;
+        // Ensure the conversation exists before trying to get original title
+        const exists = state.conversationsIndex[id] || state.loadedConversations[id] || state.conversations[id];
+        if (!exists) {
+          edgeLogger.warn(`[ChatStore] Attempted to update title for non-existent conversation: ${id}`, {
+            category: LOG_CATEGORIES.CHAT,
+            chatId: id
+          });
+          return false;
+        }
+        const originalTitle = state.conversationsIndex[id]?.title; // Get title from index
 
         // 1. Optimistic UI Update (Index, Loaded, Legacy)
+        const optimisticUpdateTimestamp = new Date().toISOString();
         set((currentState) => {
-          const updatedConversations = { ...currentState.conversations };
-          const updatedIndex = { ...currentState.conversationsIndex };
-          const updatedLoaded = { ...currentState.loadedConversations };
-          const timestamp = new Date().toISOString();
+          // Ensure we work with the freshest state inside set
+          const currentConversations = { ...currentState.conversations };
+          const currentIndex = { ...currentState.conversationsIndex };
+          const currentLoaded = { ...currentState.loadedConversations };
 
-          if (updatedConversations[id]) {
-            updatedConversations[id] = {
-              ...updatedConversations[id],
+          // Update all three potential locations
+          if (currentConversations[id]) {
+            currentConversations[id] = {
+              ...currentConversations[id],
               title: trimmedTitle,
-              updatedAt: timestamp
+              updatedAt: optimisticUpdateTimestamp
             };
           }
-          if (updatedIndex[id]) {
-            updatedIndex[id] = {
-              ...updatedIndex[id],
+          if (currentIndex[id]) {
+            currentIndex[id] = {
+              ...currentIndex[id],
               title: trimmedTitle,
-              updatedAt: timestamp
+              updatedAt: optimisticUpdateTimestamp
             };
           }
-          if (updatedLoaded[id]) {
-            updatedLoaded[id] = {
-              ...updatedLoaded[id],
+          if (currentLoaded[id]) {
+            currentLoaded[id] = {
+              ...currentLoaded[id],
               title: trimmedTitle,
-              updatedAt: timestamp
+              updatedAt: optimisticUpdateTimestamp
             };
           }
 
-          edgeLogger.debug(`[ChatStore] Optimistically updated title for chat ${id} to "${trimmedTitle}"`);
+          edgeLogger.debug(`[ChatStore] Optimistically updated title for chat ${id} to "${trimmedTitle}"`, {
+            category: LOG_CATEGORIES.CHAT,
+            chatId: id
+          });
 
           return {
-            conversations: updatedConversations,
-            conversationsIndex: updatedIndex,
-            loadedConversations: updatedLoaded,
+            conversations: currentConversations,
+            conversationsIndex: currentIndex,
+            loadedConversations: currentLoaded,
           };
         });
 
         // 2. Call API to persist change
+        let apiSuccess = false;
+        const startTime = performance.now();
         try {
           const supabase = createClient(); // Get client-side Supabase instance
-          const success = await historyService.renameChat(supabase, id, trimmedTitle);
+          apiSuccess = await historyService.renameChat(supabase, id, trimmedTitle);
+          const durationMs = performance.now() - startTime;
 
-          if (!success) {
-            throw new Error('API call to renameChat returned false');
+          if (!apiSuccess) {
+            throw new Error('API call to historyService.renameChat returned false');
           }
 
-          edgeLogger.info(`[ChatStore] Successfully persisted title update for chat ${id}`);
+          edgeLogger.info(`[ChatStore] Successfully persisted title update for chat ${id}`, {
+            category: LOG_CATEGORIES.CHAT,
+            chatId: id,
+            durationMs: Math.round(durationMs)
+          });
           // Optional: Force refresh history if needed, though optimistic update might suffice
-          // setTimeout(() => get().fetchHistory(true), 500); 
-          return true;
+          // setTimeout(() => get().fetchHistory(true), 500);
+          return true; // Overall success
         } catch (error) {
+          const durationMs = performance.now() - startTime;
           edgeLogger.error(`[ChatStore] Failed to persist title update for chat ${id}`, {
+            category: LOG_CATEGORIES.CHAT,
+            chatId: id,
             error: error instanceof Error ? error.message : String(error),
             originalTitle: originalTitle,
-            newTitle: trimmedTitle
+            newTitle: trimmedTitle,
+            durationMs: Math.round(durationMs),
+            important: true // Failed DB operations are important
           });
 
           // 3. Revert optimistic update on failure
@@ -533,28 +563,28 @@ export const useChatStore = create<ChatState>()(
             const revertedConversations = { ...currentState.conversations };
             const revertedIndex = { ...currentState.conversationsIndex };
             const revertedLoaded = { ...currentState.loadedConversations };
-            const timestamp = new Date().toISOString(); // Use a new timestamp for revert?
+            const revertTimestamp = new Date().toISOString();
 
-            if (revertedConversations[id] && originalTitle !== undefined) {
-              revertedConversations[id] = {
-                ...revertedConversations[id],
-                title: originalTitle,
-                updatedAt: timestamp // Revert timestamp?
-              };
-            }
-            if (revertedIndex[id] && originalTitle !== undefined) {
-              revertedIndex[id] = {
-                ...revertedIndex[id],
-                title: originalTitle,
-                updatedAt: timestamp
-              };
-            }
-            if (revertedLoaded[id] && originalTitle !== undefined) {
-              revertedLoaded[id] = {
-                ...revertedLoaded[id],
-                title: originalTitle,
-                updatedAt: timestamp
-              };
+            // Only revert if original title was captured and conversation exists
+            if (originalTitle !== undefined) {
+              if (revertedConversations[id]) {
+                revertedConversations[id] = { ...revertedConversations[id], title: originalTitle, updatedAt: revertTimestamp };
+              }
+              if (revertedIndex[id]) {
+                revertedIndex[id] = { ...revertedIndex[id], title: originalTitle, updatedAt: revertTimestamp };
+              }
+              if (revertedLoaded[id]) {
+                revertedLoaded[id] = { ...revertedLoaded[id], title: originalTitle, updatedAt: revertTimestamp };
+              }
+              edgeLogger.warn(`[ChatStore] Reverted optimistic title update for chat ${id}`, {
+                category: LOG_CATEGORIES.CHAT,
+                chatId: id
+              });
+            } else {
+              edgeLogger.warn(`[ChatStore] Could not revert title for chat ${id}, original title unknown.`, {
+                category: LOG_CATEGORIES.CHAT,
+                chatId: id
+              });
             }
 
             return {
@@ -564,7 +594,7 @@ export const useChatStore = create<ChatState>()(
             };
           });
 
-          return false; // Indicate failure
+          return false; // Indicate overall failure
         }
       },
 
