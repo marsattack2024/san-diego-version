@@ -1,9 +1,10 @@
-import { createClient } from '@/utils/supabase/server';
+import { type NextRequest } from 'next/server';
+import { type User } from '@supabase/supabase-js';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { successResponse, errorResponse, validationError } from '@/lib/utils/route-handler';
-import { withAuth } from '@/lib/auth/with-auth';
-import type { User } from '@supabase/supabase-js';
+import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
 export const runtime = 'edge';
 
@@ -12,7 +13,7 @@ export const runtime = 'edge';
  * This is designed to notify users when async processes like website summarization complete
  * Requires authentication.
  */
-export const POST = withAuth(async (user: User, request: Request): Promise<Response> => {
+const POST_Handler: AuthenticatedRouteHandler = async (request, context, user) => {
   const operation = 'profile_notification';
 
   try {
@@ -40,7 +41,7 @@ export const POST = withAuth(async (user: User, request: Request): Promise<Respo
     });
 
     // Future implementation: Store notifications in database here
-    // const supabase = await createClient(); // Use the appropriate client for db interaction
+    const supabase = await createRouteHandlerClient();
 
     return successResponse({
       success: true,
@@ -63,4 +64,7 @@ export const POST = withAuth(async (user: User, request: Request): Promise<Respo
       500
     );
   }
-});
+};
+
+// Apply withAuth wrapper
+export const POST = withAuth(POST_Handler);

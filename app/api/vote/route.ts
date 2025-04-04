@@ -3,8 +3,9 @@ import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { cookies } from 'next/headers';
 import type { PostgrestError } from '@supabase/supabase-js';
 import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
-import { withAuth } from '@/lib/auth/with-auth';
+import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
 import type { User } from '@supabase/supabase-js';
+import { type NextRequest } from 'next/server';
 
 export const runtime = 'edge';
 
@@ -20,108 +21,114 @@ function formatError(error: unknown): Error {
 // We've removed the GET method as vote data is now included with chat messages
 // This eliminates redundant API calls
 
-export const POST = withAuth(async (user: User, req: Request): Promise<Response> => {
-  const requestId = edgeLogger.generateRequestId();
-  const userId = user.id;
-  let messageId: string;
-  let vote: 'up' | 'down' | null;
+// Update signature
+const POST_Handler: AuthenticatedRouteHandler = async (request, context, user) => {
+  const operationId = `vote_${Math.random().toString(36).substring(2, 10)}`;
+  const userId = user.id; // Get userId from user parameter
 
-  return edgeLogger.trackOperation('submit_vote', async () => {
+  try {
+    // 1. Parse and Validate Body
+    let messageId: string;
+    let vote: 'up' | 'down' | null;
     try {
-      const body = await req.json();
+      const body = await request.json();
       messageId = body.messageId;
       vote = body.vote;
 
-      // Validate vote value
+      if (!messageId || typeof messageId !== 'string') {
+        return errorResponse('messageId (string) is required', null, 400);
+      }
       if (vote !== 'up' && vote !== 'down' && vote !== null) {
         return errorResponse('Vote must be "up", "down", or null', null, 400);
       }
-
-      // Create Supabase client using route handler utility
-      const supabase = await createRouteHandlerClient();
-
-      // Handle message ID which could be in various formats
-      edgeLogger.info('Received vote request', {
-        messageId: messageId,
-        voteType: vote,
-        userId: userId.substring(0, 8)
-      });
-
-      // Check if we're dealing with a compound ID (chatId-msgId format which frontend now sends)
-      let actualMessageId = messageId;
-      let sessionId: string | null = null;
-
-      if (messageId.includes('-msg-')) {
-        const parts = messageId.split('-msg-');
-        if (parts.length === 2) {
-          sessionId = parts[0]; // Extract the chatId part
-          actualMessageId = parts[1]; // Use the actual message ID part
-        }
-      }
-
-      // Verify the message exists and belongs to the user's session (via RLS on sessions table)
-      const { data: message, error: messageError } = await supabase
-        .from('sd_chat_histories')
-        .select('id, session_id')
-        .eq('id', actualMessageId)
-        .maybeSingle();
-
-      if (messageError || !message) {
-        edgeLogger.warn('Failed to find message or message not found for vote', {
-          error: messageError ? messageError.message : 'Message not found',
-          messageId,
-          userId: userId.substring(0, 8)
-        });
-        return successResponse({ success: true }); // Fail silently on client
-      }
-
-      // Double check session ownership for safety
-      const { error: sessionError } = await supabase
-        .from('sd_chat_sessions')
-        .select('id')
-        .eq('id', message.session_id)
-        .eq('user_id', userId)
-        .limit(1)
-        .single();
-
-      if (sessionError) {
-        edgeLogger.warn('User does not own chat session for this vote', {
-          userId: userId.substring(0, 8),
-          sessionId: message.session_id,
-          messageId: message.id,
-          error: sessionError.message
-        });
-        return unauthorizedError('Cannot vote on messages in this chat');
-      }
-
-      // Update the vote
-      const { error: updateError } = await supabase
-        .from('sd_chat_histories')
-        .update({ vote })
-        .eq('id', message.id);
-
-      if (updateError) {
-        edgeLogger.error('Failed to update vote', {
-          error: updateError.message,
-          messageId: message.id,
-          userId: userId.substring(0, 8)
-        });
-        return errorResponse('Failed to update vote', updateError, 500);
-      }
-
-      edgeLogger.info('Vote updated successfully', {
-        messageId: message.id,
-        vote,
-        userId: userId.substring(0, 8)
-      });
-
-      return successResponse({ success: true });
-    } catch (error) {
-      edgeLogger.error('Error processing vote', {
-        error: formatError(error),
-        requestId
-      });
-      return errorResponse('Internal server error', error, 500);
+    } catch (parseError: unknown) {
+      const errorMessage = parseError instanceof Error ? parseError.message : String(parseError);
+      edgeLogger.error('Error parsing vote request body', { operationId, error: errorMessage });
+      return errorResponse('Invalid request body', errorMessage, 400);
     }
-  }, { requestId });
-});
+
+    edgeLogger.info('Processing vote', {
+      messageId: messageId,
+      voteType: vote,
+      userId: userId.substring(0, 8),
+      operationId
+    });
+
+    const supabase = await createRouteHandlerClient();
+
+    // 2. Verify Message Exists & Ownership (via Session)
+    // Handle compound ID if necessary
+    let actualMessageId = messageId;
+    if (messageId.includes('-msg-')) {
+      const parts = messageId.split('-msg-');
+      if (parts.length === 2) {
+        actualMessageId = parts[1];
+      }
+    }
+
+    const { data: message, error: messageError } = await supabase
+      .from('sd_chat_histories')
+      .select('id, session_id')
+      .eq('id', actualMessageId)
+      .maybeSingle();
+
+    if (messageError || !message) {
+      edgeLogger.warn('Message not found for vote or DB error', {
+        operationId, messageId, actualMessageId,
+        error: messageError?.message || 'Message not found',
+        userId: userId.substring(0, 8)
+      });
+      // Fail silently on client if message not found
+      return successResponse({ success: true, message: 'Message not found or error occurred' });
+    }
+
+    // Check session ownership (RLS on sd_chat_sessions should enforce this, but explicit check is safer)
+    const { error: sessionError } = await supabase
+      .from('sd_chat_sessions')
+      .select('id')
+      .eq('id', message.session_id)
+      .eq('user_id', userId)
+      .limit(1)
+      .single();
+
+    if (sessionError) {
+      edgeLogger.warn('Vote authorization failed (session ownership check)', {
+        operationId, messageId, actualMessageId, sessionId: message.session_id,
+        userId: userId.substring(0, 8),
+        error: sessionError.message
+      });
+      return unauthorizedError('Cannot vote on messages in this chat session');
+    }
+
+    // 3. Update Vote
+    const { error: updateError } = await supabase
+      .from('sd_chat_histories')
+      .update({ vote })
+      .eq('id', message.id);
+
+    if (updateError) {
+      edgeLogger.error('Failed to update vote in database', {
+        operationId, messageId: message.id, userId: userId.substring(0, 8),
+        error: updateError.message
+      });
+      return errorResponse('Failed to update vote', updateError, 500);
+    }
+
+    edgeLogger.info('Vote updated successfully', {
+      operationId, messageId: message.id, userId: userId.substring(0, 8), vote
+    });
+
+    return successResponse({ success: true });
+
+  } catch (error) {
+    edgeLogger.error('Unexpected error processing vote', {
+      operationId,
+      error: error instanceof Error ? error.message : String(error),
+      important: true
+    });
+    return errorResponse('Internal server error', error instanceof Error ? error : String(error), 500);
+  }
+};
+
+// Apply withAuth wrapper
+export const POST = withAuth(POST_Handler);

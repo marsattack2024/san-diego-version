@@ -3,7 +3,7 @@ import { createServerClient } from '@supabase/ssr';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
-import { withAdminAuth } from '@/lib/auth/with-auth';
+import { withAdminAuth, type AdminAuthenticatedRouteHandler } from '@/lib/auth/with-auth';
 import type { User } from '@supabase/supabase-js';
 
 export const runtime = 'edge';
@@ -12,11 +12,11 @@ export const runtime = 'edge';
  * GET route to check if the current user has admin status
  * Uses withAdminAuth which verifies the user is authenticated and has the is_admin JWT claim.
  */
-export const GET = withAdminAuth(async (user: User, request: Request): Promise<Response> => {
+const GET_Handler: AdminAuthenticatedRouteHandler = async (request, context, user) => {
     const operationId = `admin_check_${Date.now().toString(36).substring(2, 7)}`;
 
     try {
-        // User is guaranteed to be authenticated and an admin by the wrapper
+        // User is now passed directly and is guaranteed admin by withAdminAuth
         edgeLogger.info('Admin status confirmed via withAdminAuth wrapper (JWT claim)', {
             category: LOG_CATEGORIES.AUTH,
             operationId,
@@ -41,21 +41,6 @@ export const GET = withAdminAuth(async (user: User, request: Request): Promise<R
 
         return response;
 
-        // --- Removed manual checks as withAdminAuth handles it --- 
-        /*
-        // Create Supabase client using the server function
-        // ... client creation code removed ...
-
-        // Get the current user from the request
-        // ... getUser call removed ...
-
-        // 1. Check JWT claims in app_metadata first (most efficient)
-        // ... JWT check removed ...
-
-        // 2. Check profile table as fallback
-        // ... profile check code removed ...
-        */
-
     } catch (error) {
         edgeLogger.error('Unexpected error in admin status check', {
             category: LOG_CATEGORIES.AUTH,
@@ -70,4 +55,7 @@ export const GET = withAdminAuth(async (user: User, request: Request): Promise<R
             500
         );
     }
-}); 
+};
+
+// Wrap with withAdminAuth
+export const GET = withAdminAuth(GET_Handler); 

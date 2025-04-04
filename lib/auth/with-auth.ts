@@ -7,11 +7,11 @@ import { LOG_CATEGORIES } from '@/lib/logger/constants';
 // Define and EXPORT the type for handlers that require authentication
 export type AuthenticatedRouteHandler = (
     request: Request,
-    context: { params?: Record<string, string>; user: User }
+    context: { params?: Record<string, string> },
+    user: User
 ) => Promise<Response>;
 
 // Define the type for handlers that require admin authentication
-// It shares the same signature but implies an admin check happened
 export type AdminAuthenticatedRouteHandler = AuthenticatedRouteHandler;
 
 /**
@@ -55,10 +55,8 @@ export function withAuth(handler: AuthenticatedRouteHandler): (req: Request, con
                 userId: user.id.substring(0, 8) + '...',
             });
 
-            // Call the handler with the correct signature (request, { user, ...context })
-            // Merge existing context (like params) with the user object
-            const handlerContext = { ...context, user };
-            return await handler(req, handlerContext);
+            // Call the handler with the adjusted signature (request, context, user)
+            return await handler(req, context, user);
         } catch (error) {
             // Log unexpected errors
             edgeLogger.error('Unexpected error in auth wrapper', {
@@ -88,9 +86,8 @@ export function withAuth(handler: AuthenticatedRouteHandler): (req: Request, con
  */
 export function withAdminAuth(handler: AdminAuthenticatedRouteHandler): (req: Request, context: { params?: Record<string, string> }) => Promise<Response> {
     // Wrap the authenticated handler logic first
-    return withAuth(async (req, context) => { // context here now includes { user } from withAuth
+    return withAuth(async (req, context, user) => { // Receive user from withAuth
         const operationId = `admin_auth_${Math.random().toString(36).substring(2, 8)}`;
-        const user = context.user; // Get user from the context passed by withAuth
 
         try {
             // Check JWT claims for admin status 
@@ -118,8 +115,8 @@ export function withAdminAuth(handler: AdminAuthenticatedRouteHandler): (req: Re
                 userId: user.id.substring(0, 8) + '...',
             });
 
-            // Call the original handler with the request and context (which includes user)
-            return await handler(req, context);
+            // Call the original handler with the adjusted signature
+            return await handler(req, context, user);
         } catch (error) {
             // Log unexpected errors
             edgeLogger.error('Unexpected error in admin auth wrapper', {

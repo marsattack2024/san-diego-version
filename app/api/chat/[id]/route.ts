@@ -11,42 +11,39 @@ import { edgeLogger } from '@/lib/logger/edge-logger';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { handleCors } from '@/lib/utils/http-utils';
 import type { IdParam } from '@/lib/types/route-handlers';
-import { withAuth } from '@/lib/auth/with-auth';
+import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
 import type { User } from '@supabase/supabase-js';
+import { type NextRequest } from 'next/server';
 
 export const runtime = 'edge';
 export const maxDuration = 15;
 export const dynamic = 'force-dynamic';
 
 // GET handler to retrieve a specific chat and its messages
-export const GET = withAuth(async (user: User, request: Request): Promise<Response> => {
+const GET_Handler: AuthenticatedRouteHandler = async (request: Request, context, user) => {
+    const { params } = context;
+    const chatId = params?.id;
+
+    if (!chatId) {
+        return errorResponse('Chat ID is required', null, 400);
+    }
+
     const operationId = `get_chat_${Math.random().toString(36).substring(2, 10)}`;
 
     try {
-        // Retrieve params from the request URL within the handler
-        const url = new URL(request.url);
-        const pathnameSegments = url.pathname.split('/');
-        const chatId = pathnameSegments[pathnameSegments.length - 1]; // Assuming ID is the last segment
-
-        if (!chatId) {
-            return errorResponse('Missing chat ID', null, 400);
-        }
-
         edgeLogger.info('Chat GET request started', {
             category: 'chat',
             operationId,
             chatId
         });
 
-        // Authentication handled by wrapper, user object is passed
         edgeLogger.info('User authenticated (via withAuth)', {
             category: 'auth',
             operationId,
             userId: user.id.substring(0, 8)
         });
 
-        // Get chat session data
-        const supabase = await createRouteHandlerClient(); // Need to create client here
+        const supabase = await createRouteHandlerClient();
         const { data: sessionData, error: sessionError } = await supabase
             .from('sd_chat_sessions')
             .select('id, title, created_at, updated_at, agent_id, user_id, deep_search_enabled')
@@ -65,7 +62,6 @@ export const GET = withAuth(async (user: User, request: Request): Promise<Respon
             return handleCors(notFoundError('Chat not found'), request, true);
         }
 
-        // RLS should handle authorization, but double-check ownership for safety
         if (sessionData.user_id !== user.id) {
             edgeLogger.warn('User attempted to access chat they do not own', {
                 category: 'auth',
@@ -78,7 +74,6 @@ export const GET = withAuth(async (user: User, request: Request): Promise<Respon
             return handleCors(response, request, true);
         }
 
-        // Get chat messages
         const { data: messagesData, error: messagesError } = await supabase
             .from('sd_chat_histories')
             .select('id, content, role, created_at, tools_used')
@@ -98,7 +93,6 @@ export const GET = withAuth(async (user: User, request: Request): Promise<Respon
             return handleCors(response, request, true);
         }
 
-        // Format messages for client
         const messages = messagesData.map(msg => ({
             id: msg.id,
             content: msg.content,
@@ -107,7 +101,6 @@ export const GET = withAuth(async (user: User, request: Request): Promise<Respon
             toolsUsed: msg.tools_used
         }));
 
-        // Construct response
         const response = {
             id: sessionData.id,
             title: sessionData.title || 'New Chat',
@@ -125,20 +118,19 @@ export const GET = withAuth(async (user: User, request: Request): Promise<Respon
             messageCount: messages.length
         });
 
-        // --- BEGIN DEBUG LOGGING ---
         edgeLogger.debug('[API GET /chat/[id]] Raw messagesData from DB:', {
             category: 'chat',
             operationId,
             chatId,
             count: messagesData?.length,
-            sample: JSON.stringify(messagesData?.slice(0, 2)) // Log first 2 raw messages
+            sample: JSON.stringify(messagesData?.slice(0, 2))
         });
         edgeLogger.debug('[API GET /chat/[id]] Formatted messages array:', {
             category: 'chat',
             operationId,
             chatId,
             count: messages?.length,
-            sample: JSON.stringify(messages?.slice(0, 2)) // Log first 2 formatted messages
+            sample: JSON.stringify(messages?.slice(0, 2))
         });
         edgeLogger.debug('[API GET /chat/[id]] Full response object being returned:', {
             category: 'chat',
@@ -147,13 +139,11 @@ export const GET = withAuth(async (user: User, request: Request): Promise<Respon
             responseKeys: Object.keys(response),
             messageCountInResponse: response.messages?.length
         });
-        // --- END DEBUG LOGGING ---
 
         const successResp = successResponse(response);
         return handleCors(successResp, request, true);
 
     } catch (error) {
-        // In the catch block, log error without relying on potentially unresolved params
         edgeLogger.error('Unexpected error getting chat', {
             category: 'chat',
             operationId: `get_chat_error_${Math.random().toString(36).substring(2, 10)}`,
@@ -164,28 +154,35 @@ export const GET = withAuth(async (user: User, request: Request): Promise<Respon
         const errorResp = errorResponse('Server error', error instanceof Error ? error.message : String(error), 500);
         return handleCors(errorResp, request, true);
     }
-});
+};
+export const GET = withAuth(GET_Handler);
 
 // PATCH handler to update chat metadata
-export const PATCH = withAuth(async (user: User, request: Request): Promise<Response> => {
+const PATCH_Handler: AuthenticatedRouteHandler = async (request: Request, context, user) => {
+    const { params } = context;
+    const chatId = params?.id;
     const operationId = `patch_chat_${Math.random().toString(36).substring(2, 10)}`;
 
+    if (!chatId) {
+        return handleCors(errorResponse('Chat ID is required', null, 400), request, true);
+    }
+
     try {
-        // Retrieve params from the request URL within the handler
-        const url = new URL(request.url);
-        const pathnameSegments = url.pathname.split('/');
-        const chatId = pathnameSegments[pathnameSegments.length - 1];
-
-        if (!chatId) {
-            return errorResponse('Missing chat ID', null, 400);
-        }
-
-        // Parse request body
-        const body = await request.json();
-        const { title } = body;
-
-        if (!title || typeof title !== 'string') {
-            return errorResponse('Invalid title provided', null, 400);
+        // Parse request body first
+        let title: string;
+        try {
+            const body = await request.json();
+            if (!body.title || typeof body.title !== 'string') {
+                return handleCors(errorResponse('Invalid or missing title in request body', null, 400), request, true);
+            }
+            title = body.title.trim();
+            if (!title) {
+                return handleCors(errorResponse('Title cannot be empty', null, 400), request, true);
+            }
+        } catch (parseError: unknown) {
+            const errorMessage = parseError instanceof Error ? parseError.message : String(parseError);
+            edgeLogger.error('Error parsing PATCH body', { operationId, chatId, error: errorMessage });
+            return handleCors(errorResponse('Invalid request body', errorMessage, 400), request, true);
         }
 
         edgeLogger.info('Chat PATCH request started', {
@@ -193,26 +190,28 @@ export const PATCH = withAuth(async (user: User, request: Request): Promise<Resp
             operationId,
             chatId,
             userId: user.id.substring(0, 8),
-            newTitle: title
+            newTitle: title // Log the validated title
         });
 
         const supabase = await createRouteHandlerClient();
 
-        // Verify chat exists and belongs to user (using RLS indirectly)
+        // Verify chat exists and belongs to user (using RLS indirectly is okay, but explicit check adds safety)
         const { data: existingChat, error: fetchError } = await supabase
             .from('sd_chat_sessions')
-            .select('id, user_id') // Only select needed fields
+            .select('user_id')
             .eq('id', chatId)
             .single();
 
-        if (fetchError || !existingChat) {
-            edgeLogger.error('Error finding chat to update or chat not found', {
-                category: 'chat',
-                operationId,
-                chatId,
-                error: fetchError?.message || 'Chat not found'
-            });
-            return handleCors(notFoundError('Chat not found or access denied'), request, true);
+        if (fetchError) {
+            if (fetchError.code === 'PGRST116') { // Not found code
+                return handleCors(notFoundError('Chat not found'), request, true);
+            }
+            edgeLogger.error('Error fetching chat for PATCH', { operationId, chatId, error: fetchError });
+            return handleCors(errorResponse('Failed to fetch chat', fetchError), request, true);
+        }
+
+        if (!existingChat) { // Should be caught by fetchError, but belt-and-suspenders
+            return handleCors(notFoundError('Chat not found'), request, true);
         }
 
         // Double check ownership before updating
@@ -230,7 +229,7 @@ export const PATCH = withAuth(async (user: User, request: Request): Promise<Resp
         // Update chat title
         const { error: updateError } = await supabase
             .from('sd_chat_sessions')
-            .update({ title: title.trim() })
+            .update({ title: title /* Use validated title */ })
             .eq('id', chatId);
 
         if (updateError) {
@@ -250,8 +249,7 @@ export const PATCH = withAuth(async (user: User, request: Request): Promise<Resp
             chatId
         });
 
-        // Return updated chat metadata
-        const successResp = successResponse({ id: chatId, title: title.trim() });
+        const successResp = successResponse({ id: chatId, title: title });
         return handleCors(successResp, request, true);
 
     } catch (error) {
@@ -265,4 +263,68 @@ export const PATCH = withAuth(async (user: User, request: Request): Promise<Resp
         const errorResp = errorResponse('Server error', error instanceof Error ? error.message : String(error), 500);
         return handleCors(errorResp, request, true);
     }
-});
+};
+export const PATCH = withAuth(PATCH_Handler);
+
+// --- DELETE Handler --- 
+const DELETE_Handler: AuthenticatedRouteHandler = async (request: Request, context, user) => {
+    const { params } = context;
+    const chatId = params?.id;
+    const operationId = `delete_chat_${Math.random().toString(36).substring(2, 10)}`;
+
+    if (!chatId) {
+        return handleCors(errorResponse('Chat ID is required', null, 400), request, true);
+    }
+
+    try {
+        edgeLogger.info('Chat DELETE request started', {
+            category: 'chat',
+            operationId,
+            chatId,
+            userId: user.id.substring(0, 8)
+        });
+
+        const supabase = await createRouteHandlerClient();
+
+        // Delete chat - RLS policy `auth.uid() = user_id` must exist on sd_chat_sessions for DELETE
+        const { error } = await supabase
+            .from('sd_chat_sessions')
+            .delete()
+            .eq('id', chatId);
+
+        if (error) {
+            // Log error but consider potential RLS failure as unauthorized vs server error
+            edgeLogger.error('Error deleting chat', {
+                category: 'chat',
+                operationId,
+                chatId,
+                error: error.message,
+                code: error.code,
+                important: true
+            });
+            // Check for specific foreign key errors if needed, otherwise assume RLS or other DB issue
+            return handleCors(errorResponse('Failed to delete chat', error), request, true);
+        }
+
+        edgeLogger.info('Successfully deleted chat', {
+            category: 'chat',
+            operationId,
+            chatId
+        });
+
+        const successResp = successResponse({ message: 'Chat deleted successfully' });
+        return handleCors(successResp, request, true);
+
+    } catch (error) {
+        edgeLogger.error('Unexpected error deleting chat', {
+            category: 'chat',
+            operationId: `delete_chat_error_${Math.random().toString(36).substring(2, 10)}`,
+            error: error instanceof Error ? error.message : String(error),
+            important: true
+        });
+
+        const errorResp = errorResponse('Server error', error instanceof Error ? error : String(error), 500);
+        return handleCors(errorResp, request, true);
+    }
+};
+export const DELETE = withAuth(DELETE_Handler);

@@ -7,7 +7,7 @@
  */
 
 // Vercel AI SDK Core
-import { streamText, appendClientMessage, appendResponseMessages, generateText } from 'ai';
+import { Message, streamText, appendClientMessage, appendResponseMessages, generateText } from 'ai';
 // Supabase & Auth
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { createRouteHandlerAdminClient } from '@/lib/supabase/route-client';
@@ -27,7 +27,7 @@ import { z } from 'zod'; // For request validation
 // Import AgentType
 import { AgentType } from '@/lib/chat-engine/prompts';
 import { createAgentToolSet, getAgentConfig } from '@/lib/chat-engine/agent-router';
-import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth'; // Import the auth wrapper
+import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth'; // Import the auth wrapper and type
 import type { User } from '@supabase/supabase-js'; // Import User type
 // Import necessary functions for direct title generation
 import { cleanTitle, updateTitleInDatabase } from '@/lib/chat/title-utils';
@@ -35,275 +35,213 @@ import { shouldGenerateTitle } from '@/lib/chat/title-service'; // Import should
 
 // Define request schema for validation
 // Based on useChat hook and experimental_prepareRequestBody in components/chat.tsx
-export const chatRequestSchema = z.object({
-  id: z.string().uuid(), // Session ID
-  message: z.object({ // Assuming only last message is sent
+export const ChatRequestSchema = z.object({
+  id: z.string().uuid().optional(), // Make session ID optional for new chats
+  messages: z.array(z.object({ // Expect an array of messages
     id: z.string(),
-    role: z.literal('user'),
+    role: z.enum(['user', 'assistant', 'system', 'tool', 'function']), // Allow valid roles
     content: z.string(),
     createdAt: z.string().datetime().optional(),
-    // Add other fields if sendExtraMessageFields is true and used
-  }),
+    // Add other fields from Message type if necessary
+  })).min(1), // Ensure at least one message is present
   deepSearchEnabled: z.boolean().optional(),
   agentId: z.string().optional()
 });
+
+// Infer the request body type from the schema
+export type ChatRequestBody = z.infer<typeof ChatRequestSchema>;
 
 // Maintain existing runtime directives
 export const runtime = 'edge';
 export const maxDuration = 120;
 export const dynamic = 'force-dynamic'; // Ensure dynamic behavior
 
-// Define the core handler logic separately
-const POST_Handler: AuthenticatedRouteHandler = async (user: User, request: Request): Promise<Response> => {
+// Define the core handler logic separately using the correct signature
+const POST_Handler: AuthenticatedRouteHandler = async (request, context, user) => {
   const operationId = `chat_${Math.random().toString(36).substring(2, 10)}`;
   const startTime = Date.now();
 
-  edgeLogger.info('Chat POST request received', {
-    category: LOG_CATEGORIES.CHAT,
-    operation: 'chat_post',
-    operationId
-  });
-
+  // 1. Validate Request Body
+  let body: ChatRequestBody;
   try {
-    // 1. Parse and Validate Request Body
-    edgeLogger.debug('Attempting to parse request body', { operationId });
-    const body = await request.json();
-    edgeLogger.debug('Successfully parsed request body', { operationId, body });
-
-    edgeLogger.debug('Attempting to validate schema', { operationId });
-    const validationResult = chatRequestSchema.safeParse(body);
-    edgeLogger.debug('Schema validation result', { operationId, success: validationResult.success });
-
+    const validationResult = ChatRequestSchema.safeParse(await request.json());
     if (!validationResult.success) {
-      edgeLogger.warn('Invalid chat request body', {
-        category: LOG_CATEGORIES.CHAT,
-        operationId,
-        errors: validationResult.error.format()
-      });
-      return validationError('Invalid request body', validationResult.error.format());
+      throw validationResult.error; // Throw ZodError on failure
     }
-    edgeLogger.debug('Schema validation successful', { operationId });
-
-    const {
-      id: sessionId,
-      message: userMessage,
-      deepSearchEnabled,
-      agentId
-    } = validationResult.data;
-    // Log after extraction
-    edgeLogger.debug('Extracted data from body', { operationId, sessionId, agentId });
-
-    const userId = user.id;
-    edgeLogger.debug('User ID available', { operationId, userId: userId?.substring(0, 5) });
-
-    // 3. Initialize Persistence Service
-    edgeLogger.debug('Initializing Persistence Service', { operationId });
-    const persistenceService = new MessagePersistenceService();
-    edgeLogger.debug('Persistence Service Initialized', { operationId });
-
-    // 4. Load Message History (Needed for context)
-    edgeLogger.debug('Loading previous messages', { operationId, sessionId });
-    const previousMessages = await persistenceService.loadMessages(sessionId, userId);
-    edgeLogger.debug('Loaded previous messages count:', { operationId, count: previousMessages.length });
-
-    // Convert createdAt string to Date for userMessage before appending
-    edgeLogger.debug('Preparing user message for append', { operationId, userMessageId: userMessage.id });
-    const createdAtDate = userMessage.createdAt ? new Date(userMessage.createdAt) : undefined;
-    const userMessageForAppend = {
-      ...userMessage,
-      createdAt: createdAtDate
-    };
-    edgeLogger.debug('Prepared user message', { operationId, hasDate: !!createdAtDate });
-
-    edgeLogger.debug('Appending client message to history', { operationId });
-    const currentMessages = appendClientMessage({ messages: previousMessages, message: userMessageForAppend });
-    edgeLogger.debug('Appended message, current history length:', { operationId, length: currentMessages.length });
-
-    // 5. Prepare Orchestration Context
-    edgeLogger.info('Preparing orchestration context...', { operationId, sessionId, agentId });
-    edgeLogger.debug('Initializing Agent Orchestrator', { operationId });
-    const orchestrator = new AgentOrchestrator();
-    edgeLogger.debug('Agent Orchestrator Initialized, calling prepareContext', { operationId });
-    // Call the new method
-    const {
-      targetModelId,
-      contextMessages = [] // Default to empty array if none provided
-    } = await orchestrator.prepareContext(userMessage.content, agentId as AgentType | undefined);
-    edgeLogger.debug('prepareContext finished', { operationId });
-
-    // Determine effective agent ID
-    const effectiveAgentId = (agentId || 'default') as AgentType;
-
-    // Build the system prompt for the identified agent
-    const agentConfig = getAgentConfig(effectiveAgentId);
-    const finalSystemPrompt = agentConfig.systemPrompt;
-
-    // Create the tool set for this agent based on its configuration
-    const agentToolSet = createAgentToolSet(effectiveAgentId);
-
-    edgeLogger.info('Orchestration context prepared with tools and prompt', {
-      operationId,
-      sessionId,
-      targetModelId,
-      effectiveAgentId,
-      contextMsgCount: contextMessages.length,
-      hasTools: !!agentToolSet && Object.keys(agentToolSet).length > 0
-    });
-
-    // Append context messages from orchestrator to the history if any
-    const messagesForFinalStream = [...currentMessages, ...contextMessages];
-
-    // 6. Generate & Stream Final Response using streamText
-    const result = streamText({
-      model: openai(targetModelId || 'gpt-4o-mini'), // Use model determined by orchestrator or fallback
-      messages: messagesForFinalStream, // History + User Msg + Orchestrator Context Msgs
-      system: finalSystemPrompt, // Use the agent-specific system prompt
-      tools: agentToolSet, // Include the agent-specific tools
-      experimental_generateMessageId: generateUUID,
-
-      async onFinish({ response, usage, finishReason }) {
-        const finishTime = Date.now();
-        edgeLogger.info('Stream finished, processing persistence and title gen', {
-          category: LOG_CATEGORIES.CHAT,
-          operation: 'stream_onFinish',
-          operationId,
-          sessionId,
-          durationMs: finishTime - startTime, // Log total duration here
-          usage: usage,
-          finishReason: finishReason,
-        });
-        try {
-          const assistantMessages = response.messages;
-
-          // We only expect one assistant message from streamText normally
-          if (assistantMessages && assistantMessages.length > 0) {
-            // Define the type explicitly to help inference
-            const assistantMsgData: {
-              sessionId: string;
-              userId: string;
-              role: 'assistant' | 'user' | 'system' | 'function' | 'tool';
-              content: string | any; // Match service signature
-              messageId?: string;
-              tools_used?: ToolsUsedData | undefined; // Match service signature
-            } = {
-              sessionId,
-              userId,
-              role: assistantMessages[0].role,
-              content: assistantMessages[0].content,
-              messageId: assistantMessages[0].id, // ID generated by streamText
-              // TODO: Extract actual tools_used if available from assistantMessages[0]
-              tools_used: undefined
-            };
-
-            // Save user message FIRST (important for history order)
-            const userSaveResult = await persistenceService.saveUserMessage(
-              sessionId,
-              userMessage.content,
-              userId,
-              userMessage.id // ID generated by useChat client
-            );
-            if (!userSaveResult.success) {
-              edgeLogger.error('Failed to save user message in onFinish', { operationId, sessionId, error: userSaveResult.error });
-              // Continue to save assistant message despite user save failure
-            }
-
-            // Save assistant message with CORRECT parameter order
-            const assistantSaveResult = await persistenceService.saveAssistantMessage(
-              assistantMsgData.sessionId,
-              assistantMsgData.content,
-              assistantMsgData.userId,
-              undefined, // toolsUsed (TODO: Populate if needed)
-              assistantMsgData.messageId // messageId is last
-            );
-            if (!assistantSaveResult.success) {
-              edgeLogger.error('Failed to save assistant message in onFinish', { operationId, sessionId, error: assistantSaveResult.error });
-              // Log error, but don't fail the response to the user
-            }
-          } else {
-            edgeLogger.warn('No assistant messages found in streamText response for persistence', { operationId, sessionId });
-          }
-
-          // --- Title Generation (Moved Here) --- 
-          edgeLogger.debug('Checking if title generation should run', { operationId, sessionId });
-          const proceed = await shouldGenerateTitle(sessionId, userId);
-
-          if (proceed) {
-            titleLogger.attemptGeneration({ chatId: sessionId, userId });
-            const llmStartTime = Date.now();
-            try {
-              const titleResult = await generateText({
-                model: openai('gpt-3.5-turbo'), // Use a cheaper/faster model for titles
-                messages: [
-                  { role: 'system', content: 'Create a title that summarizes the main topic or intent of the user message in 2-6 words. Do not use quotes. Keep it concise and relevant.' },
-                  { role: 'user', content: String(userMessage.content).substring(0, 1000) } // Ensure content is string
-                ],
-                maxTokens: 30,
-                temperature: 0.6
-              });
-              const llmDurationMs = Date.now() - llmStartTime;
-              const generatedTitle = cleanTitle(titleResult.text || 'Chat Summary');
-
-              titleLogger.titleGenerated({
-                chatId: sessionId, userId: userId,
-                generatedTitle,
-                durationMs: llmDurationMs
-              });
-
-              // Use Admin client to update DB, bypassing RLS
-              const adminSupabase = await createRouteHandlerAdminClient();
-              const dbUpdateSuccess = await updateTitleInDatabase(adminSupabase, sessionId, generatedTitle, userId);
-
-              if (!dbUpdateSuccess) {
-                edgeLogger.error('Failed to update title in DB from onFinish', { operationId, sessionId });
-                // Logged within updateTitleInDatabase
-              }
-
-            } catch (genError) {
-              titleLogger.titleGenerationFailed({
-                chatId: sessionId, userId: userId,
-                error: `Direct title generation failed: ${genError instanceof Error ? genError.message : String(genError)}`,
-                durationMs: Date.now() - llmStartTime
-              });
-            }
-          } else {
-            edgeLogger.debug('Skipping title generation based on shouldGenerateTitle check', { operationId, sessionId });
-          }
-
-          edgeLogger.info('Persistence and title gen completed in onFinish', { operationId, sessionId });
-          // TODO: Invalidate frontend history cache if necessary
-
-        } catch (persistOrTitleError) {
-          edgeLogger.error('Error during onFinish processing (persistence or title gen)', {
-            category: LOG_CATEGORIES.CHAT,
-            operationId,
-            sessionId,
-            error: persistOrTitleError instanceof Error ? persistOrTitleError.message : String(persistOrTitleError),
-            important: true
-          });
-        }
-      },
-      // TODO: Add onError handler for streamText itself?
-    });
-
-    // 7. Return Streaming Response
-    return result.toDataStreamResponse();
+    body = validationResult.data;
   } catch (error) {
-    edgeLogger.error('Unhandled error in main chat API', {
-      category: LOG_CATEGORIES.CHAT,
-      operation: 'chat_post_error',
+    if (error instanceof z.ZodError) {
+      // Format error first
+      const formattedError = error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ');
+      edgeLogger.warn('Invalid request body', {
+        category: LOG_CATEGORIES.SYSTEM,
+        operationId,
+        error: formattedError // Log the formatted error string
+      });
+      return errorResponse('Invalid request body', formattedError, 400);
+    }
+    // Handle non-Zod parsing errors (e.g., invalid JSON)
+    edgeLogger.error('Error parsing request body', {
+      category: LOG_CATEGORIES.SYSTEM,
       operationId,
       error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
       important: true
     });
-    // Use the standardized error response utility
-    return errorResponse(
-      'An unexpected error occurred processing your message',
-      error instanceof Error ? error.message : 'Unknown error',
-      500
-    );
+    return errorResponse('Error parsing request body', 'Could not parse request data', 400);
   }
-};
+
+  const { messages, id: sessionIdFromBody, agentId, deepSearchEnabled } = body;
+  const userId = user.id; // Use user from context
+  const sessionId = sessionIdFromBody || generateUUID(); // Use provided ID or generate new one
+
+  // Initialize Persistence Service
+  const persistenceService = new MessagePersistenceService({ operationName: operationId });
+
+  // Prepare message (assuming last message is user input)
+  const userMessage = messages[messages.length - 1];
+  if (!userMessage || userMessage.role !== 'user') {
+    return errorResponse('Invalid request: Last message must be from user', null, 400);
+  }
+
+  // Load previous messages
+  const previousMessages = await persistenceService.loadMessages(sessionId, userId);
+
+  // Convert createdAt string to Date and ensure role is explicitly 'user'
+  const createdAtDate = userMessage.createdAt ? new Date(userMessage.createdAt) : new Date();
+  const userMessageForAppend: Message = { // Explicitly type as Message
+    id: userMessage.id,
+    role: 'user', // Explicitly set role to 'user'
+    content: userMessage.content,
+    createdAt: createdAtDate,
+  };
+
+  // Append user message to history for context (do not save yet)
+  const currentMessages = appendClientMessage({ messages: previousMessages, message: userMessageForAppend });
+
+  // Prepare Orchestration Context (simplified example)
+  const orchestrator = new AgentOrchestrator();
+  const { targetModelId, contextMessages = [] } = await orchestrator.prepareContext(userMessage.content, agentId as AgentType | undefined);
+  const effectiveAgentId = (agentId || 'default') as AgentType;
+  const agentConfig = getAgentConfig(effectiveAgentId);
+  const finalSystemPrompt = agentConfig.systemPrompt;
+  const agentToolSet = createAgentToolSet(effectiveAgentId);
+
+  // Save user message asynchronously (fire and forget before streaming)
+  persistenceService.saveUserMessage(
+    sessionId,
+    userMessage.content,
+    userId, // Use user.id from context
+    userMessage.id // ID generated by useChat client
+  ).catch(err => edgeLogger.error('Async user message save failed', { operationId, sessionId, error: err instanceof Error ? err.message : String(err) }));
+
+  // Call the Vercel AI SDK streamText function
+  const result = streamText({
+    model: openai(targetModelId || 'gpt-4o'), // Use determined model
+    messages: [...contextMessages, ...currentMessages], // Pass combined history
+    system: finalSystemPrompt, // Use the agent-specific system prompt
+    tools: agentToolSet, // Include the agent-specific tools
+    experimental_generateMessageId: generateUUID,
+
+    async onFinish({ response, usage, finishReason, text /* Raw text output */ }) {
+      const finishTime = Date.now();
+      edgeLogger.info('Stream finished, processing persistence and title gen', {
+        category: LOG_CATEGORIES.CHAT,
+        operation: 'stream_onFinish',
+        operationId,
+        sessionId,
+        durationMs: finishTime - startTime,
+        usage: usage,
+        finishReason: finishReason,
+      });
+      try {
+        const assistantMessages = response.messages;
+        let assistantMessageId: string | undefined;
+        let assistantContent: string | any;
+
+        // --- Save Assistant Message --- 
+        if (assistantMessages && assistantMessages.length > 0) {
+          assistantMessageId = assistantMessages[0].id || generateUUID();
+          assistantContent = assistantMessages[0].content;
+
+          const assistantSaveResult = await persistenceService.saveAssistantMessage(
+            sessionId,
+            assistantContent,
+            userId, // Use user.id from context
+            undefined, // TODO: Populate toolsUsed if needed
+            assistantMessageId
+          );
+          if (!assistantSaveResult.success) {
+            edgeLogger.error('Failed to save assistant message in onFinish', { operationId, sessionId, error: assistantSaveResult.error });
+          }
+        } else {
+          edgeLogger.warn('No assistant messages found in streamText response for persistence', { operationId, sessionId });
+        }
+
+        // --- Title Generation (Moved Here) --- 
+        edgeLogger.debug('Checking if title generation should run', { operationId, sessionId });
+        const proceed = await shouldGenerateTitle(sessionId, userId);
+
+        if (proceed) {
+          titleLogger.attemptGeneration({ chatId: sessionId, userId });
+          const llmStartTime = Date.now();
+          try {
+            const titleResult = await generateText({
+              model: openai('gpt-3.5-turbo'), // Use a cheaper/faster model for titles
+              messages: [
+                { role: 'system', content: 'Create a title that summarizes the main topic or intent of the user message in 2-6 words. Do not use quotes. Keep it concise and relevant.' },
+                { role: 'user', content: String(userMessage.content).substring(0, 1000) } // Ensure content is string
+              ],
+              maxTokens: 30,
+              temperature: 0.6
+            });
+            const llmDurationMs = Date.now() - llmStartTime;
+            const generatedTitle = cleanTitle(titleResult.text || 'Chat Summary');
+
+            titleLogger.titleGenerated({
+              chatId: sessionId, userId: userId,
+              generatedTitle,
+              durationMs: llmDurationMs
+            });
+
+            // Use Admin client to update DB, bypassing RLS
+            const adminSupabase = await createRouteHandlerAdminClient();
+            const dbUpdateSuccess = await updateTitleInDatabase(adminSupabase, sessionId, generatedTitle, userId);
+
+            if (!dbUpdateSuccess) {
+              edgeLogger.error('Failed to update title in DB from onFinish', { operationId, sessionId });
+              // Logged within updateTitleInDatabase
+            }
+
+          } catch (genError) {
+            titleLogger.titleGenerationFailed({
+              chatId: sessionId, userId: userId,
+              error: `Direct title generation failed: ${genError instanceof Error ? genError.message : String(genError)}`,
+              durationMs: Date.now() - llmStartTime
+            });
+          }
+        } else {
+          edgeLogger.debug('Skipping title generation based on shouldGenerateTitle check', { operationId, sessionId });
+        }
+
+        edgeLogger.info('Persistence and title gen completed in onFinish', { operationId, sessionId });
+        // TODO: Invalidate frontend history cache if necessary (e.g., using Supabase realtime or a dedicated invalidation call)
+
+      } catch (persistOrTitleError) {
+        edgeLogger.error('Error during onFinish processing (persistence or title gen)', {
+          category: LOG_CATEGORIES.CHAT,
+          operationId,
+          sessionId,
+          error: persistOrTitleError instanceof Error ? persistOrTitleError.message : String(persistOrTitleError),
+          important: true
+        });
+      }
+    },
+  });
+
+  // Return Streaming Response
+  return result.toDataStreamResponse();
+  // Removed outer try/catch as withAuth handles top-level errors
+}; // End of POST_Handler definition
 
 // Export the wrapped handler as the default POST endpoint
 export const POST = withAuth(POST_Handler);

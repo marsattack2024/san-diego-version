@@ -1,8 +1,10 @@
+import { type NextRequest } from 'next/server';
+import { type User } from '@supabase/supabase-js';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { clientCache } from '@/lib/cache/client-cache';
 import { successResponse, errorResponse } from '@/lib/utils/route-handler';
-import { withAuth } from '@/lib/auth/with-auth';
-import type { User } from '@supabase/supabase-js';
+import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
 export const runtime = 'edge';
 
@@ -10,21 +12,19 @@ export const runtime = 'edge';
 // This is a reference to the same cache mechanism
 const historyCache = new Map<string, { data: any, timestamp: number }>();
 
-export const POST = withAuth(async (user: User, request: Request): Promise<Response> => {
+// Update signature
+const POST_Handler: AuthenticatedRouteHandler = async (request, context, user) => {
     const operationId = `invalidate_${Math.random().toString(36).substring(2, 10)}`;
 
     try {
-        // User is already authenticated by the wrapper
-        const userId = user.id;
-
         // Clear cache for this specific user
-        const cacheKey = `history:${userId}`;
+        const cacheKey = `history:${user.id}`;
         const hadCache = historyCache.has(cacheKey);
         historyCache.delete(cacheKey);
 
         edgeLogger.info('History cache invalidated for user', {
             category: LOG_CATEGORIES.SYSTEM,
-            userId: userId.substring(0, 8) + '...',
+            userId: user.id.substring(0, 8) + '...',
             hadCache,
             operationId
         });
@@ -44,4 +44,7 @@ export const POST = withAuth(async (user: User, request: Request): Promise<Respo
         // Return error response
         return errorResponse('Server error during cache invalidation', error, 500);
     }
-}); 
+};
+
+// Apply withAuth wrapper
+export const POST = withAuth(POST_Handler); 

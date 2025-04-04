@@ -3,7 +3,7 @@ import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { z } from 'zod';
 import { successResponse, errorResponse, unauthorizedError, validationError } from '@/lib/utils/route-handler';
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
-import { withAuth } from '@/lib/auth/with-auth';
+import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
 import type { User } from '@supabase/supabase-js';
 
 // Declare edge runtime
@@ -19,7 +19,7 @@ const sessionSchema = z.object({
 /**
  * POST handler to create a new chat session
  */
-export const POST = withAuth(async (user: User, request: Request): Promise<Response> => {
+const POST_Handler: AuthenticatedRouteHandler = async (request, context, user) => {
     const operationId = `create_session_${Math.random().toString(36).substring(2, 10)}`;
 
     edgeLogger.debug('Creating new chat session', {
@@ -114,12 +114,13 @@ export const POST = withAuth(async (user: User, request: Request): Promise<Respo
             500
         );
     }
-});
+};
+export const POST = withAuth(POST_Handler);
 
 /**
  * GET handler to retrieve all sessions for the authenticated user
  */
-export const GET = withAuth(async (user: User, request: Request): Promise<Response> => {
+const GET_Handler: AuthenticatedRouteHandler = async (request, context, user) => {
     const operationId = `get_sessions_${Math.random().toString(36).substring(2, 10)}`;
 
     edgeLogger.debug('Retrieving chat sessions', {
@@ -199,4 +200,5 @@ export const GET = withAuth(async (user: User, request: Request): Promise<Respon
             500
         );
     }
-}); 
+};
+export const GET = withAuth(GET_Handler); 

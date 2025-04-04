@@ -212,8 +212,12 @@ We should also be following our logging standardization.
 *   Remove commented-out code and unused variables/imports from `sidebar-history.tsx`. ✅
 *   Address any remaining TODOs or temporary fixes (like the `Chat` type assertion in `useChatHistoryData`). ✅
 *   Final code review. <= TO DO
-*   Linter Errors Fixed. ✅
+*   Linter Errors Fixed. ✅ (Except for integration tests)
 *   Runtime infinite loop debugged and fixed (using individual selectors in `useChatHistoryData`). ✅
+*   Post-refactor bugs (Message Rendering, Title Generation) fixed. ✅
+*   API Routes updated for `withAuth` signature change. ✅
+*   **Route Handler Documentation Updated.** ✅
+*   **Note:** Integration tests (e.g., `tests/integration/api/chat-route.test.ts`) still need updating to reflect the new `withAuth` signature and handler structure. <= TO DO
 
 ## 7. Troubleshooting Guide for Future Developers
 

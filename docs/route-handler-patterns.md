@@ -4,7 +4,9 @@ This document outlines the standardized patterns for route handlers in our Next.
 
 ## Standard Route Handler Pattern
 
-All route handlers should follow these standard patterns to ensure consistency across the codebase:
+All route handlers should follow these standard patterns to ensure consistency across the codebase.
+
+**Base Pattern (Without Authentication Wrapper):**
 
 ```typescript
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
@@ -17,19 +19,18 @@ export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
 /**
- * Route handler description
+ * Route handler description (Example: Dynamic GET)
  */
 export async function GET(
     request: Request,
-    { params }: IdParam
+    { params }: IdParam // Standard Next.js context
 ): Promise<Response> {
     const operationId = `operation_${Math.random().toString(36).substring(2, 10)}`;
     
     try {
-        // Extract params safely by awaiting the Promise
         const { id } = await params;
         
-        // Authentication
+        // Manual Authentication (if not using withAuth)
         const supabase = await createRouteHandlerClient();
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         
@@ -37,25 +38,59 @@ export async function GET(
             return handleCors(unauthorizedError(), request, true);
         }
         
-        // Main logic...
+        // Main logic using 'user'...
         
-        // Return success response with CORS headers
         const response = successResponse(data);
         return handleCors(response, request, true);
     } catch (error) {
-        // Handle unexpected errors
         const response = errorResponse('Error message', error, 500);
         return handleCors(response, request, true);
     }
 }
+
+**Pattern for Handlers Wrapped with `withAuth`:**
+
+When a route requires authentication, use the `withAuth` (or `withAdminAuth`) wrapper from `@/lib/auth/with-auth`. The handler function itself should then be defined with the following signature, receiving the validated `user` object as the third argument:
+
+```typescript
+import { type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
+import { type User } from '@supabase/supabase-js';
+// ... other imports ...
+
+// Note the signature: (request, context, user)
+const GET_Handler: AuthenticatedRouteHandler = async (request, context, user) => {
+    const { params } = context; // params might be undefined if not a dynamic route
+    const operationId = `operation_${Math.random().toString(36).substring(2, 10)}`;
+    
+    try {
+        const id = params?.id; // Access params via context if needed
+        
+        // Authentication is handled by the wrapper, 'user' is guaranteed valid.
+        edgeLogger.info('Authenticated request', { operationId, userId: user.id });
+        
+        // Main logic using 'user'...
+        const supabase = await createRouteHandlerClient(); // Still need client for DB ops
+        const { data, error } = await supabase.from('your_table').select('*').eq('user_id', user.id);
+        // ... handle data/error ...
+        
+        const response = successResponse(data);
+        return handleCors(response, request, true);
+    } catch (error) {
+        const response = errorResponse('Error message', error, 500);
+        return handleCors(response, request, true);
+    }
+};
+
+// Wrap the handler
+export const GET = withAuth(GET_Handler);
 ```
 
 ## Key Requirements for Dynamic Routes
 
-When working with dynamic routes, all handlers must:
+When working with dynamic routes (e.g., `app/api/chat/[id]/route.ts`):
 
-1. **Use `IdParam` Type**: Import and use the `IdParam` type for correctly typing dynamic route parameters
-2. **Await the params object**: Always await the params object before accessing its properties
+1.  **Use Parameter Types**: Import and use types like `IdParam` from `@/lib/types/route-handlers` for the context object: `async function GET(request: Request, { params }: IdParam, user: User)`.
+2.  **Await `params`**: Always `await params` before accessing properties like `id`: `const { id } = await params;`. (Note: This was standard before Next.js 15 shifted context structure slightly, but accessing `params` from the context passed to the handler does not require `await`). Access dynamic params directly via `context.params?.id`.
 3. **Add Operation IDs**: Include unique operation IDs in logs for traceability
 4. **Apply CORS Consistently**: Use `handleCors` for all responses
 5. **Use Comprehensive Error Handling**: Include detailed error logging

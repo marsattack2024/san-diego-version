@@ -1,588 +1,241 @@
-# Next.js 15 Route Handler Patterns
+# Next.js 15 Route Handler Standards
 
-This document outlines the standardized patterns for route handlers in our Next.js 15 application.
+This document outlines the standardized patterns for creating API route handlers in our Next.js 15 application. Adhering to these patterns ensures consistency, maintainability, and leverages our shared utilities.
 
-## Requirements Overview
+## Core Requirements & Standards
 
-Next.js 15 requires specific patterns for route handlers:
+All route handlers MUST adhere to the following:
 
-1. **Return Type**: Must be `Promise<Response>`
-2. **Params Handling**: Dynamic parameters must be awaited before use
-3. **Request Type**: Standard `Request` type is preferred over `NextRequest`
-4. **Runtime Declaration**: Explicit declaration improves deployment consistency
+1.  **Runtime & Dynamic Behavior**: Declare `export const runtime = 'edge';` and `export const dynamic = 'force-dynamic';` at the top of the file (unless a serverless runtime like `nodejs` is explicitly required for specific reasons like long execution time or incompatible libraries).
+2.  **Typing**: Use standard `Request` for the incoming request object and `Promise<Response>` for the return type. **Avoid `NextRequest` and `NextResponse`**.
+3.  **CORS Handling**: Wrap **all** returned responses (success or error) using the `handleCors(response, request, true)` utility from `@/lib/utils/http-utils`.
+4.  **Response Utilities**: Use the standardized response functions (`successResponse`, `errorResponse`, `unauthorizedError`, `validationError`, `notFoundError`) from `@/lib/utils/route-handler`.
+5.  **Supabase Client**:
+    *   For routes **requiring authentication**, use the `withAuth` or `withAdminAuth` wrappers. The Supabase client should still be created within the handler using `createRouteHandlerClient()` for database operations.
+    *   For **unauthenticated** routes or routes with optional authentication, create the client manually using `createRouteHandlerClient()` from `@/lib/supabase/route-client`.
+6.  **Authentication Wrappers**: Use `withAuth` or `withAdminAuth` from `@/lib/auth/with-auth` for routes requiring user authentication. The wrapped handler MUST follow the `AuthenticatedRouteHandler` signature: `async (request: Request, context: RouteContext, user: User) => ...`.
+7.  **Dynamic Parameters**:
+    *   When using `withAuth`, access dynamic parameters via the `context` object (e.g., `context.params?.id`). **Do not `await params` inside the handler.**
+    *   For unauthenticated routes, use the standard Next.js signature (`request: Request, { params }: IdParam`) and `await params` before use (`const { id } = await params;`).
+    *   Use standardized parameter types (e.g., `IdParam`, `SlugParam`) from `@/lib/types/route-handlers`.
+8.  **Logging**: Utilize `edgeLogger` for structured logging, including `operationId` for traceability.
+9.  **Error Handling**: Implement robust `try...catch` blocks, logging errors using `edgeLogger`, and returning standardized error responses via `handleCors`.
 
-## Important Note About Non-Dynamic Routes
+## Standard Patterns & Examples
 
-While we initially considered different patterns for dynamic and non-dynamic routes, we've found that using direct function exports is more reliable for all route types in production builds. Next.js 15 production builds have stricter type checking than development builds, which can cause issues with more complex wrapper patterns.
+### 1. Authenticated Route (using `withAuth`)
 
-For all routes (both dynamic and non-dynamic), use this pattern:
-
-```typescript
-/**
- * Route handler for [describe purpose]
- */
-import { createRouteHandlerClient } from '@/lib/supabase/route-client';
-import { edgeLogger } from '@/lib/logger/edge-logger';
-import { successResponse, errorResponse } from '@/lib/utils/route-handler';
-
-export const runtime = 'edge';
-
-export async function GET(request: Request): Promise<Response> {
-  try {
-    // Your logic here...
-    return successResponse({ data: "Your response data" });
-  } catch (error) {
-    return errorResponse("Specific error message", error);
-  }
-}
-```
-
-For dynamic routes (with URL parameters), use this pattern:
+This is the preferred pattern for routes requiring user login.
 
 ```typescript
-/**
- * Route handler for [describe purpose]
- */
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { edgeLogger } from '@/lib/logger/edge-logger';
-import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
-import type { IdParam } from '@/lib/types/route-handlers';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { successResponse, errorResponse, validationError, notFoundError } from '@/lib/utils/route-handler';
+import { handleCors } from '@/lib/utils/http-utils';
+import { withAuth, type AuthenticatedRouteHandler, type RouteContext } from '@/lib/auth/with-auth';
+import type { IdParam } from '@/lib/types/route-handlers'; // If dynamic params are used
+import type { User } from '@supabase/supabase-js';
+import { z } from 'zod'; // Example validation
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
-export async function GET(
-  request: Request,
-  { params }: IdParam
-): Promise<Response> {
-  try {
-    // Extract path params by awaiting the Promise
-    const { id } = await params;
-    
-    // Get Supabase client
-    const supabase = await createRouteHandlerClient();
-    
-    // Authentication if needed
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return unauthorizedError('Authentication required');
+// Define the core logic handler matching the AuthenticatedRouteHandler signature
+const GET_Handler: AuthenticatedRouteHandler = async (request, context, user) => {
+    // context contains { params?: { id?: string, ... }, searchParams?: URLSearchParams }
+    const operationId = `auth_get_${Math.random().toString(36).substring(2, 10)}`;
+    const chatId = context.params?.id; // Access dynamic params via context (NO await)
+
+    edgeLogger.info('Authenticated GET request started', {
+        category: LOG_CATEGORIES.CHAT, // Example category
+        operationId,
+        userId: user.id,
+        chatId // Log dynamic params if used
+    });
+
+    if (!chatId) { // Example validation for dynamic route
+        const errRes = validationError('Chat ID is required');
+        return handleCors(errRes, request, true);
     }
-    
-    // Logic goes here...
-    
-    // Return standardized response
-    return successResponse({ data: "Your response data" });
-  } catch (error) {
-    return errorResponse("Specific error message", error);
-  }
-}
+
+    try {
+        const supabase = await createRouteHandlerClient(); // Create client for DB ops
+
+        // Main logic using 'user' and potentially 'chatId'
+        const { data, error } = await supabase
+            .from('your_table')
+            .select('*')
+            .eq('user_id', user.id)
+            .eq('id', chatId); // Example query
+
+        if (error) {
+            edgeLogger.error('Database query error', {
+                category: LOG_CATEGORIES.DB,
+                operationId,
+                error: error.message,
+                userId: user.id,
+                chatId
+            });
+            const errRes = errorResponse('Failed to fetch data', error.message, 500);
+            return handleCors(errRes, request, true);
+        }
+
+        if (!data || data.length === 0) {
+            edgeLogger.warn('Data not found', {
+                category: LOG_CATEGORIES.DB,
+                operationId,
+                userId: user.id,
+                chatId
+            });
+            const errRes = notFoundError('Requested data not found');
+            return handleCors(errRes, request, true);
+        }
+
+        edgeLogger.info('Authenticated GET request successful', {
+            category: LOG_CATEGORIES.CHAT,
+            operationId,
+            userId: user.id,
+            resultCount: data.length
+        });
+
+        const successRes = successResponse({ data });
+        return handleCors(successRes, request, true);
+
+    } catch (error) {
+        edgeLogger.error('Unexpected error in authenticated GET handler', {
+            category: LOG_CATEGORIES.SYSTEM,
+            operationId,
+            userId: user.id,
+            chatId,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+            important: true
+        });
+        const errRes = errorResponse('An unexpected server error occurred', error, 500);
+        return handleCors(errRes, request, true);
+    }
+};
+
+// Wrap the handler logic with the authentication middleware
+export const GET = withAuth(GET_Handler);
+
+// Similarly for POST, PUT, DELETE etc. using withAuth or withAdminAuth
+// const POST_Handler: AuthenticatedRouteHandler = async (request, context, user) => { ... };
+// export const POST = withAuth(POST_Handler);
 ```
 
-## Key Improvements
+### 2. Unauthenticated Route (or Optional Authentication)
 
-Our standardized approach provides:
-
-1. **Consistent Error Handling**: Standard patterns for all errors
-2. **Type Safety**: Proper TypeScript definitions for route handlers
-3. **Improved Logging**: Consistent error logging
-4. **Reusable Utilities**: Helper functions for common response patterns
-5. **Reduced Boilerplate**: Less repetitive code with utility functions
-
-## Using the Route Handler Utilities
-
-We've created a set of utilities to make route handler creation simpler:
-
-### Response Utilities
+Use this pattern for public endpoints or where authentication is checked manually within the handler.
 
 ```typescript
-// Success responses
-return successResponse(data);
-
-// Error responses
-return errorResponse("Error message", error);
-return validationError("Invalid input");
-return unauthorizedError();
-return notFoundError();
-```
-
-## Type Definitions
-
-Use our standardized type definitions for consistent route handlers:
-
-```typescript
-import type { 
-  IdParam, 
-  SlugParam, 
-  UserIdParam
-} from '@/lib/types/route-handlers';
-
-// For dynamic route with id parameter
-export async function GET(
-  request: Request,
-  { params }: IdParam
-): Promise<Response> {
-  const { id } = await params;
-  // ...
-}
-
-// For route without parameters
-export async function POST(request: Request): Promise<Response> {
-  // ...
-}
-```
-
-## Migrating Existing Route Handlers
-
-When updating existing route handlers, follow these steps:
-
-1. **Import Types**: Add the appropriate type imports
-2. **Update Parameter Handling**: Use the Promise-based params pattern
-3. **Change Return Type**: Update to `Promise<Response>`
-4. **Add Runtime Declaration**: Add `export const runtime = 'edge';` if missing
-5. **Use Response Utilities**: Replace custom response code with utility functions
-6. **Use Direct Function Exports**: Use standard async function exports for all routes
-
-## Example: Before and After
-
-### Before:
-```typescript
-export async function GET(
-  request: NextRequest,
-  context: { params: { id: string } }
-): Promise<NextResponse> {
-  try {
-    const chatId = context.params.id;
-    // ...
-    return NextResponse.json({ data });
-  } catch (error) {
-    return NextResponse.json({ error: 'Error message' }, { status: 500 });
-  }
-}
-```
-
-### After (Dynamic Route):
-```typescript
-import { successResponse, errorResponse } from '@/lib/utils/route-handler';
-import type { IdParam } from '@/lib/types/route-handlers';
+import { createRouteHandlerClient } from '@/lib/supabase/route-client';
+import { edgeLogger } from '@/lib/logger/edge-logger';
+import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
+import { handleCors } from '@/lib/utils/http-utils';
+import type { IdParam } from '@/lib/types/route-handlers'; // If dynamic params are used
 
 export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
+/**
+ * Example: Unauthenticated GET for a dynamic resource
+ */
 export async function GET(
-  request: Request,
-  { params }: IdParam
+    request: Request,
+    { params }: IdParam // Standard Next.js context for dynamic routes
 ): Promise<Response> {
-  try {
-    const { id: chatId } = await params;
-    // ...
-    return successResponse(data);
-  } catch (error) {
-    return errorResponse("Error processing request", error);
-  }
+    const operationId = `unauth_get_${Math.random().toString(36).substring(2, 10)}`;
+
+    try {
+        // MUST await params before use in unauthenticated routes
+        const { id } = await params;
+
+        edgeLogger.info('Unauthenticated GET request received', {
+            category: LOG_CATEGORIES.SYSTEM,
+            operationId,
+            resourceId: id,
+            url: request.url
+        });
+
+        // Optional Authentication Check
+        const supabase = await createRouteHandlerClient();
+        const { data: { user } } = await supabase.auth.getUser(); // Doesn't throw/error if no user
+
+        if (user) {
+            edgeLogger.debug('User is authenticated (optional)', { operationId, userId: user.id });
+            // Potentially modify query based on user
+        } else {
+            edgeLogger.debug('No authenticated user found (optional)', { operationId });
+        }
+
+        // Process the request (example: fetch public data)
+        const { data, error } = await supabase
+            .from('public_table')
+            .select('*')
+            .eq('id', id)
+            .single(); // Example query
+
+        if (error || !data) {
+            edgeLogger.error('Error fetching public data or not found', {
+                category: LOG_CATEGORIES.DB,
+                operationId,
+                resourceId: id,
+                error: error?.message
+            });
+            const errRes = errorResponse('Failed to fetch resource', error?.message || 'Not found', error ? 500 : 404);
+            return handleCors(errRes, request, true);
+        }
+
+        edgeLogger.info('Unauthenticated GET request successful', {
+            category: LOG_CATEGORIES.SYSTEM,
+            operationId,
+            resourceId: id
+        });
+
+        const successRes = successResponse({ data });
+        return handleCors(successRes, request, true);
+
+    } catch (error) {
+        edgeLogger.error('Unexpected error in unauthenticated GET handler', {
+            category: LOG_CATEGORIES.SYSTEM,
+            operationId,
+            error: error instanceof Error ? error.message : String(error),
+            stack: error instanceof Error ? error.stack : undefined,
+            important: true
+        });
+        const errRes = errorResponse('An unexpected server error occurred', error, 500);
+        return handleCors(errRes, request, true);
+    }
 }
+
+// Similarly for POST, PUT, DELETE etc.
 ```
 
-### After (Non-Dynamic Route):
-```typescript
-import { successResponse, errorResponse } from '@/lib/utils/route-handler';
+## Migration Notes
 
-export const runtime = 'edge';
+*   **`NextRequest` / `NextResponse`**: Actively migrate any remaining usages to standard `Request` / `Promise<Response>`.
+*   **Dynamic Params**: Ensure dynamic params are accessed correctly (`context.params` in `withAuth`, `await params` otherwise).
+*   **CORS**: Ensure `handleCors` wraps every response.
+*   **Authentication**: Prefer the `withAuth` wrapper over manual `getUser()` checks where authentication is mandatory.
 
-export async function GET(request: Request): Promise<Response> {
-  try {
-    // Logic goes here...
-    return successResponse(data);
-  } catch (error) {
-    return errorResponse("Error processing request", error);
-  }
-}
-```
+## Serverless Routes
 
-## Migration to Next.js 15 Route Handlers
+These routes intentionally use the `nodejs` runtime and **do not** follow the edge standard:
 
-This document tracks the progress of our migration of API routes to Next.js 15 route handlers.
+*   `app/api/perplexity/route.ts` - Requires libraries/features not available in edge.
+*   `app/api/profile/update-summary/route.ts` - Longer execution time needed.
+*   `app/api/agent-chat/route.ts` - Complex operations potentially exceeding edge limits.
 
-### Migration Status
-
-- Routes migrated: 36 / 36 (100%)
-
-#### Current Standards
-
-All route handlers should:
-
-1. Use the edge runtime declaration: `export const runtime = 'edge';` (except for specific serverless routes)
-2. Be properly typed with `Request` and `Response` types
-3. Use standardized utility functions:
-   - `unauthorizedError()` for 401 responses
-   - `errorResponse()` for error responses
-   - `successResponse()` for success responses
-4. Use the proper error handling and logging patterns with `edgeLogger` instead of `console.log`
-5. Use `createRouteHandlerClient()` from `@/lib/supabase/route-client` for consistent Supabase client creation
-6. Use direct function exports for all routes, both dynamic and non-dynamic
-
-#### Recently Standardized Routes
-
-- ✅ `app/api/chat/[id]/route.ts` - Chat operations for specific chat ID
-- ✅ `app/api/chat/session/route.ts` - Chat session management
-- ✅ `app/api/chat/[id]/messages/route.ts` - Message management
-- ✅ `app/api/chat/[id]/messages/count/route.ts` - Message counting
-
-#### Routes Still Being Standardized
-
-- ⬜ None - All routes currently follow the standard pattern
-
-#### Serverless Routes
-
-These routes purposely remain serverless and should not be migrated to edge runtime:
-
-- ✅ `app/api/perplexity/route.ts` - Serverless runtime for advanced web search capabilities
-- ✅ `app/api/profile/update-summary/route.ts` - Serverless runtime for website summarization with longer timeout
-- ✅ `app/api/agent-chat/route.ts` - Serverless runtime for complex agent interactions
-
-### Notes for Developers
-
-1. **When Creating New Route Handlers**:
-   - Always start from the standardized template in this document
-   - Follow the established patterns for authentication, error handling, and response formatting
-   - Use the utility functions instead of creating custom responses
-   - Add proper typescript typing using the provided type definitions
-   - Use direct function exports for all routes
-   - Use `createRouteHandlerClient()` for Supabase client creation
-
-2. **Runtime Declarations**:
-   - Use `export const runtime = 'edge';` for most route handlers
-   - Only use serverless runtime (`nodejs`) when specifically needed for:
-     - Long-running processes (>10 seconds)
-     - Large memory requirements
-     - Direct filesystem access
-     - Library compatibility issues
-
-3. **Cookie Handling**:
-   - Always await `cookies()` call from next/headers
-   - Use the standard pattern with `getAll()`/`setAll()` methods
-   - Handle errors properly in the cookie setter function
-
-4. **Supabase Client**:
-   - Use `createRouteHandlerClient()` utility function for consistent client creation
-   - Check authentication with proper error handling
-   - Use appropriate error responses for auth failures
-
-5. **Type Safety**:
-   - Use the provided type definitions from `lib/types/route-handlers.ts`
-   - Apply proper null checking for all possible nullable values
-   - Use type guards when working with error objects
-
-6. **Error Handling**:
-   - Use the standardized utilities: `errorResponse`, `unauthorizedError`, etc.
-   - Include detailed error information in logs but limit information in responses
-   - Apply consistent status codes for different error conditions
-
-7. **Maintenance and Testing**:
-   - All route handlers should have associated tests
-   - Monitor performance, especially for edge functions
-   - Update types and utilities as Next.js versions change
-
-### Next Steps
-
-1. ✅ All route handlers have been successfully standardized!
-2. ✅ Moved toward using a standardized `createRouteHandlerClient()` utility
-3. ✅ Improved consistency in error handling across all routes
-4. ⬜ Create more comprehensive tests for all route handlers
-5. ⬜ Implement monitoring to detect any performance issues
+For these specific routes, `export const runtime = 'nodejs';` should be used. CORS and response utilities should still be applied.
 
 ## Resources
 
-- [TypeScript Types](/lib/types/route-handlers.ts)
-- [Route Handler Utilities](/lib/utils/route-handler.ts)
-- [Next.js 15 Documentation](https://nextjs.org/docs)
-
-
-
-
-NOTES:
-
-Let me perform a comprehensive scan of the codebase to identify any route handlers that might have been missed in our standardization efforts.
-
-Ran tool
-Let's check specifically for route handlers that are actual API endpoints but might not have been standardized yet:
-
-Ran tool
-Let's examine any routes that might be using `NextRequest` instead of the standard `Request` type:
-
-Ran tool
-Let's also check for routes that don't specify the edge runtime:
-
-Ran tool
-Let's check if any of these route handlers are missing the runtime declaration:
-
-Read file: app/api/chat/session/route.ts
-Based on our comprehensive scan of the codebase, here are the outstanding issues that need to be addressed to fully standardize the route handlers:
-
-## Outstanding Issues
-
-1. **Missing `runtime = 'edge'` Declaration**: Some route handlers like `app/api/chat/session/route.ts` don't have the `export const runtime = 'edge';` declaration.
-
-2. **Using `NextRequest` Instead of `Request`**: Some route handlers are still using the `NextRequest` type instead of the standard `Request` type. For example, in `app/api/chat/session/route.ts`, the POST handler uses `NextRequest`.
-
-3. **Direct `NextResponse` Usage**: Several route handlers are directly using `NextResponse.json()` instead of our standardized response utilities (`successResponse`, `errorResponse`, `unauthorizedError`).
-
-## Recommendation
-
-Let's fix the `app/api/chat/session/route.ts` file as an example, which has multiple standardization issues:
-
-```typescript:app/api/chat/session/route.ts
-import { cookies } from 'next/headers';
-import { createServerClient } from '@supabase/ssr';
-import { createClient } from '@/utils/supabase/server';
-import { edgeLogger } from '@/lib/logger/edge-logger';
-import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { z } from 'zod';
-import { successResponse, errorResponse, unauthorizedError, validationError } from '@/lib/utils/route-handler';
-
-// Declare edge runtime
-export const runtime = 'edge';
-
-const sessionSchema = z.object({
-    id: z.string().uuid(),
-    title: z.string().optional(),
-    agentId: z.string().optional(),
-    deepSearchEnabled: z.boolean().optional()
-});
-
-/**
- * POST handler to create a new chat session
- */
-export async function POST(request: Request): Promise<Response> {
-    const operationId = `create_session_${Math.random().toString(36).substring(2, 10)}`;
-
-    edgeLogger.debug('Creating new chat session', {
-        category: LOG_CATEGORIES.CHAT,
-        operation: 'session_create',
-        operationId
-    });
-
-    try {
-        const body = await request.json();
-        edgeLogger.debug('Request body', {
-            category: LOG_CATEGORIES.CHAT,
-            operation: 'session_create',
-            operationId,
-            body
-        });
-
-        const result = sessionSchema.safeParse(body);
-        if (!result.success) {
-            edgeLogger.error('Invalid request body', {
-                category: LOG_CATEGORIES.CHAT,
-                operation: 'session_create_error',
-                operationId,
-                errors: result.error.format()
-            });
-            return validationError('Invalid request body', result.error.format());
-        }
-
-        const { id, title, agentId, deepSearchEnabled } = result.data;
-
-        if (!id) {
-            edgeLogger.error('Missing session ID', {
-                category: LOG_CATEGORIES.CHAT,
-                operation: 'session_create_error',
-                operationId
-            });
-            return validationError('Missing session ID');
-        }
-
-        // Authenticate user
-        const supabase = await createClient();
-        const { data: { user }, error: authError } = await supabase.auth.getUser();
-
-        if (authError || !user) {
-            edgeLogger.warn('Authentication failed creating session', {
-                category: LOG_CATEGORIES.AUTH,
-                operation: 'session_create_error',
-                operationId,
-                error: authError?.message || 'No user found'
-            });
-
-            return unauthorizedError('Authentication required');
-        }
-
-        // Create the session
-        const { data: sessionData, error: sessionError } = await supabase
-            .from('sd_chat_sessions')
-            .insert({
-                id,
-                title: title || 'Untitled Conversation',
-                user_id: user.id,
-                agent_id: agentId,
-                deep_search_enabled: deepSearchEnabled || false,
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-            })
-            .select()
-            .single();
-
-        if (sessionError) {
-            edgeLogger.error('Error creating chat session', {
-                category: LOG_CATEGORIES.CHAT,
-                operation: 'session_create_error',
-                operationId,
-                sessionId: id,
-                error: sessionError.message,
-                important: true
-            });
-
-            return errorResponse('Error creating chat session', sessionError.message, 500);
-        }
-
-        edgeLogger.info('Chat session created successfully', {
-            category: LOG_CATEGORIES.CHAT,
-            operation: 'session_create_success',
-            operationId,
-            sessionId: id
-        });
-
-        return successResponse(sessionData);
-    } catch (error) {
-        edgeLogger.error('Unexpected error creating chat session', {
-            category: LOG_CATEGORIES.CHAT,
-            operation: 'session_create_error',
-            operationId,
-            error: error instanceof Error ? error.message : String(error),
-            important: true
-        });
-
-        return errorResponse(
-            'Unexpected error creating chat session', 
-            error instanceof Error ? error.message : String(error),
-            500
-        );
-    }
-}
-```
-Based on our comprehensive scan of the codebase and the fixes we've implemented, here's our final assessment and recommendation for completing the route handler standardization:
-
-## Final Assessment
-
-### What We've Fixed
-
-1. We've successfully standardized multiple route handlers across the codebase, with consistent patterns for:
-   - Cookie handling with proper awaits
-   - Response formatting using our standardized utilities
-   - Error handling with appropriate logging
-   - Type safety for nullable values
-   - Runtime declarations for edge deployment
-
-2. We've updated the migration tracking document to accurately reflect the current state and to provide guidance for future route handler development.
-
-### Remaining Work
-
-Based on our final scan, there are still several route handlers that need updating to meet our standardization guidelines:
-
-1. **Route Handlers with `NextRequest`**:
-   - `app/api/chat/session/route.ts` (partially fixed)
-   - Any other handlers that still use NextRequest instead of Request
-
-2. **Route Handlers Using Direct `NextResponse` Usage**:
-   - Several handlers are still using direct NextResponse.json() calls instead of our standardized utilities
-
-3. **Missing Runtime Declarations**:
-   - Routes that need to add `export const runtime = 'edge';`
-
-## Final Recommendations
-
-To complete the standardization process:
-
-1. **Create a Standardization Utility**:
-   
-   Create a new file at `lib/supabase/route-client.ts` that provides a standardized way to create Supabase clients for route handlers:
-
-   ```typescript
-   import { cookies } from 'next/headers';
-   import { createServerClient } from '@supabase/ssr';
-   import type { SupabaseClient } from '@supabase/supabase-js';
-   
-   export async function createRouteHandlerClient(): Promise<SupabaseClient> {
-     const cookieStore = await cookies();
-     
-     return createServerClient(
-       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-       {
-         cookies: {
-           getAll() {
-             return cookieStore.getAll();
-           },
-           setAll(cookiesToSet) {
-             try {
-               cookiesToSet.forEach(({ name, value, options }) =>
-                 cookieStore.set(name, value, options)
-               );
-             } catch {
-               // This can be ignored in Server Components
-             }
-           }
-         }
-       }
-     );
-   }
-   ```
-
-2. **Create a Route Handler Template**:
-
-   Update the template in the documentation to ensure all new route handlers follow the standard:
-
-   ```typescript
-   import { createRouteHandlerClient } from '@/lib/supabase/route-client';
-   import { edgeLogger } from '@/lib/logger/edge-logger';
-   import { LOG_CATEGORIES } from '@/lib/logger/constants';
-   import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
-
-   export const runtime = 'edge';
-
-   export async function METHOD(request: Request): Promise<Response> {
-     try {
-       // Authentication if needed
-       const supabase = await createRouteHandlerClient();
-       const { data: { user } } = await supabase.auth.getUser();
-       
-       if (!user) {
-         return unauthorizedError('Authentication required');
-       }
-       
-       // Request processing
-       // ...
-       
-       // Success response
-       return successResponse(data);
-     } catch (error) {
-       edgeLogger.error('Error in route handler', {
-         category: LOG_CATEGORIES.SYSTEM,
-         error: error instanceof Error ? error.message : String(error)
-       });
-       
-       return errorResponse(
-         'Error message', 
-         error instanceof Error ? error.message : String(error),
-         500
-       );
-     }
-   }
-   ```
-
-3. **Systematic Update Process**:
-
-   Create a prioritized list of remaining non-standard route handlers and update them one by one:
-   
-   a. Add the runtime declaration
-   b. Convert NextRequest to Request
-   c. Replace direct NextResponse calls with standardized utilities
-   d. Standardize cookie handling
-
-4. **Testing**:
-
-   After updating each route handler, thoroughly test it to ensure it works correctly with the new standardization.
-
-5. **Documentation Update**:
-
-   Keep the migration tracking document up to date as each route handler is standardized.
-
-By following these final recommendations, you'll complete the standardization of all route handlers in the codebase, resulting in more consistent, maintainable, and type-safe API routes.
+*   [Standard Route Handler Template](/docs/route-handler-template.ts)
+*   [Authentication Wrappers](/lib/auth/with-auth.ts)
+*   [Response & CORS Utilities](/lib/utils/route-handler.ts), [/lib/utils/http-utils.ts](/lib/utils/http-utils.ts)
+*   [Supabase Client Utility](/lib/supabase/route-client.ts)
+*   [Route Parameter Types](/lib/types/route-handlers.ts)
+*   [Next.js Route Handlers Documentation](https://nextjs.org/docs/app/building-your-application/routing/route-handlers)

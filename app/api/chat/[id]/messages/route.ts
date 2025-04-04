@@ -4,8 +4,9 @@ import type { Message } from 'ai';
 import { successResponse, errorResponse, unauthorizedError } from '@/lib/utils/route-handler';
 import type { IdParam } from '@/lib/types/route-handlers';
 import { handleCors } from '@/lib/utils/http-utils';
-import { withAuth } from '@/lib/auth/with-auth';
+import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth';
 import type { User } from '@supabase/supabase-js';
+import { type NextRequest } from 'next/server';
 
 export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
@@ -13,16 +14,19 @@ export const dynamic = 'force-dynamic';
 /**
  * GET handler to retrieve paginated messages for a specific chat
  */
-export const GET = withAuth(async (user: User, request: Request): Promise<Response> => {
+const GET_Handler: AuthenticatedRouteHandler = async (request: Request, context, user) => {
+    const { params } = context;
+    const chatId = params?.id;
+
+    if (!chatId) {
+        return errorResponse('Chat ID is required', null, 400);
+    }
+
     const operationId = `messages_${Math.random().toString(36).substring(2, 10)}`;
 
     try {
-        // Retrieve chat ID from URL
-        const url = new URL(request.url);
-        const pathnameSegments = url.pathname.split('/');
-        const chatId = pathnameSegments[pathnameSegments.length - 2]; // ID is second to last segment
-
         // Get pagination params
+        const url = new URL(request.url);
         const { searchParams } = url;
         const page = parseInt(searchParams.get('page') || '1');
         const pageSize = parseInt(searchParams.get('pageSize') || '100'); // Default to larger page size
@@ -35,11 +39,6 @@ export const GET = withAuth(async (user: User, request: Request): Promise<Respon
             page,
             pageSize
         });
-
-        // Basic validation
-        if (!chatId) {
-            return errorResponse('Chat ID is required', null, 400);
-        }
 
         if (isNaN(page) || page < 1) {
             return errorResponse('Invalid page number', null, 400);
@@ -119,4 +118,7 @@ export const GET = withAuth(async (user: User, request: Request): Promise<Respon
         const response = errorResponse('Unexpected error fetching messages', error, 500);
         return handleCors(response, request, true);
     }
-}); 
+};
+
+// Apply withAuth wrapper
+export const GET = withAuth(GET_Handler); 
