@@ -212,5 +212,56 @@ We should also be following our logging standardization.
 *   Remove commented-out code and unused variables/imports from `sidebar-history.tsx`. ✅
 *   Address any remaining TODOs or temporary fixes (like the `Chat` type assertion in `useChatHistoryData`). ✅
 *   Final code review. <= TO DO
-*   **Linter Errors Fixed.** ✅
+*   Linter Errors Fixed. ✅
+*   Runtime infinite loop debugged and fixed (using individual selectors in `useChatHistoryData`). ✅
+
+## 7. Troubleshooting Guide for Future Developers
+
+This section outlines potential issues and debugging strategies for the refactored `SidebarHistory` feature.
+
+**Key Components & Data Flow:**
+
+1.  **`SidebarHistory`**: Main component, orchestrates hooks and renders dialogs.
+2.  **`ChatHistoryList`**: Uses `useChatHistoryData` and `useChatActions`, renders sections or loading/error/empty states. Wrapped in `Suspense` and `ErrorBoundary`.
+3.  **`ChatHistorySection`**: Renders items for a specific date group.
+4.  **`ChatHistoryItem`**: Renders a single chat link and its action menu.
+5.  **`useChatHistoryData`**: Fetches data via store (`fetchHistory`), handles polling, groups data (`groupChatsByDate`), manages loading/error state.
+6.  **`useChatActions`**: Manages state for rename/delete dialogs, calls store actions (`deleteConversation`, `updateConversationTitle`).
+7.  **`useCreateChat`**: Calls store action (`createConversation`), handles navigation (`useRouter`).
+8.  **`useChatStore`**: Global state for `conversationsIndex` (metadata), `loadedConversations`, actions (`fetchHistory`, `deleteConversation`, etc.). Actions often call `historyService`.
+
+**Potential Issues & Debugging Steps:**
+
+*   **Infinite Re-renders / "Maximum update depth exceeded":**
+    *   **Cause:** Often related to Zustand selectors returning new object/array references frequently, triggering re-renders.
+    *   **Check:** The selectors within `useChatHistoryData`. We are currently using individual selectors to mitigate this. If re-introduced, ensure object selectors use `shallow` equality check correctly (e.g., `useChatStore(selector, shallow)`).
+    *   **Check:** Dependencies of `useEffect` and `useMemo` hooks in `useChatHistoryData`. Ensure they don't include unstable references that change on every render.
+    *   **Check:** Ensure child components (`ChatHistoryList`, `ChatHistorySection`, `ChatHistoryItem`) are correctly memoized (`React.memo`) if receiving complex props that might change reference but not value.
+*   **History Not Loading/Updating:**
+    *   **Check Auth:** Verify `isAuthenticated` is true in `useAuthStore`. `useChatHistoryData` relies on this for initial fetch and polling.
+    *   **Check Network:** Look for failed API calls related to `/api/history` or individual chat loads in the browser's network tab.
+    *   **Check Store Action:** Debug the `fetchHistory` action in `useChatStore`. Is it being called? Is it receiving data from `historyService`? Is `syncConversationsFromHistory` updating the `conversationsIndex` correctly?
+    *   **Check Hook Logic:** Add `edgeLogger.debug` logs inside `useChatHistoryData`'s initial fetch `useEffect` and polling logic to trace execution flow.
+    *   **Check Error State:** Is the `historyError` state in `useChatStore` set? The UI (`ChatHistoryList`) should display this error.
+*   **Polling Issues:**
+    *   **Check Auth:** Polling only runs when `isAuthenticated` is true.
+    *   **Check Logs:** Add `edgeLogger.debug` inside the polling `setTimeout` callback in `useChatHistoryData` to see if it's firing and calling `fetchHistory`.
+    *   **Check Cleanup:** Ensure the `useEffect` managing polling in `useChatHistoryData` has correct dependencies (`[isAuthenticated, setupPolling]`) and that the cleanup function clears the timeout.
+*   **Rename/Delete Dialogs Not Working:**
+    *   **Check Hook State:** Debug `useChatActions`. Are `showRenameDialog`/`showDeleteDialog` states being set correctly when `handleRenameClick`/`handleDeleteClick` are called?
+    *   **Check Callbacks:** Ensure `onRename`/`onDelete` props are correctly passed down: `ChatHistoryList` -> `ChatHistorySection` -> `ChatHistoryItem`.
+    *   **Check Store Actions:** Debug `updateConversationTitle`/`deleteConversation` actions in `useChatStore`. Are they being called by the hook's confirm handlers? Are they successfully interacting with `historyService`?
+    *   **Check Props:** Ensure the `DeleteChatDialog` and `RenameChatDialog` components in `SidebarHistory` are receiving the correct state (`open`, `isDeleting`, `isRenaming`, `value`) and callbacks (`onConfirm`, `onCancel`, `onValueChange`) from `useChatActions`.
+*   **Navigation Issues (New Chat / Item Click):**
+    *   **Check New Chat:** Debug `useCreateChat`. Is `createConversationAction` returning a valid ID? Is `router.push` being called?
+    *   **Check Item Click:** Debug `ChatHistoryItem`. Ensure the `<Link>` component is rendered correctly and its `onClick` handler (`handleLinkClick`) is *not* calling `e.preventDefault()`. Verify the `href` is correct.
+*   **Type Errors (SidebarChatItem vs Chat):**
+    *   **Remember:** The sidebar uses the minimal `SidebarChatItem` type (defined in `useChatHistoryData`). Components like `ChatHistorySection` and `ChatHistoryItem` expect this type, *not* the full `Chat` schema type.
+    *   **Check:** Prop types in `ChatHistorySectionProps` and `ChatHistoryItemProps`. Ensure they use `SidebarChatItem` or `SidebarChatItem[]`.
+    *   **Check:** The `map` function within `useChatHistoryData`'s `groupedChats` calculation correctly produces `SidebarChatItem[]`.
+    *   **Check:** The generic `groupChatsByDate` utility is correctly typed and used.
+*   **General Debugging:**
+    *   **Use Logs:** Add `edgeLogger.debug` calls liberally within hooks and component handlers during development to trace state changes and function calls.
+    *   **React DevTools:** Inspect component props and state, identify which components are re-rendering unexpectedly.
+    *   **Zustand DevTools:** Inspect the `useChatStore` state changes over time.
 

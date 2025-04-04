@@ -23,38 +23,50 @@ const POLLING_JITTER_MS = 30 * 1000; // 30 seconds
 
 export function useChatHistoryData() {
     const isComponentMounted = useRef(true);
+    const initialFetchAttempted = useRef(false);
 
-    // Select relevant state from stores with explicit types
-    const { conversationsIndex, isLoadingHistory, historyError, fetchHistory } = useChatStore(
-        (state: ChatState) => ({
-            conversationsIndex: state.conversationsIndex,
-            isLoadingHistory: state.isLoadingHistory,
-            historyError: state.historyError,
-            fetchHistory: state.fetchHistory,
-        })
-        // Removed shallow comparator
-    );
-    const { isAuthenticated } = useAuthStore(
-        (state: AuthState) => ({ isAuthenticated: state.isAuthenticated })
-    );
+    // Revert back to individual selectors
+    const conversationsIndex = useChatStore((state: ChatState) => state.conversationsIndex);
+    const isLoadingHistory = useChatStore((state: ChatState) => state.isLoadingHistory);
+    const historyError = useChatStore((state: ChatState) => state.historyError);
+    const fetchHistory = useChatStore((state: ChatState) => state.fetchHistory);
 
-    // --- Initial Fetch Logic ---
+    const isAuthenticated = useAuthStore((state: AuthState) => state.isAuthenticated);
+
+    // --- Initial Fetch Logic (Refined) ---
     useEffect(() => {
-        // Attempt initial fetch only if authenticated, not loading, and index is empty
-        if (isAuthenticated && !isLoadingHistory && Object.keys(conversationsIndex).length === 0) {
-            edgeLogger.debug('[useChatHistoryData] Attempting initial history fetch', {
-                category: LOG_CATEGORIES.CHAT,
-                trigger: 'mount/auth_ready',
-            });
-            fetchHistory(false).catch((error: unknown) => { // Type error param
-                // Error is handled by the historyError state, log here for trace
-                edgeLogger.error('[useChatHistoryData] Initial fetchHistory call failed', {
-                    category: LOG_CATEGORIES.CHAT,
-                    error: error instanceof Error ? error.message : String(error)
-                });
-            });
+        if (isAuthenticated) {
+            // Only attempt fetch once per authenticated session
+            if (!initialFetchAttempted.current) {
+                initialFetchAttempted.current = true; // Mark as attempted
+
+                // Check current state directly
+                const currentState = useChatStore.getState();
+                if (!currentState.isLoadingHistory && Object.keys(currentState.conversationsIndex).length === 0) {
+                    edgeLogger.debug('[useChatHistoryData] Attempting initial history fetch', {
+                        category: LOG_CATEGORIES.CHAT,
+                        trigger: 'auth_ready_empty_index',
+                    });
+                    fetchHistory(false).catch((error: unknown) => {
+                        edgeLogger.error('[useChatHistoryData] Initial fetchHistory call failed', {
+                            category: LOG_CATEGORIES.CHAT,
+                            error: error instanceof Error ? error.message : String(error)
+                        });
+                    });
+                } else {
+                    edgeLogger.debug('[useChatHistoryData] Skipping initial fetch: already loading or history present.', {
+                        category: LOG_CATEGORIES.CHAT,
+                        isLoading: currentState.isLoadingHistory,
+                        hasHistory: Object.keys(currentState.conversationsIndex).length > 0
+                    });
+                }
+            }
+        } else {
+            // Reset the flag if user logs out, allowing fetch on next login
+            initialFetchAttempted.current = false;
         }
-    }, [isAuthenticated, isLoadingHistory, fetchHistory, conversationsIndex]);
+        // Depend only on isAuthenticated to trigger check/reset
+    }, [isAuthenticated, fetchHistory]);
 
     // --- Polling Logic ---
     const setupPolling = useCallback(() => {

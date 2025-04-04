@@ -8,7 +8,7 @@ import { ChatHistoryItem } from './ChatHistoryItem'; // Import the item componen
 
 interface ChatHistorySectionProps {
     title: string;
-    chats: SidebarChatItem[]; // <-- Update type here
+    chats: SidebarChatItem[]; // <-- Use SidebarChatItem[]
     activeChatId?: string; // To pass down to items
     // Action callbacks to pass down
     onRename: (chatId: string, currentTitle: string) => void;
