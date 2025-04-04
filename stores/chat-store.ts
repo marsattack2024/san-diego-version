@@ -47,7 +47,7 @@ interface ChatStateV0 {
   currentConversationId: string | null;
 }
 
-interface ChatState {
+export interface ChatState {
   // Split conversations into two separate data structures
   conversations: Record<string, Conversation>; // Legacy support for backward compatibility
   conversationsIndex: Record<string, ConversationMetadata>; // Lightweight metadata for sidebar

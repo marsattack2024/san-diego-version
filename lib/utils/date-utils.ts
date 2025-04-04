@@ -1,21 +1,28 @@
 import type { Chat } from '@/lib/db/schema';
 
-// Consistent type definition for grouped chats
-export type GroupedChats = {
-    today: Chat[];
-    yesterday: Chat[];
-    pastWeek: Chat[];
-    older: Chat[];
+// Define a base type constraint for items that can be grouped by date
+interface DateGroupable {
+    createdAt: string;
+    updatedAt?: string | null; // Allow null or undefined for updatedAt
+}
+
+// Make GroupedChats generic
+export type GroupedChats<T extends DateGroupable> = {
+    today: T[];
+    yesterday: T[];
+    pastWeek: T[];
+    older: T[];
 };
 
 /**
- * Groups an array of chat objects by date relative to today.
+ * Groups an array of objects by date relative to today.
  * Categories: Today, Yesterday, Past Week, Older.
  * 
- * @param chats Array of Chat objects (must have createdAt or updatedAt).
- * @returns An object with chats grouped into arrays by date category.
+ * @param items Array of objects conforming to DateGroupable (must have createdAt or updatedAt).
+ * @returns An object with items grouped into arrays by date category.
  */
-export const groupChatsByDate = (chats: Array<Chat>): GroupedChats => {
+// Make groupChatsByDate generic
+export const groupChatsByDate = <T extends DateGroupable>(items: T[]): GroupedChats<T> => {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
@@ -26,20 +33,27 @@ export const groupChatsByDate = (chats: Array<Chat>): GroupedChats => {
     lastWeekDate.setDate(lastWeekDate.getDate() - 7);
 
     // Use reduce for potentially better performance on very large arrays
-    return chats.reduce<GroupedChats>(
-        (acc, chat) => {
+    return items.reduce<GroupedChats<T>>(
+        (acc, item) => {
             // Use updatedAt first, fallback to createdAt
-            const chatDate = new Date(chat.updatedAt || chat.createdAt);
-            const chatDay = new Date(chatDate.getFullYear(), chatDate.getMonth(), chatDate.getDate());
+            // Ensure we handle potential null/undefined updatedAt
+            const referenceDateString = item.updatedAt || item.createdAt;
+            if (!referenceDateString) {
+                // Skip items without a valid date - or place in 'older'? Logging might be useful.
+                console.warn('Item skipped in groupChatsByDate due to missing date:', item);
+                return acc;
+            }
+            const itemDate = new Date(referenceDateString);
+            const itemDay = new Date(itemDate.getFullYear(), itemDate.getMonth(), itemDate.getDate());
 
-            if (chatDay >= today) {
-                acc.today.push(chat);
-            } else if (chatDay.getTime() === yesterday.getTime()) {
-                acc.yesterday.push(chat);
-            } else if (chatDay >= lastWeekDate) {
-                acc.pastWeek.push(chat);
+            if (itemDay >= today) {
+                acc.today.push(item);
+            } else if (itemDay.getTime() === yesterday.getTime()) {
+                acc.yesterday.push(item);
+            } else if (itemDay >= lastWeekDate) {
+                acc.pastWeek.push(item);
             } else {
-                acc.older.push(chat);
+                acc.older.push(item);
             }
             return acc;
         },

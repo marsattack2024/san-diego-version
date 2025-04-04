@@ -27,7 +27,7 @@ interface UserProfile {
   is_admin?: boolean;
 }
 
-interface AuthState {
+export interface AuthState {
   user: User | null;
   profile: UserProfile | null;
   isAuthenticated: boolean;

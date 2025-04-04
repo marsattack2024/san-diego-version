@@ -1,10 +1,22 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useChatStore } from '@/stores/chat-store';
-import { useAuthStore } from '@/stores/auth-store';
+import { useChatStore, type ChatState, type ConversationMetadata } from '@/stores/chat-store';
+import { useAuthStore, type AuthState } from '@/stores/auth-store';
 import { groupChatsByDate, type GroupedChats } from '@/lib/utils/date-utils';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
-import { shallow } from 'zustand/shallow';
+import type { Chat } from '@/lib/db/schema';
+import type { AgentType } from '@/lib/chat-engine/prompts';
+
+// Define and EXPORT a type specific to the data needed by the sidebar items
+export interface SidebarChatItem {
+    id: string;
+    title: string;
+    createdAt: string;
+    updatedAt: string;
+    userId?: string;
+    agentId: AgentType;
+    deepSearchEnabled?: boolean;
+}
 
 const POLLING_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const POLLING_JITTER_MS = 30 * 1000; // 30 seconds
@@ -12,18 +24,18 @@ const POLLING_JITTER_MS = 30 * 1000; // 30 seconds
 export function useChatHistoryData() {
     const isComponentMounted = useRef(true);
 
-    // Select relevant state from stores
+    // Select relevant state from stores with explicit types
     const { conversationsIndex, isLoadingHistory, historyError, fetchHistory } = useChatStore(
-        (state) => ({
+        (state: ChatState) => ({
             conversationsIndex: state.conversationsIndex,
             isLoadingHistory: state.isLoadingHistory,
             historyError: state.historyError,
             fetchHistory: state.fetchHistory,
-        }),
-        shallow // Use shallow comparison
+        })
+        // Removed shallow comparator
     );
     const { isAuthenticated } = useAuthStore(
-        (state) => ({ isAuthenticated: state.isAuthenticated })
+        (state: AuthState) => ({ isAuthenticated: state.isAuthenticated })
     );
 
     // --- Initial Fetch Logic ---
@@ -34,7 +46,7 @@ export function useChatHistoryData() {
                 category: LOG_CATEGORIES.CHAT,
                 trigger: 'mount/auth_ready',
             });
-            fetchHistory(false).catch(error => {
+            fetchHistory(false).catch((error: unknown) => { // Type error param
                 // Error is handled by the historyError state, log here for trace
                 edgeLogger.error('[useChatHistoryData] Initial fetchHistory call failed', {
                     category: LOG_CATEGORIES.CHAT,
@@ -42,7 +54,7 @@ export function useChatHistoryData() {
                 });
             });
         }
-    }, [isAuthenticated, isLoadingHistory, fetchHistory, conversationsIndex]); // Added conversationsIndex dependency
+    }, [isAuthenticated, isLoadingHistory, fetchHistory, conversationsIndex]);
 
     // --- Polling Logic ---
     const setupPolling = useCallback(() => {
@@ -67,7 +79,7 @@ export function useChatHistoryData() {
                 edgeLogger.debug('[useChatHistoryData] Polling: fetching history', {
                     category: LOG_CATEGORIES.CHAT
                 });
-                state.fetchHistory(false).catch(error => {
+                state.fetchHistory(false).catch((error: unknown) => { // Type error param
                     edgeLogger.error('[useChatHistoryData] Polling fetchHistory call failed', {
                         category: LOG_CATEGORIES.CHAT,
                         error: error instanceof Error ? error.message : String(error)
@@ -92,7 +104,7 @@ export function useChatHistoryData() {
                 category: LOG_CATEGORIES.CHAT
             });
         };
-    }, [isAuthenticated]); // Only depends on auth state to start/stop polling
+    }, [isAuthenticated, fetchHistory]); // Added fetchHistory dependency
 
     // Start/Stop polling based on authentication
     useEffect(() => {
@@ -106,9 +118,11 @@ export function useChatHistoryData() {
             edgeLogger.debug('[useChatHistoryData] No auth, ensuring polling is stopped.', {
                 category: LOG_CATEGORIES.CHAT
             });
-            // If there was a running poll from a previous auth state, cleanup
-            // (This part might be redundant if setupPolling handles the !isAuthenticated case correctly,
-            // but explicit cleanup on auth loss is safer)
+            // Explicitly call cleanup if polling might be running
+            if (cleanupPolling) {
+                cleanupPolling();
+                cleanupPolling = undefined;
+            }
         }
 
         // Cleanup polling on unmount or when auth changes
@@ -132,25 +146,26 @@ export function useChatHistoryData() {
     }, []);
 
     // --- Grouping Logic ---
-    const groupedChats = useMemo<GroupedChats>(() => {
-        // Convert index map to array for grouping
-        const historyArray = Object.values(conversationsIndex).map(metadata => ({
-            id: metadata.id,
-            title: metadata.title || 'New Chat',
-            createdAt: metadata.createdAt,
-            updatedAt: metadata.updatedAt || metadata.createdAt, // Ensure updatedAt has a fallback
-            userId: metadata.userId || '',
-            messages: [], // Messages not needed for sidebar display
-            agentId: metadata.agentId,
-            deepSearchEnabled: metadata.deepSearchEnabled
-            // Cast to Chat - needs careful type alignment or a dedicated SidebarChat type
-        } as any)); // Use 'any' for now, refine type later
+    const groupedChats = useMemo<GroupedChats<SidebarChatItem>>(() => {
+        // Explicitly type the array from Object.values
+        const historyArray = (Object.values(conversationsIndex) as ConversationMetadata[])
+            .map((metadata: ConversationMetadata): SidebarChatItem => ({
+                id: metadata.id,
+                title: metadata.title || 'New Chat',
+                createdAt: metadata.createdAt,
+                updatedAt: metadata.updatedAt || metadata.createdAt, // Ensure updatedAt has a fallback
+                userId: metadata.userId,
+                // Ensure agentId and deepSearchEnabled have fallbacks if they might be missing in metadata
+                agentId: metadata.agentId || 'default',
+                deepSearchEnabled: metadata.deepSearchEnabled || false,
+            })); // No longer asserting as Chat or any
 
         edgeLogger.debug('[useChatHistoryData] Grouping chats', {
             category: LOG_CATEGORIES.CHAT,
             count: historyArray.length
         });
-        return groupChatsByDate(historyArray);
+        // Call the generic function without casting
+        return groupChatsByDate<SidebarChatItem>(historyArray);
     }, [conversationsIndex]);
 
     // --- Manual Refresh Function ---
@@ -165,7 +180,7 @@ export function useChatHistoryData() {
                 category: LOG_CATEGORIES.CHAT,
                 durationMs: Math.round(durationMs)
             });
-        }).catch(error => {
+        }).catch((error: unknown) => { // Type error param
             const durationMs = performance.now() - startTime;
             edgeLogger.error('[useChatHistoryData] Manual history refresh failed', {
                 category: LOG_CATEGORIES.CHAT,

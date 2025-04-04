@@ -163,7 +163,7 @@ export function AppSidebar({ user: serverUser }: { user: User | undefined }) {
         </SidebarHeader>
       )}
       <SidebarContent className={isMobile ? "pt-4" : "pt-14"}>
-        <SidebarHistory user={user} />
+        <SidebarHistory />
       </SidebarContent>
       <SidebarFooter>
         {user && <SidebarUserNav user={user} />}

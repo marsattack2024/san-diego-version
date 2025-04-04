@@ -138,19 +138,19 @@ While this refactor primarily targets the frontend component, interactions with 
     *   Verify/add `renameConversation` action in `chat-store.ts`. ✅
     *   Move `groupChatsByDate` to utils. ✅
     *   Write/update tests for store action and utility.
-2.  **Phase 2: Hook Extraction & Testing: <= IN PROGRESS**
-    *   Create `useChatHistoryData`, `useChatActions`, `useCreateChat`.
-    *   Write unit tests for hooks.
-3.  **Phase 3: Component Decomposition & Testing:**
-    *   Create smaller components (`ChatHistoryList`, `ChatHistoryItem`, etc.).
-    *   Write unit tests for components.
-4.  **Phase 4: Main Component Refactoring & Integration:**
-    *   Refactor the main `sidebar-history.tsx` to use hooks and new components.
-    *   Fix routing issues, standardize logging.
-    *   Perform integration testing.
-5.  **Phase 5: Error Boundary & Performance Monitoring (Optional but Recommended):**
-    *   Implement Error Boundary.
-    *   Add basic performance monitoring hooks/logs.
+2.  **Phase 2: Hook Extraction & Testing: ✅ Hooks Implemented, Testing Skipped**
+    *   Create `useChatHistoryData`, `useChatActions`, `useCreateChat`. ✅
+    *   Write unit tests for hooks. <= SKIPPED (per user instruction)
+3.  **Phase 3: Component Decomposition & Testing: ✅ Components Created, Testing Skipped**
+    *   Create smaller components (`ChatHistoryList`, `ChatHistoryItem`, etc.). ✅
+    *   Write unit tests for components. <= SKIPPED (per user instruction)
+4.  **Phase 4: Main Component Refactoring & Integration: ✅ COMPLETED**
+    *   Refactor the main `sidebar-history.tsx` to use hooks and new components. ✅
+    *   Fix routing issues, standardize logging. ✅
+    *   Perform integration testing. <= TO DO (Part of Phase 6)
+5.  **Phase 5: Error Boundary & Performance Monitoring (Optional but Recommended): ✅ Error Boundary Implemented, Perf Logging Skipped**
+    *   Implement Error Boundary. ✅ (Done in Phase 4)
+    *   Add basic performance monitoring hooks/logs. <= SKIPPED (per user instruction)
 
 ## 5. Migration Strategy (Optional but Recommended)
 
@@ -204,4 +204,13 @@ we should really should be keeping to the standard of React, shadCN.
 We should also be following all the proper routing rules for the app and the standard. 
 
 We should also be following our logging standardization. 
+
+
+## 6. Final Cleanup & Integration Testing ✅ COMPLETED (Pending Testing/Review)
+
+*   Perform manual integration testing of the refactored sidebar history feature. <= TO DO
+*   Remove commented-out code and unused variables/imports from `sidebar-history.tsx`. ✅
+*   Address any remaining TODOs or temporary fixes (like the `Chat` type assertion in `useChatHistoryData`). ✅
+*   Final code review. <= TO DO
+*   **Linter Errors Fixed.** ✅
 
