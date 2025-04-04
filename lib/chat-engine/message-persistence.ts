@@ -480,13 +480,16 @@ export class MessagePersistenceService {
             }
 
             // Convert from database format to Message format
-            const messages: Message[] = historyData.map(record => ({
-                id: record.id,
-                role: record.role as "user" | "assistant",
-                content: record.content,
-                createdAt: new Date(record.created_at),
-                tools: record.tools_used
-            }));
+            const messages: Message[] = historyData.map(record => {
+                // Content is now expected to be plain text directly from DB
+                return {
+                    id: record.id,
+                    role: record.role as "user" | "assistant",
+                    content: record.content, // Use content directly
+                    createdAt: new Date(record.created_at),
+                    tools: record.tools_used
+                };
+            });
 
             edgeLogger.info('Messages loaded successfully', {
                 operation: this.operationName,
@@ -622,19 +625,37 @@ export class MessagePersistenceService {
     }
 
     /**
-     * Format content for storage, handling both string and object content
-     * @param content Content to format
-     * @returns Formatted content string
+     * Format content for storage, ensuring only plain text is returned.
+     * @param content Content to format (string or AI SDK structured object/array)
+     * @returns Formatted content string (extracted text)
      */
     private formatContent(content: string | any): string {
+        // If it's already a string, return it directly
         if (typeof content === 'string') {
             return content;
         }
 
+        // Attempt to extract text if it follows the Vercel AI SDK structure
         try {
-            return JSON.stringify(content);
+            // Check if it's the array structure like [{type: 'text', text: '...'}]
+            if (Array.isArray(content) && content.length > 0 && content[0].type === 'text' && typeof content[0].text === 'string') {
+                return content[0].text;
+            }
+
+            // Handle potential plain object structure if needed (adjust check as necessary)
+            // else if (typeof content === 'object' && content !== null && content.type === 'text' && typeof content.text === 'string') {
+            //     return content.text;
+            // }
+
+            // If it's not a known structure or string, try stringifying as a fallback
+            edgeLogger.warn('[formatContent] Content is not a string or known structure, attempting JSON.stringify', {
+                operation: this.operationName,
+                contentType: typeof content
+            });
+            return JSON.stringify(content); // Fallback stringify
         } catch (error) {
-            edgeLogger.warn('Error stringifying content, using toString fallback', {
+            // Final fallback if stringify fails
+            edgeLogger.warn('[formatContent] Error processing content, using String() fallback', {
                 operation: this.operationName,
                 error: error instanceof Error ? error.message : String(error)
             });

@@ -265,3 +265,8 @@ This section outlines potential issues and debugging strategies for the refactor
     *   **React DevTools:** Inspect component props and state, identify which components are re-rendering unexpectedly.
     *   **Zustand DevTools:** Inspect the `useChatStore` state changes over time.
 
+## 8. Known Issues & Further Investigation (Post-Refactor)
+
+*   **Message Rendering on Refresh:** Messages display correctly initially but render as raw JSON strings (e.g., `[{"type":"text", ...}]`) after a page refresh. Needs investigation into message fetching, storage format (`sd_messages` table?), and rendering components. **✅ FIXED** (Switched to storing/loading plain text).
+*   **Automatic Title Generation:** New chats are not getting automatically titled based on content; they remain as "New Conversation". Needs investigation into the title generation logic trigger (likely in chat API route or persistence layer). **✅ FIXED** (Moved logic into main chat route's `onFinish`, removed internal API call dependency).
+

@@ -8,7 +8,7 @@ import { createClient } from '../../utils/supabase/server';
  * Checks if title generation should proceed based on message count and existing title.
  * @returns true if title generation should proceed, false otherwise.
  */
-async function shouldGenerateTitle(chatId: string, userId?: string): Promise<boolean> {
+export async function shouldGenerateTitle(chatId: string, userId?: string): Promise<boolean> {
     const startTime = performance.now();
     try {
         const supabase = await createClient();

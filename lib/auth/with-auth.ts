@@ -4,18 +4,25 @@ import type { User } from '@supabase/supabase-js';
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 
-// Export the handler type for use in tests
-export type AuthHandler = (user: User, req: Request) => Promise<Response>;
+// Define and EXPORT the type for handlers that require authentication
+export type AuthenticatedRouteHandler = (
+    request: Request,
+    context: { params?: Record<string, string>; user: User }
+) => Promise<Response>;
+
+// Define the type for handlers that require admin authentication
+// It shares the same signature but implies an admin check happened
+export type AdminAuthenticatedRouteHandler = AuthenticatedRouteHandler;
 
 /**
  * Middleware wrapper for route handlers that require authentication
  * Creates a standardized way to protect API routes with proper error handling
  * 
- * @param handler Function to handle the request if authentication is successful
+ * @param handler Function to handle the request if authentication is successful (matches AuthenticatedRouteHandler)
  * @returns Route handler function that validates auth before proceeding
  */
-export function withAuth(handler: AuthHandler): (req: Request) => Promise<Response> {
-    return async (req: Request) => {
+export function withAuth(handler: AuthenticatedRouteHandler): (req: Request, context: { params?: Record<string, string> }) => Promise<Response> {
+    return async (req: Request, context: { params?: Record<string, string> }) => {
         const operationId = `auth_${Math.random().toString(36).substring(2, 8)}`;
 
         try {
@@ -48,7 +55,10 @@ export function withAuth(handler: AuthHandler): (req: Request) => Promise<Respon
                 userId: user.id.substring(0, 8) + '...',
             });
 
-            return await handler(user, req);
+            // Call the handler with the correct signature (request, { user, ...context })
+            // Merge existing context (like params) with the user object
+            const handlerContext = { ...context, user };
+            return await handler(req, handlerContext);
         } catch (error) {
             // Log unexpected errors
             edgeLogger.error('Unexpected error in auth wrapper', {
@@ -71,17 +81,19 @@ export function withAuth(handler: AuthHandler): (req: Request) => Promise<Respon
 
 /**
  * Middleware wrapper for route handlers that require admin privileges
- * Extends withAuth to also check for admin status
+ * Extends withAuth to also check for admin status (via JWT claim)
  * 
- * @param handler Function to handle the request if authentication and admin check are successful
+ * @param handler Function to handle the request if authentication and admin check are successful (matches AdminAuthenticatedRouteHandler)
  * @returns Route handler function that validates auth and admin status before proceeding
  */
-export function withAdminAuth(handler: AuthHandler): (req: Request) => Promise<Response> {
-    return withAuth(async (user, req) => {
+export function withAdminAuth(handler: AdminAuthenticatedRouteHandler): (req: Request, context: { params?: Record<string, string> }) => Promise<Response> {
+    // Wrap the authenticated handler logic first
+    return withAuth(async (req, context) => { // context here now includes { user } from withAuth
         const operationId = `admin_auth_${Math.random().toString(36).substring(2, 8)}`;
+        const user = context.user; // Get user from the context passed by withAuth
 
         try {
-            // Check JWT claims for admin status (available after Phase 6)
+            // Check JWT claims for admin status 
             const isAdmin = user.app_metadata?.is_admin === true;
 
             if (!isAdmin) {
@@ -106,7 +118,8 @@ export function withAdminAuth(handler: AuthHandler): (req: Request) => Promise<R
                 userId: user.id.substring(0, 8) + '...',
             });
 
-            return await handler(user, req);
+            // Call the original handler with the request and context (which includes user)
+            return await handler(req, context);
         } catch (error) {
             // Log unexpected errors
             edgeLogger.error('Unexpected error in admin auth wrapper', {

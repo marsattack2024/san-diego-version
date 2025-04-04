@@ -7,12 +7,14 @@
  */
 
 // Vercel AI SDK Core
-import { streamText, appendClientMessage, appendResponseMessages } from 'ai';
+import { streamText, appendClientMessage, appendResponseMessages, generateText } from 'ai';
 // Supabase & Auth
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
+import { createRouteHandlerAdminClient } from '@/lib/supabase/route-client';
 // Logging
 import { edgeLogger } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
+import { titleLogger } from '@/lib/logger/title-logger';
 // Utilities & Route Handling
 import { errorResponse, unauthorizedError, validationError } from '@/lib/utils/route-handler';
 // Import generateUUID
@@ -25,8 +27,11 @@ import { z } from 'zod'; // For request validation
 // Import AgentType
 import { AgentType } from '@/lib/chat-engine/prompts';
 import { createAgentToolSet, getAgentConfig } from '@/lib/chat-engine/agent-router';
-import { withAuth } from '@/lib/auth/with-auth'; // Import the auth wrapper
+import { withAuth, type AuthenticatedRouteHandler } from '@/lib/auth/with-auth'; // Import the auth wrapper
 import type { User } from '@supabase/supabase-js'; // Import User type
+// Import necessary functions for direct title generation
+import { cleanTitle, updateTitleInDatabase } from '@/lib/chat/title-utils';
+import { shouldGenerateTitle } from '@/lib/chat/title-service'; // Import shouldGenerateTitle
 
 // Define request schema for validation
 // Based on useChat hook and experimental_prepareRequestBody in components/chat.tsx
@@ -49,7 +54,7 @@ export const maxDuration = 120;
 export const dynamic = 'force-dynamic'; // Ensure dynamic behavior
 
 // Define the core handler logic separately
-const POST_Handler = async (user: User, request: Request): Promise<Response> => {
+const POST_Handler: AuthenticatedRouteHandler = async (user: User, request: Request): Promise<Response> => {
   const operationId = `chat_${Math.random().toString(36).substring(2, 10)}`;
   const startTime = Date.now();
 
@@ -158,7 +163,7 @@ const POST_Handler = async (user: User, request: Request): Promise<Response> => 
 
       async onFinish({ response, usage, finishReason }) {
         const finishTime = Date.now();
-        edgeLogger.info('Stream finished, processing persistence', {
+        edgeLogger.info('Stream finished, processing persistence and title gen', {
           category: LOG_CATEGORIES.CHAT,
           operation: 'stream_onFinish',
           operationId,
@@ -218,18 +223,63 @@ const POST_Handler = async (user: User, request: Request): Promise<Response> => 
             edgeLogger.warn('No assistant messages found in streamText response for persistence', { operationId, sessionId });
           }
 
-          edgeLogger.info('Persistence completed in onFinish', { operationId, sessionId });
+          // --- Title Generation (Moved Here) --- 
+          edgeLogger.debug('Checking if title generation should run', { operationId, sessionId });
+          const proceed = await shouldGenerateTitle(sessionId, userId);
+
+          if (proceed) {
+            titleLogger.attemptGeneration({ chatId: sessionId, userId });
+            const llmStartTime = Date.now();
+            try {
+              const titleResult = await generateText({
+                model: openai('gpt-3.5-turbo'), // Use a cheaper/faster model for titles
+                messages: [
+                  { role: 'system', content: 'Create a title that summarizes the main topic or intent of the user message in 2-6 words. Do not use quotes. Keep it concise and relevant.' },
+                  { role: 'user', content: String(userMessage.content).substring(0, 1000) } // Ensure content is string
+                ],
+                maxTokens: 30,
+                temperature: 0.6
+              });
+              const llmDurationMs = Date.now() - llmStartTime;
+              const generatedTitle = cleanTitle(titleResult.text || 'Chat Summary');
+
+              titleLogger.titleGenerated({
+                chatId: sessionId, userId: userId,
+                generatedTitle,
+                durationMs: llmDurationMs
+              });
+
+              // Use Admin client to update DB, bypassing RLS
+              const adminSupabase = await createRouteHandlerAdminClient();
+              const dbUpdateSuccess = await updateTitleInDatabase(adminSupabase, sessionId, generatedTitle, userId);
+
+              if (!dbUpdateSuccess) {
+                edgeLogger.error('Failed to update title in DB from onFinish', { operationId, sessionId });
+                // Logged within updateTitleInDatabase
+              }
+
+            } catch (genError) {
+              titleLogger.titleGenerationFailed({
+                chatId: sessionId, userId: userId,
+                error: `Direct title generation failed: ${genError instanceof Error ? genError.message : String(genError)}`,
+                durationMs: Date.now() - llmStartTime
+              });
+            }
+          } else {
+            edgeLogger.debug('Skipping title generation based on shouldGenerateTitle check', { operationId, sessionId });
+          }
+
+          edgeLogger.info('Persistence and title gen completed in onFinish', { operationId, sessionId });
           // TODO: Invalidate frontend history cache if necessary
 
-        } catch (persistError) {
-          edgeLogger.error('Persistence failed in onFinish', {
+        } catch (persistOrTitleError) {
+          edgeLogger.error('Error during onFinish processing (persistence or title gen)', {
             category: LOG_CATEGORIES.CHAT,
             operationId,
             sessionId,
-            error: persistError instanceof Error ? persistError.message : String(persistError),
+            error: persistOrTitleError instanceof Error ? persistOrTitleError.message : String(persistOrTitleError),
             important: true
           });
-          // Don't block response to user if persistence fails, but log it critically.
         }
       },
       // TODO: Add onError handler for streamText itself?
