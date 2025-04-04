@@ -17,6 +17,7 @@ export default function ChatPage() {
   const isHydrated = useChatStore(state => state.isHydrated);
   const currentConversationId = useChatStore(state => state.currentConversationId);
   const conversations = useChatStore(state => state.conversations);
+  const loadedConversations = useChatStore(state => state.loadedConversations);
   const createConversation = useChatStore(state => state.createConversation);
   const router = useRouter();
   const [isInitialized, setIsInitialized] = useState(false);
@@ -88,23 +89,23 @@ export default function ChatPage() {
     }
   }, [currentConversationId, createConversation, history, historyLoading, router, isHydrated]);
 
-  const currentConversation = currentConversationId
-    ? conversations[currentConversationId]
+  const currentLoadedConversation = currentConversationId
+    ? loadedConversations[currentConversationId]
     : null;
 
-  if (historyLoading || !isHydrated || !isInitialized || !currentConversationId || !currentConversation) {
+  if (historyLoading || !isHydrated || !isInitialized || !currentConversationId || !currentLoadedConversation) {
     return <div className="h-screen flex items-center justify-center">Loading...</div>;
   }
 
-  log.debug('Rendering chat with conversation', {
+  log.debug('Rendering chat with loaded conversation', {
     id: currentConversationId,
-    messageCount: currentConversation.messages?.length || 0
+    messageCount: currentLoadedConversation.messages?.length || 0
   });
 
   return (
     <Chat
       id={currentConversationId!}
-      initialMessages={currentConversation.messages || []}
+      initialMessages={currentLoadedConversation.messages || []}
       isReadonly={false}
     />
   );

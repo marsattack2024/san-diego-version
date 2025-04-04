@@ -144,11 +144,11 @@ export function VirtualizedChat({
   useLayoutEffect(() => {
     // Only run once after initial messages are loaded and scroll hasn't happened
     if (virtuosoRef.current && allMessages.length > 0 && !initialScrollComplete) {
-      console.log('[VirtualizedChat] Attempting initial scroll to bottom.');
+      console.log('[VirtualizedChat] Attempting initial scroll to bottom (behavior: auto).');
       virtuosoRef.current?.scrollToIndex({
         index: allMessages.length - 1,
         align: 'end',
-        behavior: 'smooth' // Use 'smooth' for potentially better results
+        behavior: 'auto' // Use 'auto' for initial scroll - might be more reliable
       });
       setInitialScrollComplete(true); // Mark initial scroll as done
       console.log('[VirtualizedChat] Initial scroll executed.');
@@ -334,7 +334,7 @@ export function VirtualizedChat({
           } as React.CSSProperties}
           data={allMessages}
           className={styles.virtualizedChat} // Ensure this class handles height/flex correctly
-          alignToBottom={true}
+          initialTopMostItemIndex={allMessages.length - 1}
           defaultItemHeight={virtuosoConfig.defaultItemHeight}
           followOutput={shouldAutoScroll ? 'auto' : false}
           startReached={loadMoreMessages}
