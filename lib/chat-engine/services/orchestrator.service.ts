@@ -309,7 +309,7 @@ Analyze this request and generate the appropriate workflow plan (either single-s
                         step: i,
                         stepLogId,
                         agent: step.agent,
-                        outputResult: output.result.substring(0, 1000) + (output.result.length > 1000 ? '...' : '')
+                        outputResult: output.result.substring(0, 1500) + (output.result.length > 1500 ? '...' : '')
                     });
 
                     // Store output for dependency tracking AND potential use after loop

@@ -195,7 +195,7 @@ export function getAgentConfig(agentType: AgentType): AgentConfig {
             }
         },
         'copyeditor': {
-            temperature: 0.6, // Balanced for refinement
+            temperature: 0.2, // Lowered from 0.6 for more determinism and adherence to format
             model: 'gpt-4o',
             toolOptions: {
                 useKnowledgeBase: true, // May need KB for brand voice guidelines
