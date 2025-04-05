@@ -185,7 +185,7 @@ export function getAgentConfig(agentType: AgentType): AgentConfig {
         },
         'default': {
             temperature: 0.5, // Balanced temperature for general purposes
-            model: 'gpt-4o',
+            model: 'gpt-4o-mini',
             toolOptions: {
                 useKnowledgeBase: true,
                 useWebScraper: true,
@@ -196,7 +196,7 @@ export function getAgentConfig(agentType: AgentType): AgentConfig {
         },
         'researcher': {
             temperature: 0.5,
-            model: 'gpt-4o', // Needs a capable model for research
+            model: 'gpt-4o-mini',
             toolOptions: {
                 useKnowledgeBase: true,
                 useWebScraper: true, // Researcher needs web access

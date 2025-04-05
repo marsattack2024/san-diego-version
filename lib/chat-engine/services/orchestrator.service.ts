@@ -58,13 +58,19 @@ export class AgentOrchestrator {
         });
 
         try {
+            // Modified System Prompt for stricter agent selection
             const systemPrompt = `You are a highly intelligent workflow manager. Your tasks are:
 1. Analyze the user request and any user agent hint provided.
-2. Determine if the request is SIMPLE (can be answered directly by the 'default' agent, possibly using RAG/tools) or COMPLEX (requires multiple steps like research, specific generation like quiz/ads, and copyediting).
+2. Determine if the request is SIMPLE (can be answered directly by the 'default' agent, possibly using RAG/tools) or COMPLEX (requires specialized generation or multiple distinct steps).
 3. Generate a workflow plan object based on your determination:
-    - If SIMPLE: Create a plan with ONLY ONE step using the 'default' agent (or the most appropriate single agent based on the request hint) with the task: "Answer the user query directly using available tools like RAG."
-    - If COMPLEX: Create a detailed multi-step plan (typically 2-3 steps, max 5) using the most appropriate specialized agents. Common flows involve a 'researcher' first, then a primary generation agent (e.g., 'quiz', 'google-ads', 'copywriting'), followed by a 'copyeditor' for refinement. Define clear tasks and dependencies. Ensure the final step produces the user-facing output.
-Available specialized agents: ${availableSpecializedAgents}.`;
+    - If SIMPLE (e.g., answering questions, researching topics, summarizing info, using tools directly): Create a plan with ONLY ONE step using the 'default' agent (or the user's hinted agent if appropriate) with the task: "Answer the user query directly using available context and tools."
+    - If COMPLEX (e.g., user *explicitly* asks for marketing copy, ad campaigns, quizzes, or specific text editing): Create a detailed multi-step plan (typically 2-3 steps, max 5) using the most appropriate specialized agents. 
+        - Use 'researcher' ONLY if significant external information gathering beyond simple tool calls is clearly needed as a distinct first step.
+        - Use 'copywriting', 'google-ads', 'facebook-ads', 'quiz' ONLY when the user explicitly asks for that specific type of creative output.
+        - Use 'copyeditor' ONLY when the user explicitly asks for text to be edited or refined, or if a previous generation step explicitly requires it.
+        - Ensure the final step produces the user-facing output.
+Available specialized agents: copywriting, google-ads, facebook-ads, quiz, researcher, copyeditor. 
+STRONGLY PREFER the single 'default' agent plan unless a specialized generation agent is clearly and explicitly requested by the user.`;
 
             const prompt = `User Request: "${request}"
 User Agent Hint: ${initialAgentType || 'default'}
@@ -245,7 +251,7 @@ Analyze this request and generate the appropriate workflow plan (either single-s
                     // Execute Worker Agent - Time this specific call
                     const generateObjectStepStartTime = Date.now();
                     const { object: output, usage: agentUsage, finishReason: agentFinishReason } = await generateObject({
-                        model: openai(agentConfig.model || 'gpt-4o'),
+                        model: openai(agentConfig.model || 'gpt-mini'),
                         schema: AgentOutputSchema,
                         system: agentConfig.systemPrompt,
                         prompt: workerPrompt,

@@ -12,7 +12,7 @@ import { Message, streamText, appendClientMessage, appendResponseMessages, gener
 import { createRouteHandlerClient } from '@/lib/supabase/route-client';
 import { createRouteHandlerAdminClient } from '@/lib/supabase/route-client';
 // Logging
-import { edgeLogger } from '@/lib/logger/edge-logger';
+import { edgeLogger, THRESHOLDS } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 // Remove titleLogger import if not used elsewhere or properly defined
 // import { titleLogger } from '@/lib/logger/title-logger'; 
@@ -362,20 +362,39 @@ export async function POST(request: Request) { // No context needed if no params
     );
     edgeLogger.debug('AIStreamService process returned', { operationId, sessionId });
 
+    // Log total request duration before returning
+    const totalDurationMs = Date.now() - startTime;
+    const isTotalSlow = totalDurationMs > THRESHOLDS.SLOW_OPERATION;
+    const isTotalImportant = totalDurationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
+    // Use specific logger level method
+    (isTotalSlow ? edgeLogger.warn : edgeLogger.info).call(edgeLogger, 'API request completed successfully', {
+      category: LOG_CATEGORIES.CHAT, // Or SYSTEM?
+      operationId,
+      sessionId,
+      method: request.method,
+      path: new URL(request.url).pathname,
+      status: 200, // Assuming success if we reach here
+      durationMs: totalDurationMs,
+      slow: isTotalSlow,
+      important: isTotalImportant
+    });
+
     // Return the response from the service
     return streamResponse;
 
   } catch (error) {
-    // Top-level catch block for the direct export function
+    // --- Top Level Error Handling --- 
+    const totalDurationMs = Date.now() - startTime; // Calculate duration even on error
     edgeLogger.error('Unexpected error in POST chat handler', {
       category: LOG_CATEGORIES.SYSTEM,
       operationId,
       error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      durationMs: totalDurationMs, // Log duration on error
       important: true
     });
-    // Use standard errorResponse + handleCors
     const errRes = errorResponse('Internal Server Error', error, 500);
-    return handleCors(errRes, request, true); // Wrap the final catch block response
+    return handleCors(errRes, request, true);
   }
 }
 

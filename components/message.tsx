@@ -201,48 +201,42 @@ const PurePreviewMessage = ({
               </div>
             )}
 
+            {/* Render a consolidated list of tools used, excluding RAG if it gets special treatment */}
             {message.toolInvocations && message.toolInvocations.length > 0 && (
-              <div className="flex flex-col gap-2">
-                {message.toolInvocations.map((toolInvocation) => {
-                  const { toolName, toolCallId, state, args } = toolInvocation;
+              (() => {
+                // Filter out RAG tool if it has specific UI, collect other names
+                const relevantToolNames = message.toolInvocations
+                  .map(inv => inv.toolName)
+                  .filter(name => name && name !== 'getInformation'); // Exclude RAG 
 
-                  if (state === 'result') {
-                    const { result } = toolInvocation;
-
-                    return (
-                      <div key={toolCallId}>
-                        {toolName === 'getInformation' ? (
-                          <RagResultCount count={result.found ? result.documents.length : 0} />
-                        ) : toolName === 'deepSearch' || toolName === 'webScraper' || toolName === 'detectAndScrapeUrls' ||
-                          toolName === 'comprehensiveScraper' ||
-                          toolName.includes('Scraper') || toolName.includes('Search') ? (
-                          null
-                        ) : (
-                          <div className="text-xs text-muted-foreground">
-                            Tool used: {toolName}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  }
+                // Render only if there are relevant tool names to display
+                if (relevantToolNames.length > 0) {
                   return (
-                    <div
-                      key={toolCallId}
-                      className={cx({
-                        skeleton: ['getWeather'].includes(toolName),
-                      })}
-                    >
-                      {toolName === 'getInformation' ? (
-                        <RagResultCount count={args.found ? args.documents.length : 0} />
-                      ) : (
-                        <div className="text-xs text-muted-foreground">
-                          Tool used: {toolName}
-                        </div>
-                      )}
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Tools used: {relevantToolNames.join(', ')}
                     </div>
                   );
-                })}
-              </div>
+                }
+                return null; // Return null if only RAG was used (or no other tools)
+              })()
+            )}
+
+            {/* Specific UI for RAG results (if needed) */}
+            {message.toolInvocations?.some(inv => inv.toolName === 'getInformation') && (
+              <RagResultCount
+                count={(() => {
+                  const ragInvocation = message.toolInvocations?.find(inv => inv.toolName === 'getInformation');
+                  if (!ragInvocation) return 0;
+                  // Check if state is 'result' and try to access result.documents
+                  if (ragInvocation.state === 'result' && typeof ragInvocation.result === 'object' && ragInvocation.result !== null && Array.isArray((ragInvocation.result as any).documents)) {
+                    return (ragInvocation.result as any).documents.length;
+                  }
+                  // Fallback: Check if state is 'call' and try to access args (less likely to have count here)
+                  // if (ragInvocation.state === 'call' && typeof ragInvocation.args === 'object' && ...) { ... }
+                  // Default to 0 if count cannot be determined
+                  return 0;
+                })()}
+              />
             )}
 
             {!isReadonly && message.role === 'assistant' && (

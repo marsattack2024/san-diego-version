@@ -196,7 +196,8 @@ export async function findSimilarDocumentsOptimized(
         // No valid cache hit, perform the search
         const documents = await findSimilarDocuments(queryText, options);
         const retrievalTimeMs = Math.round(performance.now() - startTime);
-        const durationMs = retrievalTimeMs; // Total duration so far
+        // Use total duration for slow/important checks on non-cached results
+        const durationMs = retrievalTimeMs;
 
         // Calculate metrics
         const metrics = calculateSearchMetrics(documents, retrievalTimeMs);
@@ -219,44 +220,27 @@ export async function findSimilarDocumentsOptimized(
             limit: options.limit
         });
 
+        // Calculate slow/important flags based on total duration
         const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
         const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
 
-        if (isSlow) {
-            edgeLogger.warn('RAG search completed', {
-                category: LOG_CATEGORIES.TOOLS,
-                operation: OPERATION_TYPES.RAG_SEARCH,
-                ragOperationId,
-                documentCount: documents.length,
-                documentIds,
-                topSimilarityScore,
-                avgSimilarityScore,
-                similarityRange,
-                retrievalTimeMs,
-                durationMs,
-                source: 'search',
-                slow: true,
-                important: isImportant,
-                status: 'completed'
-            });
-        } else {
-            edgeLogger.info('RAG search completed', {
-                category: LOG_CATEGORIES.TOOLS,
-                operation: OPERATION_TYPES.RAG_SEARCH,
-                ragOperationId,
-                documentCount: documents.length,
-                documentIds,
-                topSimilarityScore,
-                avgSimilarityScore,
-                similarityRange,
-                retrievalTimeMs,
-                durationMs,
-                source: 'search',
-                slow: false,
-                important: false,
-                status: 'completed'
-            });
-        }
+        // Log completion using appropriate level and flags
+        (isSlow ? edgeLogger.warn : edgeLogger.info).call(edgeLogger, 'RAG search completed', {
+            category: LOG_CATEGORIES.TOOLS,
+            operation: OPERATION_TYPES.RAG_SEARCH,
+            ragOperationId,
+            documentCount: documents.length,
+            documentIds,
+            topSimilarityScore,
+            avgSimilarityScore,
+            similarityRange,
+            retrievalTimeMs,
+            durationMs, // Log total duration
+            source: 'search',
+            slow: isSlow, // Add slow flag
+            important: isImportant, // Add important flag
+            status: 'completed'
+        });
 
         return result;
     } catch (error) {

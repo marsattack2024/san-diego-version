@@ -8,7 +8,7 @@
 
 import { tool } from 'ai';
 import { z } from 'zod';
-import { edgeLogger } from '@/lib/logger/edge-logger';
+import { edgeLogger, THRESHOLDS } from '@/lib/logger/edge-logger';
 import { LOG_CATEGORIES } from '@/lib/logger/constants';
 import { perplexityService } from '@/lib/services/perplexity.service';
 
@@ -117,15 +117,21 @@ export const deepSearchTool = tool({
             const result = await perplexityService.search(query);
             const duration = Date.now() - startTime;
 
-            // Log successful result
-            edgeLogger.info("Deep Search completed successfully", {
+            // Calculate slow/important flags
+            const isSlow = duration > THRESHOLDS.SLOW_OPERATION;
+            const isImportant = duration > THRESHOLDS.IMPORTANT_THRESHOLD;
+
+            // Log successful result with flags using specific logger method
+            (isSlow ? edgeLogger.warn : edgeLogger.info).call(edgeLogger, "Deep Search completed successfully", {
                 category: LOG_CATEGORIES.TOOLS,
                 operation: "deep_search_success",
                 operationId,
                 toolCallId: runOptions.toolCallId,
                 durationMs: duration,
                 responseLength: result.content.length,
-                model: result.model
+                model: result.model,
+                slow: isSlow,
+                important: isImportant
             });
 
             return result.content;
