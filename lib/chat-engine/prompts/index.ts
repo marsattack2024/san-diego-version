@@ -4,10 +4,11 @@ import { GOOGLE_ADS_SYSTEM_PROMPT } from './google-ads-prompts';
 import { FACEBOOK_ADS_SYSTEM_PROMPT } from './facebook-ads-prompts';
 import { QUIZ_SYSTEM_PROMPT } from './quiz-prompts';
 import { WIDGET_BASE_PROMPT } from './widget-prompt';
+import { COPYEDITOR_SYSTEM_PROMPT } from './copyeditor-prompts';
 
 // Agent types supported by the system
-// Removed validator, added copyeditor
-export type AgentType = 'default' | 'copywriting' | 'google-ads' | 'facebook-ads' | 'quiz' | 'researcher' | 'copyeditor';
+// Removed validator, added copyeditor, removed researcher
+export type AgentType = 'default' | 'copywriting' | 'google-ads' | 'facebook-ads' | 'quiz' | 'copyeditor';
 
 // Runtime array of agent types for validation/iteration
 export const AVAILABLE_AGENT_TYPES: AgentType[] = [
@@ -16,8 +17,7 @@ export const AVAILABLE_AGENT_TYPES: AgentType[] = [
   'google-ads',
   'facebook-ads',
   'quiz',
-  'researcher',
-  'copyeditor' // Added
+  'copyeditor'
 ];
 
 // Enhanced prompt types to support both the main chat and widget chat
@@ -29,10 +29,8 @@ export const AGENT_PROMPTS: Record<AgentType, string> = {
   'copywriting': COPYWRITING_SYSTEM_PROMPT,
   'google-ads': GOOGLE_ADS_SYSTEM_PROMPT,
   'facebook-ads': FACEBOOK_ADS_SYSTEM_PROMPT,
-  'quiz': QUIZ_SYSTEM_PROMPT, // Assuming you reverted this correctly
-  // 'validator': '...', // Removed
-  'researcher': 'You are an efficient research agent, gathering information using available tools.', // Placeholder
-  'copyeditor': 'You are a skilled copyeditor, refining text for clarity, tone, engagement, and adherence to requirements like word count.' // Placeholder
+  'quiz': QUIZ_SYSTEM_PROMPT,
+  'copyeditor': COPYEDITOR_SYSTEM_PROMPT
 };
 
 /**
@@ -161,9 +159,7 @@ export function buildChatEnginePrompt(promptType: ChatEnginePromptType): string 
     promptType === 'google-ads' ||
     promptType === 'facebook-ads' ||
     promptType === 'quiz' ||
-    // promptType === 'validator' || // Removed
-    promptType === 'researcher' ||
-    promptType === 'copyeditor') { // Added
+    promptType === 'copyeditor') {
     return buildSystemPrompt(promptType);
   }
 
@@ -185,9 +181,7 @@ export const prompts = {
   googleAds: buildSystemPrompt('google-ads'),
   facebookAds: buildSystemPrompt('facebook-ads'),
   quiz: buildSystemPrompt('quiz'),
-  // validator: buildSystemPrompt('validator'), // Removed
-  researcher: buildSystemPrompt('researcher'),
-  copyeditor: buildSystemPrompt('copyeditor'), // Added
+  copyeditor: buildSystemPrompt('copyeditor'),
   widget: WIDGET_BASE_PROMPT,
 
   // Helper functions with standardized interfaces
@@ -204,4 +198,5 @@ export { COPYWRITING_SYSTEM_PROMPT } from './copywriting-prompts';
 export { GOOGLE_ADS_SYSTEM_PROMPT } from './google-ads-prompts';
 export { FACEBOOK_ADS_SYSTEM_PROMPT } from './facebook-ads-prompts';
 export { QUIZ_SYSTEM_PROMPT } from './quiz-prompts';
-export { WIDGET_BASE_PROMPT } from './widget-prompt'; 
+export { WIDGET_BASE_PROMPT } from './widget-prompt';
+export { COPYEDITOR_SYSTEM_PROMPT } from './copyeditor-prompts'; 

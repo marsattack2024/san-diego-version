@@ -58,19 +58,22 @@ export class AgentOrchestrator {
         });
 
         try {
-            // Modified System Prompt for stricter agent selection
+            // Modified System Prompt for stricter agent selection and clearer creative workflow
             const systemPrompt = `You are a highly intelligent workflow manager. Your tasks are:
 1. Analyze the user request and any user agent hint provided.
 2. Determine if the request is SIMPLE (can be answered directly by the 'default' agent, possibly using RAG/tools) or COMPLEX (requires specialized generation or multiple distinct steps).
 3. Generate a workflow plan object based on your determination:
     - If SIMPLE (e.g., answering questions, researching topics, summarizing info, using tools directly): Create a plan with ONLY ONE step using the 'default' agent (or the user's hinted agent if appropriate) with the task: "Answer the user query directly using available context and tools."
-    - If COMPLEX (e.g., user *explicitly* asks for marketing copy, ad campaigns, quizzes, or specific text editing): Create a detailed multi-step plan (typically 2-3 steps, max 5) using the most appropriate specialized agents. 
-        - Use 'researcher' ONLY if significant external information gathering beyond simple tool calls is clearly needed as a distinct first step.
-        - Use 'copywriting', 'google-ads', 'facebook-ads', 'quiz' ONLY when the user explicitly asks for that specific type of creative output.
-        - Use 'copyeditor' ONLY when the user explicitly asks for text to be edited or refined, or if a previous generation step explicitly requires it.
-        - Ensure the final step produces the user-facing output.
-Available specialized agents: copywriting, google-ads, facebook-ads, quiz, researcher, copyeditor. 
-STRONGLY PREFER the single 'default' agent plan unless a specialized generation agent is clearly and explicitly requested by the user.`;
+    - If COMPLEX (e.g., user *explicitly* asks for specific creative output like marketing copy, ad campaigns, quizzes, or asks for text editing): Create a detailed multi-step plan:
+        - **Standard Creative Workflow:** For requests involving creating specific content (copywriting, ads, quizzes), the plan should typically have TWO steps:
+            1.  The relevant specialist agent ('copywriting', 'google-ads', 'facebook-ads', 'quiz') generates the initial draft based on the user request. Use these agents ONLY when explicitly requested for that specific output type.
+            2.  The 'copyeditor' agent refines the draft from step 1, focusing on clarity, tone, and quality. Its task should be to "Review and refine the draft provided by the previous step."
+        - **Editing-Only Workflow:** If the user *only* asks for existing text to be edited or refined, create a plan with ONE step using the 'copyeditor' agent with the task: "Edit the provided text according to the user's instructions."
+        - Ensure the final step's output is what the user expects to see.
+
+Available specialized agents: copywriting, google-ads, facebook-ads, quiz, copyeditor.
+
+STRONGLY PREFER the single 'default' agent plan unless a specialized creative agent (copywriting, ads, quiz) or the copyeditor is clearly and explicitly requested by the user. Avoid unnecessary steps.`;
 
             const prompt = `User Request: "${request}"
 User Agent Hint: ${initialAgentType || 'default'}

@@ -194,17 +194,6 @@ export function getAgentConfig(agentType: AgentType): AgentConfig {
                 useProfileContext: true
             }
         },
-        'researcher': {
-            temperature: 0.5,
-            model: 'gpt-4o-mini',
-            toolOptions: {
-                useKnowledgeBase: true,
-                useWebScraper: true, // Researcher needs web access
-                useDeepSearch: true, // Researcher needs deep search
-                useRagTool: true,
-                useProfileContext: true // May need profile for context-aware research
-            }
-        },
         'copyeditor': {
             temperature: 0.6, // Balanced for refinement
             model: 'gpt-4o',
