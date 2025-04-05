@@ -38,7 +38,349 @@
         *   Remove or comment out types related to the old `prepareContext` and `OrchestrationContext`.
     2.  **(Orchestrator)** Refactor `lib/chat-engine/services/orchestrator.service.ts`:
         *   Implement the `classifyRequest(request: string): Promise<ClassificationResult>` function using `generateObject` with a fast model (e.g., `gpt-4o-mini`), appropriate system prompt, and the new `ClassificationResult` schema. Log appropriately. Ensure **no tools** are passed or executed here.
-        *   Implement the `generatePlan(request: string, complexAgent: AgentType): Promise<PlanResult>` function using `generateObject` to output *only* the sequence of agent roles based on the nature of the complex task (e.g., `['google-ads', 'copyeditor']`). Log appropriately. Ensure **no tools** are passed or executed here.
+        *   Implement the `generatePlan(reqUrl=true
+  hasAnonKey=true
+  level=debug
+🔵 01:11:29 Session authenticated (auth)
+  userId=5c80...4...
+  path=/api/chat/7b1ca5e3-fa6b-4db1-a6b9-2ce5d542f2ff/messages/count
+  level=debug
+🔵 01:11:29 Received raw request body
+  operationId=chat_xaxz9w98
+  rawBody={"message":{"id":"eaac5ced-bfb4-4f5b-8a77-eb8b3308cc71","createdAt":"2025-04-05T01:11:28.460Z","role":"user","content":"give me examples of optimize, alt text for photos on a website. ","parts":[{"type":"text","text":"give me examples of optimize, alt text for photos on a website. "}]},"id":"7b1ca5e3-fa6b-4db1-a6b9-2ce5d542f2ff","deepSearchEnabled":false,"agentId":"default"}
+  level=debug
+🔵 01:11:29 Validated request body
+  operationId=chat_xaxz9w98
+  body={"id":"7b1ca5e3-fa6b-4db1-a6b9-2ce5d542f2ff","message":{"id":"eaac5ced-bfb4-4f5b-8a77-eb8b3308cc71","role":"user","content":"give me examples of optimize, alt text for photos on a website. ","createdAt":"2025-04-05T01:11:28.460Z"},"deepSearchEnabled":false,"agentId":"default"}
+  level=debug
+🔵 01:11:29 Message persistence service initialized (system, chat_xaxz9w98)
+  messageHistoryLimit=20
+  throwErrors=false
+  isWidgetChat=false
+  disabled=false
+  level=debug
+🔵 01:11:29 Loading previous messages (chat_xaxz9w98)
+  userId=5c80...20e9
+  limit=20
+  level=info
+🔵 01:11:29 Creating Supabase client (system)
+  hasSupabaseUrl=true
+  hasAnonKey=true
+  urlPrefix=https://uw...
+  nodeEnv=development
+  level=info
+🔵 01:11:29 Creating route handler Supabase client (system)
+  hasSupabaseUrl=true
+  hasAnonKey=true
+  level=debug
+🔵 01:11:29 Messages loaded successfully (chat_xaxz9w98)
+  count=20
+  executionTimeMs=155
+  level=info
+🔵 01:11:29 AgentOrchestrator initialized (orchestrator)
+  model=gpt-4o-mini
+  level=info
+🔵 01:11:29 Orchestrator prepareContext started (orchestrator, prepare_context_start)
+  operationId=prep_ctx_m93ipuyz
+  requestPreview=give me examples of optimize, alt text for photos on a website. ...
+  level=info
+🔵 01:11:29 Generating workflow plan (incl. complexity assessment) (orchestrator, generate_plan)
+  operationId=plan_m93ipuyz
+  requestPreview=give me examples of optimize, alt text for photos on a website. ...
+  initialAgentHint=default
+  level=info
+🔵 01:11:29 generatePlan: Prompt sent to model (orchestrator)
+  operationId=plan_m93ipuyz
+  systemPrompt=You are a highly intelligent workflow manager. Your tasks are:
+1. Analyze the user request and any user agent hint provided.
+2. Determine if the request is SIMPLE (can be answered directly by the 'default' agent, possibly using RAG/tools) or COMPLEX (requires specialized generation or multiple distinct steps).
+3. Generate a workflow plan object based on your determination:
+    - If SIMPLE (e.g., answering questions, researching topics, summarizing info, using tools directly): Create a plan with ONLY ONE step using the 'default' agent (or the user's hinted agent if appropriate) with the task: "Answer the user query directly using available context and tools."
+    - If COMPLEX (e.g., user *explicitly* asks for marketing copy, ad campaigns, quizzes, or specific text editing): Create a detailed multi-step plan (typically 2-3 steps, max 5) using the most appropriate specialized agents. 
+        - Use 'researcher' ONLY if significant external information gathering beyond simple tool calls is clearly needed as a distinct first step.
+        - Use 'copywriting', 'google-ads', 'facebook-ads', 'quiz' ONLY when the user explicitly asks for that specific type of creative output.
+        - Use 'copyeditor' ONLY when the user explicitly asks for text to be edited or refined, or if a previous generation step explicitly requires it.
+        - Ensure the final step produces the user-facing output.
+Available specialized agents: copywriting, google-ads, facebook-ads, quiz, researcher, copyeditor. 
+STRONGLY PREFER the single 'default' agent plan unless a specialized generation agent is clearly and explicitly requested by the user.
+  prompt=User Request: "give me examples of optimize, alt text for photos on a website. "
+User Agent Hint: default
+
+Analyze this request and generate the appropriate workflow plan (either single-step simple or multi-step complex) based on your system instructions. Ensure the plan achieves the user's goal.
+  level=debug
+🔵 01:11:29 Counting chat messages (chat, count_chat_messages)
+  operationId=count_nk2cdn75
+  chatId=7b1ca5e3
+  userId=5c80...df74
+  level=info
+🔵 01:11:29 Redis REST API connection successful (system, redis_init_success)
+  level=info
+🔵 01:11:29 Successfully counted chat messages (chat, count_chat_messages)
+  operationId=count_nk2cdn75
+  chatId=7b1ca5e3
+  count=43
+  level=info
+ GET /api/chat/7b1ca5e3-fa6b-4db1-a6b9-2ce5d542f2ff/messages/count 200 in 602ms
+🔵 01:11:30 generatePlan: generateObject call completed (orchestrator, 890ms, generate_plan_llm_call)
+  operationId=plan_m93ipuyz
+  slow=false
+  important=false
+  usage={"promptTokens":556,"completionTokens":25,"totalTokens":581}
+  finishReason=stop
+  warnings=[]
+  level=info
+🔵 01:11:30 Workflow plan generation completed (orchestrator, 890ms, generate_plan_success)
+  operationId=plan_m93ipuyz
+  stepCount=1
+  planPreview=["default"]
+  slow=false
+  important=false
+  llmDurationMs=890
+  level=info
+🔵 01:11:30 Simple ["default"] plan detected. Skipping synchronous execution step. (orchestrator, prepare_context_skip_execution)
+  operationId=prep_ctx_m93ipuyz
+  planPreview=[default]
+  level=info
+🔵 01:11:30 Orchestrator prepareContext finished successfully (Simple Plan) (orchestrator, 891ms, prepare_context_success)
+  operationId=prep_ctx_m93ipuyz
+  contextMessageCount=0
+  targetModelId=gpt-4o-mini
+  planType=simple
+  level=info
+🔵 01:11:30 Creating custom tool set (tools, create_tool_set)
+  useKnowledgeBase=true
+  useWebScraper=true
+  useDeepSearch=true
+  useProfileContext=true
+  level=info
+🔵 01:11:30 Preparing to call streamText
+  operationId=chat_xaxz9w98
+  userId=5c80...d...
+  targetModelId=gpt-4o-mini
+  contextMessageCount=0
+  historyMessageCount=20
+  systemPromptLength=4744
+  toolCount=4
+  toolNames=[getInformation, scrapeWebContent, deepSearch, getUserProfileContext]
+  level=debug
+🔵 01:11:30 Saving user message (chat_xaxz9w98)
+  operationId=save_user_msg_xvxj3k
+  userId=5c80...20e9
+  messageId=eaac5ced-bfb4-4f5b-8a77-eb8b3308cc71
+  contentPreview=give me examples of optimize, alt text for photos ...
+  level=info
+🔵 01:11:30 Saving message to database (chat_xaxz9w98)
+  role=user
+  userId=5c80...20e9
+  messageId=eaac5ced-bfb4-4f5b-8a77-eb8b3308cc71
+  contentLength=64
+  hasToolsUsed=false
+  level=info
+🔵 01:11:30 AI Stream Service initialized (system)
+  level=info
+🔵 01:11:30 Calling AIStreamService process
+  operationId=chat_xaxz9w98
+  level=debug
+🔵 01:11:30 Starting AI stream processing (llm, chat_xaxz9w98)
+  userId=5c80...20e9
+  model=gpt-4o-mini
+  hasTools=true
+  temperature=0.5
+  maxTokens=4096
+  level=debug
+🔵 01:11:30 Tools configuration passed to streamText (tools, chat_xaxz9w98)
+  toolCount=4
+  toolNames=[getInformation, scrapeWebContent, deepSearch, getUserProfileContext]
+  toolDetails=[{"name":"getInformation","hasDescription":true,"hasExecute":true,"parametersType":"object"},{"name":"scrapeWebContent","hasDescription":true,"hasExecute":true,"parametersType":"object"},{"name":"deepSearch","hasDescription":true,"hasExecute":true,"parametersType":"object"},{"name":"getUserProfileContext","hasDescription":true,"hasExecute":true,"parametersType":"object"}]
+  level=debug
+🔵 01:11:30 Standardized messages (chat, standardize_messages)
+  operationId=chat_xaxz9w98
+  originalCount=41
+  standardizedCount=41
+  level=debug
+🔵 01:11:30 Processing standardized messages for AI stream (llm, chat_xaxz9w98)
+  messageCount=41
+  roles=[user, assistant, user, assistant, user, assistant, user, assistant, user, assistant, user, assistant, user, assistant, user, user, user, user, assistant, user, user, assistant, user, assistant, user, assistant, user, assistant, user, assistant, user, assistant, user, assistant, user, user, user, user, assistant, user, user]
+  firstMessage={"id":"dc8405ba-d957-4cfa-9d5b-fe346695d135","role":"user","content":"How do I make sure my ads don't get rejected?"}
+  level=debug
+🔵 01:11:30 Converted messages to CoreMessage format (llm, chat_xaxz9w98)
+  coreMessageCount=41
+  level=debug
+🔵 01:11:30 Injected context message for tool execution (llm, chat_xaxz9w98)
+  injectedContextKeys=[id, message, deepSearchEnabled, agentId, userId]
+  level=debug
+🔵 01:11:30 AI Stream: Background consumption enabled (llm, chat_xaxz9w98)
+  level=debug
+🔵 01:11:30 AI stream processing complete, returning response (llm, 1187ms, chat_xaxz9w98)
+  level=info
+🔵 01:11:30 AIStreamService process returned
+  operationId=chat_xaxz9w98
+  level=debug
+🔵 01:11:30 API request completed successfully (chat, 1188ms)
+  operationId=chat_xaxz9w98
+  method=POST
+  path=/api/chat
+  status=200
+  slow=false
+  important=false
+  level=info
+🔵 01:11:30 Message saved successfully via RPC (chat_xaxz9w98)
+  messageId=eaac5ced-bfb4-4f5b-8a77-eb8b3308cc71
+  executionTimeMs=343
+  rpcSuccess=true
+  level=info
+🔵 01:11:30 Knowledge base search started (tools, rag_search)
+  operationId=rag-m93ipwa2
+  toolCallId=call_xM9aZtUCQi2F4yaDOdz8zcGD
+  queryLength=41
+  queryPreview=optimize alt text fo...
+  level=info
+🔵 01:11:30 Starting RAG operation with cache check (tools, rag_search)
+  ragOperationId=rag-m93ipwa3
+  queryLength=41
+  queryPreview=optimize alt text fo...
+  limit=5
+  similarityThreshold=0.7
+  metadataFilterApplied=false
+  level=info
+🔵 01:11:31 Cache get (system)
+  key=app:rag:a56a6f9ae09f3927
+  hit=false
+  level=debug
+🔵 01:11:31 RAG cache check completed (tools, rag_cache_check)
+  ragOperationId=rag-m93ipwa3
+  cacheHit=false
+  level=debug
+🔵 01:11:31 Creating embedding
+  text_length=41
+  level=info
+ GET /api/chat/7b1ca5e3-fa6b-4db1-a6b9-2ce5d542f2ff/messages/count 200 in 411ms
+🔵 01:11:31 Successfully created embedding
+  text_length=41
+  duration_ms=856
+  model=text-embedding-3-small
+  level=info
+🔵 01:11:32 Cache set (system)
+  key=app:rag:a56a6f9ae09f3927
+  ttl=43200
+  level=debug
+🔵 01:11:32 RAG search completed (tools, 1151ms, rag_search)
+  ragOperationId=rag-m93ipwa3
+  documentCount=2
+  documentIds=[14536, 14924]
+  topSimilarityScore=0.648639121570536
+  avgSimilarityScore=0.634872761096118
+  similarityRange=0.621-0.649
+  retrievalTimeMs=1151
+  source=search
+  slow=false
+  important=false
+  status=completed
+  level=info
+🔵 01:11:32 Knowledge base search completed (tools, 1193ms, rag_search)
+  operationId=rag-m93ipwa2
+  toolCallId=call_xM9aZtUCQi2F4yaDOdz8zcGD
+  resultsCount=2
+  documentIds=[14536, 14924]
+  topSimilarityScore=0.648639121570536
+  avgSimilarityScore=0.634872761096118
+  similarityRange=0.621-0.649
+  contentLength=6779
+  metadataTypes=[unknown]
+  retrievalTimeMs=1151
+  slow=false
+  important=false
+  status=completed
+  queryLength=41
+  level=info
+🔵 01:11:32 AI Stream: Step completed (llm, chat_xaxz9w98)
+  hasText=false
+  toolCallCount=1
+  toolResultCount=1
+  finishReason=tool-calls
+  usage={"promptTokens":5925,"completionTokens":23,"totalTokens":5948}
+  level=debug
+🔵 01:11:32 Tool call details (tools, chat_xaxz9w98)
+  toolName=getInformation
+  toolCallId=call_xM9aZtUCQi2F4yaDOdz8zcGD
+  argsPreview={"query":"optimize alt text for photos on a website"}
+  fullArgs={"query":"optimize alt text for photos on a website"}
+  level=debug
+🔵 01:11:32 AI Stream: Tool calls executed in step (tools, chat_xaxz9w98)
+  toolNames=[getInformation]
+  level=info
+🔵 01:11:32 Tool results received (tools, chat_xaxz9w98)
+  toolResultCount=1
+  toolResultsPreview=[{"toolCallId":"call_xM9aZtUCQi2F4yaDOdz8zcGD","contentLength":0,"contentPreview":"none"}]
+  level=debug
+🔵 01:11:42 AI Stream: Step completed (llm, chat_xaxz9w98)
+  hasText=true
+  toolCallCount=0
+  toolResultCount=0
+  finishReason=stop
+  usage={"promptTokens":9119,"completionTokens":522,"totalTokens":9641}
+  level=debug
+🔵 01:11:42 AI Stream: Finished (llm, chat_xaxz9w98)
+  textLength=2633
+  usage={"promptTokens":15044,"completionTokens":545,"totalTokens":15589}
+  finalToolCallCount=1
+  level=info
+🔵 01:11:42 AIStreamService: onFinish callback started (llm)
+  operationId=chat_xaxz9w98
+  finishReason=callback_invoked
+  textLength=2633
+  usage={"promptTokens":15044,"completionTokens":545,"totalTokens":15589}
+  toolCallCount=1
+  level=info
+🔵 01:11:42 Formatted tool calls for persistence (in Service Callback)
+  operationId=chat_xaxz9w98
+  toolCount=1
+  toolNames=[getInformation]
+  level=info
+🔵 01:11:42 Creating Supabase client (repeated 2 times) (system)
+  hasSupabaseUrl=true
+  hasAnonKey=true
+  urlPrefix=https://uw...
+  nodeEnv=development
+  level=info
+🔵 01:11:42 Title already exists for chat (chat, title_exists)
+  chatId=7b1ca5e3-fa6b-4db1-a6b9-2ce5d542f2ff
+  userId=5c80...20e9
+  titlePreview=Preventing Ad Rejection: Best ...
+  important=false
+  level=info
+🔵 01:11:42 Skipping title generation (in Service Callback) (chat)
+  operationId=chat_xaxz9w98
+  level=info
+🔵 01:11:42 Saving assistant message (chat_xaxz9w98)
+  operationId=save_assistant_msg_oizeyk
+  userId=5c80...20e9
+  messageId=f01f572b-06bd-4aca-8892-00f521df3822
+  contentPreview=Here are some examples of optimized alt text for p...
+  hasToolsUsed=true
+  toolsCount=1
+  toolNames=[getInformation]
+  level=info
+🔵 01:11:42 Saving message to database (chat_xaxz9w98)
+  role=assistant
+  userId=5c80...20e9
+  messageId=f01f572b-06bd-4aca-8892-00f521df3822
+  contentLength=2633
+  hasToolsUsed=true
+  level=info
+🔵 01:11:43 Message saved successfully via RPC (chat_xaxz9w98)
+  messageId=f01f572b-06bd-4aca-8892-00f521df3822
+  executionTimeMs=144
+  rpcSuccess=true
+  level=info
+🔵 01:11:43 Assistant message saved successfully (in Service Callback) (145ms)
+  operationId=chat_xaxz9w98
+  contentLength=2633
+  level=info
+🔵 01:11:43 AIStreamService: onFinish callback completed (llm)
+  operationId=chat_xaxz9w98
+  level=info
+ POST /api/chat 200 in 14211msuest: string, complexAgent: AgentType): Promise<PlanResult>` function using `generateObject` to output *only* the sequence of agent roles based on the nature of the complex task (e.g., `['google-ads', 'copyeditor']`). Log appropriately. Ensure **no tools** are passed or executed here.
         *   Deprecate/remove the `prepareContext`, `executePlanAndGatherContext`, `run`, and `compileResults` methods. Keep constructor and logger initialization.
     3.  **(Agent Router)** Review `lib/chat-engine/agent-router.ts`: Ensure `getAgentConfig` and `createAgentToolSet` correctly provide configurations and toolsets for all necessary agents ('default', 'google-ads', 'copyeditor', etc.).
     4.  **(Testing - Initial):** Add/update unit tests for the new `classifyRequest` and `generatePlan` methods in `orchestrator.service.test.ts`. (Note: Still blocked by potential TS/Vitest config issues).

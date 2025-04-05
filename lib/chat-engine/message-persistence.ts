@@ -154,7 +154,7 @@ export class MessagePersistenceService {
         // Store config values directly in class properties
         this.operationName = config.operationName || 'message_persistence';
         this.throwErrors = config.throwErrors === true;
-        this.messageHistoryLimit = config.messageHistoryLimit || 50;
+        this.messageHistoryLimit = config.messageHistoryLimit || 20;
         this.isWidgetChat = config.isWidgetChat || false;
         this.disabled = config.disabled || false;
         this.bypassAuth = config.bypassAuth || false;
