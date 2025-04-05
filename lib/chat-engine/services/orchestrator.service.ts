@@ -84,7 +84,7 @@ Analyze this request and generate the appropriate workflow plan (either single-s
             this.logger.debug('generatePlan: Prompt sent to model', {
                 category: LOG_CATEGORIES.ORCHESTRATOR,
                 operationId,
-                systemPrompt,
+                systemPrompt: systemPrompt.substring(0, 100) + (systemPrompt.length > 100 ? '...' : ''),
                 prompt
             });
 
@@ -172,8 +172,7 @@ Analyze this request and generate the appropriate workflow plan (either single-s
 
         let iteration = 0;
         let currentPlan = { ...plan, steps: [...plan.steps] }; // Deep copy steps for modification
-        let completedStepOutputs: Record<number, AgentOutput> = {}; // Store outputs temporarily (Use LET)
-        const contextMessages: Message[] = []; // Collect messages to pass to final stream
+        let completedStepOutputs: Record<number, AgentOutput> = {};
 
         // Determine default target model - can be overridden by plan/logic later
         let targetModelId = getAgentConfig(currentPlan.steps[currentPlan.steps.length - 1].agent as AgentType)?.model || 'gpt-4o-mini';
@@ -247,7 +246,7 @@ Analyze this request and generate the appropriate workflow plan (either single-s
                         step: i,
                         stepLogId,
                         agent: step.agent,
-                        systemPrompt: agentConfig.systemPrompt,
+                        systemPrompt: agentConfig.systemPrompt.substring(0, 1000) + (agentConfig.systemPrompt.length > 1000 ? '...' : ''),
                         workerPrompt
                     });
 
@@ -303,18 +302,19 @@ Analyze this request and generate the appropriate workflow plan (either single-s
                         important: isStepImportant,
                     });
 
-                    // Store output for dependency tracking
+                    // *** ADDED: Log agent step output (truncated) ***
+                    this.logger.debug(`executePlan Step ${i} (${step.agent}) Output:`, {
+                        category: LOG_CATEGORIES.ORCHESTRATOR,
+                        operationId,
+                        step: i,
+                        stepLogId,
+                        agent: step.agent,
+                        outputResult: output.result.substring(0, 1000) + (output.result.length > 1000 ? '...' : '')
+                    });
+
+                    // Store output for dependency tracking AND potential use after loop
                     completedStepOutputs[i] = output;
                     madeProgress = true;
-
-                    // Add result as context message for the final stream
-                    // Format: Use assistant role to represent intermediate results
-                    contextMessages.push({
-                        id: `ctx_${operationId}_${i}`,
-                        role: 'assistant',
-                        content: `Context from ${step.agent}: ${output.result}`,
-                        // TODO: Should we include tool call info here if the agent used tools?
-                    });
 
                     // If the last agent executed has a specific system prompt, maybe use it?
                     if (i === currentPlan.steps.length - 1 && agentConfig.systemPrompt) {
@@ -336,6 +336,15 @@ Analyze this request and generate the appropriate workflow plan (either single-s
                             const replanSystemPrompt = `You are the workflow manager. Adjust the workflow based on agent feedback. You can modify steps, add new steps (e.g., a copyeditor step), or re-order tasks. Available agents: ${availableSpecializedAgents}.`;
                             const replanPrompt = `Step ${i} (${step.agent}) requires revision. Issues: ${output.metadata.issues?.join(', ') || 'None'}. Result: ${output.result.substring(0, 200)}...\nCurrent plan: ${JSON.stringify(currentPlan.steps.map(s => s.agent))}\nProvide an updated plan (max 5 steps) to address the issue for the goal: "${initialRequest}"`;
 
+                            // Log truncated replan system prompt
+                            this.logger.debug('Re-planning: Prompt sent to model', {
+                                category: LOG_CATEGORIES.ORCHESTRATOR,
+                                operationId,
+                                stepTriggeringReplan: i,
+                                systemPrompt: replanSystemPrompt.substring(0, 100) + (replanSystemPrompt.length > 100 ? '...' : ''),
+                                prompt: replanPrompt
+                            });
+
                             const { object: revisedPlanData } = await generateObject({
                                 model: this.orchestratorModel,
                                 schema: WorkflowPlanSchema,
@@ -344,16 +353,11 @@ Analyze this request and generate the appropriate workflow plan (either single-s
                                 maxRetries: 1,
                             });
 
-                            // Validate new plan
-                            if (!revisedPlanData.steps || revisedPlanData.steps.length === 0 || revisedPlanData.steps.some(step => !AVAILABLE_AGENT_TYPES.includes(step.agent as AgentType))) {
-                                throw new Error("Re-planning generated an invalid or empty plan.");
-                            }
 
                             this.logger.info('Re-planning successful', { category: LOG_CATEGORIES.ORCHESTRATOR, operationId, newStepCount: revisedPlanData.steps.length });
 
                             currentPlan = revisedPlanData;
                             completedStepOutputs = {}; // Reset completed steps (OK with LET)
-                            contextMessages.length = 0; // Clear context messages
                             planChangedThisIteration = true;
                             madeProgress = false;
                             allStepsCompleteOrSkipped = false;
@@ -413,17 +417,46 @@ Analyze this request and generate the appropriate workflow plan (either single-s
             }
         } // End while loop (iterations)
 
+        // --- Assemble FINAL context message --- 
+        const finalContextMessages: Message[] = [];
+        const lastStepIndex = currentPlan.steps.length - 1;
+
+        // Find the output of the last successfully completed step
+        let lastSuccessfulOutput: AgentOutput | undefined = undefined;
+        for (let i = lastStepIndex; i >= 0; i--) {
+            if (completedStepOutputs[i]) {
+                lastSuccessfulOutput = completedStepOutputs[i];
+                const lastAgent = currentPlan.steps[i]?.agent || 'unknown';
+                this.logger.info(`Using output from Step ${i} (${lastAgent}) as final context for stream.`, {
+                    category: LOG_CATEGORIES.ORCHESTRATOR, operationId, finalContextStep: i
+                });
+                break;
+            }
+        }
+
+        if (lastSuccessfulOutput) {
+            finalContextMessages.push({
+                id: `final_ctx_${operationId}`,
+                role: 'assistant', // Representing the final synthesized context
+                content: lastSuccessfulOutput.result // Use only the result of the LAST successful agent step
+            });
+        } else {
+            this.logger.warn('No successful agent step output found to use as final context.', {
+                category: LOG_CATEGORIES.ORCHESTRATOR, operationId
+            });
+        }
+
         const execDurationMs = Date.now() - execStartTime;
         this.logger.info('Finished workflow plan execution for context gathering', {
             category: LOG_CATEGORIES.ORCHESTRATOR,
             operationId,
             durationMs: execDurationMs,
-            contextMessageCount: contextMessages.length,
+            contextMessageCount: finalContextMessages.length,
             slow: execDurationMs > THRESHOLDS.SLOW_OPERATION,
             important: execDurationMs > THRESHOLDS.IMPORTANT_THRESHOLD,
         });
 
-        return { contextMessages, finalPlan: currentPlan, targetModelId, finalSystemPrompt };
+        return { contextMessages: finalContextMessages, finalPlan: currentPlan, targetModelId, finalSystemPrompt };
     }
 
     /**

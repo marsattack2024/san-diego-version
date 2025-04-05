@@ -23,9 +23,9 @@ export const AVAILABLE_AGENT_TYPES: AgentType[] = [
 // Enhanced prompt types to support both the main chat and widget chat
 export type ChatEnginePromptType = AgentType | 'widget';
 
-// Map of agent types to their specialized prompts - maintain our modular organization
+// Map of agent types to their specialized prompts
 export const AGENT_PROMPTS: Record<AgentType, string> = {
-  'default': '',
+  'default': '', // Default uses BASE_PROMPT below
   'copywriting': COPYWRITING_SYSTEM_PROMPT,
   'google-ads': GOOGLE_ADS_SYSTEM_PROMPT,
   'facebook-ads': FACEBOOK_ADS_SYSTEM_PROMPT,
@@ -33,18 +33,34 @@ export const AGENT_PROMPTS: Record<AgentType, string> = {
   'copyeditor': COPYEDITOR_SYSTEM_PROMPT
 };
 
+// Define the concise universal rules to be appended
+const UNIVERSAL_RULES = `
+---
+# UNIVERSAL RULES:
+- **Tools:** ALWAYS check Knowledge Base (getInformation) first for relevant topics. Use scrapeWebContent for URLs. Use Profile Context for personalization. Use Deep Search only if enabled and needed. List tools used at end.
+- **Formatting:** ALWAYS use proper Markdown.
+`;
+
 /**
- * Builds a system prompt for the specified agent type
- * following AI SDK standards for system prompts
+ * Builds a system prompt for the specified agent type.
+ * - For specialists: Uses the specialist prompt + UNIVERSAL_RULES.
+ * - For default: Uses BASE_PROMPT + UNIVERSAL_RULES.
  */
 export function buildSystemPrompt(agentType: AgentType): string {
-  // Start with the base prompt that applies to all agents
-  let systemPrompt = BASE_PROMPT;
+  let systemPrompt = '';
 
-  // If this is a specialized agent, add its specific prompt
-  if (agentType !== 'default' && AGENT_PROMPTS[agentType]) {
-    systemPrompt += `\n\n${AGENT_PROMPTS[agentType]}`;
+  // Start with specialist prompt OR base prompt for default
+  if (agentType === 'default') {
+    systemPrompt = BASE_PROMPT; // Default agent gets the full original base prompt
+  } else if (AGENT_PROMPTS[agentType]) {
+    systemPrompt = AGENT_PROMPTS[agentType]; // Specialists start with their own prompt
+  } else {
+    // Fallback to default if agent type is somehow invalid (shouldn't happen with validation)
+    systemPrompt = BASE_PROMPT;
   }
+
+  // Append the universal rules to all prompts
+  systemPrompt += UNIVERSAL_RULES;
 
   return systemPrompt;
 }
