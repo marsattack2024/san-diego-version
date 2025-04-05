@@ -62,7 +62,7 @@ export function buildSystemPromptWithDeepSearch(agentType: AgentType, deepSearch
   // Add tool descriptions - maintaining our custom format but aligning with AI SDK patterns
   const withToolDescription = `${basePrompt}\n\n### AVAILABLE TOOLS:\n\n` +
     `You have access to the following resources:\n` +
-    `- Knowledge Base, getInformation: Retrieve information from our internal knowledge base\n` +
+    `- ALWAYS USE the Knowledge Base, getInformation: Retrieve information from our internal knowledge base. (even for basic questions)\n` +
     `- Web Scraper, scrapeWebContent: Extract content from specific URLs provided by the user\n` +
     `- Deep Search, deepSearch: Conduct in-depth research on complex topics using Perplexity AI\n` +
     `- Profile Context, getUserProfileContext: Retrieve the user\'s saved business profile information\n\n` +

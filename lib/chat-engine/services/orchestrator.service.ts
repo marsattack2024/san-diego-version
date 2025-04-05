@@ -425,7 +425,8 @@ Analyze this request and generate the appropriate workflow plan (either single-s
 
     /**
      * Prepares the context for the final streaming call by the API route.
-     * This involves planning and executing steps to gather information.
+     * This involves planning and potentially executing steps to gather information.
+     * Optimization: Skips execution for simple ["default"] plans.
      */
     async prepareContext(request: string, initialAgentType?: AgentType): Promise<OrchestrationContext> {
         const operationId = `prep_ctx_${Date.now().toString(36)}`;
@@ -440,34 +441,77 @@ Analyze this request and generate the appropriate workflow plan (either single-s
         try {
             // Step 1: Generate the plan
             const initialPlan = await this.generatePlan(request, initialAgentType);
+            const isSimpleDefaultPlan = initialPlan.steps.length === 1 && initialPlan.steps[0].agent === 'default';
 
-            // Step 2: Execute plan to gather context
-            const { contextMessages, finalPlan, targetModelId, finalSystemPrompt } = await this.executePlanAndGatherContext(initialPlan, request);
+            // Step 2: Check if plan is simple default
+            if (isSimpleDefaultPlan) {
+                // Optimization: Skip execution for simple default plan
+                this.logger.info('Simple ["default"] plan detected. Skipping synchronous execution step.', {
+                    category: LOG_CATEGORIES.ORCHESTRATOR,
+                    operation: 'prepare_context_skip_execution',
+                    operationId,
+                    planPreview: ['default']
+                });
 
-            // Step 3: Assemble the final OrchestrationContext
-            const result: OrchestrationContext = {
-                targetModelId,
-                finalSystemPrompt,
-                contextMessages,
-                planSummary: finalPlan.steps.map(s => s.agent)
-            };
+                // Get default agent config to determine the target model
+                const defaultConfig = getAgentConfig('default');
+                const durationMs = Date.now() - startTime;
 
-            const durationMs = Date.now() - startTime;
-            const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
-            const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
-            // Use warn if slow or important, otherwise info
-            const contextLogMethod = isSlow || isImportant ? this.logger.warn : this.logger.info;
-            contextLogMethod.call(this.logger, 'Orchestrator prepareContext finished successfully', {
-                category: LOG_CATEGORIES.ORCHESTRATOR,
-                operation: 'prepare_context_success',
-                operationId,
-                durationMs,
-                contextMessageCount: contextMessages.length,
-                targetModelId: result.targetModelId,
-                slow: isSlow,
-                important: isImportant,
-            });
-            return result;
+                const result: OrchestrationContext = {
+                    targetModelId: defaultConfig.model || 'gpt-4o-mini', // Use default agent model
+                    contextMessages: [], // No context messages generated
+                    planSummary: ['default']
+                    // finalSystemPrompt is intentionally omitted - API route will handle it
+                };
+
+                this.logger.info('Orchestrator prepareContext finished successfully (Simple Plan)', {
+                    category: LOG_CATEGORIES.ORCHESTRATOR,
+                    operation: 'prepare_context_success',
+                    operationId,
+                    durationMs,
+                    contextMessageCount: 0,
+                    targetModelId: result.targetModelId,
+                    planType: 'simple'
+                });
+                return result;
+
+            } else {
+                // Complex Plan: Execute plan to gather context
+                this.logger.info('Complex plan detected. Executing steps to gather context.', {
+                    category: LOG_CATEGORIES.ORCHESTRATOR,
+                    operation: 'prepare_context_execute_plan',
+                    operationId,
+                    planPreview: initialPlan.steps.map(s => s.agent)
+                });
+
+                // Call the original execution logic
+                // Destructure without finalSystemPrompt as it's handled by API route
+                const { contextMessages, finalPlan, targetModelId } = await this.executePlanAndGatherContext(initialPlan, request);
+
+                // Assemble the final OrchestrationContext
+                const result: OrchestrationContext = {
+                    targetModelId,
+                    contextMessages,
+                    planSummary: finalPlan.steps.map(s => s.agent)
+                    // finalSystemPrompt omitted
+                };
+
+                const durationMs = Date.now() - startTime;
+                const isSlow = durationMs > THRESHOLDS.SLOW_OPERATION;
+                const isImportant = durationMs > THRESHOLDS.IMPORTANT_THRESHOLD;
+                (isSlow ? this.logger.warn : this.logger.info).call(this.logger, 'Orchestrator prepareContext finished successfully (Complex Plan)', {
+                    category: LOG_CATEGORIES.ORCHESTRATOR,
+                    operation: 'prepare_context_success',
+                    operationId,
+                    durationMs,
+                    contextMessageCount: contextMessages.length,
+                    targetModelId: result.targetModelId,
+                    planType: 'complex',
+                    slow: isSlow,
+                    important: isImportant,
+                });
+                return result;
+            }
         } catch (error) {
             const durationMs = Date.now() - startTime;
             this.logger.error('Orchestrator prepareContext failed', {
